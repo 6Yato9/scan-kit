@@ -1,6 +1,13 @@
 // __tests__/storage.test.ts
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getDocuments, saveDocument, updateDocument, deleteDocument } from '../lib/storage';
+import {
+  getDocuments,
+  saveDocument,
+  updateDocument,
+  deleteDocument,
+  getSortPreference,
+  saveSortPreference,
+} from '../lib/storage';
 import { Document } from '../types/document';
 
 jest.mock('@react-native-async-storage/async-storage', () =>
@@ -47,4 +54,32 @@ test('deleteDocument removes document by id', async () => {
   await saveDocument(doc);
   await deleteDocument(doc.id);
   expect(await getDocuments()).toHaveLength(0);
+});
+
+describe('getSortPreference', () => {
+  it('returns dateAdded by default when nothing stored', async () => {
+    jest.spyOn(AsyncStorage, 'getItem').mockResolvedValueOnce(null);
+    const key = await getSortPreference();
+    expect(key).toBe('dateAdded');
+  });
+
+  it('returns stored value when valid', async () => {
+    jest.spyOn(AsyncStorage, 'getItem').mockResolvedValueOnce('nameAZ');
+    const key = await getSortPreference();
+    expect(key).toBe('nameAZ');
+  });
+
+  it('returns dateAdded for unknown stored value', async () => {
+    jest.spyOn(AsyncStorage, 'getItem').mockResolvedValueOnce('invalid');
+    const key = await getSortPreference();
+    expect(key).toBe('dateAdded');
+  });
+});
+
+describe('saveSortPreference', () => {
+  it('saves the sort key to AsyncStorage', async () => {
+    const spy = jest.spyOn(AsyncStorage, 'setItem').mockResolvedValueOnce(undefined as any);
+    await saveSortPreference('dateModified');
+    expect(spy).toHaveBeenCalledWith('@scan_kit_sort', 'dateModified');
+  });
 });
