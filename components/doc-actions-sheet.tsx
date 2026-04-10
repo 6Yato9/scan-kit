@@ -9,10 +9,10 @@ type Props = {
   onRename: (doc: Document) => void;
   onDuplicate: (doc: Document) => void;
   onMerge: (doc: Document) => void;
+  onMoveToFolder: (doc: Document) => void;
   onSelect: (doc: Document) => void;
   onDelete: (doc: Document) => void;
   onClose: () => void;
-  onMoveToFolder?: (doc: Document) => void;
 };
 
 export function DocActionsSheet({
@@ -21,6 +21,7 @@ export function DocActionsSheet({
   onRename,
   onDuplicate,
   onMerge,
+  onMoveToFolder,
   onSelect,
   onDelete,
   onClose,
@@ -47,6 +48,10 @@ export function DocActionsSheet({
         <Text style={styles.optionText}>Merge with…</Text>
       </Pressable>
 
+      <Pressable style={styles.option} onPress={wrap(onMoveToFolder)}>
+        <Text style={styles.optionText}>Move to Folder…</Text>
+      </Pressable>
+
       <Pressable style={styles.option} onPress={wrap(onSelect)}>
         <Text style={styles.optionText}>Select</Text>
       </Pressable>
@@ -59,12 +64,7 @@ export function DocActionsSheet({
 }
 
 const styles = StyleSheet.create({
-  docName: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#888',
-    marginBottom: 12,
-  },
+  docName: { fontSize: 15, fontWeight: '600', color: '#888', marginBottom: 12 },
   option: {
     paddingVertical: 16,
     borderBottomWidth: StyleSheet.hairlineWidth,
