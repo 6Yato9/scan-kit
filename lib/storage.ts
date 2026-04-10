@@ -7,7 +7,11 @@ const KEY = '@scan_kit_documents';
 export async function getDocuments(): Promise<Document[]> {
   const raw = await AsyncStorage.getItem(KEY);
   if (!raw) return [];
-  return JSON.parse(raw);
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
 }
 
 export async function saveDocument(doc: Document): Promise<void> {
