@@ -32,24 +32,32 @@ export default function HomeScreen() {
   }, []);
 
   const handleScan = useCallback(async () => {
-    const { scannedImages } = await DocumentScanner.scanDocument();
-    if (!scannedImages?.length) return;
-    setPendingPages(scannedImages);
-    setNameSheetVisible(true);
+    try {
+      const { scannedImages } = await DocumentScanner.scanDocument();
+      if (!scannedImages?.length) return;
+      setPendingPages(scannedImages);
+      setNameSheetVisible(true);
+    } catch (err) {
+      console.error('Scan failed', err);
+    }
   }, []);
 
   const handleSave = useCallback(
     async (name: string) => {
-      const id = Crypto.randomUUID();
-      const now = Date.now();
-      const savedPages = await Promise.all(
-        pendingPages.map((uri, i) => copyPageToStorage(uri, id, i))
-      );
-      const doc: Document = { id, name, pages: savedPages, createdAt: now, updatedAt: now };
-      await saveDocument(doc);
-      setDocuments(prev => [doc, ...prev]);
-      setNameSheetVisible(false);
-      setPendingPages([]);
+      try {
+        const id = Crypto.randomUUID();
+        const now = Date.now();
+        const savedPages = await Promise.all(
+          pendingPages.map((uri, i) => copyPageToStorage(uri, id, i))
+        );
+        const doc: Document = { id, name, pages: savedPages, createdAt: now, updatedAt: now };
+        await saveDocument(doc);
+        setDocuments(prev => [doc, ...prev]);
+        setNameSheetVisible(false);
+        setPendingPages([]);
+      } catch (err) {
+        console.error('Save failed', err);
+      }
     },
     [pendingPages]
   );
@@ -57,7 +65,7 @@ export default function HomeScreen() {
   const handleRetake = useCallback(() => {
     setNameSheetVisible(false);
     setPendingPages([]);
-    handleScan();
+    setTimeout(handleScan, 350);
   }, [handleScan]);
 
   const handleRename = useCallback(async (doc: Document, newName: string) => {
