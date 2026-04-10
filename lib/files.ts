@@ -1,5 +1,6 @@
 // lib/files.ts
 import { Directory, File, Paths } from 'expo-file-system';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 
 export function copyPageToStorage(
   tempUri: string,
@@ -112,4 +113,41 @@ export function copyDocumentFiles(
     src.copy(dest);
     return dest.uri;
   });
+}
+
+/**
+ * Copies a temp page URI to storage, compressing to the given quality (0–1).
+ * When quality === 1, copies the file directly (no recompression).
+ */
+export async function copyPageWithQuality(
+  tempUri: string,
+  docId: string,
+  pageIndex: number,
+  quality: number
+): Promise<string> {
+  const dir = new Directory(Paths.document, 'scan-kit', docId);
+  dir.create({ intermediates: true, idempotent: true });
+  const dest = new File(dir, `page-${pageIndex}.jpg`);
+  if (quality === 1) {
+    const src = new File(tempUri);
+    src.copy(dest);
+  } else {
+    const result = await manipulateAsync(tempUri, [], { compress: quality, format: SaveFormat.JPEG });
+    const src = new File(result.uri);
+    src.copy(dest);
+  }
+  return dest.uri;
+}
+
+/**
+ * Copies an imported PDF from a temp URI to permanent storage.
+ * Returns the stored file:// URI.
+ */
+export function copyPdfToStorage(tempUri: string, docId: string): string {
+  const dir = new Directory(Paths.document, 'scan-kit', docId);
+  dir.create({ intermediates: true, idempotent: true });
+  const dest = new File(dir, 'document.pdf');
+  const src = new File(tempUri);
+  src.copy(dest);
+  return dest.uri;
 }

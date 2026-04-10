@@ -1,11 +1,26 @@
 // lib/storage.ts
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Document } from '../types/document';
+import { Document, PageFilter } from '../types/document';
 
 const KEY = '@scan_kit_documents';
 const SORT_KEY = '@scan_kit_sort';
+const FOLDERS_KEY = '@scan_kit_folders';
+const SCAN_SETTINGS_KEY = '@scan_kit_scan_settings';
+const DOC_SETTINGS_KEY = '@scan_kit_doc_settings';
 
 export type SortKey = 'dateAdded' | 'dateModified' | 'nameAZ';
+
+export type ScanSettings = {
+  quality: 'low' | 'medium' | 'high';
+  autoCrop: boolean;
+  defaultFilter: PageFilter | 'original';
+};
+
+export type DocSettings = {
+  namePrefix: string;
+  pdfPageSize: 'A4' | 'Letter';
+  pdfQuality: 'standard' | 'high';
+};
 
 export async function getDocuments(): Promise<Document[]> {
   const raw = await AsyncStorage.getItem(KEY);
@@ -43,4 +58,64 @@ export async function getSortPreference(): Promise<SortKey> {
 
 export async function saveSortPreference(key: SortKey): Promise<void> {
   await AsyncStorage.setItem(SORT_KEY, key);
+}
+
+export async function getFolders(): Promise<string[]> {
+  const raw = await AsyncStorage.getItem(FOLDERS_KEY);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return [...parsed].sort();
+  } catch {
+    return [];
+  }
+}
+
+export async function saveFolder(name: string): Promise<void> {
+  const folders = await getFolders();
+  if (folders.includes(name)) return;
+  await AsyncStorage.setItem(FOLDERS_KEY, JSON.stringify([...folders, name]));
+}
+
+export async function deleteFolder(name: string): Promise<void> {
+  // Remove from folders list
+  const folders = await getFolders();
+  await AsyncStorage.setItem(FOLDERS_KEY, JSON.stringify(folders.filter(f => f !== name)));
+  // Clear folder field on all docs that had this folder
+  const docs = await getDocuments();
+  const updated = docs.map(d => {
+    if (d.folder !== name) return d;
+    const { folder: _removed, ...rest } = d;
+    return rest as Document;
+  });
+  await AsyncStorage.setItem(KEY, JSON.stringify(updated));
+}
+
+export async function getScanSettings(): Promise<ScanSettings> {
+  const raw = await AsyncStorage.getItem(SCAN_SETTINGS_KEY);
+  if (!raw) return { quality: 'high', autoCrop: true, defaultFilter: 'original' };
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return { quality: 'high', autoCrop: true, defaultFilter: 'original' };
+  }
+}
+
+export async function saveScanSettings(s: ScanSettings): Promise<void> {
+  await AsyncStorage.setItem(SCAN_SETTINGS_KEY, JSON.stringify(s));
+}
+
+export async function getDocSettings(): Promise<DocSettings> {
+  const raw = await AsyncStorage.getItem(DOC_SETTINGS_KEY);
+  if (!raw) return { namePrefix: 'Scan', pdfPageSize: 'A4', pdfQuality: 'standard' };
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return { namePrefix: 'Scan', pdfPageSize: 'A4', pdfQuality: 'standard' };
+  }
+}
+
+export async function saveDocSettings(s: DocSettings): Promise<void> {
+  await AsyncStorage.setItem(DOC_SETTINGS_KEY, JSON.stringify(s));
 }

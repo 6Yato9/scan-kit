@@ -7,6 +7,13 @@ import {
   deleteDocument,
   getSortPreference,
   saveSortPreference,
+  getFolders,
+  saveFolder,
+  deleteFolder,
+  getScanSettings,
+  saveScanSettings,
+  getDocSettings,
+  saveDocSettings,
 } from '../lib/storage';
 import { Document } from '../types/document';
 
@@ -81,5 +88,82 @@ describe('saveSortPreference', () => {
     const spy = jest.spyOn(AsyncStorage, 'setItem').mockResolvedValueOnce(undefined as any);
     await saveSortPreference('dateModified');
     expect(spy).toHaveBeenCalledWith('@scan_kit_sort', 'dateModified');
+  });
+});
+
+// --- Folders ---
+
+describe('getFolders', () => {
+  it('returns empty array when nothing stored', async () => {
+    const folders = await getFolders();
+    expect(folders).toEqual([]);
+  });
+
+  it('returns sorted folder names', async () => {
+    await AsyncStorage.setItem('@scan_kit_folders', JSON.stringify(['Zebra', 'Alpha']));
+    const folders = await getFolders();
+    expect(folders).toEqual(['Alpha', 'Zebra']);
+  });
+});
+
+describe('saveFolder', () => {
+  it('adds a new folder name', async () => {
+    await saveFolder('Work');
+    const folders = await getFolders();
+    expect(folders).toContain('Work');
+  });
+
+  it('does not add duplicate names', async () => {
+    await saveFolder('Work');
+    await saveFolder('Work');
+    const folders = await getFolders();
+    expect(folders.filter(f => f === 'Work')).toHaveLength(1);
+  });
+});
+
+describe('deleteFolder', () => {
+  it('removes the folder from the list', async () => {
+    await saveFolder('Old');
+    await deleteFolder('Old');
+    expect(await getFolders()).not.toContain('Old');
+  });
+
+  it('clears folder field on all docs that had it', async () => {
+    const docWithFolder: Document = { ...doc, id: 'f1', folder: 'Old' };
+    await saveDocument(docWithFolder);
+    await saveFolder('Old');
+    await deleteFolder('Old');
+    const docs = await getDocuments();
+    expect(docs.find(d => d.id === 'f1')?.folder).toBeUndefined();
+  });
+});
+
+// --- ScanSettings ---
+
+describe('getScanSettings', () => {
+  it('returns defaults when nothing stored', async () => {
+    const s = await getScanSettings();
+    expect(s).toEqual({ quality: 'high', autoCrop: true, defaultFilter: 'original' });
+  });
+
+  it('returns stored value', async () => {
+    const custom = { quality: 'low' as const, autoCrop: false, defaultFilter: 'grayscale' as const };
+    await saveScanSettings(custom);
+    expect(await getScanSettings()).toEqual(custom);
+  });
+});
+
+// --- DocSettings ---
+
+describe('getDocSettings', () => {
+  it('returns defaults when nothing stored', async () => {
+    const s = await getDocSettings();
+    expect(s).toEqual({ namePrefix: 'Scan', pdfPageSize: 'A4', pdfQuality: 'standard' });
+  });
+
+  it('returns stored value', async () => {
+    const custom = { namePrefix: 'Doc', pdfPageSize: 'Letter' as const, pdfQuality: 'high' as const };
+    await saveDocSettings(custom);
+    expect(await getDocSettings()).toEqual(custom);
   });
 });
