@@ -22,6 +22,7 @@ import {
   saveDocument,
   updateDocument,
   deleteDocument,
+  deleteDocuments,
   getSortPreference,
   saveSortPreference,
   getFolders,
@@ -90,7 +91,7 @@ export default function FilesScreen() {
   useEffect(() => {
     if (params.action === 'importImages') handleImportImages();
     else if (params.action === 'importFiles') handleImportFiles();
-  }, [params.action]);
+  }, [params.action, handleImportImages, handleImportFiles]);
 
   const displayedDocuments = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -277,10 +278,8 @@ export default function FilesScreen() {
           style: 'destructive',
           onPress: async () => {
             const ids = Array.from(selectedIds);
-            for (const id of ids) {
-              await deleteDocument(id);
-              deleteDocumentFiles(id);
-            }
+            await deleteDocuments(ids);
+            ids.forEach(id => deleteDocumentFiles(id));
             setDocuments(prev => prev.filter(d => !ids.includes(d.id)));
             setSelectedIds(new Set());
           },

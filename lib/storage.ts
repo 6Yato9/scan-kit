@@ -50,6 +50,12 @@ export async function deleteDocument(id: string): Promise<void> {
   await AsyncStorage.setItem(KEY, JSON.stringify(docs.filter(d => d.id !== id)));
 }
 
+export async function deleteDocuments(ids: string[]): Promise<void> {
+  const set = new Set(ids);
+  const docs = await getDocuments();
+  await AsyncStorage.setItem(KEY, JSON.stringify(docs.filter(d => !set.has(d.id))));
+}
+
 export async function getSortPreference(): Promise<SortKey> {
   const raw = await AsyncStorage.getItem(SORT_KEY);
   if (raw === 'dateModified' || raw === 'nameAZ') return raw;

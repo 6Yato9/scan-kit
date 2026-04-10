@@ -19,11 +19,11 @@ export function MoveFolderSheet({ visible, document, folders, onMove, onClose }:
       <Text style={styles.heading}>Move to Folder</Text>
 
       <Pressable
-        style={[styles.option, document.folder === undefined && styles.optionActive]}
+        style={[styles.option, document.folder == null && styles.optionActive]}
         onPress={() => onMove(document, null)}
       >
         <Text style={styles.optionText}>No folder</Text>
-        {document.folder === undefined && <Text style={styles.check}>✓</Text>}
+        {document.folder == null && <Text style={styles.check}>✓</Text>}
       </Pressable>
 
       {folders.map(f => (
