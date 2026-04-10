@@ -135,6 +135,7 @@ export async function copyPageWithQuality(
     const result = await manipulateAsync(tempUri, [], { compress: quality, format: SaveFormat.JPEG });
     const src = new File(result.uri);
     src.copy(dest);
+    src.delete();
   }
   return dest.uri;
 }

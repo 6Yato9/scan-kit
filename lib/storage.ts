@@ -13,7 +13,7 @@ export type SortKey = 'dateAdded' | 'dateModified' | 'nameAZ';
 export type ScanSettings = {
   quality: 'low' | 'medium' | 'high';
   autoCrop: boolean;
-  defaultFilter: PageFilter | 'original';
+  defaultFilter: PageFilter;
 };
 
 export type DocSettings = {
