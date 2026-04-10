@@ -1,7 +1,8 @@
 // app/(tabs)/_layout.tsx
 import { useCallback } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Tabs, useRouter } from 'expo-router';
+import type { BottomTabBarButtonProps } from '@react-navigation/bottom-tabs';
 import * as Crypto from 'expo-crypto';
 import { ScanProvider, useScan } from '@/contexts/scan-context';
 import { ScanNameSheet } from '@/components/scan-name-sheet';
@@ -10,7 +11,7 @@ import { saveDocument } from '@/lib/storage';
 import { copyPageWithQuality, copyPdfToStorage } from '@/lib/files';
 
 // Rendered inside ScanProvider so useScan() works.
-function ScanTabButton(props: any) {
+function ScanTabButton(props: BottomTabBarButtonProps) {
   const { triggerScan } = useScan();
   return (
     <Pressable
@@ -71,6 +72,7 @@ function TabsWithScanSheet() {
         router.navigate('/(tabs)/files');
       } catch (err) {
         console.error('Save failed', err);
+        Alert.alert('Save Failed', 'Could not save document. Please try again.');
       }
     },
     [pendingPages, pendingPdfUri, pendingQuality, pendingDefaultFilter, clearPending, bumpLastSaved, router]
