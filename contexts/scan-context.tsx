@@ -60,12 +60,16 @@ export function ScanProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const openPdfImport = useCallback(async (uri: string) => {
-    const settings = await getScanSettings();
-    setPendingPages([]);
-    setPendingPdfUri(uri);
-    setPendingQuality(QUALITY_MAP[settings.quality]);
-    setPendingDefaultFilter('original');
-    setNameSheetVisible(true);
+    try {
+      const settings = await getScanSettings();
+      setPendingPages([]);
+      setPendingPdfUri(uri);
+      setPendingQuality(QUALITY_MAP[settings.quality]);
+      setPendingDefaultFilter('original');
+      setNameSheetVisible(true);
+    } catch (err) {
+      console.error('PDF import failed', err);
+    }
   }, []);
 
   const clearPending = useCallback(() => {
