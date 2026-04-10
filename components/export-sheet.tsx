@@ -1,7 +1,10 @@
+// components/export-sheet.tsx
 import { ActivityIndicator, Pressable, StyleSheet, Text } from 'react-native';
 import { useState } from 'react';
 import * as Sharing from 'expo-sharing';
+import * as Print from 'expo-print';
 import { generatePdf } from '@/lib/pdf';
+import { filterCss } from '@/lib/filters';
 import { BottomSheet } from '@/components/bottom-sheet';
 import { Document } from '@/types/document';
 
@@ -17,8 +20,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
   async function handleExportPdf() {
     setLoading(true);
     try {
-      const uri = await generatePdf(document.pages);
-      onClose();
+      const uri = await generatePdf(document.pages, document.filters);
       await Sharing.shareAsync(uri, {
         mimeType: 'application/pdf',
         dialogTitle: document.name,
@@ -26,24 +28,48 @@ export function ExportSheet({ visible, document, onClose }: Props) {
       });
     } finally {
       setLoading(false);
+      onClose();
     }
   }
 
   async function handleExportJpeg() {
-    onClose();
-    for (const pageUri of document.pages) {
-      await Sharing.shareAsync(pageUri, {
-        mimeType: 'image/jpeg',
-        dialogTitle: document.name,
-      });
+    setLoading(true);
+    try {
+      for (const pageUri of document.pages) {
+        await Sharing.shareAsync(pageUri, {
+          mimeType: 'image/jpeg',
+          dialogTitle: document.name,
+        });
+      }
+    } finally {
+      setLoading(false);
+      onClose();
+    }
+  }
+
+  async function handlePrint() {
+    setLoading(true);
+    try {
+      const imgTags = document.pages
+        .map((uri, i) => {
+          const css = filterCss(document.filters?.[i]);
+          const filterAttr = css !== 'none' ? `filter:${css};` : '';
+          return `<img src="${uri}" style="width:100%;display:block;page-break-after:always;${filterAttr}" />`;
+        })
+        .join('');
+      const html = `<html><body style="margin:0;padding:0;">${imgTags}</body></html>`;
+      await Print.printAsync({ html });
+    } finally {
+      setLoading(false);
+      onClose();
     }
   }
 
   return (
-    <BottomSheet visible={visible} onClose={onClose}>
+    <BottomSheet visible={visible} onClose={loading ? undefined : onClose}>
       <Text style={styles.heading}>Export</Text>
       {loading ? (
-        <ActivityIndicator style={{ marginVertical: 24 }} />
+        <ActivityIndicator size="large" style={{ marginVertical: 32 }} />
       ) : (
         <>
           <Pressable style={styles.option} onPress={handleExportPdf}>
@@ -53,6 +79,10 @@ export function ExportSheet({ visible, document, onClose }: Props) {
           <Pressable style={styles.option} onPress={handleExportJpeg}>
             <Text style={styles.optionTitle}>Export as JPEG</Text>
             <Text style={styles.optionSub}>Share individual page images</Text>
+          </Pressable>
+          <Pressable style={styles.option} onPress={handlePrint}>
+            <Text style={styles.optionTitle}>Print</Text>
+            <Text style={styles.optionSub}>Send to a printer</Text>
           </Pressable>
         </>
       )}

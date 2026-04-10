@@ -11,7 +11,7 @@ import {
 
 type Props = {
   visible: boolean;
-  onClose: () => void;
+  onClose?: () => void;
   children: React.ReactNode;
 };
 
@@ -30,6 +30,7 @@ export function BottomSheet({ visible, onClose, children }: Props) {
         <Pressable
           style={styles.backdrop}
           onPress={() => {
+            if (!onClose) return;
             Keyboard.dismiss();
             onClose();
           }}
@@ -41,13 +42,8 @@ export function BottomSheet({ visible, onClose, children }: Props) {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  backdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-  },
+  container: { flex: 1 },
+  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)' },
   sheet: {
     backgroundColor: '#fff',
     borderTopLeftRadius: 20,
