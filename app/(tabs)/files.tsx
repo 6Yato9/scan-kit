@@ -41,6 +41,7 @@ import { RenameSheet } from '@/components/rename-sheet';
 import { SortSheet } from '@/components/sort-sheet';
 import { DocActionsSheet } from '@/components/doc-actions-sheet';
 import { MergeSheet } from '@/components/merge-sheet';
+import { MoveFolderSheet } from '@/components/move-folder-sheet';
 
 function sortDocuments(docs: Document[], key: SortKey): Document[] {
   switch (key) {
@@ -64,6 +65,7 @@ export default function FilesScreen() {
   const [docActionsTarget, setDocActionsTarget] = useState<Document | null>(null);
   const [renameTarget, setRenameTarget] = useState<Document | null>(null);
   const [mergeTarget, setMergeTarget] = useState<Document | null>(null);
+  const [moveFolderTarget, setMoveFolderTarget] = useState<Document | null>(null);
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const params = useLocalSearchParams<{ action?: string }>();
@@ -252,6 +254,13 @@ export default function FilesScreen() {
     setDocuments(prev => prev.map(d => (d.id === updated.id ? updated : d)));
   }, []);
 
+  const handleMoveToFolder = useCallback(async (doc: Document, folder: string | null) => {
+    const updated: Document = { ...doc, folder: folder ?? undefined, updatedAt: Date.now() };
+    await updateDocument(updated);
+    setDocuments(prev => prev.map(d => (d.id === doc.id ? updated : d)));
+    setMoveFolderTarget(null);
+  }, []);
+
   const handleSort = useCallback(async (key: SortKey) => {
     setSortKey(key);
     await saveSortPreference(key);
@@ -394,7 +403,7 @@ export default function FilesScreen() {
         onSelect={doc => { setDocActionsTarget(null); setSelectedIds(new Set([doc.id])); }}
         onDelete={doc => { setDocActionsTarget(null); handleDelete(doc); }}
         onClose={() => setDocActionsTarget(null)}
-        onMoveToFolder={() => {}}
+        onMoveToFolder={doc => { setDocActionsTarget(null); setMoveFolderTarget(doc); }}
       />
 
       <RenameSheet
@@ -411,6 +420,14 @@ export default function FilesScreen() {
         allDocs={documents}
         onMerge={handleMerge}
         onClose={() => setMergeTarget(null)}
+      />
+
+      <MoveFolderSheet
+        visible={moveFolderTarget !== null}
+        document={moveFolderTarget}
+        folders={folders}
+        onMove={handleMoveToFolder}
+        onClose={() => setMoveFolderTarget(null)}
       />
     </View>
   );
