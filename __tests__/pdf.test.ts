@@ -39,5 +39,5 @@ test('returns the URI from printToFileAsync', async () => {
 test('applies CSS filter when filter is not original', async () => {
   await generatePdf(['file:///page0.jpg'], ['grayscale']);
   const { html } = mockPrint.mock.calls[0][0];
-  expect(html).toContain('filter:');
+  expect(html).toContain('filter:grayscale(100%)');
 });

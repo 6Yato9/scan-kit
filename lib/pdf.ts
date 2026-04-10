@@ -9,10 +9,13 @@ export async function generatePdf(pages: string[], filters?: PageFilter[]): Prom
     pages.map(async (uri, i) => {
       const css = filterCss(filters?.[i]);
       const filterAttr = css !== 'none' ? `filter:${css};` : '';
+      const mime = uri.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
       const b64 = await FileSystem.readAsStringAsync(uri, {
         encoding: FileSystem.EncodingType.Base64,
+      }).catch((err: Error) => {
+        throw new Error(`generatePdf: failed to read page ${i} (${uri}): ${err.message}`);
       });
-      return `<img src="data:image/jpeg;base64,${b64}" style="width:100%;display:block;page-break-after:always;${filterAttr}" />`;
+      return `<img src="data:${mime};base64,${b64}" style="width:100%;display:block;page-break-after:always;${filterAttr}" />`;
     })
   );
   const html = `<html><body style="margin:0;padding:0;">${imgTags.join('')}</body></html>`;
