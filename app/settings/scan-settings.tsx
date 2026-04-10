@@ -5,6 +5,7 @@ import { useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getScanSettings, saveScanSettings, ScanSettings } from '@/lib/storage';
 import { PageFilter } from '@/types/document';
+import { useTheme } from '@/contexts/theme-context';
 
 type Quality = ScanSettings['quality'];
 type FilterOrOriginal = PageFilter | 'original';
@@ -24,6 +25,7 @@ const FILTER_OPTIONS: { label: string; value: FilterOrOriginal }[] = [
 
 export default function ScanSettingsScreen() {
   const insets = useSafeAreaInsets();
+  const { colors } = useTheme();
   const [settings, setSettings] = useState<ScanSettings>({
     quality: 'high',
     autoCrop: true,
@@ -42,51 +44,51 @@ export default function ScanSettingsScreen() {
 
   return (
     <ScrollView
-      style={styles.container}
+      style={[styles.container, { backgroundColor: colors.bg }]}
       contentContainerStyle={{ paddingBottom: insets.bottom + 40 }}
     >
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>SCAN QUALITY</Text>
+      <View style={[styles.section, { backgroundColor: colors.card }]}>
+        <Text style={[styles.sectionTitle, { color: colors.muted }]}>SCAN QUALITY</Text>
         {QUALITY_OPTIONS.map(opt => (
           <Pressable
             key={opt.value}
-            style={styles.row}
+            style={[styles.row, { borderTopColor: colors.separator }]}
             onPress={() => update({ quality: opt.value })}
           >
             <View style={styles.rowLeft}>
-              <Text style={styles.rowLabel}>{opt.label}</Text>
-              <Text style={styles.rowDesc}>{opt.desc}</Text>
+              <Text style={[styles.rowLabel, { color: colors.text }]}>{opt.label}</Text>
+              <Text style={[styles.rowDesc, { color: colors.muted }]}>{opt.desc}</Text>
             </View>
-            <View style={[styles.radio, settings.quality === opt.value && styles.radioActive]}>
-              {settings.quality === opt.value && <View style={styles.radioDot} />}
+            <View style={[styles.radio, { borderColor: settings.quality === opt.value ? colors.accent : colors.border }]}>
+              {settings.quality === opt.value && <View style={[styles.radioDot, { backgroundColor: colors.accent }]} />}
             </View>
           </Pressable>
         ))}
       </View>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>AUTO-CROP</Text>
-        <View style={styles.row}>
-          <Text style={styles.rowLabel}>Allow manual crop adjustment</Text>
+      <View style={[styles.section, { backgroundColor: colors.card }]}>
+        <Text style={[styles.sectionTitle, { color: colors.muted }]}>AUTO-CROP</Text>
+        <View style={[styles.row, { borderTopColor: colors.separator }]}>
+          <Text style={[styles.rowLabel, { color: colors.text }]}>Allow manual crop adjustment</Text>
           <Switch
             value={settings.autoCrop}
             onValueChange={v => update({ autoCrop: v })}
-            trackColor={{ true: '#0a7ea4' }}
+            trackColor={{ true: colors.accent }}
           />
         </View>
       </View>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>DEFAULT COLOR MODE</Text>
+      <View style={[styles.section, { backgroundColor: colors.card }]}>
+        <Text style={[styles.sectionTitle, { color: colors.muted }]}>DEFAULT COLOR MODE</Text>
         {FILTER_OPTIONS.map(opt => (
           <Pressable
             key={opt.value}
-            style={styles.row}
+            style={[styles.row, { borderTopColor: colors.separator }]}
             onPress={() => update({ defaultFilter: opt.value })}
           >
-            <Text style={styles.rowLabel}>{opt.label}</Text>
-            <View style={[styles.radio, settings.defaultFilter === opt.value && styles.radioActive]}>
-              {settings.defaultFilter === opt.value && <View style={styles.radioDot} />}
+            <Text style={[styles.rowLabel, { color: colors.text }]}>{opt.label}</Text>
+            <View style={[styles.radio, { borderColor: settings.defaultFilter === opt.value ? colors.accent : colors.border }]}>
+              {settings.defaultFilter === opt.value && <View style={[styles.radioDot, { backgroundColor: colors.accent }]} />}
             </View>
           </Pressable>
         ))}
@@ -96,9 +98,8 @@ export default function ScanSettingsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f5f5f5' },
+  container: { flex: 1 },
   section: {
-    backgroundColor: '#fff',
     marginHorizontal: 14,
     marginTop: 20,
     borderRadius: 14,
@@ -107,7 +108,6 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#888',
     letterSpacing: 0.8,
     paddingHorizontal: 16,
     paddingTop: 14,
@@ -120,20 +120,17 @@ const styles = StyleSheet.create({
     paddingVertical: 13,
     paddingHorizontal: 16,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#f0f0f0',
   },
   rowLeft: { flex: 1 },
-  rowLabel: { fontSize: 16, color: '#1a1a1a' },
-  rowDesc: { fontSize: 12, color: '#888', marginTop: 1 },
+  rowLabel: { fontSize: 16 },
+  rowDesc: { fontSize: 12, marginTop: 1 },
   radio: {
     width: 22,
     height: 22,
     borderRadius: 11,
     borderWidth: 2,
-    borderColor: '#ccc',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  radioActive: { borderColor: '#0a7ea4' },
-  radioDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#0a7ea4' },
+  radioDot: { width: 10, height: 10, borderRadius: 5 },
 });

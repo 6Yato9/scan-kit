@@ -25,6 +25,7 @@ import {
 } from '@/lib/storage';
 import { deleteDocumentFiles, copyDocumentFiles, appendPages } from '@/lib/files';
 import { useScan } from '@/contexts/scan-context';
+import { useTheme } from '@/contexts/theme-context';
 import { DocActionsSheet } from '@/components/doc-actions-sheet';
 import { RenameSheet } from '@/components/rename-sheet';
 import { MergeSheet } from '@/components/merge-sheet';
@@ -52,6 +53,7 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { lastSaved } = useScan();
+  const { colors } = useTheme();
 
   const load = useCallback(async () => {
     const [docs, sort] = await Promise.all([getDocuments(), getSortPreference()]);
@@ -150,19 +152,19 @@ export default function HomeScreen() {
   }, []);
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
+    <View style={[styles.container, { paddingTop: insets.top, backgroundColor: colors.bg }]}>
       <View style={styles.header}>
-        <Text style={styles.title}>Recent</Text>
+        <Text style={[styles.title, { color: colors.text }]}>Recent</Text>
         <Pressable onPress={() => setSortSheetVisible(true)} hitSlop={12}>
-          <Text style={styles.sortBtn}>↕ Sort</Text>
+          <Text style={[styles.sortBtn, { color: colors.accent }]}>↕ Sort</Text>
         </Pressable>
       </View>
 
       <View style={styles.searchRow}>
         <TextInput
-          style={styles.searchInput}
+          style={[styles.searchInput, { backgroundColor: colors.input, color: colors.text }]}
           placeholder="Search documents…"
-          placeholderTextColor="#aaa"
+          placeholderTextColor={colors.muted}
           value={searchQuery}
           onChangeText={setSearchQuery}
           clearButtonMode="while-editing"
@@ -176,7 +178,7 @@ export default function HomeScreen() {
         contentContainerStyle={styles.listContent}
         ListEmptyComponent={
           <View style={styles.empty}>
-            <Text style={styles.emptyText}>
+            <Text style={[styles.emptyText, { color: colors.muted }]}>
               {searchQuery.trim()
                 ? `No results for "${searchQuery.trim()}"`
                 : 'No documents yet. Tap 📷 to scan.'}
@@ -185,28 +187,28 @@ export default function HomeScreen() {
         }
         renderItem={({ item }) => (
           <Pressable
-            style={styles.row}
+            style={[styles.row, { backgroundColor: colors.card }]}
             onPress={() => router.push({ pathname: '/viewer', params: { id: item.id } })}
             onLongPress={() => setDocActionsTarget(item)}
           >
             {item.pdfUri ? (
-              <View style={styles.thumb}>
+              <View style={[styles.thumb, { backgroundColor: colors.placeholder }]}>
                 <Text style={styles.pdfIcon}>📄</Text>
               </View>
             ) : item.pages[0] ? (
               <Image source={{ uri: item.pages[0] }} style={styles.thumb} resizeMode="cover" />
             ) : (
-              <View style={styles.thumb} />
+              <View style={[styles.thumb, { backgroundColor: colors.placeholder }]} />
             )}
             <View style={styles.rowInfo}>
-              <Text style={styles.rowName} numberOfLines={1}>{item.name}</Text>
-              <Text style={styles.rowMeta}>
+              <Text style={[styles.rowName, { color: colors.text }]} numberOfLines={1}>{item.name}</Text>
+              <Text style={[styles.rowMeta, { color: colors.muted }]}>
                 {item.pdfUri ? 'PDF' : `${item.pages.length} page${item.pages.length !== 1 ? 's' : ''}`}
                 {' · '}
                 {new Date(item.updatedAt).toLocaleDateString()}
               </Text>
             </View>
-            <Text style={styles.chevron}>›</Text>
+            <Text style={[styles.chevron, { color: colors.border }]}>›</Text>
           </Pressable>
         )}
       />
@@ -249,7 +251,7 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f5f5f5' },
+  container: { flex: 1 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -258,24 +260,21 @@ const styles = StyleSheet.create({
     paddingTop: 14,
     paddingBottom: 8,
   },
-  title: { fontSize: 30, fontWeight: '800', color: '#1a1a1a', letterSpacing: -0.5 },
-  sortBtn: { fontSize: 14, color: '#0a7ea4', fontWeight: '600' },
+  title: { fontSize: 30, fontWeight: '800', letterSpacing: -0.5 },
+  sortBtn: { fontSize: 14, fontWeight: '600' },
   searchRow: { paddingHorizontal: 14, paddingBottom: 10 },
   searchInput: {
-    backgroundColor: '#ebebeb',
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 9,
     fontSize: 15,
-    color: '#1a1a1a',
   },
   listContent: { paddingHorizontal: 14, paddingBottom: 80 },
   empty: { alignItems: 'center', paddingTop: 60 },
-  emptyText: { fontSize: 15, color: '#888', textAlign: 'center' },
+  emptyText: { fontSize: 15, textAlign: 'center' },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#fff',
     borderRadius: 12,
     marginBottom: 8,
     padding: 10,
@@ -285,13 +284,12 @@ const styles = StyleSheet.create({
     width: 48,
     height: 64,
     borderRadius: 6,
-    backgroundColor: '#e8e8e8',
     alignItems: 'center',
     justifyContent: 'center',
   },
   pdfIcon: { fontSize: 24 },
   rowInfo: { flex: 1 },
-  rowName: { fontSize: 15, fontWeight: '600', color: '#1a1a1a' },
-  rowMeta: { fontSize: 12, color: '#888', marginTop: 2 },
-  chevron: { fontSize: 20, color: '#ccc' },
+  rowName: { fontSize: 15, fontWeight: '600' },
+  rowMeta: { fontSize: 12, marginTop: 2 },
+  chevron: { fontSize: 20 },
 });

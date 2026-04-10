@@ -125,3 +125,16 @@ export async function getDocSettings(): Promise<DocSettings> {
 export async function saveDocSettings(s: DocSettings): Promise<void> {
   await AsyncStorage.setItem(DOC_SETTINGS_KEY, JSON.stringify(s));
 }
+
+const THEME_KEY = '@scan_kit_theme';
+type ThemePreference = 'light' | 'dark' | 'system';
+
+export async function getThemePreference(): Promise<ThemePreference> {
+  const raw = await AsyncStorage.getItem(THEME_KEY);
+  if (raw === 'light' || raw === 'dark' || raw === 'system') return raw;
+  return 'system';
+}
+
+export async function saveThemePreference(p: ThemePreference): Promise<void> {
+  await AsyncStorage.setItem(THEME_KEY, p);
+}

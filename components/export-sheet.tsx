@@ -7,6 +7,7 @@ import { generatePdf } from '@/lib/pdf';
 import { filterCss } from '@/lib/filters';
 import { BottomSheet } from '@/components/bottom-sheet';
 import { Document } from '@/types/document';
+import { useTheme } from '@/contexts/theme-context';
 
 type Props = {
   visible: boolean;
@@ -15,6 +16,7 @@ type Props = {
 };
 
 export function ExportSheet({ visible, document, onClose }: Props) {
+  const { colors } = useTheme();
   const [loading, setLoading] = useState(false);
 
   async function handleExportPdf() {
@@ -67,22 +69,22 @@ export function ExportSheet({ visible, document, onClose }: Props) {
 
   return (
     <BottomSheet visible={visible} onClose={loading ? undefined : onClose}>
-      <Text style={styles.heading}>Export</Text>
+      <Text style={[styles.heading, { color: colors.text }]}>Export</Text>
       {loading ? (
         <ActivityIndicator size="large" style={{ marginVertical: 32 }} />
       ) : (
         <>
-          <Pressable style={styles.option} onPress={handleExportPdf}>
-            <Text style={styles.optionTitle}>Export as PDF</Text>
-            <Text style={styles.optionSub}>All {document.pages.length} pages in one file</Text>
+          <Pressable style={[styles.option, { borderBottomColor: colors.border }]} onPress={handleExportPdf}>
+            <Text style={[styles.optionTitle, { color: colors.text }]}>Export as PDF</Text>
+            <Text style={[styles.optionSub, { color: colors.faint }]}>All {document.pages.length} pages in one file</Text>
           </Pressable>
-          <Pressable style={styles.option} onPress={handleExportJpeg}>
-            <Text style={styles.optionTitle}>Export as JPEG</Text>
-            <Text style={styles.optionSub}>Share individual page images</Text>
+          <Pressable style={[styles.option, { borderBottomColor: colors.border }]} onPress={handleExportJpeg}>
+            <Text style={[styles.optionTitle, { color: colors.text }]}>Export as JPEG</Text>
+            <Text style={[styles.optionSub, { color: colors.faint }]}>Share individual page images</Text>
           </Pressable>
-          <Pressable style={styles.option} onPress={handlePrint}>
-            <Text style={styles.optionTitle}>Print</Text>
-            <Text style={styles.optionSub}>Send to a printer</Text>
+          <Pressable style={[styles.option, { borderBottomColor: colors.border }]} onPress={handlePrint}>
+            <Text style={[styles.optionTitle, { color: colors.text }]}>Print</Text>
+            <Text style={[styles.optionSub, { color: colors.faint }]}>Send to a printer</Text>
           </Pressable>
         </>
       )}
@@ -91,12 +93,11 @@ export function ExportSheet({ visible, document, onClose }: Props) {
 }
 
 const styles = StyleSheet.create({
-  heading: { fontSize: 18, fontWeight: '700', marginBottom: 16, color: '#1a1a1a' },
+  heading: { fontSize: 18, fontWeight: '700', marginBottom: 16 },
   option: {
     paddingVertical: 16,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e8e8e8',
   },
-  optionTitle: { fontSize: 16, fontWeight: '600', color: '#1a1a1a' },
-  optionSub: { fontSize: 13, color: '#999', marginTop: 3 },
+  optionTitle: { fontSize: 16, fontWeight: '600' },
+  optionSub: { fontSize: 13, marginTop: 3 },
 });

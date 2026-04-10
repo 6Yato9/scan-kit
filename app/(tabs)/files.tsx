@@ -36,6 +36,7 @@ import {
   copyPdfToStorage,
 } from '@/lib/files';
 import { useScan } from '@/contexts/scan-context';
+import { useTheme } from '@/contexts/theme-context';
 import { DocumentCard } from '@/components/document-card';
 import { EmptyState } from '@/components/empty-state';
 import { RenameSheet } from '@/components/rename-sheet';
@@ -71,6 +72,7 @@ export default function FilesScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ action?: string }>();
   const { lastSaved, openImport, openPdfImport } = useScan();
+  const { colors } = useTheme();
 
   const load = useCallback(async () => {
     const [docs, sort, fldrs] = await Promise.all([
@@ -289,19 +291,19 @@ export default function FilesScreen() {
   }, [selectedIds]);
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
+    <View style={[styles.container, { paddingTop: insets.top, backgroundColor: colors.bg }]}>
       <View style={styles.header}>
-        <Text style={styles.title}>Files</Text>
+        <Text style={[styles.title, { color: colors.text }]}>Files</Text>
         <Pressable onPress={() => setSortSheetVisible(true)} hitSlop={12}>
-          <Text style={styles.sortBtn}>↕ Sort</Text>
+          <Text style={[styles.sortBtn, { color: colors.accent }]}>↕ Sort</Text>
         </Pressable>
       </View>
 
       <View style={styles.searchRow}>
         <TextInput
-          style={styles.searchInput}
+          style={[styles.searchInput, { backgroundColor: colors.input, color: colors.text }]}
           placeholder="Search documents…"
-          placeholderTextColor="#aaa"
+          placeholderTextColor={colors.muted}
           value={searchQuery}
           onChangeText={setSearchQuery}
           clearButtonMode="while-editing"
@@ -311,14 +313,14 @@ export default function FilesScreen() {
 
       {/* Quick action bar */}
       <View style={styles.actionBar}>
-        <Pressable style={styles.actionBtn} onPress={handleImportImages}>
-          <Text style={styles.actionBtnText}>🖼 Import Images</Text>
+        <Pressable style={[styles.actionBtn, { backgroundColor: colors.card }]} onPress={handleImportImages}>
+          <Text style={[styles.actionBtnText, { color: colors.text }]}>🖼 Import Images</Text>
         </Pressable>
-        <Pressable style={styles.actionBtn} onPress={handleImportFiles}>
-          <Text style={styles.actionBtnText}>📥 Import Files</Text>
+        <Pressable style={[styles.actionBtn, { backgroundColor: colors.card }]} onPress={handleImportFiles}>
+          <Text style={[styles.actionBtnText, { color: colors.text }]}>📥 Import Files</Text>
         </Pressable>
-        <Pressable style={styles.actionBtn} onPress={handleNewFolder}>
-          <Text style={styles.actionBtnText}>📁 New Folder</Text>
+        <Pressable style={[styles.actionBtn, { backgroundColor: colors.card }]} onPress={handleNewFolder}>
+          <Text style={[styles.actionBtnText, { color: colors.text }]}>📁 New Folder</Text>
         </Pressable>
       </View>
 
@@ -331,18 +333,18 @@ export default function FilesScreen() {
           contentContainerStyle={styles.chips}
         >
           <Pressable
-            style={[styles.chip, activeFolder === null && styles.chipActive]}
+            style={[styles.chip, { backgroundColor: colors.input }, activeFolder === null && { borderColor: colors.accent, backgroundColor: colors.accentLight }]}
             onPress={() => setActiveFolder(null)}
           >
-            <Text style={[styles.chipText, activeFolder === null && styles.chipTextActive]}>All</Text>
+            <Text style={[styles.chipText, { color: colors.subtext }, activeFolder === null && { color: colors.accent, fontWeight: '700' }]}>All</Text>
           </Pressable>
           {folders.map(f => (
             <Pressable
               key={f}
-              style={[styles.chip, activeFolder === f && styles.chipActive]}
+              style={[styles.chip, { backgroundColor: colors.input }, activeFolder === f && { borderColor: colors.accent, backgroundColor: colors.accentLight }]}
               onPress={() => setActiveFolder(f)}
             >
-              <Text style={[styles.chipText, activeFolder === f && styles.chipTextActive]}>{f}</Text>
+              <Text style={[styles.chipText, { color: colors.subtext }, activeFolder === f && { color: colors.accent, fontWeight: '700' }]}>{f}</Text>
             </Pressable>
           ))}
         </ScrollView>
@@ -358,7 +360,7 @@ export default function FilesScreen() {
         ListEmptyComponent={
           searchQuery.trim() ? (
             <View style={styles.noResults}>
-              <Text style={styles.noResultsText}>No results for "{searchQuery.trim()}"</Text>
+              <Text style={[styles.noResultsText, { color: colors.muted }]}>No results for "{searchQuery.trim()}"</Text>
             </View>
           ) : (
             <EmptyState />
@@ -376,12 +378,12 @@ export default function FilesScreen() {
       />
 
       {isMultiSelectMode && (
-        <View style={[styles.multiBar, { paddingBottom: insets.bottom + 12 }]}>
-          <Pressable style={styles.cancelBtn} onPress={() => setSelectedIds(new Set())}>
-            <Text style={styles.cancelBtnText}>Cancel</Text>
+        <View style={[styles.multiBar, { paddingBottom: insets.bottom + 12, backgroundColor: colors.card }]}>
+          <Pressable style={[styles.cancelBtn, { backgroundColor: colors.secondary }]} onPress={() => setSelectedIds(new Set())}>
+            <Text style={[styles.cancelBtnText, { color: colors.text }]}>Cancel</Text>
           </Pressable>
-          <Pressable style={styles.deleteBtn} onPress={handleBatchDelete}>
-            <Text style={styles.deleteBtnText}>Delete ({selectedIds.size})</Text>
+          <Pressable style={[styles.deleteBtn, { backgroundColor: colors.dangerBg, borderColor: colors.dangerBorder }]} onPress={handleBatchDelete}>
+            <Text style={[styles.deleteBtnText, { color: colors.danger }]}>Delete ({selectedIds.size})</Text>
           </Pressable>
         </View>
       )}
@@ -433,7 +435,7 @@ export default function FilesScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f5f5f5' },
+  container: { flex: 1 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -442,16 +444,14 @@ const styles = StyleSheet.create({
     paddingTop: 14,
     paddingBottom: 8,
   },
-  title: { fontSize: 30, fontWeight: '800', color: '#1a1a1a', letterSpacing: -0.5 },
-  sortBtn: { fontSize: 14, color: '#0a7ea4', fontWeight: '600' },
+  title: { fontSize: 30, fontWeight: '800', letterSpacing: -0.5 },
+  sortBtn: { fontSize: 14, fontWeight: '600' },
   searchRow: { paddingHorizontal: 14, paddingBottom: 6 },
   searchInput: {
-    backgroundColor: '#ebebeb',
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 9,
     fontSize: 15,
-    color: '#1a1a1a',
   },
   actionBar: {
     flexDirection: 'row',
@@ -461,7 +461,6 @@ const styles = StyleSheet.create({
   },
   actionBtn: {
     flex: 1,
-    backgroundColor: '#fff',
     borderRadius: 10,
     paddingVertical: 9,
     alignItems: 'center',
@@ -471,30 +470,26 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 1 },
     elevation: 2,
   },
-  actionBtnText: { fontSize: 12, fontWeight: '600', color: '#1a1a1a' },
+  actionBtnText: { fontSize: 12, fontWeight: '600' },
   chipsScroll: { maxHeight: 40 },
   chips: { paddingHorizontal: 14, paddingBottom: 8, gap: 8, flexDirection: 'row' },
   chip: {
     paddingHorizontal: 14,
     paddingVertical: 6,
     borderRadius: 20,
-    backgroundColor: '#ebebeb',
     borderWidth: 1.5,
     borderColor: 'transparent',
   },
-  chipActive: { borderColor: '#0a7ea4', backgroundColor: '#e8f5fa' },
-  chipText: { fontSize: 13, color: '#555', fontWeight: '500' },
-  chipTextActive: { color: '#0a7ea4', fontWeight: '700' },
+  chipText: { fontSize: 13, fontWeight: '500' },
   gridContent: { padding: 10, paddingBottom: 120 },
   emptyContent: { flex: 1 },
   noResults: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 80 },
-  noResultsText: { fontSize: 16, color: '#888' },
+  noResultsText: { fontSize: 16 },
   multiBar: {
     position: 'absolute',
     bottom: 0,
     left: 0,
     right: 0,
-    backgroundColor: '#fff',
     flexDirection: 'row',
     gap: 12,
     paddingHorizontal: 20,
@@ -507,20 +502,17 @@ const styles = StyleSheet.create({
   },
   cancelBtn: {
     flex: 1,
-    backgroundColor: '#f0f0f0',
     borderRadius: 12,
     padding: 15,
     alignItems: 'center',
   },
-  cancelBtnText: { fontSize: 16, fontWeight: '600', color: '#1a1a1a' },
+  cancelBtnText: { fontSize: 16, fontWeight: '600' },
   deleteBtn: {
     flex: 1,
-    backgroundColor: '#fff0f0',
     borderRadius: 12,
     padding: 15,
     alignItems: 'center',
     borderWidth: 1.5,
-    borderColor: '#ffc5c5',
   },
-  deleteBtnText: { fontSize: 16, fontWeight: '600', color: '#cc0000' },
+  deleteBtnText: { fontSize: 16, fontWeight: '600' },
 });

@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { PageFilter } from '@/types/document';
 import { filterStyle } from '@/lib/filters';
+import { useTheme } from '@/contexts/theme-context';
 
 type Props = {
   pages: string[];
@@ -28,6 +29,7 @@ export function ThumbnailStrip({
   onAddPress,
   bottomInset,
 }: Props) {
+  const { colors } = useTheme();
   const listRef = useRef<FlatList>(null);
 
   useEffect(() => {
@@ -50,7 +52,7 @@ export function ThumbnailStrip({
           const fStyle = filterStyle(filters?.[index]);
           return (
             <Pressable
-              style={[styles.thumb, index === currentPage && styles.thumbActive]}
+              style={[styles.thumb, index === currentPage && { borderColor: colors.accent }]}
               onPress={() => onPagePress(index)}
             >
               <Image
@@ -88,9 +90,6 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: 'transparent',
     overflow: 'hidden',
-  },
-  thumbActive: {
-    borderColor: '#0a7ea4',
   },
   thumbImage: {
     width: '100%',

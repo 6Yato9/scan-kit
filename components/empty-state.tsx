@@ -1,12 +1,14 @@
 // components/empty-state.tsx
 import { StyleSheet, Text, View } from 'react-native';
+import { useTheme } from '@/contexts/theme-context';
 
 export function EmptyState() {
+  const { colors } = useTheme();
   return (
     <View style={styles.container}>
       <Text style={styles.icon}>📄</Text>
-      <Text style={styles.title}>No scans yet</Text>
-      <Text style={styles.subtitle}>
+      <Text style={[styles.title, { color: colors.text }]}>No scans yet</Text>
+      <Text style={[styles.subtitle, { color: colors.faint }]}>
         Tap the button below to scan your first document
       </Text>
     </View>
@@ -27,12 +29,10 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 22,
     fontWeight: '700',
-    color: '#1a1a1a',
     marginBottom: 10,
   },
   subtitle: {
     fontSize: 15,
-    color: '#999',
     textAlign: 'center',
     lineHeight: 22,
   },

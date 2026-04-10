@@ -8,6 +8,7 @@ import {
   StyleSheet,
   View,
 } from 'react-native';
+import { useTheme } from '@/contexts/theme-context';
 
 type Props = {
   visible: boolean;
@@ -16,6 +17,7 @@ type Props = {
 };
 
 export function BottomSheet({ visible, onClose, children }: Props) {
+  const { colors } = useTheme();
   return (
     <Modal
       transparent
@@ -35,7 +37,7 @@ export function BottomSheet({ visible, onClose, children }: Props) {
             onClose();
           }}
         />
-        <View style={styles.sheet}>{children}</View>
+        <View style={[styles.sheet, { backgroundColor: colors.card }]}>{children}</View>
       </KeyboardAvoidingView>
     </Modal>
   );
@@ -43,9 +45,8 @@ export function BottomSheet({ visible, onClose, children }: Props) {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)' },
+  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)' },
   sheet: {
-    backgroundColor: '#fff',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     padding: 24,

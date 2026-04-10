@@ -2,6 +2,7 @@
 import { Pressable, StyleSheet, Text } from 'react-native';
 import { BottomSheet } from '@/components/bottom-sheet';
 import { Document } from '@/types/document';
+import { useTheme } from '@/contexts/theme-context';
 
 type Props = {
   visible: boolean;
@@ -26,6 +27,7 @@ export function DocActionsSheet({
   onDelete,
   onClose,
 }: Props) {
+  const { colors } = useTheme();
   if (!document) return null;
 
   function wrap(fn: (doc: Document) => void) {
@@ -34,43 +36,41 @@ export function DocActionsSheet({
 
   return (
     <BottomSheet visible={visible} onClose={onClose}>
-      <Text style={styles.docName} numberOfLines={2}>{document.name}</Text>
+      <Text style={[styles.docName, { color: colors.muted }]} numberOfLines={2}>{document.name}</Text>
 
-      <Pressable style={styles.option} onPress={wrap(onRename)}>
-        <Text style={styles.optionText}>Rename</Text>
+      <Pressable style={[styles.option, { borderBottomColor: colors.border }]} onPress={wrap(onRename)}>
+        <Text style={[styles.optionText, { color: colors.text }]}>Rename</Text>
       </Pressable>
 
-      <Pressable style={styles.option} onPress={wrap(onDuplicate)}>
-        <Text style={styles.optionText}>Duplicate</Text>
+      <Pressable style={[styles.option, { borderBottomColor: colors.border }]} onPress={wrap(onDuplicate)}>
+        <Text style={[styles.optionText, { color: colors.text }]}>Duplicate</Text>
       </Pressable>
 
-      <Pressable style={styles.option} onPress={wrap(onMerge)}>
-        <Text style={styles.optionText}>Merge with…</Text>
+      <Pressable style={[styles.option, { borderBottomColor: colors.border }]} onPress={wrap(onMerge)}>
+        <Text style={[styles.optionText, { color: colors.text }]}>Merge with…</Text>
       </Pressable>
 
-      <Pressable style={styles.option} onPress={wrap(onMoveToFolder)}>
-        <Text style={styles.optionText}>Move to Folder…</Text>
+      <Pressable style={[styles.option, { borderBottomColor: colors.border }]} onPress={wrap(onMoveToFolder)}>
+        <Text style={[styles.optionText, { color: colors.text }]}>Move to Folder…</Text>
       </Pressable>
 
-      <Pressable style={styles.option} onPress={wrap(onSelect)}>
-        <Text style={styles.optionText}>Select</Text>
+      <Pressable style={[styles.option, { borderBottomColor: colors.border }]} onPress={wrap(onSelect)}>
+        <Text style={[styles.optionText, { color: colors.text }]}>Select</Text>
       </Pressable>
 
       <Pressable style={[styles.option, styles.optionLast]} onPress={wrap(onDelete)}>
-        <Text style={[styles.optionText, styles.deleteText]}>Delete</Text>
+        <Text style={[styles.optionText, { color: colors.danger }]}>Delete</Text>
       </Pressable>
     </BottomSheet>
   );
 }
 
 const styles = StyleSheet.create({
-  docName: { fontSize: 15, fontWeight: '600', color: '#888', marginBottom: 12 },
+  docName: { fontSize: 15, fontWeight: '600', marginBottom: 12 },
   option: {
     paddingVertical: 16,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e8e8e8',
   },
   optionLast: { borderBottomWidth: 0 },
-  optionText: { fontSize: 17, color: '#1a1a1a' },
-  deleteText: { color: '#cc0000' },
+  optionText: { fontSize: 17 },
 });

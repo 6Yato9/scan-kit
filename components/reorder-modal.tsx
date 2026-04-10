@@ -7,6 +7,7 @@ import DraggableFlatList, {
 } from 'react-native-draggable-flatlist';
 import { PageFilter } from '@/types/document';
 import { filterStyle } from '@/lib/filters';
+import { useTheme } from '@/contexts/theme-context';
 
 type PageItem = {
   index: number;
@@ -23,6 +24,7 @@ type Props = {
 };
 
 export function ReorderModal({ visible, pages, filters, onConfirm, onCancel }: Props) {
+  const { colors } = useTheme();
   const [items, setItems] = useState<PageItem[]>([]);
 
   function handleShow() {
@@ -38,17 +40,17 @@ export function ReorderModal({ visible, pages, filters, onConfirm, onCancel }: P
     return (
       <ScaleDecorator>
         <Pressable
-          style={[styles.row, isActive && styles.rowActive]}
+          style={[styles.row, { backgroundColor: isActive ? colors.accentLight : colors.card }]}
           onLongPress={drag}
           delayLongPress={100}
         >
           <Image
             source={{ uri: item.uri }}
-            style={[styles.thumb, fStyle ? ({ filter: fStyle } as any) : undefined]}
+            style={[styles.thumb, { backgroundColor: colors.placeholder }, fStyle ? ({ filter: fStyle } as any) : undefined]}
             resizeMode="cover"
           />
-          <Text style={styles.pageLabel}>Page {index + 1}</Text>
-          <Text style={styles.dragHandle}>☰</Text>
+          <Text style={[styles.pageLabel, { color: colors.text }]}>Page {index + 1}</Text>
+          <Text style={[styles.dragHandle, { color: colors.border }]}>☰</Text>
         </Pressable>
       </ScaleDecorator>
     );
@@ -62,14 +64,14 @@ export function ReorderModal({ visible, pages, filters, onConfirm, onCancel }: P
       onShow={handleShow}
       onRequestClose={onCancel}
     >
-      <SafeAreaView style={styles.container}>
-        <View style={styles.header}>
+      <SafeAreaView style={[styles.container, { backgroundColor: colors.card }]}>
+        <View style={[styles.header, { borderBottomColor: colors.border }]}>
           <Pressable onPress={onCancel} hitSlop={12}>
-            <Text style={styles.cancel}>Cancel</Text>
+            <Text style={[styles.cancel, { color: colors.muted }]}>Cancel</Text>
           </Pressable>
-          <Text style={styles.title}>Reorder Pages</Text>
+          <Text style={[styles.title, { color: colors.text }]}>Reorder Pages</Text>
           <Pressable onPress={handleConfirm} hitSlop={12}>
-            <Text style={styles.done}>Done</Text>
+            <Text style={[styles.done, { color: colors.accent }]}>Done</Text>
           </Pressable>
         </View>
         <DraggableFlatList
@@ -85,7 +87,7 @@ export function ReorderModal({ visible, pages, filters, onConfirm, onCancel }: P
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
+  container: { flex: 1 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -93,27 +95,23 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 16,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e8e8e8',
   },
-  title: { fontSize: 17, fontWeight: '600', color: '#1a1a1a' },
-  cancel: { fontSize: 16, color: '#888' },
-  done: { fontSize: 16, color: '#0a7ea4', fontWeight: '600' },
+  title: { fontSize: 17, fontWeight: '600' },
+  cancel: { fontSize: 16 },
+  done: { fontSize: 16, fontWeight: '600' },
   list: { paddingVertical: 8 },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,
     paddingVertical: 10,
-    backgroundColor: '#fff',
     gap: 14,
   },
-  rowActive: { backgroundColor: '#f0f8ff' },
   thumb: {
     width: 44,
     height: 58,
     borderRadius: 4,
-    backgroundColor: '#e8e8e8',
   },
-  pageLabel: { flex: 1, fontSize: 15, color: '#1a1a1a' },
-  dragHandle: { fontSize: 20, color: '#ccc' },
+  pageLabel: { flex: 1, fontSize: 15 },
+  dragHandle: { fontSize: 20 },
 });

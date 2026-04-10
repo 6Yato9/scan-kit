@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { BottomSheet } from '@/components/bottom-sheet';
 import { PageFilter } from '@/types/document';
 import { filterStyle } from '@/lib/filters';
+import { useTheme } from '@/contexts/theme-context';
 
 type Props = {
   visible: boolean;
@@ -33,6 +34,7 @@ export function PageActionsSheet({
   onShare,
   onClose,
 }: Props) {
+  const { colors } = useTheme();
   const [rotating, setRotating] = useState(false);
 
   async function rotate(direction: 'cw' | 'ccw') {
@@ -48,13 +50,13 @@ export function PageActionsSheet({
 
   return (
     <BottomSheet visible={visible} onClose={rotating ? undefined : onClose}>
-      <Text style={styles.heading}>Page Actions</Text>
+      <Text style={[styles.heading, { color: colors.text }]}>Page Actions</Text>
 
       {/* Preview */}
       <View style={styles.previewRow}>
         <Image
           source={{ uri }}
-          style={[styles.preview, fStyle ? ({ filter: fStyle } as any) : undefined]}
+          style={[styles.preview, { backgroundColor: colors.secondary }, fStyle ? ({ filter: fStyle } as any) : undefined]}
           resizeMode="contain"
         />
       </View>
@@ -65,21 +67,21 @@ export function PageActionsSheet({
           <ActivityIndicator style={{ flex: 1 }} />
         ) : (
           <>
-            <Pressable style={styles.actionBtn} onPress={() => rotate('ccw')}>
-              <Text style={styles.actionIcon}>↺</Text>
-              <Text style={styles.actionLabel}>Rotate L</Text>
+            <Pressable style={[styles.actionBtn, { backgroundColor: colors.actionBtnBg }]} onPress={() => rotate('ccw')}>
+              <Text style={[styles.actionIcon, { color: colors.text }]}>↺</Text>
+              <Text style={[styles.actionLabel, { color: colors.subtext }]}>Rotate L</Text>
             </Pressable>
-            <Pressable style={styles.actionBtn} onPress={() => rotate('cw')}>
-              <Text style={styles.actionIcon}>↻</Text>
-              <Text style={styles.actionLabel}>Rotate R</Text>
+            <Pressable style={[styles.actionBtn, { backgroundColor: colors.actionBtnBg }]} onPress={() => rotate('cw')}>
+              <Text style={[styles.actionIcon, { color: colors.text }]}>↻</Text>
+              <Text style={[styles.actionLabel, { color: colors.subtext }]}>Rotate R</Text>
             </Pressable>
-            <Pressable style={styles.actionBtn} onPress={onShare}>
-              <Text style={styles.actionIcon}>↑</Text>
-              <Text style={styles.actionLabel}>Share</Text>
+            <Pressable style={[styles.actionBtn, { backgroundColor: colors.actionBtnBg }]} onPress={onShare}>
+              <Text style={[styles.actionIcon, { color: colors.text }]}>↑</Text>
+              <Text style={[styles.actionLabel, { color: colors.subtext }]}>Share</Text>
             </Pressable>
-            <Pressable style={[styles.actionBtn, styles.deleteAction]} onPress={onDelete}>
-              <Text style={[styles.actionIcon, styles.deleteIcon]}>✕</Text>
-              <Text style={[styles.actionLabel, styles.deleteLabel]}>Delete</Text>
+            <Pressable style={[styles.actionBtn, { backgroundColor: colors.dangerBg }]} onPress={onDelete}>
+              <Text style={[styles.actionIcon, { color: colors.danger }]}>✕</Text>
+              <Text style={[styles.actionLabel, { color: colors.danger }]}>Delete</Text>
             </Pressable>
           </>
         )}
@@ -92,15 +94,15 @@ export function PageActionsSheet({
           return (
             <Pressable
               key={key}
-              style={[styles.filterTile, filter === key && styles.filterTileActive]}
+              style={[styles.filterTile, { borderColor: filter === key ? colors.accent : 'transparent' }]}
               onPress={() => onFilter(key)}
             >
               <Image
                 source={{ uri }}
-                style={[styles.filterPreview, fs ? ({ filter: fs } as any) : undefined]}
+                style={[styles.filterPreview, { backgroundColor: colors.placeholder }, fs ? ({ filter: fs } as any) : undefined]}
                 resizeMode="cover"
               />
-              <Text style={[styles.filterLabel, filter === key && styles.filterLabelActive]}>
+              <Text style={[styles.filterLabel, { color: filter === key ? colors.accent : colors.muted }, filter === key && styles.filterLabelActive]}>
                 {label}
               </Text>
             </Pressable>
@@ -112,9 +114,9 @@ export function PageActionsSheet({
 }
 
 const styles = StyleSheet.create({
-  heading: { fontSize: 17, fontWeight: '700', marginBottom: 12, color: '#1a1a1a' },
+  heading: { fontSize: 17, fontWeight: '700', marginBottom: 12 },
   previewRow: { alignItems: 'center', marginBottom: 12 },
-  preview: { width: 80, height: 100, borderRadius: 4, backgroundColor: '#f0f0f0' },
+  preview: { width: 80, height: 100, borderRadius: 4 },
   row: {
     flexDirection: 'row',
     gap: 8,
@@ -124,14 +126,10 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     paddingVertical: 10,
-    backgroundColor: '#f5f5f5',
     borderRadius: 10,
   },
-  actionIcon: { fontSize: 22, color: '#1a1a1a' },
-  actionLabel: { fontSize: 11, color: '#555', marginTop: 2 },
-  deleteAction: { backgroundColor: '#fff0f0' },
-  deleteIcon: { color: '#cc0000' },
-  deleteLabel: { color: '#cc0000' },
+  actionIcon: { fontSize: 22 },
+  actionLabel: { fontSize: 11, marginTop: 2 },
   filterRow: { flexDirection: 'row', gap: 8 },
   filterTile: {
     flex: 1,
@@ -139,10 +137,8 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 4,
     borderWidth: 2,
-    borderColor: 'transparent',
   },
-  filterTileActive: { borderColor: '#0a7ea4' },
-  filterPreview: { width: '100%', aspectRatio: 0.75, borderRadius: 4, backgroundColor: '#e8e8e8' },
-  filterLabel: { fontSize: 10, color: '#888', marginTop: 4 },
-  filterLabelActive: { color: '#0a7ea4', fontWeight: '600' },
+  filterPreview: { width: '100%', aspectRatio: 0.75, borderRadius: 4 },
+  filterLabel: { fontSize: 10, marginTop: 4 },
+  filterLabelActive: { fontWeight: '600' },
 });

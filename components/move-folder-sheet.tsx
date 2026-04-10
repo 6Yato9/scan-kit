@@ -2,6 +2,7 @@
 import { Pressable, StyleSheet, Text } from 'react-native';
 import { BottomSheet } from '@/components/bottom-sheet';
 import { Document } from '@/types/document';
+import { useTheme } from '@/contexts/theme-context';
 
 type Props = {
   visible: boolean;
@@ -12,28 +13,29 @@ type Props = {
 };
 
 export function MoveFolderSheet({ visible, document, folders, onMove, onClose }: Props) {
+  const { colors } = useTheme();
   if (!document) return null;
 
   return (
     <BottomSheet visible={visible} onClose={onClose}>
-      <Text style={styles.heading}>Move to Folder</Text>
+      <Text style={[styles.heading, { color: colors.muted }]}>Move to Folder</Text>
 
       <Pressable
-        style={[styles.option, document.folder == null && styles.optionActive]}
+        style={[styles.option, { borderBottomColor: colors.border }, document.folder == null && { backgroundColor: colors.accentLight }]}
         onPress={() => onMove(document, null)}
       >
-        <Text style={styles.optionText}>No folder</Text>
-        {document.folder == null && <Text style={styles.check}>✓</Text>}
+        <Text style={[styles.optionText, { color: colors.text }]}>No folder</Text>
+        {document.folder == null && <Text style={[styles.check, { color: colors.accent }]}>✓</Text>}
       </Pressable>
 
       {folders.map(f => (
         <Pressable
           key={f}
-          style={[styles.option, document.folder === f && styles.optionActive]}
+          style={[styles.option, { borderBottomColor: colors.border }, document.folder === f && { backgroundColor: colors.accentLight }]}
           onPress={() => onMove(document, f)}
         >
-          <Text style={styles.optionText}>{f}</Text>
-          {document.folder === f && <Text style={styles.check}>✓</Text>}
+          <Text style={[styles.optionText, { color: colors.text }]}>{f}</Text>
+          {document.folder === f && <Text style={[styles.check, { color: colors.accent }]}>✓</Text>}
         </Pressable>
       ))}
     </BottomSheet>
@@ -41,16 +43,14 @@ export function MoveFolderSheet({ visible, document, folders, onMove, onClose }:
 }
 
 const styles = StyleSheet.create({
-  heading: { fontSize: 15, fontWeight: '600', color: '#888', marginBottom: 12 },
+  heading: { fontSize: 15, fontWeight: '600', marginBottom: 12 },
   option: {
     paddingVertical: 16,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e8e8e8',
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  optionActive: { backgroundColor: '#f0f8ff' },
-  optionText: { fontSize: 17, color: '#1a1a1a' },
-  check: { fontSize: 17, color: '#0a7ea4' },
+  optionText: { fontSize: 17 },
+  check: { fontSize: 17 },
 });

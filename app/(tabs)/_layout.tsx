@@ -5,6 +5,7 @@ import { Tabs, useRouter } from 'expo-router';
 import type { BottomTabBarButtonProps } from '@react-navigation/bottom-tabs';
 import * as Crypto from 'expo-crypto';
 import { ScanProvider, useScan } from '@/contexts/scan-context';
+import { useTheme } from '@/contexts/theme-context';
 import { ScanNameSheet } from '@/components/scan-name-sheet';
 import { Document, PageFilter } from '@/types/document';
 import { saveDocument } from '@/lib/storage';
@@ -29,6 +30,7 @@ function ScanTabButton(props: BottomTabBarButtonProps) {
 // Inner wrapper: has access to ScanContext to render ScanNameSheet.
 function TabsWithScanSheet() {
   const router = useRouter();
+  const { isDark } = useTheme();
   const {
     pendingPages,
     pendingPdfUri,
@@ -88,8 +90,14 @@ function TabsWithScanSheet() {
       <Tabs
         screenOptions={{
           headerShown: false,
-          tabBarStyle: styles.tabBar,
-          tabBarActiveTintColor: '#0a7ea4',
+          tabBarStyle: [
+            styles.tabBar,
+            {
+              backgroundColor: isDark ? '#1a1a1a' : '#ffffff',
+              borderTopColor: isDark ? '#222' : '#e0e0e0',
+            },
+          ],
+          tabBarActiveTintColor: isDark ? '#4ec6e0' : '#0a7ea4',
           tabBarInactiveTintColor: '#666',
         }}
       >
@@ -151,8 +159,6 @@ export default function TabLayout() {
 
 const styles = StyleSheet.create({
   tabBar: {
-    backgroundColor: '#1a1a1a',
-    borderTopColor: '#222',
     height: 64,
   },
   scanBtn: {
