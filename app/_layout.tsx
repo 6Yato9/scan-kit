@@ -1,25 +1,33 @@
 // app/_layout.tsx
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack } from 'expo-router';
-import { StatusBar } from 'expo-status-bar';
-import 'react-native-reanimated';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { useColorScheme } from '@/hooks/use-color-scheme';
 
 export default function RootLayout() {
-  const colorScheme = useColorScheme();
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
       <Stack>
-        <Stack.Screen name="index" options={{ headerShown: false }} />
+        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen
           name="viewer"
           options={{ presentation: 'fullScreenModal', headerShown: false }}
         />
+        <Stack.Screen
+          name="settings/scan-settings"
+          options={{ title: 'Scan Settings', presentation: 'card' }}
+        />
+        <Stack.Screen
+          name="settings/document-settings"
+          options={{ title: 'Document Settings', presentation: 'card' }}
+        />
+        <Stack.Screen
+          name="settings/printer"
+          options={{ title: 'My Printer', presentation: 'card' }}
+        />
+        <Stack.Screen
+          name="settings/about"
+          options={{ title: 'About', presentation: 'card' }}
+        />
       </Stack>
-      <StatusBar style="auto" />
-    </ThemeProvider>
     </GestureHandlerRootView>
   );
 }
