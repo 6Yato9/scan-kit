@@ -16,9 +16,9 @@ export function ExportSheet({ visible, document, onClose }: Props) {
 
   async function handleExportPdf() {
     setLoading(true);
-    onClose();
     try {
       const uri = await generatePdf(document.pages);
+      onClose();
       await Sharing.shareAsync(uri, {
         mimeType: 'application/pdf',
         dialogTitle: document.name,

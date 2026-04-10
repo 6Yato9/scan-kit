@@ -1,11 +1,11 @@
 // lib/files.ts
 import { Directory, File, Paths } from 'expo-file-system';
 
-export async function copyPageToStorage(
+export function copyPageToStorage(
   tempUri: string,
   docId: string,
   pageIndex: number
-): Promise<string> {
+): string {
   const dir = new Directory(Paths.document, 'scan-kit', docId);
   dir.create({ intermediates: true, idempotent: true });
   const dest = new File(dir, `page-${pageIndex}.jpg`);
@@ -14,7 +14,7 @@ export async function copyPageToStorage(
   return dest.uri;
 }
 
-export async function deleteDocumentFiles(docId: string): Promise<void> {
+export function deleteDocumentFiles(docId: string): void {
   const dir = new Directory(Paths.document, 'scan-kit', docId);
   if (dir.exists) {
     dir.delete();
