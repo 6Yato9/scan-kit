@@ -12,6 +12,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { WebView } from 'react-native-webview';
 import * as Sharing from 'expo-sharing';
 import DocumentScanner from 'react-native-document-scanner-plugin';
 import { getDocuments, updateDocument, deleteDocument } from '@/lib/storage';
@@ -158,8 +159,39 @@ export default function ViewerScreen() {
     flatListRef.current?.scrollToIndex({ index, animated: true });
   }, []);
 
+  const handleSharePdf = useCallback(async () => {
+    if (!document?.pdfUri) return;
+    await Sharing.shareAsync(document.pdfUri, {
+      mimeType: 'application/pdf',
+      dialogTitle: document.name,
+    });
+  }, [document]);
+
   if (!document) return null;
 
+  // PDF viewer mode: read-only WebView rendering
+  if (document.pdfUri) {
+    return (
+      <View style={[styles.container, { paddingTop: insets.top }]}>
+        <View style={styles.header}>
+          <Pressable onPress={() => router.back()} hitSlop={12}>
+            <Text style={styles.back}>‹ Back</Text>
+          </Pressable>
+          <Text style={styles.title} numberOfLines={1}>{document.name}</Text>
+          <Pressable onPress={handleSharePdf} hitSlop={12}>
+            <Text style={styles.exportBtn}>Share</Text>
+          </Pressable>
+        </View>
+        <WebView
+          source={{ uri: document.pdfUri }}
+          style={styles.webView}
+          originWhitelist={['file://*', 'blob:*']}
+        />
+      </View>
+    );
+  }
+
+  // JPEG pager mode (existing behaviour)
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
@@ -242,6 +274,7 @@ export default function ViewerScreen() {
   );
 }
 
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#111' },
   header: {
@@ -265,4 +298,5 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   pageImage: { width: SCREEN_WIDTH - 32, flex: 1 },
+  webView: { flex: 1, backgroundColor: '#111' },
 });
