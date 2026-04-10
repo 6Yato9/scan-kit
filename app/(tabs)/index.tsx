@@ -43,7 +43,7 @@ function sortDocuments(docs: Document[], key: SortKey): Document[] {
 
 export default function HomeScreen() {
   const [documents, setDocuments] = useState<Document[]>([]);
-  const [sortKey, setSortKey] = useState<SortKey>('dateModified');
+  const [sortKey, setSortKey] = useState<SortKey>('dateAdded');
   const [sortSheetVisible, setSortSheetVisible] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [docActionsTarget, setDocActionsTarget] = useState<Document | null>(null);
@@ -60,12 +60,13 @@ export default function HomeScreen() {
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
-  useEffect(() => { if (lastSaved > 0) load(); }, [lastSaved]);
+  useEffect(() => { if (lastSaved > 0) load(); }, [lastSaved, load]);
 
   const displayed = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     const filtered = q ? documents.filter(d => d.name.toLowerCase().includes(q)) : documents;
-    return sortDocuments(filtered, sortKey).slice(0, 10);
+    const sorted = sortDocuments(filtered, sortKey);
+    return q ? sorted : sorted.slice(0, 10);
   }, [documents, searchQuery, sortKey]);
 
   const handleDelete = useCallback(async (doc: Document) => {
@@ -84,19 +85,39 @@ export default function HomeScreen() {
   }, []);
 
   const handleDuplicate = useCallback(async (doc: Document) => {
-    const newId = Crypto.randomUUID();
-    const now = Date.now();
-    const newPages = copyDocumentFiles(doc.id, newId, doc.pages);
-    const newDoc: Document = {
-      id: newId,
-      name: `Copy of ${doc.name}`,
-      pages: newPages,
-      filters: doc.filters ? [...doc.filters] : undefined,
-      createdAt: now,
-      updatedAt: now,
-    };
-    await saveDocument(newDoc);
-    setDocuments(prev => [newDoc, ...prev]);
+    try {
+      const newId = Crypto.randomUUID();
+      const now = Date.now();
+      if (doc.pdfUri) {
+        const { copyPdfToStorage } = await import('@/lib/files');
+        const storedUri = copyPdfToStorage(doc.pdfUri, newId);
+        const newDoc: Document = {
+          id: newId,
+          name: `Copy of ${doc.name}`,
+          pages: [],
+          pdfUri: storedUri,
+          createdAt: now,
+          updatedAt: now,
+        };
+        await saveDocument(newDoc);
+        setDocuments(prev => [newDoc, ...prev]);
+      } else {
+        const newPages = copyDocumentFiles(doc.id, newId, doc.pages);
+        const newDoc: Document = {
+          id: newId,
+          name: `Copy of ${doc.name}`,
+          pages: newPages,
+          filters: doc.filters ? [...doc.filters] : undefined,
+          createdAt: now,
+          updatedAt: now,
+        };
+        await saveDocument(newDoc);
+        setDocuments(prev => [newDoc, ...prev]);
+      }
+    } catch (err) {
+      console.error('Duplicate failed', err);
+      Alert.alert('Duplicate Failed', 'Could not duplicate the document.');
+    }
   }, []);
 
   const handleRename = useCallback(async (doc: Document, newName: string) => {
@@ -107,6 +128,7 @@ export default function HomeScreen() {
   }, []);
 
   const handleMerge = useCallback(async (targetDoc: Document, sourceDoc: Document) => {
+    // Non-destructive merge: source document is preserved. Pages are copied into target.
     const newPageUris = appendPages(sourceDoc.pages, targetDoc.id, targetDoc.pages.length);
     const targetFilters: PageFilter[] = targetDoc.filters ?? targetDoc.pages.map(() => 'original' as PageFilter);
     const sourceFilters: PageFilter[] = sourceDoc.filters ?? sourceDoc.pages.map(() => 'original' as PageFilter);
@@ -200,7 +222,7 @@ export default function HomeScreen() {
         visible={docActionsTarget !== null}
         document={docActionsTarget}
         onRename={doc => { setDocActionsTarget(null); setRenameTarget(doc); }}
-        onDuplicate={doc => { setDocActionsTarget(null); handleDuplicate(doc); }}
+        onDuplicate={doc => { setDocActionsTarget(null); handleDuplicate(doc).catch(console.error); }}
         onMerge={doc => { setDocActionsTarget(null); setMergeTarget(doc); }}
         onSelect={() => setDocActionsTarget(null)}
         onDelete={doc => { setDocActionsTarget(null); handleDelete(doc); }}
