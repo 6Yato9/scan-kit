@@ -122,25 +122,28 @@ A sort icon button (↕) in the top-right of the header. Tapping opens `SortShee
 Selection stored in AsyncStorage key `@scan_kit_sort`. `lib/storage.ts` exports `getSortPreference(): Promise<SortKey>` and `saveSortPreference(key: SortKey): Promise<void>`. Applied to the documents array before rendering.
 
 ### 4c. Multi-Select Mode
-Long-pressing a card activates multi-select mode:
+Multi-select mode is entered via the "Select" option in `DocActionsSheet` (see 4d). The tapped document is pre-selected when entering multi-select.
+
+Once active:
 - All cards show a circular checkbox overlay (empty circle / filled blue check)
-- The long-pressed card is pre-selected
-- A bottom action bar slides up from the bottom (above safe area) with "Delete (N)" and "Cancel"
-- Tapping more cards toggles their selection
+- A bottom action bar slides up with "Delete (N)" and "Cancel"
+- Tapping cards toggles selection
 - "Delete (N)" shows a confirmation alert, then deletes all selected documents and their files, then exits multi-select
 - "Cancel" exits multi-select (no changes)
 - Tapping the FAB or navigating away also cancels multi-select
 
-Multi-select mode is tracked in component state (`selectedIds: Set<string>`). When `selectedIds.size > 0`, the component is in multi-select mode.
+Multi-select mode is tracked in component state (`selectedIds: Set<string>`). When `selectedIds.size > 0`, the component is in multi-select mode. Long-press on a card while multi-select is active toggles that card's selection.
 
 ### 4d. Document Actions Sheet
-Long-press when NOT in multi-select mode opens `DocActionsSheet` (replaces `RenameSheet`). Options:
+Long-press on any card (when NOT in multi-select mode) opens `DocActionsSheet`. Options:
 
-**Rename:** Opens a sub-sheet (inline text input within DocActionsSheet, or pushes RenameSheet). Saves via `updateDocument`.
+**Rename:** Dismisses DocActionsSheet, then opens `RenameSheet` (existing component, unchanged). `RenameSheet` is kept — it is not removed.
 
 **Duplicate:** Creates a new document with name "Copy of {name}", copies all page files to a new docId directory, saves to AsyncStorage, refreshes the list.
 
 **Merge with…:** Opens `MergeSheet` — a scrollable list of all other documents. Selecting one appends the selected doc's pages to the current doc (copy files, update pages array, update AsyncStorage). The source document is NOT deleted (user can delete it separately). The merged doc's `updatedAt` is updated.
+
+**Select:** Dismisses DocActionsSheet, enters multi-select mode with this document pre-selected.
 
 **Delete:** Alert confirmation → `deleteDocument` + `deleteDocumentFiles`. Same as today.
 
@@ -168,10 +171,10 @@ Long-press when NOT in multi-select mode opens `DocActionsSheet` (replaces `Rena
 | `app/viewer.tsx` | Add thumbnail strip, reorder button, •••  menu, add-more flow, hold doc in state |
 | `app/index.tsx` | Add search, sort, multi-select, DocActionsSheet |
 
-### Removed files
-| File | Reason |
-|------|--------|
-| `components/rename-sheet.tsx` | Functionality absorbed into `DocActionsSheet` |
+### Unchanged files
+| File | Note |
+|------|------|
+| `components/rename-sheet.tsx` | Kept; opened from `DocActionsSheet` instead of directly from long-press |
 
 ### New packages
 - `expo-image-manipulator` (Expo SDK 54 compatible)
