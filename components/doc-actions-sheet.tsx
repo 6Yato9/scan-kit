@@ -12,6 +12,7 @@ type Props = {
   onSelect: (doc: Document) => void;
   onDelete: (doc: Document) => void;
   onClose: () => void;
+  onMoveToFolder?: (doc: Document) => void;
 };
 
 export function DocActionsSheet({
