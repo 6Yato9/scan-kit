@@ -11,8 +11,10 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSCameraUsageDescription": "Scan Kit needs camera access to scan documents."
-      }
+        "NSCameraUsageDescription": "Scan Kit needs camera access to scan documents.",
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "bundleIdentifier": "com.6yato9.scan-kit"
     },
     "android": {
       "adaptiveIcon": {
@@ -23,7 +25,9 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "permissions": ["android.permission.CAMERA"]
+      "permissions": [
+        "android.permission.CAMERA"
+      ]
     },
     "web": {
       "output": "static",
@@ -48,6 +52,12 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "366af2ae-96c4-48e2-9197-5b782e804cff"
+      }
     }
   }
 }

@@ -88,7 +88,7 @@ All exports go through the system share sheet (`expo-sharing`):
 | Format | Behavior |
 |--------|----------|
 | PDF | All pages combined into a single multi-page PDF via `expo-print` |
-| JPEG | Individual page images; if multiple pages, zipped |
+| JPEG | Individual page images shared one at a time via share sheet (use PDF for multi-page export) |
 | Share | System share sheet — AirDrop, Messages, email, etc. |
 
 ---
@@ -110,7 +110,7 @@ All exports go through the system share sheet (`expo-sharing`):
 | `@react-native-async-storage/async-storage` | Persist document metadata |
 | `expo-print` | Generate multi-page PDFs from JPEG URIs |
 | `expo-sharing` | System share sheet |
-| `react-native-uuid` or `expo-crypto` | Generate document IDs |
+| `expo-crypto` | Generate document UUIDs (already in Expo ecosystem) |
 
 ---
 
