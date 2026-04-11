@@ -9,31 +9,34 @@ type Tool = {
   id: string;
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
-  subtitle: string;
-  available: boolean;
+  color: string;   // icon & bg tint colour
+  soon?: boolean;
   action?: () => void;
 };
 
-function ToolCard({ tool }: { tool: Tool }) {
+function ToolItem({ tool }: { tool: Tool }) {
   const { colors, isDark } = useTheme();
-  const iconColor = tool.available
-    ? (isDark ? '#e0e0e0' : '#1a1a1a')
-    : (isDark ? '#555' : '#bbb');
+  const bg = tool.color + (isDark ? '28' : '1A');
+
   return (
     <Pressable
-      style={[styles.card, { backgroundColor: colors.card }, !tool.available && styles.cardDisabled]}
-      onPress={tool.available ? tool.action : undefined}
+      style={styles.toolItem}
+      onPress={!tool.soon && tool.action ? tool.action : undefined}
     >
-      <Ionicons name={tool.icon} size={28} color={iconColor} style={styles.cardIcon} />
-      <Text style={[styles.cardLabel, { color: tool.available ? colors.text : colors.faint }]}>
+      <View style={[styles.iconWrap, { backgroundColor: bg }, tool.soon && styles.iconSoon]}>
+        <Ionicons name={tool.icon} size={26} color={tool.soon ? '#555' : tool.color} />
+        {tool.soon && (
+          <View style={styles.soonBadge}>
+            <Text style={styles.soonText}>Soon</Text>
+          </View>
+        )}
+      </View>
+      <Text
+        style={[styles.toolLabel, { color: tool.soon ? colors.faint : colors.text }]}
+        numberOfLines={2}
+      >
         {tool.label}
       </Text>
-      <Text style={[styles.cardSub, { color: colors.faint }]}>{tool.subtitle}</Text>
-      {!tool.available && (
-        <View style={[styles.soonBadge, { backgroundColor: colors.secondary }]}>
-          <Text style={[styles.soonText, { color: colors.muted }]}>Soon</Text>
-        </View>
-      )}
     </Pressable>
   );
 }
@@ -45,145 +48,234 @@ export default function ToolsScreen() {
 
   const sections: { title: string; tools: Tool[] }[] = [
     {
-      title: 'IMPORT',
-      tools: [
-        {
-          id: 'import-images',
-          icon: 'images-outline',
-          label: 'Import Images',
-          subtitle: 'From photo library',
-          available: true,
-          action: () => router.navigate({ pathname: '/(tabs)/files', params: { action: 'importImages' } } as any),
-        },
-        {
-          id: 'import-files',
-          icon: 'cloud-download-outline',
-          label: 'Import Files',
-          subtitle: 'PDF or image',
-          available: true,
-          action: () => router.navigate({ pathname: '/(tabs)/files', params: { action: 'importFiles' } } as any),
-        },
-      ],
-    },
-    {
-      title: 'EXPORT',
-      tools: [
-        {
-          id: 'export-pdf',
-          icon: 'document-text-outline',
-          label: 'Export PDF',
-          subtitle: 'Save as PDF file',
-          available: true,
-          action: () => Alert.alert('Export PDF', 'Open any document, then tap Export → Export as PDF.'),
-        },
-        {
-          id: 'export-jpeg',
-          icon: 'image-outline',
-          label: 'Export JPEG',
-          subtitle: 'Save as images',
-          available: true,
-          action: () => Alert.alert('Export JPEG', 'Open any document, then tap Export → Export as JPEG.'),
-        },
-        {
-          id: 'print',
-          icon: 'print-outline',
-          label: 'Print',
-          subtitle: 'Send to printer',
-          available: true,
-          action: () => Alert.alert('Print', 'Open any document, then tap Export → Print.'),
-        },
-        {
-          id: 'share',
-          icon: 'share-social-outline',
-          label: 'Share',
-          subtitle: 'Share document',
-          available: true,
-          action: () => Alert.alert('Share', 'Open any document and tap Export to share.'),
-        },
-      ],
-    },
-    {
-      title: 'SCAN',
+      title: 'Scan',
       tools: [
         {
           id: 'idcard',
           icon: 'card-outline',
           label: 'ID Card',
-          subtitle: 'Scan front + back',
-          available: true,
+          color: '#26C6A6',
           action: () => router.push('/tools/id-card'),
+        },
+        {
+          id: 'ocr',
+          icon: 'text-outline',
+          label: 'Extract Text',
+          color: '#66BB6A',
+          action: () =>
+            Alert.alert(
+              'Extract Text',
+              'Open any document in the viewer and tap the T button in the header to extract text with OCR.',
+            ),
         },
         {
           id: 'qr',
           icon: 'qr-code-outline',
           label: 'QR / Barcode',
-          subtitle: 'Scan & copy',
-          available: true,
+          color: '#42A5F5',
           action: () => router.push('/tools/qr'),
         },
         {
           id: 'timestamp',
           icon: 'time-outline',
           label: 'Timestamp',
-          subtitle: 'Add date/time',
-          available: true,
+          color: '#CE93D8',
           action: () => router.push('/tools/timestamp'),
+        },
+        {
+          id: 'whiteboard',
+          icon: 'easel-outline',
+          label: 'Whiteboard',
+          color: '#4FC3F7',
+          soon: true,
+        },
+        {
+          id: 'book',
+          icon: 'book-outline',
+          label: 'Book Mode',
+          color: '#FFA726',
+          soon: true,
         },
       ],
     },
     {
-      title: 'EDIT',
+      title: 'Import',
+      tools: [
+        {
+          id: 'import-images',
+          icon: 'images-outline',
+          label: 'Import Images',
+          color: '#26C6A6',
+          action: () =>
+            router.navigate({
+              pathname: '/(tabs)/files',
+              params: { action: 'importImages' },
+            } as any),
+        },
+        {
+          id: 'import-files',
+          icon: 'cloud-download-outline',
+          label: 'Import Files',
+          color: '#42A5F5',
+          action: () =>
+            router.navigate({
+              pathname: '/(tabs)/files',
+              params: { action: 'importFiles' },
+            } as any),
+        },
+      ],
+    },
+    {
+      title: 'Convert',
+      tools: [
+        {
+          id: 'pdf-to-images',
+          icon: 'image-outline',
+          label: 'PDF to Images',
+          color: '#FFA726',
+          action: () =>
+            Alert.alert(
+              'PDF to Images',
+              'Open a document and tap Export → Export as ZIP to save all pages as JPEG images.',
+            ),
+        },
+        {
+          id: 'to-word',
+          icon: 'document-text-outline',
+          label: 'To Word',
+          color: '#42A5F5',
+          soon: true,
+        },
+        {
+          id: 'to-excel',
+          icon: 'grid-outline',
+          label: 'To Excel',
+          color: '#66BB6A',
+          soon: true,
+        },
+        {
+          id: 'to-ppt',
+          icon: 'easel-outline',
+          label: 'To PPT',
+          color: '#EF5350',
+          soon: true,
+        },
+        {
+          id: 'pdf-to-long',
+          icon: 'albums-outline',
+          label: 'PDF to Long Image',
+          color: '#AB47BC',
+          soon: true,
+        },
+      ],
+    },
+    {
+      title: 'Edit',
       tools: [
         {
           id: 'sign',
           icon: 'create-outline',
           label: 'Sign',
-          subtitle: 'Draw signature',
-          available: true,
+          color: '#CE93D8',
           action: () => router.push('/tools/sign'),
         },
         {
           id: 'watermark',
           icon: 'water-outline',
-          label: 'Watermark',
-          subtitle: 'Add text overlay',
-          available: true,
+          label: 'Add Watermark',
+          color: '#42A5F5',
           action: () => router.push('/tools/watermark'),
+        },
+        {
+          id: 'merge',
+          icon: 'git-merge-outline',
+          label: 'Merge Files',
+          color: '#26C6A6',
+          action: () => router.push('/tools/merge'),
         },
         {
           id: 'extract',
           icon: 'cut-outline',
           label: 'Extract Pages',
-          subtitle: 'Split document',
-          available: true,
+          color: '#FFA726',
           action: () => router.push('/tools/extract'),
+        },
+        {
+          id: 'reorder',
+          icon: 'swap-vertical-outline',
+          label: 'Reorder Pages',
+          color: '#66BB6A',
+          action: () =>
+            Alert.alert(
+              'Reorder Pages',
+              'Open a document in the viewer and tap the reorder icon to drag and rearrange pages.',
+            ),
         },
         {
           id: 'compress',
           icon: 'archive-outline',
-          label: 'Compress',
-          subtitle: 'Reduce file size',
-          available: true,
+          label: 'Compress PDF',
+          color: '#90A4AE',
           action: () => router.push('/tools/compress'),
-        },
-        {
-          id: 'merge',
-          icon: 'git-merge-outline',
-          label: 'Merge',
-          subtitle: 'Combine documents',
-          available: true,
-          action: () => router.push('/tools/merge'),
         },
         {
           id: 'lock',
           icon: 'lock-closed-outline',
           label: 'Lock PDF',
-          subtitle: 'Password protect',
-          available: true,
-          action: () => Alert.alert(
-            'Lock PDF',
-            'PDF password protection is not supported natively on iOS/Android. To password-protect a PDF, use "Export PDF" to save it, then open it in Files and use a PDF editor app.'
-          ),
+          color: '#90A4AE',
+          action: () =>
+            Alert.alert(
+              'Lock PDF',
+              'PDF password protection is not supported natively on iOS. Export your PDF and use a PDF editor app to add a password.',
+            ),
+        },
+        {
+          id: 'smart-erase',
+          icon: 'color-wand-outline',
+          label: 'Smart Erase',
+          color: '#EF5350',
+          soon: true,
+        },
+        {
+          id: 'erase-marks',
+          icon: 'brush-outline',
+          label: 'Erase Marks',
+          color: '#FF8A65',
+          soon: true,
+        },
+      ],
+    },
+    {
+      title: 'Utilities',
+      tools: [
+        {
+          id: 'print',
+          icon: 'print-outline',
+          label: 'Print',
+          color: '#90A4AE',
+          action: () =>
+            Alert.alert('Print', 'Open a document and tap Export → Print to send to a printer.'),
+        },
+        {
+          id: 'measure',
+          icon: 'resize-outline',
+          label: 'Measure',
+          color: '#66BB6A',
+          soon: true,
+        },
+        {
+          id: '3d-scan',
+          icon: 'cube-outline',
+          label: '3D Scanning',
+          color: '#42A5F5',
+          soon: true,
+        },
+        {
+          id: 'ai-tools',
+          icon: 'flash-outline',
+          label: 'AI Tools',
+          color: '#CE93D8',
+          soon: true,
         },
       ],
     },
@@ -192,16 +284,19 @@ export default function ToolsScreen() {
   return (
     <ScrollView
       style={[styles.container, { backgroundColor: colors.bg }]}
-      contentContainerStyle={[styles.content, { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 110 }]}
+      contentContainerStyle={[
+        styles.content,
+        { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 110 },
+      ]}
     >
       <Text style={[styles.screenTitle, { color: colors.text }]}>Tools</Text>
 
       {sections.map(section => (
         <View key={section.title} style={styles.section}>
-          <Text style={[styles.sectionTitle, { color: colors.muted }]}>{section.title}</Text>
+          <Text style={[styles.sectionTitle, { color: colors.text }]}>{section.title}</Text>
           <View style={styles.grid}>
             {section.tools.map(tool => (
-              <ToolCard key={tool.id} tool={tool} />
+              <ToolItem key={tool.id} tool={tool} />
             ))}
           </View>
         </View>
@@ -219,36 +314,44 @@ const styles = StyleSheet.create({
     letterSpacing: -0.5,
     marginBottom: 20,
   },
-  section: { marginBottom: 24 },
+  section: { marginBottom: 28 },
   sectionTitle: {
-    fontSize: 11,
+    fontSize: 18,
     fontWeight: '700',
-    letterSpacing: 1,
-    marginBottom: 10,
+    marginBottom: 16,
   },
   grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 10,
   },
-  card: {
-    width: '47%',
-    borderRadius: 14,
-    padding: 16,
+  toolItem: {
+    width: '25%',
     alignItems: 'center',
-    position: 'relative',
+    marginBottom: 20,
   },
-  cardDisabled: { opacity: 0.45 },
-  cardIcon: { marginBottom: 8 },
-  cardLabel: { fontSize: 13, fontWeight: '700', textAlign: 'center' },
-  cardSub: { fontSize: 11, marginTop: 2, textAlign: 'center' },
+  iconWrap: {
+    width: 60,
+    height: 60,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  iconSoon: { opacity: 0.45 },
+  toolLabel: {
+    fontSize: 11,
+    textAlign: 'center',
+    lineHeight: 15,
+    paddingHorizontal: 2,
+  },
   soonBadge: {
     position: 'absolute',
-    top: 8,
-    right: 8,
-    borderRadius: 4,
-    paddingHorizontal: 5,
-    paddingVertical: 2,
+    top: -5,
+    right: -5,
+    backgroundColor: '#FFA726',
+    borderRadius: 5,
+    paddingHorizontal: 4,
+    paddingVertical: 1,
   },
-  soonText: { fontSize: 9, fontWeight: '700' },
+  soonText: { fontSize: 8, fontWeight: '800', color: '#000' },
 });
