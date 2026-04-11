@@ -8,7 +8,7 @@ type ScanContextType = {
   pendingPdfUri: string | null;
   pendingQuality: number;
   pendingDefaultFilter: PageFilter | 'original';
-  nameSheetVisible: boolean;
+  reviewVisible: boolean;
   lastSaved: number;
   triggerScan: () => Promise<void>;
   openImport: (pages: string[]) => Promise<void>;
@@ -26,7 +26,7 @@ export function ScanProvider({ children }: { children: ReactNode }) {
   const [pendingPdfUri, setPendingPdfUri] = useState<string | null>(null);
   const [pendingQuality, setPendingQuality] = useState<number>(0.9);
   const [pendingDefaultFilter, setPendingDefaultFilter] = useState<PageFilter | 'original'>('original');
-  const [nameSheetVisible, setNameSheetVisible] = useState(false);
+  const [reviewVisible, setReviewVisible] = useState(false);
   const [lastSaved, setLastSaved] = useState(0);
 
   const triggerScan = useCallback(async () => {
@@ -40,7 +40,7 @@ export function ScanProvider({ children }: { children: ReactNode }) {
       setPendingPdfUri(null);
       setPendingQuality(QUALITY_MAP[settings.quality]);
       setPendingDefaultFilter(settings.defaultFilter);
-      setNameSheetVisible(true);
+      setReviewVisible(true);
     } catch (err) {
       console.error('Scan failed', err);
     }
@@ -53,7 +53,7 @@ export function ScanProvider({ children }: { children: ReactNode }) {
       setPendingPdfUri(null);
       setPendingQuality(QUALITY_MAP[settings.quality]);
       setPendingDefaultFilter('original');
-      setNameSheetVisible(true);
+      setReviewVisible(true);
     } catch (err) {
       console.error('Import failed', err);
     }
@@ -66,7 +66,7 @@ export function ScanProvider({ children }: { children: ReactNode }) {
       setPendingPdfUri(uri);
       setPendingQuality(QUALITY_MAP[settings.quality]);
       setPendingDefaultFilter('original');
-      setNameSheetVisible(true);
+      setReviewVisible(true);
     } catch (err) {
       console.error('PDF import failed', err);
     }
@@ -75,7 +75,7 @@ export function ScanProvider({ children }: { children: ReactNode }) {
   const clearPending = useCallback(() => {
     setPendingPages([]);
     setPendingPdfUri(null);
-    setNameSheetVisible(false);
+    setReviewVisible(false);
   }, []);
 
   const bumpLastSaved = useCallback(() => setLastSaved(Date.now()), []);
@@ -85,14 +85,14 @@ export function ScanProvider({ children }: { children: ReactNode }) {
     pendingPdfUri,
     pendingQuality,
     pendingDefaultFilter,
-    nameSheetVisible,
+    reviewVisible,
     lastSaved,
     triggerScan,
     openImport,
     openPdfImport,
     clearPending,
     bumpLastSaved,
-  }), [pendingPages, pendingPdfUri, pendingQuality, pendingDefaultFilter, nameSheetVisible, lastSaved, triggerScan, openImport, openPdfImport, clearPending, bumpLastSaved]);
+  }), [pendingPages, pendingPdfUri, pendingQuality, pendingDefaultFilter, reviewVisible, lastSaved, triggerScan, openImport, openPdfImport, clearPending, bumpLastSaved]);
 
   return (
     <ScanContext.Provider value={value}>
