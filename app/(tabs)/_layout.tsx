@@ -5,7 +5,7 @@ import { Tabs, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ScanProvider, useScan } from '@/contexts/scan-context';
+import { useScan } from '@/contexts/scan-context';
 import { useTheme } from '@/contexts/theme-context';
 
 const TAB_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
@@ -101,11 +101,7 @@ function TabsInner() {
 }
 
 export default function TabLayout() {
-  return (
-    <ScanProvider>
-      <TabsInner />
-    </ScanProvider>
-  );
+  return <TabsInner />;
 }
 
 const styles = StyleSheet.create({

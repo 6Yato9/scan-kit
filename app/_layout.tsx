@@ -1,12 +1,14 @@
 // app/_layout.tsx
 import { Stack } from 'expo-router';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { ScanProvider } from '@/contexts/scan-context';
 import { ThemeProvider } from '@/contexts/theme-context';
 
 export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <ThemeProvider>
+        <ScanProvider>
         <Stack>
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen
@@ -34,6 +36,7 @@ export default function RootLayout() {
             options={{ title: 'About', presentation: 'card' }}
           />
         </Stack>
+        </ScanProvider>
       </ThemeProvider>
     </GestureHandlerRootView>
   );
