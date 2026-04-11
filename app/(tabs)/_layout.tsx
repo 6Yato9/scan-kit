@@ -1,40 +1,91 @@
 // app/(tabs)/_layout.tsx
-import { useCallback } from 'react';
-import { Alert, Pressable, StyleSheet, View } from 'react-native';
+import { useCallback, useEffect } from 'react';
+import { Alert, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { Tabs, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import type { BottomTabBarButtonProps } from '@react-navigation/bottom-tabs';
+import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Crypto from 'expo-crypto';
 import { ScanProvider, useScan } from '@/contexts/scan-context';
 import { useTheme } from '@/contexts/theme-context';
-import { ScanNameSheet } from '@/components/scan-name-sheet';
 import { Document, PageFilter } from '@/types/document';
 import { saveDocument } from '@/lib/storage';
 import { copyPageWithQuality, copyPdfToStorage } from '@/lib/files';
+import { autoName } from '@/lib/auto-name';
 
-// Rendered inside ScanProvider so useScan() works.
-function ScanTabButton(props: BottomTabBarButtonProps) {
+const TAB_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
+  index: 'home',
+  files: 'document-text',
+  tools: 'grid',
+  me: 'settings-outline',
+};
+
+const TAB_LABELS: Record<string, string> = {
+  index: 'Home',
+  files: 'Files',
+  tools: 'Tools',
+  me: 'Settings',
+};
+
+// Custom tab bar renders its own absolutely-positioned View so left/right
+// values apply to the actual visible element, not a React Navigation wrapper.
+function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
+  const insets = useSafeAreaInsets();
+  const { width: screenWidth } = useWindowDimensions();
+  const { isDark, colors } = useTheme();
   const { triggerScan } = useScan();
-  const { colors } = useTheme();
+
   return (
-    <Pressable
-      onPress={triggerScan}
-      style={[props.style, styles.scanBtn]}
-      accessibilityLabel="Scan document"
+    <View
+      style={[
+        styles.floatingBar,
+        {
+          bottom: insets.bottom + 8,
+          left: screenWidth * 0.05,
+          right: screenWidth * 0.05,
+          backgroundColor: isDark ? 'rgba(18,18,18,0.92)' : 'rgba(248,248,248,0.92)',
+          borderColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)',
+        },
+      ]}
     >
-      <View style={[styles.scanCircle, { backgroundColor: colors.accent, shadowColor: colors.accent }]}>
-        <Ionicons name="camera" size={26} color="#fff" />
-      </View>
-    </Pressable>
+      {state.routes.map((route, index) => {
+        const isFocused = state.index === index;
+
+        if (route.name === 'scan') {
+          return (
+            <Pressable
+              key={route.key}
+              onPress={triggerScan}
+              style={styles.scanBtn}
+              accessibilityLabel="Scan document"
+            >
+              <View style={[styles.scanCircle, { backgroundColor: colors.accent, shadowColor: colors.accent }]}>
+                <Ionicons name="camera" size={34} color="#fff" />
+              </View>
+            </Pressable>
+          );
+        }
+
+        const color = isFocused ? colors.accent : isDark ? '#666' : '#aaa';
+
+        return (
+          <Pressable
+            key={route.key}
+            onPress={() => { if (!isFocused) navigation.navigate(route.name); }}
+            style={styles.tabBtn}
+          >
+            <Ionicons name={TAB_ICONS[route.name] ?? 'help-circle'} size={22} color={color} />
+            <Text style={[styles.tabLabel, { color }]}>{TAB_LABELS[route.name] ?? route.name}</Text>
+          </Pressable>
+        );
+      })}
+    </View>
   );
 }
 
 // Inner wrapper: has access to ScanContext to render ScanNameSheet.
 function TabsWithScanSheet() {
   const router = useRouter();
-  const insets = useSafeAreaInsets();
-  const { isDark, colors } = useTheme();
   const {
     pendingPages,
     pendingPdfUri,
@@ -42,7 +93,6 @@ function TabsWithScanSheet() {
     pendingDefaultFilter,
     nameSheetVisible,
     clearPending,
-    triggerScan,
     bumpLastSaved,
   } = useScan();
 
@@ -84,85 +134,25 @@ function TabsWithScanSheet() {
     [pendingPages, pendingPdfUri, pendingQuality, pendingDefaultFilter, clearPending, bumpLastSaved, router]
   );
 
-  const handleRetake = useCallback(() => {
-    clearPending();
-    setTimeout(triggerScan, 350);
-  }, [clearPending, triggerScan]);
-
-  const glassBar = {
-    position: 'absolute' as const,
-    bottom: insets.bottom + 8,
-    left: 12,
-    right: 12,
-    borderRadius: 26,
-    height: 64,
-    backgroundColor: isDark ? 'rgba(18,18,18,0.92)' : 'rgba(248,248,248,0.92)',
-    borderTopWidth: 0,
-    borderWidth: 0.5,
-    borderColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)',
-    shadowColor: '#000',
-    shadowOpacity: 0.28,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 14,
-    overflow: 'visible' as const,
-  };
+  // Auto-save with a generated name — no popup needed.
+  useEffect(() => {
+    if (nameSheetVisible) {
+      handleSave(autoName());
+    }
+  }, [nameSheetVisible]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <>
       <Tabs
-        screenOptions={{
-          headerShown: false,
-          tabBarStyle: glassBar,
-          tabBarActiveTintColor: colors.accent,
-          tabBarInactiveTintColor: isDark ? '#666' : '#aaa',
-          tabBarLabelStyle: { fontSize: 10, marginBottom: 4 },
-        }}
+        tabBar={(props) => <FloatingTabBar {...props} />}
+        screenOptions={{ headerShown: false }}
       >
-        <Tabs.Screen
-          name="index"
-          options={{
-            title: 'Home',
-            tabBarIcon: ({ color, size }) => <Ionicons name="home" size={size} color={color} />,
-          }}
-        />
-        <Tabs.Screen
-          name="files"
-          options={{
-            title: 'Files',
-            tabBarIcon: ({ color, size }) => <Ionicons name="document-text" size={size} color={color} />,
-          }}
-        />
-        <Tabs.Screen
-          name="scan"
-          options={{
-            title: '',
-            tabBarButton: (props) => <ScanTabButton {...props} />,
-          }}
-        />
-        <Tabs.Screen
-          name="tools"
-          options={{
-            title: 'Tools',
-            tabBarIcon: ({ color, size }) => <Ionicons name="grid" size={size} color={color} />,
-          }}
-        />
-        <Tabs.Screen
-          name="me"
-          options={{
-            title: 'Me',
-            tabBarIcon: ({ color, size }) => <Ionicons name="person" size={size} color={color} />,
-          }}
-        />
+        <Tabs.Screen name="index" />
+        <Tabs.Screen name="files" />
+        <Tabs.Screen name="scan" />
+        <Tabs.Screen name="tools" />
+        <Tabs.Screen name="me" />
       </Tabs>
-
-      <ScanNameSheet
-        visible={nameSheetVisible}
-        pageCount={pendingPdfUri ? 1 : pendingPages.length}
-        onSave={handleSave}
-        onRetake={handleRetake}
-        onClose={clearPending}
-      />
     </>
   );
 }
@@ -176,15 +166,40 @@ export default function TabLayout() {
 }
 
 const styles = StyleSheet.create({
-  scanBtn: {
-    justifyContent: 'center',
+  floatingBar: {
+    position: 'absolute',
+    height: 64,
+    borderRadius: 26,
+    borderWidth: 0.5,
+    shadowColor: '#000',
+    shadowOpacity: 0.28,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 14,
+    overflow: 'visible',
+    flexDirection: 'row',
     alignItems: 'center',
-    top: -18,
+  },
+  tabBtn: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+  },
+  tabLabel: {
+    fontSize: 10,
+    marginBottom: 4,
+  },
+  scanBtn: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    top: -22,
   },
   scanCircle: {
-    width: 58,
-    height: 58,
-    borderRadius: 29,
+    width: 75,
+    height: 75,
+    borderRadius: 38,
     alignItems: 'center',
     justifyContent: 'center',
     shadowOpacity: 0.5,

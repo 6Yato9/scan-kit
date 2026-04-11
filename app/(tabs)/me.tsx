@@ -59,12 +59,7 @@ export default function MeScreen() {
       style={[styles.container, { backgroundColor: colors.bg }]}
       contentContainerStyle={{ paddingBottom: insets.bottom + 110 }}
     >
-      <View style={[styles.header, { paddingTop: insets.top + 16 }]}>
-        <View style={[styles.avatar, { backgroundColor: colors.card }]}>
-          <Ionicons name="person" size={40} color={colors.muted} />
-        </View>
-        <Text style={[styles.appName, { color: colors.text }]}>Scan Kit</Text>
-      </View>
+      <View style={{ paddingTop: insets.top + 16 }} />
 
       <View style={[styles.section, { marginBottom: 12 }]}>
         <Text style={[styles.sectionLabel, { color: colors.muted }]}>APPEARANCE</Text>
@@ -113,20 +108,6 @@ export default function MeScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  header: {
-    alignItems: 'center',
-    paddingBottom: 24,
-    paddingHorizontal: 20,
-  },
-  avatar: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 10,
-  },
-  appName: { fontSize: 20, fontWeight: '700' },
   section: {
     marginHorizontal: 14,
     borderRadius: 14,
