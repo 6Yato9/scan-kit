@@ -330,9 +330,39 @@ export default function ReviewScreen() {
         />
       </View>
 
-      {/* ④ Action row — replaced in Task 7 */}
-      <View style={{ height: 72 + insets.bottom, backgroundColor: colors.card, justifyContent: 'center', alignItems: 'center' }}>
-        <Text style={{ color: colors.muted }}>Actions coming in Task 7</Text>
+      {/* ④ Action row */}
+      <View style={[styles.actionRow, { backgroundColor: isDark ? 'rgba(18,18,18,0.95)' : 'rgba(248,248,248,0.95)', borderTopColor: colors.border, paddingBottom: insets.bottom + 8 }]}>
+        {/* Retake */}
+        <Pressable style={styles.actionBtn} onPress={handleRetake}>
+          <Text style={styles.actionIcon}>↩</Text>
+          <Text style={[styles.actionLabel, { color: colors.muted }]}>Retake</Text>
+        </Pressable>
+
+        {/* Rotate */}
+        <Pressable style={styles.actionBtn} onPress={handleRotate} disabled={rotating}>
+          <Text style={[styles.actionIcon, rotating && { opacity: 0.4 }]}>
+            {rotating ? '⏳' : '↻'}
+          </Text>
+          <Text style={[styles.actionLabel, { color: colors.muted }]}>Rotate</Text>
+        </Pressable>
+
+        {/* Crop (re-scan this page) */}
+        <Pressable style={styles.actionBtn} onPress={handleCrop}>
+          <Text style={styles.actionIcon}>✂</Text>
+          <Text style={[styles.actionLabel, { color: colors.muted }]}>Crop</Text>
+        </Pressable>
+
+        {/* Delete */}
+        <Pressable style={styles.actionBtn} onPress={handleDeletePage}>
+          <Text style={styles.actionIcon}>🗑</Text>
+          <Text style={[styles.actionLabel, { color: colors.muted }]}>Delete</Text>
+        </Pressable>
+
+        {/* Add Page */}
+        <Pressable style={styles.actionBtn} onPress={handleAddPage}>
+          <Text style={styles.actionIcon}>📷</Text>
+          <Text style={[styles.actionLabel, { color: colors.muted }]}>Add Page</Text>
+        </Pressable>
       </View>
     </View>
   );
@@ -421,6 +451,23 @@ const styles = StyleSheet.create({
     height: '100%',
   },
   filterItemLabel: {
+    fontSize: 10,
+  },
+  actionRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingTop: 10,
+  },
+  actionBtn: {
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 8,
+  },
+  actionIcon: {
+    fontSize: 20,
+  },
+  actionLabel: {
     fontSize: 10,
   },
 });
