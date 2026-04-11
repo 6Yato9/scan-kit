@@ -6,7 +6,9 @@ import {
   Dimensions,
   FlatList,
   Image,
+  Modal,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -18,14 +20,23 @@ import DocumentScanner from 'react-native-document-scanner-plugin';
 import { getDocuments, updateDocument, deleteDocument } from '@/lib/storage';
 import { appendPages, deleteSinglePage, reorderPages, deleteDocumentFiles } from '@/lib/files';
 import { rotatePage } from '@/lib/image';
-import { filterStyle } from '@/lib/filters';
-import { Document, PageFilter } from '@/types/document';
+import { combinedFilterStyle } from '@/lib/filters';
+import { Document, PageAdjustment, PageFilter } from '@/types/document';
 import { ExportSheet } from '@/components/export-sheet';
 import { PageActionsSheet } from '@/components/page-actions-sheet';
 import { ThumbnailStrip } from '@/components/thumbnail-strip';
 import { ReorderModal } from '@/components/reorder-modal';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
+
+// OCR is optional — imported lazily so the app won't crash if the native module isn't linked yet
+let TextRecognition: { recognize: (uri: string) => Promise<{ text: string }> } | null = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  TextRecognition = require('@react-native-ml-kit/text-recognition').default;
+} catch {
+  // package not linked — OCR button will show an info alert
+}
 
 export default function ViewerScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -34,6 +45,8 @@ export default function ViewerScreen() {
   const [exportVisible, setExportVisible] = useState(false);
   const [actionsVisible, setActionsVisible] = useState(false);
   const [reorderVisible, setReorderVisible] = useState(false);
+  const [ocrResult, setOcrResult] = useState<string | null>(null);
+  const [ocrRunning, setOcrRunning] = useState(false);
   const flatListRef = useRef<FlatList>(null);
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -76,6 +89,19 @@ export default function ViewerScreen() {
     });
   }, [document, currentPage, saveDoc]);
 
+  const handleAdjust = useCallback(async (adj: PageAdjustment) => {
+    if (!document) return;
+    const base = document.adjustments ?? document.pages.map(() => ({ brightness: 0, contrast: 0, saturation: 0 }));
+    const newAdj = [...base];
+    newAdj[currentPage] = adj;
+    const allDefault = newAdj.every(a => a.brightness === 0 && a.contrast === 0 && a.saturation === 0);
+    await saveDoc({
+      ...document,
+      adjustments: allDefault ? undefined : newAdj,
+      updatedAt: Date.now(),
+    });
+  }, [document, currentPage, saveDoc]);
+
   const handleDeletePage = useCallback(async () => {
     if (!document) return;
     if (document.pages.length === 1) {
@@ -100,11 +126,13 @@ export default function ViewerScreen() {
     deleteSinglePage(document.id, currentPage, document.pages.length);
     const newPages = document.pages.filter((_, i) => i !== currentPage);
     const newFilters = document.filters?.filter((_, i) => i !== currentPage);
+    const newAdjustments = document.adjustments?.filter((_, i) => i !== currentPage);
     const safePage = Math.min(currentPage, newPages.length - 1);
     await saveDoc({
       ...document,
       pages: newPages,
       filters: newFilters?.length ? newFilters : undefined,
+      adjustments: newAdjustments?.length ? newAdjustments : undefined,
       updatedAt: Date.now(),
     });
     setCurrentPage(safePage);
@@ -143,10 +171,13 @@ export default function ViewerScreen() {
     const oldFilters = document.filters ?? document.pages.map(() => 'original' as PageFilter);
     const newFilters = newOrderIndices.map(i => oldFilters[i]);
     const allOriginal = newFilters.every(f => f === 'original');
+    const oldAdj = document.adjustments;
+    const newAdj = oldAdj ? newOrderIndices.map(i => oldAdj[i]) : undefined;
     await saveDoc({
       ...document,
       pages: newUris,
       filters: allOriginal ? undefined : newFilters,
+      adjustments: newAdj,
       updatedAt: Date.now(),
     });
     setReorderVisible(false);
@@ -166,6 +197,31 @@ export default function ViewerScreen() {
       dialogTitle: document.name,
     });
   }, [document]);
+
+  const handleAnnotate = useCallback(() => {
+    if (!document) return;
+    router.push({ pathname: '/annotate', params: { docId: document.id, pageIndex: String(currentPage) } } as any);
+  }, [document, currentPage, router]);
+
+  const handleOcr = useCallback(async () => {
+    if (!document) return;
+    if (!TextRecognition) {
+      Alert.alert(
+        'OCR not available',
+        'Rebuild your dev client after installing @react-native-ml-kit/text-recognition to enable text extraction.'
+      );
+      return;
+    }
+    setOcrRunning(true);
+    try {
+      const result = await TextRecognition.recognize(document.pages[currentPage]);
+      setOcrResult(result.text || '(No text found)');
+    } catch {
+      Alert.alert('OCR failed', 'Could not extract text from this page.');
+    } finally {
+      setOcrRunning(false);
+    }
+  }, [document, currentPage]);
 
   if (!document) return null;
 
@@ -191,7 +247,7 @@ export default function ViewerScreen() {
     );
   }
 
-  // JPEG pager mode (existing behaviour)
+  // JPEG pager mode
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
@@ -200,6 +256,9 @@ export default function ViewerScreen() {
         </Pressable>
         <Text style={styles.title} numberOfLines={1}>{document.name}</Text>
         <View style={styles.headerRight}>
+          <Pressable onPress={handleOcr} hitSlop={12} style={styles.headerBtn} disabled={ocrRunning}>
+            <Text style={[styles.headerBtnText, ocrRunning && { opacity: 0.4 }]}>T</Text>
+          </Pressable>
           <Pressable onPress={() => setReorderVisible(true)} hitSlop={12} style={styles.headerBtn}>
             <Text style={styles.headerBtnText}>⇅</Text>
           </Pressable>
@@ -224,7 +283,7 @@ export default function ViewerScreen() {
         }}
         onScrollToIndexFailed={() => {}}
         renderItem={({ item, index }) => {
-          const fStyle = filterStyle(document.filters?.[index]);
+          const fStyle = combinedFilterStyle(document.filters?.[index], document.adjustments?.[index]);
           return (
             <View style={styles.page}>
               <Image
@@ -240,6 +299,7 @@ export default function ViewerScreen() {
       <ThumbnailStrip
         pages={document.pages}
         filters={document.filters}
+        adjustments={document.adjustments}
         currentPage={currentPage}
         onPagePress={handleThumbnailPress}
         onAddPress={handleAddMore}
@@ -256,8 +316,11 @@ export default function ViewerScreen() {
         visible={actionsVisible}
         uri={document.pages[currentPage]}
         filter={document.filters?.[currentPage] ?? 'original'}
+        adjustment={document.adjustments?.[currentPage]}
         onRotate={handleRotate}
         onFilter={handleFilter}
+        onAdjust={handleAdjust}
+        onAnnotate={handleAnnotate}
         onDelete={handleDeletePage}
         onShare={handleSharePage}
         onClose={() => setActionsVisible(false)}
@@ -270,10 +333,26 @@ export default function ViewerScreen() {
         onConfirm={handleReorder}
         onCancel={() => setReorderVisible(false)}
       />
+
+      {/* OCR result modal */}
+      <Modal visible={ocrResult !== null} animationType="slide" transparent>
+        <View style={styles.ocrOverlay}>
+          <View style={styles.ocrSheet}>
+            <View style={styles.ocrHeader}>
+              <Text style={styles.ocrTitle}>Extracted Text</Text>
+              <Pressable onPress={() => setOcrResult(null)} hitSlop={12}>
+                <Text style={styles.ocrClose}>✕</Text>
+              </Pressable>
+            </View>
+            <ScrollView style={styles.ocrBody}>
+              <Text style={styles.ocrText} selectable>{ocrResult ?? ''}</Text>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
-
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#111' },
@@ -299,4 +378,30 @@ const styles = StyleSheet.create({
   },
   pageImage: { width: SCREEN_WIDTH - 32, flex: 1 },
   webView: { flex: 1, backgroundColor: '#111' },
+  // OCR modal
+  ocrOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+  },
+  ocrSheet: {
+    backgroundColor: '#1e1e1e',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: '60%',
+    paddingTop: 16,
+  },
+  ocrHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingBottom: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#333',
+  },
+  ocrTitle: { fontSize: 17, fontWeight: '700', color: '#f0f0f0' },
+  ocrClose: { fontSize: 18, color: '#888' },
+  ocrBody: { padding: 20 },
+  ocrText: { fontSize: 15, color: '#ddd', lineHeight: 22 },
 });

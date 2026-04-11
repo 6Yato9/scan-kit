@@ -129,12 +129,22 @@ export async function saveDocSettings(s: DocSettings): Promise<void> {
 const THEME_KEY = '@scan_kit_theme';
 type ThemePreference = 'light' | 'dark' | 'system';
 
+// In-memory cache so ThemeProvider can read synchronously on every render
+// after the first async load — prevents the light→dark flash on nav push.
+let _themePrefCache: ThemePreference = 'system';
+
+export function getThemePreferenceSync(): ThemePreference {
+  return _themePrefCache;
+}
+
 export async function getThemePreference(): Promise<ThemePreference> {
   const raw = await AsyncStorage.getItem(THEME_KEY);
-  if (raw === 'light' || raw === 'dark' || raw === 'system') return raw;
-  return 'system';
+  const pref = (raw === 'light' || raw === 'dark' || raw === 'system') ? raw : 'system';
+  _themePrefCache = pref;
+  return pref;
 }
 
 export async function saveThemePreference(p: ThemePreference): Promise<void> {
+  _themePrefCache = p;
   await AsyncStorage.setItem(THEME_KEY, p);
 }

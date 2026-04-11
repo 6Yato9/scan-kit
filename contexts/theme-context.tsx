@@ -2,7 +2,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { useColorScheme } from 'react-native';
 import { Colors, ThemePreference, type ThemeColors } from '@/lib/theme';
-import { getThemePreference, saveThemePreference } from '@/lib/storage';
+import { getThemePreference, getThemePreferenceSync, saveThemePreference } from '@/lib/storage';
 
 type ThemeContextType = {
   preference: ThemePreference;
@@ -20,7 +20,9 @@ const ThemeContext = createContext<ThemeContextType>({
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const systemScheme = useColorScheme();
-  const [preference, setPreferenceState] = useState<ThemePreference>('system');
+  // Use the sync cache so the initial render already has the correct preference,
+  // preventing a light→dark flash when the stored pref differs from the system scheme.
+  const [preference, setPreferenceState] = useState<ThemePreference>(getThemePreferenceSync);
 
   useEffect(() => {
     getThemePreference().then(setPreferenceState);

@@ -4,7 +4,7 @@ import { useState } from 'react';
 import * as Sharing from 'expo-sharing';
 import * as Print from 'expo-print';
 import { generatePdf } from '@/lib/pdf';
-import { filterCss } from '@/lib/filters';
+import { combinedFilterCss } from '@/lib/filters';
 import { BottomSheet } from '@/components/bottom-sheet';
 import { Document } from '@/types/document';
 import { useTheme } from '@/contexts/theme-context';
@@ -22,7 +22,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
   async function handleExportPdf() {
     setLoading(true);
     try {
-      const uri = await generatePdf(document.pages, document.filters);
+      const uri = await generatePdf(document.pages, document.filters, document.adjustments);
       await Sharing.shareAsync(uri, {
         mimeType: 'application/pdf',
         dialogTitle: document.name,
@@ -54,7 +54,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
     try {
       const imgTags = document.pages
         .map((uri, i) => {
-          const css = filterCss(document.filters?.[i]);
+          const css = combinedFilterCss(document.filters?.[i], document.adjustments?.[i]);
           const filterAttr = css !== 'none' ? `filter:${css};` : '';
           return `<img src="${uri}" style="width:100%;display:block;page-break-after:always;${filterAttr}" />`;
         })
@@ -67,6 +67,8 @@ export function ExportSheet({ visible, document, onClose }: Props) {
     }
   }
 
+  const hasFilters = document.pages.length > 0 && (document.filters?.some(f => f !== 'original') || document.adjustments?.length);
+
   return (
     <BottomSheet visible={visible} onClose={loading ? undefined : onClose}>
       <Text style={[styles.heading, { color: colors.text }]}>Export</Text>
@@ -76,15 +78,17 @@ export function ExportSheet({ visible, document, onClose }: Props) {
         <>
           <Pressable style={[styles.option, { borderBottomColor: colors.border }]} onPress={handleExportPdf}>
             <Text style={[styles.optionTitle, { color: colors.text }]}>Export as PDF</Text>
-            <Text style={[styles.optionSub, { color: colors.faint }]}>All {document.pages.length} pages in one file</Text>
+            <Text style={[styles.optionSub, { color: colors.faint }]}>All {document.pages.length} pages — filters applied</Text>
           </Pressable>
           <Pressable style={[styles.option, { borderBottomColor: colors.border }]} onPress={handleExportJpeg}>
             <Text style={[styles.optionTitle, { color: colors.text }]}>Export as JPEG</Text>
-            <Text style={[styles.optionSub, { color: colors.faint }]}>Share individual page images</Text>
+            <Text style={[styles.optionSub, { color: colors.faint }]}>
+              {hasFilters ? 'Original images — use PDF to preserve filters' : 'Share individual page images'}
+            </Text>
           </Pressable>
           <Pressable style={[styles.option, { borderBottomColor: colors.border }]} onPress={handlePrint}>
             <Text style={[styles.optionTitle, { color: colors.text }]}>Print</Text>
-            <Text style={[styles.optionSub, { color: colors.faint }]}>Send to a printer</Text>
+            <Text style={[styles.optionSub, { color: colors.faint }]}>Send to a printer — filters applied</Text>
           </Pressable>
         </>
       )}

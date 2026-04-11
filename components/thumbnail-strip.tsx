@@ -8,13 +8,14 @@ import {
   Text,
   View,
 } from 'react-native';
-import { PageFilter } from '@/types/document';
-import { filterStyle } from '@/lib/filters';
+import { PageAdjustment, PageFilter } from '@/types/document';
+import { combinedFilterStyle } from '@/lib/filters';
 import { useTheme } from '@/contexts/theme-context';
 
 type Props = {
   pages: string[];
   filters?: PageFilter[];
+  adjustments?: PageAdjustment[];
   currentPage: number;
   onPagePress: (index: number) => void;
   onAddPress: () => void;
@@ -24,6 +25,7 @@ type Props = {
 export function ThumbnailStrip({
   pages,
   filters,
+  adjustments,
   currentPage,
   onPagePress,
   onAddPress,
@@ -49,7 +51,7 @@ export function ThumbnailStrip({
         contentContainerStyle={styles.content}
         onScrollToIndexFailed={() => {}}
         renderItem={({ item, index }) => {
-          const fStyle = filterStyle(filters?.[index]);
+          const fStyle = combinedFilterStyle(filters?.[index], adjustments?.[index]);
           return (
             <Pressable
               style={[styles.thumb, index === currentPage && { borderColor: colors.accent }]}

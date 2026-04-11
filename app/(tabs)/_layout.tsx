@@ -1,6 +1,13 @@
 // app/(tabs)/_layout.tsx
-import { useEffect } from 'react';
-import { Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  Animated,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+} from 'react-native';
 import { Tabs, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
@@ -22,25 +29,120 @@ const TAB_LABELS: Record<string, string> = {
   me: 'Settings',
 };
 
+// Number of routes including the non-navigable scan button
+const ROUTE_COUNT = 5;
+
 function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
   const { width: screenWidth } = useWindowDimensions();
   const { isDark, colors } = useTheme();
   const { triggerScan } = useScan();
 
+  // Glass selector animation state
+  const barWidthRef = useRef(0);
+  const [tabWidth, setTabWidth] = useState(0);
+  const selectorX = useRef(new Animated.Value(-200)).current;
+  const selectorOpacity = useRef(new Animated.Value(0)).current;
+  const fadeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const initialised = useRef(false);
+
+  const moveSelectorTo = useCallback(
+    (routeIndex: number, animated: boolean) => {
+      if (barWidthRef.current === 0) return;
+      const tw = barWidthRef.current / ROUTE_COUNT;
+      const targetX = routeIndex * tw;
+
+      if (fadeTimer.current) clearTimeout(fadeTimer.current);
+
+      selectorOpacity.setValue(1);
+
+      if (animated) {
+        Animated.spring(selectorX, {
+          toValue: targetX,
+          useNativeDriver: true,
+          damping: 22,
+          stiffness: 260,
+          mass: 0.75,
+        }).start();
+      } else {
+        selectorX.setValue(targetX);
+      }
+
+      // Fade to a subtle "resting outline" after 500 ms
+      fadeTimer.current = setTimeout(() => {
+        Animated.timing(selectorOpacity, {
+          toValue: 0.38,
+          duration: 280,
+          useNativeDriver: true,
+        }).start();
+      }, 500);
+    },
+    [selectorX, selectorOpacity],
+  );
+
+  // Initialise once the bar has been laid out
+  const onBarLayout = useCallback(
+    (e: { nativeEvent: { layout: { width: number } } }) => {
+      const w = e.nativeEvent.layout.width;
+      if (w === barWidthRef.current) return; // nothing changed
+      barWidthRef.current = w;
+      setTabWidth(w / ROUTE_COUNT);
+
+      if (!initialised.current) {
+        initialised.current = true;
+        moveSelectorTo(state.index, false);
+      }
+    },
+    [moveSelectorTo, state.index],
+  );
+
+  // Animate to newly focused tab
+  useEffect(() => {
+    if (initialised.current) {
+      moveSelectorTo(state.index, true);
+    }
+  }, [state.index, moveSelectorTo]);
+
   return (
     <View
+      onLayout={onBarLayout}
       style={[
         styles.floatingBar,
         {
           bottom: insets.bottom + 8,
           left: screenWidth * 0.05,
           right: screenWidth * 0.05,
-          backgroundColor: isDark ? 'rgba(18,18,18,0.92)' : 'rgba(248,248,248,0.92)',
+          backgroundColor: isDark ? 'rgba(18,18,18,0.93)' : 'rgba(248,248,248,0.93)',
           borderColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)',
         },
       ]}
     >
+      {/* ── Glass selector (absolutely positioned, behind tab icons) ── */}
+      {tabWidth > 0 && (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.glassSelector,
+            {
+              width: tabWidth - 8,   // slight inset so it doesn't touch neighbours
+              backgroundColor: isDark
+                ? 'rgba(255,255,255,0.13)'
+                : 'rgba(0,0,0,0.09)',
+              borderColor: isDark
+                ? 'rgba(255,255,255,0.22)'
+                : 'rgba(0,0,0,0.14)',
+              opacity: selectorOpacity,
+              transform: [
+                {
+                  translateX: Animated.add(selectorX, new Animated.Value(4)),
+                },
+              ],
+            },
+          ]}
+        />
+      )}
+
+      {/* ── Tab buttons ── */}
       {state.routes.map((route, index) => {
         const isFocused = state.index === index;
 
@@ -52,7 +154,12 @@ function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
               style={styles.scanBtn}
               accessibilityLabel="Scan document"
             >
-              <View style={[styles.scanCircle, { backgroundColor: colors.accent, shadowColor: colors.accent }]}>
+              <View
+                style={[
+                  styles.scanCircle,
+                  { backgroundColor: colors.accent, shadowColor: colors.accent },
+                ]}
+              >
                 <Ionicons name="camera" size={34} color="#fff" />
               </View>
             </Pressable>
@@ -64,11 +171,19 @@ function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
         return (
           <Pressable
             key={route.key}
-            onPress={() => { if (!isFocused) navigation.navigate(route.name); }}
+            onPress={() => {
+              if (!isFocused) navigation.navigate(route.name);
+            }}
             style={styles.tabBtn}
           >
-            <Ionicons name={TAB_ICONS[route.name] ?? 'help-circle'} size={22} color={color} />
-            <Text style={[styles.tabLabel, { color }]}>{TAB_LABELS[route.name] ?? route.name}</Text>
+            <Ionicons
+              name={TAB_ICONS[route.name] ?? 'help-circle'}
+              size={22}
+              color={color}
+            />
+            <Text style={[styles.tabLabel, { color }]}>
+              {TAB_LABELS[route.name] ?? route.name}
+            </Text>
           </Pressable>
         );
       })}
@@ -118,6 +233,14 @@ const styles = StyleSheet.create({
     overflow: 'visible',
     flexDirection: 'row',
     alignItems: 'center',
+  },
+  // Absolutely positioned glass pill behind the active tab
+  glassSelector: {
+    position: 'absolute',
+    top: 6,
+    bottom: 6,
+    borderRadius: 16,
+    borderWidth: 1,
   },
   tabBtn: {
     flex: 1,
