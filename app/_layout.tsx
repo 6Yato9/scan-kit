@@ -35,6 +35,13 @@ export default function RootLayout() {
             name="settings/about"
             options={{ title: 'About', presentation: 'card' }}
           />
+          <Stack.Screen name="tools/qr" options={{ headerShown: false, presentation: 'fullScreenModal' }} />
+          <Stack.Screen name="tools/id-card" options={{ headerShown: false, presentation: 'card' }} />
+          <Stack.Screen name="tools/compress" options={{ headerShown: false, presentation: 'card' }} />
+          <Stack.Screen name="tools/extract" options={{ headerShown: false, presentation: 'card' }} />
+          <Stack.Screen name="tools/watermark" options={{ headerShown: false, presentation: 'card' }} />
+          <Stack.Screen name="tools/timestamp" options={{ headerShown: false, presentation: 'card' }} />
+          <Stack.Screen name="tools/sign" options={{ headerShown: false, presentation: 'card' }} />
         </Stack>
         </ScanProvider>
       </ThemeProvider>
