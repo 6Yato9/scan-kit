@@ -134,7 +134,7 @@ function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
               transform: [
                 {
                   // Centre the circle within its tab slot
-                  translateX: Animated.add(selectorX, new Animated.Value((tabWidth - 56) / 2)),
+                  translateX: Animated.add(selectorX, new Animated.Value((tabWidth - 64) / 2)),
                 },
               ],
             },
@@ -237,10 +237,10 @@ const styles = StyleSheet.create({
   // Absolutely positioned glass pill behind the active tab
   glassSelector: {
     position: 'absolute',
-    top: 4,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    top: 0,
+    width: 64,
+    height: 64,
+    borderRadius: 32,
     borderWidth: 1,
   },
   tabBtn: {
@@ -248,6 +248,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 2,
+    paddingTop: 2,
   },
   tabLabel: {
     fontSize: 10,
