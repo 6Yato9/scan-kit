@@ -287,9 +287,47 @@ export default function ReviewScreen() {
         </View>
       </View>
 
-      {/* ③ Filter strip — replaced in Task 6 */}
-      <View style={{ height: 90, backgroundColor: colors.card, justifyContent: 'center', alignItems: 'center' }}>
-        <Text style={{ color: colors.muted }}>Filter strip coming in Task 6</Text>
+      {/* ③ Filter strip */}
+      <View style={[styles.filterStrip, { backgroundColor: isDark ? 'rgba(18,18,18,0.95)' : 'rgba(248,248,248,0.95)', borderTopColor: colors.border }]}>
+        <Text style={[styles.filterLabel, { color: colors.muted }]}>
+          FILTER — Page {focusedIndex + 1}
+        </Text>
+        <FlatList
+          data={FILTERS}
+          keyExtractor={f => f.value}
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ paddingHorizontal: 12, gap: 10 }}
+          renderItem={({ item: f }) => {
+            const isSelected = filters[focusedIndex] === f.value;
+            const fStyle = filterStyle(f.value as PageFilter);
+            const thumbUri = pages[focusedIndex];
+            return (
+              <Pressable
+                onPress={() => setFilters(prev => {
+                  const next = [...prev];
+                  next[focusedIndex] = f.value;
+                  return next;
+                })}
+                style={styles.filterItem}
+              >
+                <View style={[
+                  styles.filterThumb,
+                  { borderColor: isSelected ? colors.accent : colors.border, borderWidth: isSelected ? 2 : 1 },
+                ]}>
+                  <Image
+                    source={{ uri: thumbUri }}
+                    style={[styles.filterThumbImage, fStyle ? ({ filter: fStyle } as any) : undefined]}
+                    resizeMode="cover"
+                  />
+                </View>
+                <Text style={[styles.filterItemLabel, { color: isSelected ? colors.accent : colors.muted }]}>
+                  {f.label}
+                </Text>
+              </Pressable>
+            );
+          }}
+        />
       </View>
 
       {/* ④ Action row — replaced in Task 7 */}
@@ -355,5 +393,34 @@ const styles = StyleSheet.create({
   pageCounterText: {
     color: '#fff',
     fontSize: 12,
+  },
+  filterStrip: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingTop: 8,
+    paddingBottom: 6,
+  },
+  filterLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    marginLeft: 14,
+    marginBottom: 6,
+  },
+  filterItem: {
+    alignItems: 'center',
+    gap: 4,
+  },
+  filterThumb: {
+    width: 52,
+    height: 52,
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  filterThumbImage: {
+    width: '100%',
+    height: '100%',
+  },
+  filterItemLabel: {
+    fontSize: 10,
   },
 });
