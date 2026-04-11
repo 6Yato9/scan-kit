@@ -84,7 +84,7 @@ function TabsInner() {
     if (reviewVisible) {
       router.push('/review');
     }
-  }, [reviewVisible]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [reviewVisible, router]);
 
   return (
     <Tabs
