@@ -124,6 +124,7 @@ function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
           style={[
             styles.glassSelector,
             {
+              width: tabWidth - 8,  // 4px inset on each side
               backgroundColor: isDark
                 ? 'rgba(255,255,255,0.13)'
                 : 'rgba(0,0,0,0.09)',
@@ -133,8 +134,7 @@ function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
               opacity: selectorOpacity,
               transform: [
                 {
-                  // Centre the 64px circle within its (wider) tab slot
-                  translateX: Animated.add(selectorX, new Animated.Value((tabWidth - 64) / 2)),
+                  translateX: Animated.add(selectorX, new Animated.Value(4)),
                 },
               ],
             },
@@ -237,10 +237,10 @@ const styles = StyleSheet.create({
   // Absolutely positioned glass pill behind the active tab
   glassSelector: {
     position: 'absolute',
-    top: 0,
-    width: 64,
-    height: 64,
-    borderRadius: 32,
+    top: 4,
+    bottom: 4,
+    // borderRadius = half of remaining height (64 - 8 = 56) → perfect semicircle ends
+    borderRadius: 28,
     borderWidth: 1,
   },
   tabBtn: {
