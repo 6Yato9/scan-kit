@@ -240,9 +240,42 @@ export default function ReviewScreen() {
         </Pressable>
       </View>
 
-      {/* ② Page pager — replaced in Task 5 */}
-      <View style={{ flex: 1, backgroundColor: '#000', justifyContent: 'center', alignItems: 'center' }}>
-        <Text style={{ color: '#666' }}>Pager coming in Task 5</Text>
+      {/* ② Page pager */}
+      <View style={{ flex: 1, backgroundColor: '#000' }}>
+        <FlatList
+          ref={pagerRef}
+          data={pages}
+          keyExtractor={(_, i) => String(i)}
+          showsVerticalScrollIndicator={false}
+          snapToInterval={ITEM_HEIGHT}
+          decelerationRate="fast"
+          onViewableItemsChanged={onViewableItemsChanged.current}
+          viewabilityConfig={viewabilityConfig.current}
+          getItemLayout={(_, index) => ({ length: ITEM_HEIGHT, offset: ITEM_HEIGHT * index, index })}
+          renderItem={({ item: uri, index }) => {
+            const fStyle = filterStyle(filters[index] as PageFilter);
+            const isFocused = index === focusedIndex;
+            return (
+              <View style={{ height: ITEM_HEIGHT, justifyContent: 'center', alignItems: 'center', paddingVertical: 16, paddingHorizontal: 24 }}>
+                <View style={[
+                  styles.pageCard,
+                  { opacity: isFocused ? 1 : 0.35, transform: [{ scale: isFocused ? 1 : 0.88 }] },
+                  isFocused && { borderColor: colors.accent, borderWidth: 2 },
+                ]}>
+                  <Image
+                    source={{ uri }}
+                    style={[styles.pageImage, fStyle ? ({ filter: fStyle } as any) : undefined]}
+                    resizeMode="contain"
+                  />
+                </View>
+              </View>
+            );
+          }}
+        />
+        {/* Page counter */}
+        <View style={styles.pageCounter}>
+          <Text style={styles.pageCounterText}>{focusedIndex + 1} / {pages.length}</Text>
+        </View>
       </View>
 
       {/* ③ Filter strip — replaced in Task 6 */}
@@ -290,4 +323,28 @@ const styles = StyleSheet.create({
   pdfPreview: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   pdfLabel: { fontSize: 18, fontWeight: '600', marginBottom: 8 },
   pdfSub: { fontSize: 14 },
+  pageCard: {
+    flex: 1,
+    width: '100%',
+    borderRadius: 6,
+    overflow: 'hidden',
+    backgroundColor: '#fff',
+  },
+  pageImage: {
+    width: '100%',
+    height: '100%',
+  },
+  pageCounter: {
+    position: 'absolute',
+    bottom: 12,
+    right: 12,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+  },
+  pageCounterText: {
+    color: '#fff',
+    fontSize: 12,
+  },
 });
