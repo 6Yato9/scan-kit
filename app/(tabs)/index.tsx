@@ -10,6 +10,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Crypto from 'expo-crypto';
@@ -155,8 +156,9 @@ export default function HomeScreen() {
     <View style={[styles.container, { paddingTop: insets.top, backgroundColor: colors.bg }]}>
       <View style={styles.header}>
         <Text style={[styles.title, { color: colors.text }]}>Recent</Text>
-        <Pressable onPress={() => setSortSheetVisible(true)} hitSlop={12}>
-          <Text style={[styles.sortBtn, { color: colors.accent }]}>↕ Sort</Text>
+        <Pressable style={styles.sortBtnRow} onPress={() => setSortSheetVisible(true)} hitSlop={12}>
+          <Ionicons name="swap-vertical" size={16} color={colors.accent} />
+          <Text style={[styles.sortBtn, { color: colors.accent }]}>Sort</Text>
         </Pressable>
       </View>
 
@@ -181,7 +183,7 @@ export default function HomeScreen() {
             <Text style={[styles.emptyText, { color: colors.muted }]}>
               {searchQuery.trim()
                 ? `No results for "${searchQuery.trim()}"`
-                : 'No documents yet. Tap 📷 to scan.'}
+                : 'No documents yet. Tap the camera button to scan.'}
             </Text>
           </View>
         }
@@ -192,8 +194,8 @@ export default function HomeScreen() {
             onLongPress={() => setDocActionsTarget(item)}
           >
             {item.pdfUri ? (
-              <View style={[styles.thumb, { backgroundColor: colors.placeholder }]}>
-                <Text style={styles.pdfIcon}>📄</Text>
+              <View style={[styles.thumb, { backgroundColor: colors.placeholder, alignItems: 'center', justifyContent: 'center' }]}>
+                <Ionicons name="document-text" size={28} color={colors.muted} />
               </View>
             ) : item.pages[0] ? (
               <Image source={{ uri: item.pages[0] }} style={styles.thumb} resizeMode="cover" />
@@ -228,6 +230,7 @@ export default function HomeScreen() {
         onMerge={doc => { setDocActionsTarget(null); setMergeTarget(doc); }}
         onSelect={() => setDocActionsTarget(null)}
         onDelete={doc => { setDocActionsTarget(null); handleDelete(doc); }}
+        onMoveToFolder={() => setDocActionsTarget(null)}
         onClose={() => setDocActionsTarget(null)}
       />
 
@@ -261,6 +264,7 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
   },
   title: { fontSize: 30, fontWeight: '800', letterSpacing: -0.5 },
+  sortBtnRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   sortBtn: { fontSize: 14, fontWeight: '600' },
   searchRow: { paddingHorizontal: 14, paddingBottom: 10 },
   searchInput: {
@@ -287,7 +291,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  pdfIcon: { fontSize: 24 },
   rowInfo: { flex: 1 },
   rowName: { fontSize: 15, fontWeight: '600' },
   rowMeta: { fontSize: 12, marginTop: 2 },

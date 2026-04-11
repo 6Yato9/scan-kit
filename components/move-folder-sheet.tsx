@@ -1,5 +1,6 @@
 // components/move-folder-sheet.tsx
 import { Pressable, StyleSheet, Text } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { BottomSheet } from '@/components/bottom-sheet';
 import { Document } from '@/types/document';
 import { useTheme } from '@/contexts/theme-context';
@@ -25,7 +26,7 @@ export function MoveFolderSheet({ visible, document, folders, onMove, onClose }:
         onPress={() => onMove(document, null)}
       >
         <Text style={[styles.optionText, { color: colors.text }]}>No folder</Text>
-        {document.folder == null && <Text style={[styles.check, { color: colors.accent }]}>✓</Text>}
+        {document.folder == null && <Ionicons name="checkmark" size={20} color={colors.accent} />}
       </Pressable>
 
       {folders.map(f => (
@@ -35,7 +36,7 @@ export function MoveFolderSheet({ visible, document, folders, onMove, onClose }:
           onPress={() => onMove(document, f)}
         >
           <Text style={[styles.optionText, { color: colors.text }]}>{f}</Text>
-          {document.folder === f && <Text style={[styles.check, { color: colors.accent }]}>✓</Text>}
+          {document.folder === f && <Ionicons name="checkmark" size={20} color={colors.accent} />}
         </Pressable>
       ))}
     </BottomSheet>
@@ -52,5 +53,4 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   optionText: { fontSize: 17 },
-  check: { fontSize: 17 },
 });

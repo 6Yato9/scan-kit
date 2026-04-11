@@ -1,26 +1,27 @@
 // app/(tabs)/me.tsx
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { SortSheet } from '@/components/sort-sheet';
 import { getSortPreference, saveSortPreference, SortKey } from '@/lib/storage';
 import { useTheme } from '@/contexts/theme-context';
 
 type Row = {
-  icon: string;
+  icon: keyof typeof Ionicons.glyphMap;
   label: string;
   route?: string;
   action?: 'sort' | 'help';
 };
 
 const ROWS: Row[] = [
-  { icon: '📷', label: 'Scan Settings', route: '/settings/scan-settings' },
-  { icon: '📄', label: 'Document Settings', route: '/settings/document-settings' },
-  { icon: '🖨', label: 'My Printer', route: '/settings/printer' },
-  { icon: '↕️', label: 'Sort Preference', action: 'sort' },
-  { icon: '❓', label: 'Help', action: 'help' },
-  { icon: 'ℹ️', label: 'About', route: '/settings/about' },
+  { icon: 'camera-outline', label: 'Scan Settings', route: '/settings/scan-settings' },
+  { icon: 'document-text-outline', label: 'Document Settings', route: '/settings/document-settings' },
+  { icon: 'print-outline', label: 'My Printer', route: '/settings/printer' },
+  { icon: 'swap-vertical-outline', label: 'Sort Preference', action: 'sort' },
+  { icon: 'help-circle-outline', label: 'Help', action: 'help' },
+  { icon: 'information-circle-outline', label: 'About', route: '/settings/about' },
 ];
 
 export default function MeScreen() {
@@ -42,7 +43,7 @@ export default function MeScreen() {
     } else if (row.action === 'help') {
       Alert.alert(
         'Help',
-        '• Tap 📷 in the tab bar to scan a document.\n• Tap any document to view it.\n• Long-press a document for actions.\n• Use Tools tab to import files or images.\n• Adjust quality and defaults in Scan Settings.',
+        '• Tap the camera button to scan a document.\n• Tap any document to view it.\n• Long-press a document for actions.\n• Use Tools tab to import files or images.\n• Adjust quality and defaults in Scan Settings.',
         [{ text: 'Got it' }]
       );
     }
@@ -56,11 +57,11 @@ export default function MeScreen() {
   return (
     <ScrollView
       style={[styles.container, { backgroundColor: colors.bg }]}
-      contentContainerStyle={{ paddingBottom: insets.bottom + 80 }}
+      contentContainerStyle={{ paddingBottom: insets.bottom + 110 }}
     >
       <View style={[styles.header, { paddingTop: insets.top + 16 }]}>
-        <View style={[styles.avatar, { backgroundColor: colors.border }]}>
-          <Text style={styles.avatarIcon}>👤</Text>
+        <View style={[styles.avatar, { backgroundColor: colors.card }]}>
+          <Ionicons name="person" size={40} color={colors.muted} />
         </View>
         <Text style={[styles.appName, { color: colors.text }]}>Scan Kit</Text>
       </View>
@@ -93,9 +94,9 @@ export default function MeScreen() {
             style={[styles.row, i === ROWS.length - 1 && styles.rowLast, { borderBottomColor: colors.border }]}
             onPress={() => handleRow(row)}
           >
-            <Text style={styles.rowIcon}>{row.icon}</Text>
+            <Ionicons name={row.icon} size={20} color={colors.muted} style={styles.rowIcon} />
             <Text style={[styles.rowLabel, { color: colors.text }]}>{row.label}</Text>
-            <Text style={[styles.rowChevron, { color: colors.border }]}>›</Text>
+            <Ionicons name="chevron-forward" size={16} color={colors.border} />
           </Pressable>
         ))}
       </View>
@@ -125,7 +126,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: 10,
   },
-  avatarIcon: { fontSize: 36 },
   appName: { fontSize: 20, fontWeight: '700' },
   section: {
     marginHorizontal: 14,
@@ -150,7 +150,6 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   rowLast: { borderBottomWidth: 0 },
-  rowIcon: { fontSize: 20, width: 28, textAlign: 'center' },
+  rowIcon: { width: 24, textAlign: 'center' },
   rowLabel: { flex: 1, fontSize: 16 },
-  rowChevron: { fontSize: 20 },
 });

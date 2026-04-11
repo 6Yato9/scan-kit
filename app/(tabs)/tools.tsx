@@ -1,11 +1,13 @@
 // app/(tabs)/tools.tsx
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useTheme } from '@/contexts/theme-context';
 
 type Tool = {
   id: string;
-  icon: string;
+  icon: keyof typeof Ionicons.glyphMap;
   label: string;
   subtitle: string;
   available: boolean;
@@ -13,18 +15,23 @@ type Tool = {
 };
 
 function ToolCard({ tool }: { tool: Tool }) {
+  const { colors, isDark } = useTheme();
+  const iconColor = tool.available
+    ? (isDark ? '#e0e0e0' : '#1a1a1a')
+    : (isDark ? '#555' : '#bbb');
   return (
     <Pressable
-      style={[styles.card, !tool.available && styles.cardDisabled]}
+      style={[styles.card, { backgroundColor: colors.card }, !tool.available && styles.cardDisabled]}
       onPress={tool.available ? tool.action : undefined}
     >
-      <Text style={styles.cardIcon}>{tool.icon}</Text>
-      <Text style={[styles.cardLabel, !tool.available && styles.cardLabelDisabled]}>
+      <Ionicons name={tool.icon} size={28} color={iconColor} style={styles.cardIcon} />
+      <Text style={[styles.cardLabel, { color: tool.available ? colors.text : colors.faint }]}>
         {tool.label}
       </Text>
+      <Text style={[styles.cardSub, { color: colors.faint }]}>{tool.subtitle}</Text>
       {!tool.available && (
-        <View style={styles.soonBadge}>
-          <Text style={styles.soonText}>Soon</Text>
+        <View style={[styles.soonBadge, { backgroundColor: colors.secondary }]}>
+          <Text style={[styles.soonText, { color: colors.muted }]}>Soon</Text>
         </View>
       )}
     </Pressable>
@@ -33,74 +40,98 @@ function ToolCard({ tool }: { tool: Tool }) {
 
 export default function ToolsScreen() {
   const insets = useSafeAreaInsets();
+  const { colors } = useTheme();
   const router = useRouter();
 
   const sections: { title: string; tools: Tool[] }[] = [
     {
-      title: 'SCAN',
-      tools: [
-        { id: 'idcard', icon: '🪪', label: 'ID Card', subtitle: 'Scan front + back', available: false },
-        { id: 'timestamp', icon: '⏰', label: 'Timestamp', subtitle: 'Add date/time', available: false },
-      ],
-    },
-    {
       title: 'IMPORT',
       tools: [
         {
+          id: 'import-images',
+          icon: 'images-outline',
+          label: 'Import Images',
+          subtitle: 'From photo library',
+          available: true,
+          action: () => router.navigate({ pathname: '/(tabs)/files', params: { action: 'importImages' } } as any),
+        },
+        {
           id: 'import-files',
-          icon: '📥',
+          icon: 'cloud-download-outline',
           label: 'Import Files',
           subtitle: 'PDF or image',
           available: true,
           action: () => router.navigate({ pathname: '/(tabs)/files', params: { action: 'importFiles' } } as any),
         },
+      ],
+    },
+    {
+      title: 'EXPORT',
+      tools: [
         {
-          id: 'import-images',
-          icon: '🖼',
-          label: 'Import Images',
-          subtitle: 'From library',
+          id: 'export-pdf',
+          icon: 'document-text-outline',
+          label: 'Export PDF',
+          subtitle: 'Save as PDF file',
           available: true,
-          action: () => router.navigate({ pathname: '/(tabs)/files', params: { action: 'importImages' } } as any),
+          action: () => Alert.alert('Export PDF', 'Open any document, then tap Export → Export as PDF.'),
         },
+        {
+          id: 'export-jpeg',
+          icon: 'image-outline',
+          label: 'Export JPEG',
+          subtitle: 'Save as images',
+          available: true,
+          action: () => Alert.alert('Export JPEG', 'Open any document, then tap Export → Export as JPEG.'),
+        },
+        {
+          id: 'print',
+          icon: 'print-outline',
+          label: 'Print',
+          subtitle: 'Send to printer',
+          available: true,
+          action: () => Alert.alert('Print', 'Open any document, then tap Export → Print.'),
+        },
+        {
+          id: 'share',
+          icon: 'share-social-outline',
+          label: 'Share',
+          subtitle: 'Share document',
+          available: true,
+          action: () => Alert.alert('Share', 'Open any document and tap Export to share.'),
+        },
+      ],
+    },
+    {
+      title: 'SCAN',
+      tools: [
+        { id: 'idcard', icon: 'card-outline', label: 'ID Card', subtitle: 'Scan front + back', available: false },
+        { id: 'qr', icon: 'qr-code-outline', label: 'QR / Barcode', subtitle: 'Scan & copy', available: false },
+        { id: 'timestamp', icon: 'time-outline', label: 'Timestamp', subtitle: 'Add date/time', available: false },
       ],
     },
     {
       title: 'EDIT',
       tools: [
-        { id: 'sign', icon: '✍️', label: 'Sign', subtitle: 'Draw signature', available: false },
-        { id: 'watermark', icon: '💧', label: 'Watermark', subtitle: 'Add text', available: false },
-        { id: 'extract', icon: '✂️', label: 'Extract Pages', subtitle: 'Split document', available: false },
-        { id: 'compress', icon: '🗜', label: 'Compress', subtitle: 'Reduce size', available: false },
-        { id: 'lock', icon: '🔒', label: 'Lock PDF', subtitle: 'Add password', available: false },
-      ],
-    },
-    {
-      title: 'UTILITIES',
-      tools: [
-        {
-          id: 'print',
-          icon: '🖨',
-          label: 'Print',
-          subtitle: 'Print document',
-          available: true,
-          action: () =>
-            Alert.alert('Print', 'Open a document and tap Export → Print to print from any doc.'),
-        },
-        { id: 'qr', icon: '📷', label: 'QR / Barcode', subtitle: 'Scan & copy', available: false },
+        { id: 'sign', icon: 'create-outline', label: 'Sign', subtitle: 'Draw signature', available: false },
+        { id: 'watermark', icon: 'water-outline', label: 'Watermark', subtitle: 'Add text overlay', available: false },
+        { id: 'extract', icon: 'cut-outline', label: 'Extract Pages', subtitle: 'Split document', available: false },
+        { id: 'compress', icon: 'archive-outline', label: 'Compress', subtitle: 'Reduce file size', available: false },
+        { id: 'lock', icon: 'lock-closed-outline', label: 'Lock PDF', subtitle: 'Password protect', available: false },
       ],
     },
   ];
 
   return (
     <ScrollView
-      style={styles.container}
-      contentContainerStyle={[styles.content, { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 80 }]}
+      style={[styles.container, { backgroundColor: colors.bg }]}
+      contentContainerStyle={[styles.content, { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 110 }]}
     >
-      <Text style={styles.screenTitle}>Tools</Text>
+      <Text style={[styles.screenTitle, { color: colors.text }]}>Tools</Text>
 
       {sections.map(section => (
         <View key={section.title} style={styles.section}>
-          <Text style={styles.sectionTitle}>{section.title}</Text>
+          <Text style={[styles.sectionTitle, { color: colors.muted }]}>{section.title}</Text>
           <View style={styles.grid}>
             {section.tools.map(tool => (
               <ToolCard key={tool.id} tool={tool} />
@@ -113,12 +144,11 @@ export default function ToolsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#111' },
+  container: { flex: 1 },
   content: { paddingHorizontal: 16 },
   screenTitle: {
     fontSize: 30,
     fontWeight: '800',
-    color: '#fff',
     letterSpacing: -0.5,
     marginBottom: 20,
   },
@@ -126,7 +156,6 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 11,
     fontWeight: '700',
-    color: '#666',
     letterSpacing: 1,
     marginBottom: 10,
   },
@@ -137,24 +166,22 @@ const styles = StyleSheet.create({
   },
   card: {
     width: '47%',
-    backgroundColor: '#1e1e1e',
     borderRadius: 14,
     padding: 16,
     alignItems: 'center',
     position: 'relative',
   },
-  cardDisabled: { opacity: 0.5 },
-  cardIcon: { fontSize: 30, marginBottom: 6 },
-  cardLabel: { fontSize: 13, fontWeight: '700', color: '#fff', textAlign: 'center' },
-  cardLabelDisabled: { color: '#aaa' },
+  cardDisabled: { opacity: 0.45 },
+  cardIcon: { marginBottom: 8 },
+  cardLabel: { fontSize: 13, fontWeight: '700', textAlign: 'center' },
+  cardSub: { fontSize: 11, marginTop: 2, textAlign: 'center' },
   soonBadge: {
     position: 'absolute',
     top: 8,
     right: 8,
-    backgroundColor: '#333',
     borderRadius: 4,
     paddingHorizontal: 5,
     paddingVertical: 2,
   },
-  soonText: { fontSize: 9, color: '#888', fontWeight: '700' },
+  soonText: { fontSize: 9, fontWeight: '700' },
 });

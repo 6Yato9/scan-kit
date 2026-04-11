@@ -1,5 +1,6 @@
 // components/sort-sheet.tsx
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { BottomSheet } from '@/components/bottom-sheet';
 import { SortKey } from '@/lib/storage';
 import { useTheme } from '@/contexts/theme-context';
@@ -32,7 +33,7 @@ export function SortSheet({ visible, current, onSort, onClose }: Props) {
             <Text style={[styles.optionLabel, { color: colors.text }]}>{label}</Text>
             <Text style={[styles.optionSub, { color: colors.faint }]}>{sub}</Text>
           </View>
-          {current === key && <Text style={[styles.check, { color: colors.accent }]}>✓</Text>}
+          {current === key && <Ionicons name="checkmark" size={20} color={colors.accent} />}
         </Pressable>
       ))}
     </BottomSheet>
@@ -50,5 +51,4 @@ const styles = StyleSheet.create({
   optionText: { flex: 1 },
   optionLabel: { fontSize: 16, fontWeight: '500' },
   optionSub: { fontSize: 12, marginTop: 2 },
-  check: { fontSize: 18, fontWeight: '700' },
 });

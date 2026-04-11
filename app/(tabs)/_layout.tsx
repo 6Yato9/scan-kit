@@ -1,8 +1,10 @@
 // app/(tabs)/_layout.tsx
 import { useCallback } from 'react';
-import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, View } from 'react-native';
 import { Tabs, useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import type { BottomTabBarButtonProps } from '@react-navigation/bottom-tabs';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Crypto from 'expo-crypto';
 import { ScanProvider, useScan } from '@/contexts/scan-context';
 import { useTheme } from '@/contexts/theme-context';
@@ -14,14 +16,15 @@ import { copyPageWithQuality, copyPdfToStorage } from '@/lib/files';
 // Rendered inside ScanProvider so useScan() works.
 function ScanTabButton(props: BottomTabBarButtonProps) {
   const { triggerScan } = useScan();
+  const { colors } = useTheme();
   return (
     <Pressable
       onPress={triggerScan}
       style={[props.style, styles.scanBtn]}
       accessibilityLabel="Scan document"
     >
-      <View style={styles.scanCircle}>
-        <Text style={styles.scanIcon}>📷</Text>
+      <View style={[styles.scanCircle, { backgroundColor: colors.accent, shadowColor: colors.accent }]}>
+        <Ionicons name="camera" size={26} color="#fff" />
       </View>
     </Pressable>
   );
@@ -30,7 +33,8 @@ function ScanTabButton(props: BottomTabBarButtonProps) {
 // Inner wrapper: has access to ScanContext to render ScanNameSheet.
 function TabsWithScanSheet() {
   const router = useRouter();
-  const { isDark } = useTheme();
+  const insets = useSafeAreaInsets();
+  const { isDark, colors } = useTheme();
   const {
     pendingPages,
     pendingPdfUri,
@@ -85,34 +89,48 @@ function TabsWithScanSheet() {
     setTimeout(triggerScan, 350);
   }, [clearPending, triggerScan]);
 
+  const glassBar = {
+    position: 'absolute' as const,
+    bottom: insets.bottom + 8,
+    left: 12,
+    right: 12,
+    borderRadius: 26,
+    height: 64,
+    backgroundColor: isDark ? 'rgba(18,18,18,0.92)' : 'rgba(248,248,248,0.92)',
+    borderTopWidth: 0,
+    borderWidth: 0.5,
+    borderColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)',
+    shadowColor: '#000',
+    shadowOpacity: 0.28,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 14,
+    overflow: 'visible' as const,
+  };
+
   return (
     <>
       <Tabs
         screenOptions={{
           headerShown: false,
-          tabBarStyle: [
-            styles.tabBar,
-            {
-              backgroundColor: isDark ? '#1a1a1a' : '#ffffff',
-              borderTopColor: isDark ? '#222' : '#e0e0e0',
-            },
-          ],
-          tabBarActiveTintColor: isDark ? '#4ec6e0' : '#0a7ea4',
-          tabBarInactiveTintColor: '#666',
+          tabBarStyle: glassBar,
+          tabBarActiveTintColor: colors.accent,
+          tabBarInactiveTintColor: isDark ? '#666' : '#aaa',
+          tabBarLabelStyle: { fontSize: 10, marginBottom: 4 },
         }}
       >
         <Tabs.Screen
           name="index"
           options={{
             title: 'Home',
-            tabBarIcon: ({ color }) => <Text style={{ color, fontSize: 20 }}>🏠</Text>,
+            tabBarIcon: ({ color, size }) => <Ionicons name="home" size={size} color={color} />,
           }}
         />
         <Tabs.Screen
           name="files"
           options={{
             title: 'Files',
-            tabBarIcon: ({ color }) => <Text style={{ color, fontSize: 20 }}>🗂</Text>,
+            tabBarIcon: ({ color, size }) => <Ionicons name="document-text" size={size} color={color} />,
           }}
         />
         <Tabs.Screen
@@ -126,14 +144,14 @@ function TabsWithScanSheet() {
           name="tools"
           options={{
             title: 'Tools',
-            tabBarIcon: ({ color }) => <Text style={{ color, fontSize: 20 }}>🔧</Text>,
+            tabBarIcon: ({ color, size }) => <Ionicons name="grid" size={size} color={color} />,
           }}
         />
         <Tabs.Screen
           name="me"
           options={{
             title: 'Me',
-            tabBarIcon: ({ color }) => <Text style={{ color, fontSize: 20 }}>👤</Text>,
+            tabBarIcon: ({ color, size }) => <Ionicons name="person" size={size} color={color} />,
           }}
         />
       </Tabs>
@@ -158,26 +176,20 @@ export default function TabLayout() {
 }
 
 const styles = StyleSheet.create({
-  tabBar: {
-    height: 64,
-  },
   scanBtn: {
     justifyContent: 'center',
     alignItems: 'center',
-    top: -16,
+    top: -18,
   },
   scanCircle: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: '#0a7ea4',
+    width: 58,
+    height: 58,
+    borderRadius: 29,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#0a7ea4',
     shadowOpacity: 0.5,
-    shadowRadius: 12,
+    shadowRadius: 14,
     shadowOffset: { width: 0, height: 4 },
-    elevation: 8,
+    elevation: 10,
   },
-  scanIcon: { fontSize: 24 },
 });

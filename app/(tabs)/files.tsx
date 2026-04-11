@@ -1,9 +1,8 @@
 // app/(tabs)/files.tsx
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   FlatList,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -13,6 +12,8 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
+import { BottomSheet } from '@/components/bottom-sheet';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as Crypto from 'expo-crypto';
@@ -68,6 +69,9 @@ export default function FilesScreen() {
   const [renameTarget, setRenameTarget] = useState<Document | null>(null);
   const [mergeTarget, setMergeTarget] = useState<Document | null>(null);
   const [moveFolderTarget, setMoveFolderTarget] = useState<Document | null>(null);
+  const [newFolderVisible, setNewFolderVisible] = useState(false);
+  const [newFolderName, setNewFolderName] = useState('');
+  const newFolderInputRef = useRef<TextInput>(null);
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const params = useLocalSearchParams<{ action?: string }>();
@@ -141,21 +145,17 @@ export default function FilesScreen() {
   }, [openImport, openPdfImport]);
 
   const handleNewFolder = useCallback(() => {
-    if (Platform.OS === 'ios') {
-      Alert.prompt(
-        'New Folder',
-        'Enter a name for the folder',
-        async (name) => {
-          if (!name?.trim()) return;
-          await saveFolder(name.trim());
-          setFolders(await getFolders());
-        },
-        'plain-text'
-      );
-    } else {
-      Alert.alert('New Folder', 'Folder creation is available on iOS. Long-press a document and choose "Move to Folder" after creating a folder via settings.');
-    }
+    setNewFolderName('');
+    setNewFolderVisible(true);
+    setTimeout(() => newFolderInputRef.current?.focus(), 400);
   }, []);
+
+  const handleCreateFolder = useCallback(async () => {
+    if (!newFolderName.trim()) return;
+    await saveFolder(newFolderName.trim());
+    setFolders(await getFolders());
+    setNewFolderVisible(false);
+  }, [newFolderName]);
 
   const handleCardPress = useCallback((doc: Document) => {
     if (isMultiSelectMode) {
@@ -294,8 +294,9 @@ export default function FilesScreen() {
     <View style={[styles.container, { paddingTop: insets.top, backgroundColor: colors.bg }]}>
       <View style={styles.header}>
         <Text style={[styles.title, { color: colors.text }]}>Files</Text>
-        <Pressable onPress={() => setSortSheetVisible(true)} hitSlop={12}>
-          <Text style={[styles.sortBtn, { color: colors.accent }]}>↕ Sort</Text>
+        <Pressable style={styles.sortBtnRow} onPress={() => setSortSheetVisible(true)} hitSlop={12}>
+          <Ionicons name="swap-vertical" size={16} color={colors.accent} />
+          <Text style={[styles.sortBtn, { color: colors.accent }]}>Sort</Text>
         </Pressable>
       </View>
 
@@ -314,13 +315,16 @@ export default function FilesScreen() {
       {/* Quick action bar */}
       <View style={styles.actionBar}>
         <Pressable style={[styles.actionBtn, { backgroundColor: colors.card }]} onPress={handleImportImages}>
-          <Text style={[styles.actionBtnText, { color: colors.text }]}>🖼 Import Images</Text>
+          <Ionicons name="images-outline" size={16} color={colors.accent} />
+          <Text style={[styles.actionBtnText, { color: colors.text }]}>Import Images</Text>
         </Pressable>
         <Pressable style={[styles.actionBtn, { backgroundColor: colors.card }]} onPress={handleImportFiles}>
-          <Text style={[styles.actionBtnText, { color: colors.text }]}>📥 Import Files</Text>
+          <Ionicons name="cloud-download-outline" size={16} color={colors.accent} />
+          <Text style={[styles.actionBtnText, { color: colors.text }]}>Import Files</Text>
         </Pressable>
         <Pressable style={[styles.actionBtn, { backgroundColor: colors.card }]} onPress={handleNewFolder}>
-          <Text style={[styles.actionBtnText, { color: colors.text }]}>📁 New Folder</Text>
+          <Ionicons name="folder-open-outline" size={16} color={colors.accent} />
+          <Text style={[styles.actionBtnText, { color: colors.text }]}>New Folder</Text>
         </Pressable>
       </View>
 
@@ -430,6 +434,32 @@ export default function FilesScreen() {
         onMove={handleMoveToFolder}
         onClose={() => setMoveFolderTarget(null)}
       />
+
+      <BottomSheet visible={newFolderVisible} onClose={() => setNewFolderVisible(false)}>
+        <Text style={[styles.sheetHeading, { color: colors.text }]}>New Folder</Text>
+        <TextInput
+          ref={newFolderInputRef}
+          style={[styles.sheetInput, { borderColor: colors.border, color: colors.text, backgroundColor: colors.input }]}
+          value={newFolderName}
+          onChangeText={setNewFolderName}
+          placeholder="Folder name"
+          placeholderTextColor={colors.faint}
+          selectTextOnFocus
+          returnKeyType="done"
+          onSubmitEditing={handleCreateFolder}
+        />
+        <View style={styles.sheetRow}>
+          <Pressable style={[styles.sheetCancelBtn, { backgroundColor: colors.secondary }]} onPress={() => setNewFolderVisible(false)}>
+            <Text style={[styles.sheetCancelText, { color: colors.text }]}>Cancel</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.sheetCreateBtn, { backgroundColor: colors.accent }, !newFolderName.trim() && styles.sheetBtnDisabled]}
+            onPress={handleCreateFolder}
+          >
+            <Text style={styles.sheetCreateText}>Create</Text>
+          </Pressable>
+        </View>
+      </BottomSheet>
     </View>
   );
 }
@@ -445,6 +475,7 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
   },
   title: { fontSize: 30, fontWeight: '800', letterSpacing: -0.5 },
+  sortBtnRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   sortBtn: { fontSize: 14, fontWeight: '600' },
   searchRow: { paddingHorizontal: 14, paddingBottom: 6 },
   searchInput: {
@@ -464,13 +495,14 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     paddingVertical: 9,
     alignItems: 'center',
+    gap: 4,
     shadowColor: '#000',
     shadowOpacity: 0.06,
     shadowRadius: 4,
     shadowOffset: { width: 0, height: 1 },
     elevation: 2,
   },
-  actionBtnText: { fontSize: 12, fontWeight: '600' },
+  actionBtnText: { fontSize: 11, fontWeight: '600' },
   chipsScroll: { maxHeight: 40 },
   chips: { paddingHorizontal: 14, paddingBottom: 8, gap: 8, flexDirection: 'row' },
   chip: {
@@ -515,4 +547,20 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
   },
   deleteBtnText: { fontSize: 16, fontWeight: '600' },
+  sheetHeading: { fontSize: 17, fontWeight: '700', marginBottom: 14 },
+  sheetInput: {
+    borderWidth: 1.5,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    fontSize: 16,
+    marginBottom: 18,
+    minHeight: 52,
+  },
+  sheetRow: { flexDirection: 'row', gap: 12 },
+  sheetCancelBtn: { flex: 1, borderRadius: 12, padding: 15, alignItems: 'center' },
+  sheetCancelText: { fontSize: 16, fontWeight: '600' },
+  sheetCreateBtn: { flex: 1, borderRadius: 12, padding: 15, alignItems: 'center' },
+  sheetCreateText: { fontSize: 16, fontWeight: '700', color: '#fff' },
+  sheetBtnDisabled: { opacity: 0.4 },
 });
