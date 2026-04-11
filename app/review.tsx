@@ -21,7 +21,7 @@ import { useScan } from '@/contexts/scan-context';
 import { useTheme } from '@/contexts/theme-context';
 import { PageFilter } from '@/types/document';
 import { saveDocument } from '@/lib/storage';
-import { copyPageWithQuality, copyPdfToStorage } from '@/lib/files';
+import { copyPageWithQuality, copyPdfToStorage, deleteDocumentFiles } from '@/lib/files';
 import { filterStyle } from '@/lib/filters';
 import { autoName } from '@/lib/auto-name';
 
@@ -76,8 +76,8 @@ export default function ReviewScreen() {
     const trimmedName = name.trim();
     if (!trimmedName || saving) return;
     setSaving(true);
+    const id = Crypto.randomUUID();
     try {
-      const id = Crypto.randomUUID();
       const now = Date.now();
 
       if (pendingPdfUri) {
@@ -103,6 +103,8 @@ export default function ReviewScreen() {
       router.replace('/(tabs)/files');
     } catch (err) {
       console.error('Save failed', err);
+      // Clean up any partially-written files for this document id
+      try { deleteDocumentFiles(id); } catch { /* ignore secondary failure */ }
       Alert.alert('Save Failed', 'Could not save document. Please try again.');
       setSaving(false);
     }
@@ -116,16 +118,17 @@ export default function ReviewScreen() {
 
   const handleRotate = useCallback(async () => {
     if (rotating) return;
+    const targetIndex = focusedIndex;
     setRotating(true);
     try {
       const result = await manipulateAsync(
-        pages[focusedIndex],
+        pages[targetIndex],
         [{ rotate: 90 }],
         { compress: pendingQuality, format: SaveFormat.JPEG }
       );
       setPages(prev => {
         const next = [...prev];
-        next[focusedIndex] = result.uri;
+        next[targetIndex] = result.uri;
         return next;
       });
     } catch (err) {
@@ -136,12 +139,13 @@ export default function ReviewScreen() {
   }, [rotating, pages, focusedIndex, pendingQuality]);
 
   const handleCrop = useCallback(async () => {
+    const targetIndex = focusedIndex;
     try {
       const { scannedImages } = await DocumentScanner.scanDocument({ letUserAdjustCrop: true });
       if (!scannedImages?.length) return;
       setPages(prev => {
         const next = [...prev];
-        next[focusedIndex] = scannedImages[0];
+        next[targetIndex] = scannedImages[0];
         return next;
       });
     } catch (err) {
