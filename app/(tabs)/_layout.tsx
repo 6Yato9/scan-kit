@@ -110,8 +110,8 @@ function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
         styles.floatingBar,
         {
           bottom: insets.bottom + 8,
-          left: (screenWidth - ROUTE_COUNT * 64) / 2,
-          right: (screenWidth - ROUTE_COUNT * 64) / 2,
+          left: Math.max(16, (screenWidth - ROUTE_COUNT * 78) / 2),
+          right: Math.max(16, (screenWidth - ROUTE_COUNT * 78) / 2),
           backgroundColor: isDark ? 'rgba(18,18,18,0.93)' : 'rgba(248,248,248,0.93)',
           borderColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)',
         },
@@ -133,8 +133,8 @@ function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
               opacity: selectorOpacity,
               transform: [
                 {
-                  // Centre the circle within its tab slot
-                  translateX: selectorX,
+                  // Centre the 64px circle within its (wider) tab slot
+                  translateX: Animated.add(selectorX, new Animated.Value((tabWidth - 64) / 2)),
                 },
               ],
             },
