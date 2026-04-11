@@ -1,5 +1,5 @@
 // app/review.tsx
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -65,7 +65,10 @@ export default function ReviewScreen() {
   const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 50 });
 
   // Approximate item height: screen minus top bar (~56) minus filter strip (~90) minus action row (~72) minus insets
-  const ITEM_HEIGHT = screenHeight - 56 - insets.top - 90 - 72 - insets.bottom;
+  const ITEM_HEIGHT = useMemo(
+    () => screenHeight - 56 - insets.top - 90 - 72 - insets.bottom,
+    [screenHeight, insets.top, insets.bottom]
+  );
 
   const handleDiscard = useCallback(() => {
     clearPending();
@@ -159,9 +162,13 @@ export default function ReviewScreen() {
       router.back();
       return;
     }
+    const newIndex = Math.min(focusedIndex, pages.length - 2);
     setPages(prev => prev.filter((_, i) => i !== focusedIndex));
     setFilters(prev => prev.filter((_, i) => i !== focusedIndex));
-    setFocused(prev => Math.min(prev, pages.length - 2));
+    setFocused(newIndex);
+    setTimeout(() => {
+      pagerRef.current?.scrollToIndex({ index: newIndex, animated: true });
+    }, 50);
   }, [pages.length, focusedIndex, clearPending, router]);
 
   const handleAddPage = useCallback(async () => {
@@ -179,6 +186,26 @@ export default function ReviewScreen() {
       console.error('Add page failed', err);
     }
   }, [pages.length, pendingDefaultFilter]);
+
+  const renderPage = useCallback(({ item: uri, index }: { item: string; index: number }) => {
+    const fStyle = filterStyle(filters[index] as PageFilter);
+    const isFocused = index === focusedIndex;
+    return (
+      <View style={{ height: ITEM_HEIGHT, justifyContent: 'center', alignItems: 'center', paddingVertical: 16, paddingHorizontal: 24 }}>
+        <View style={[
+          styles.pageCard,
+          { opacity: isFocused ? 1 : 0.35, transform: [{ scale: isFocused ? 1 : 0.88 }] },
+          isFocused && { borderColor: colors.accent, borderWidth: 2 },
+        ]}>
+          <Image
+            source={{ uri }}
+            style={[styles.pageImage, fStyle ? ({ filter: fStyle } as any) : undefined]}
+            resizeMode="contain"
+          />
+        </View>
+      </View>
+    );
+  }, [focusedIndex, filters, colors.accent, ITEM_HEIGHT]);
 
   // PDF import mode: simple preview, title editable, no filters or actions
   if (pendingPdfUri) {
@@ -252,25 +279,7 @@ export default function ReviewScreen() {
           onViewableItemsChanged={onViewableItemsChanged.current}
           viewabilityConfig={viewabilityConfig.current}
           getItemLayout={(_, index) => ({ length: ITEM_HEIGHT, offset: ITEM_HEIGHT * index, index })}
-          renderItem={({ item: uri, index }) => {
-            const fStyle = filterStyle(filters[index] as PageFilter);
-            const isFocused = index === focusedIndex;
-            return (
-              <View style={{ height: ITEM_HEIGHT, justifyContent: 'center', alignItems: 'center', paddingVertical: 16, paddingHorizontal: 24 }}>
-                <View style={[
-                  styles.pageCard,
-                  { opacity: isFocused ? 1 : 0.35, transform: [{ scale: isFocused ? 1 : 0.88 }] },
-                  isFocused && { borderColor: colors.accent, borderWidth: 2 },
-                ]}>
-                  <Image
-                    source={{ uri }}
-                    style={[styles.pageImage, fStyle ? ({ filter: fStyle } as any) : undefined]}
-                    resizeMode="contain"
-                  />
-                </View>
-              </View>
-            );
-          }}
+          renderItem={renderPage}
         />
         {/* Page counter */}
         <View style={styles.pageCounter}>
