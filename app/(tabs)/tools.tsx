@@ -167,6 +167,14 @@ export default function ToolsScreen() {
           action: () => router.push('/tools/compress'),
         },
         {
+          id: 'merge',
+          icon: 'git-merge-outline',
+          label: 'Merge',
+          subtitle: 'Combine documents',
+          available: true,
+          action: () => router.push('/tools/merge'),
+        },
+        {
           id: 'lock',
           icon: 'lock-closed-outline',
           label: 'Lock PDF',

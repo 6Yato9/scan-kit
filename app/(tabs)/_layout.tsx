@@ -239,7 +239,9 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 6,
     bottom: 6,
-    borderRadius: 16,
+    // Inner radius = bar radius (26) minus vertical inset (6) so the curve
+    // is concentric with the nav bar's own corners.
+    borderRadius: 20,
     borderWidth: 1,
   },
   tabBtn: {
