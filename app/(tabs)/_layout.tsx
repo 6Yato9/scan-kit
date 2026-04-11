@@ -124,7 +124,7 @@ function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
           style={[
             styles.glassSelector,
             {
-              width: tabWidth - 6,   // slight inset so it doesn't touch neighbours
+              width: tabWidth - 4,   // slight inset so it doesn't touch neighbours
               backgroundColor: isDark
                 ? 'rgba(255,255,255,0.13)'
                 : 'rgba(0,0,0,0.09)',
@@ -134,7 +134,7 @@ function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
               opacity: selectorOpacity,
               transform: [
                 {
-                  translateX: Animated.add(selectorX, new Animated.Value(3)),
+                  translateX: Animated.add(selectorX, new Animated.Value(2)),
                 },
               ],
             },
@@ -237,11 +237,9 @@ const styles = StyleSheet.create({
   // Absolutely positioned glass pill behind the active tab
   glassSelector: {
     position: 'absolute',
-    top: 4,
-    bottom: 4,
-    // Inner radius = bar radius (26) minus vertical inset (4) so the curve
-    // is concentric with the nav bar's own corners.
-    borderRadius: 22,
+    top: 0,
+    bottom: 0,
+    borderRadius: 26,
     borderWidth: 1,
   },
   tabBtn: {
