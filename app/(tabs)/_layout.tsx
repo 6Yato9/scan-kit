@@ -1,17 +1,12 @@
 // app/(tabs)/_layout.tsx
-import { useCallback, useEffect } from 'react';
-import { Alert, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { useEffect } from 'react';
+import { Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { Tabs, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import * as Crypto from 'expo-crypto';
 import { ScanProvider, useScan } from '@/contexts/scan-context';
 import { useTheme } from '@/contexts/theme-context';
-import { Document, PageFilter } from '@/types/document';
-import { saveDocument } from '@/lib/storage';
-import { copyPageWithQuality, copyPdfToStorage } from '@/lib/files';
-import { autoName } from '@/lib/auto-name';
 
 const TAB_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
   index: 'home',
@@ -27,8 +22,6 @@ const TAB_LABELS: Record<string, string> = {
   me: 'Settings',
 };
 
-// Custom tab bar renders its own absolutely-positioned View so left/right
-// values apply to the actual visible element, not a React Navigation wrapper.
 function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
   const { width: screenWidth } = useWindowDimensions();
@@ -83,84 +76,34 @@ function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
   );
 }
 
-// Inner wrapper: has access to ScanContext to render ScanNameSheet.
-function TabsWithScanSheet() {
+function TabsInner() {
   const router = useRouter();
-  const {
-    pendingPages,
-    pendingPdfUri,
-    pendingQuality,
-    pendingDefaultFilter,
-    nameSheetVisible,
-    clearPending,
-    bumpLastSaved,
-  } = useScan();
+  const { reviewVisible } = useScan();
 
-  const handleSave = useCallback(
-    async (name: string) => {
-      try {
-        const id = Crypto.randomUUID();
-        const now = Date.now();
-        let doc: Document;
-
-        if (pendingPdfUri) {
-          const storedUri = copyPdfToStorage(pendingPdfUri, id);
-          doc = { id, name, pages: [], pdfUri: storedUri, createdAt: now, updatedAt: now };
-        } else {
-          const savedPages = await Promise.all(
-            pendingPages.map((uri, i) => copyPageWithQuality(uri, id, i, pendingQuality))
-          );
-          const filters: PageFilter[] = savedPages.map(() => pendingDefaultFilter as PageFilter);
-          const allOriginal = filters.every(f => f === 'original');
-          doc = {
-            id,
-            name,
-            pages: savedPages,
-            filters: allOriginal ? undefined : filters,
-            createdAt: now,
-            updatedAt: now,
-          };
-        }
-
-        await saveDocument(doc);
-        bumpLastSaved();
-        clearPending();
-        router.navigate('/(tabs)/files');
-      } catch (err) {
-        console.error('Save failed', err);
-        Alert.alert('Save Failed', 'Could not save document. Please try again.');
-      }
-    },
-    [pendingPages, pendingPdfUri, pendingQuality, pendingDefaultFilter, clearPending, bumpLastSaved, router]
-  );
-
-  // Auto-save with a generated name — no popup needed.
   useEffect(() => {
-    if (nameSheetVisible) {
-      handleSave(autoName());
+    if (reviewVisible) {
+      router.push('/review');
     }
-  }, [nameSheetVisible]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [reviewVisible]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <>
-      <Tabs
-        tabBar={(props) => <FloatingTabBar {...props} />}
-        screenOptions={{ headerShown: false }}
-      >
-        <Tabs.Screen name="index" />
-        <Tabs.Screen name="files" />
-        <Tabs.Screen name="scan" />
-        <Tabs.Screen name="tools" />
-        <Tabs.Screen name="me" />
-      </Tabs>
-    </>
+    <Tabs
+      tabBar={(props) => <FloatingTabBar {...props} />}
+      screenOptions={{ headerShown: false }}
+    >
+      <Tabs.Screen name="index" />
+      <Tabs.Screen name="files" />
+      <Tabs.Screen name="scan" />
+      <Tabs.Screen name="tools" />
+      <Tabs.Screen name="me" />
+    </Tabs>
   );
 }
 
 export default function TabLayout() {
   return (
     <ScanProvider>
-      <TabsWithScanSheet />
+      <TabsInner />
     </ScanProvider>
   );
 }
