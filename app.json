@@ -36,6 +36,14 @@
     "plugins": [
       "expo-router",
       [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "15.5"
+          }
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "image": "./assets/images/splash-icon.png",
