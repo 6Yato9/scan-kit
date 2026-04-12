@@ -358,6 +358,7 @@ export default function FilesScreen() {
         data={displayedDocuments}
         keyExtractor={d => d.id}
         numColumns={2}
+        style={styles.list}
         contentContainerStyle={
           displayedDocuments.length === 0 ? styles.emptyContent : styles.gridContent
         }
@@ -503,7 +504,8 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   actionBtnText: { fontSize: 11, fontWeight: '600' },
-  chipsScroll: { maxHeight: 40 },
+  chipsScroll: { maxHeight: 40, flexShrink: 0 },
+  list: { flex: 1 },
   chips: { paddingHorizontal: 14, paddingBottom: 8, gap: 8, flexDirection: 'row' },
   chip: {
     paddingHorizontal: 14,
