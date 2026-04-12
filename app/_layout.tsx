@@ -53,6 +53,7 @@ function ThemedStack() {
       <Stack.Screen name="tools/timestamp" options={{ headerShown: false, presentation: 'card' }} />
       <Stack.Screen name="tools/sign" options={{ headerShown: false, presentation: 'card' }} />
       <Stack.Screen name="tools/merge" options={{ headerShown: false, presentation: 'card' }} />
+      <Stack.Screen name="tools/long-image" options={{ headerShown: false, presentation: 'card' }} />
     </Stack>
   );
 }

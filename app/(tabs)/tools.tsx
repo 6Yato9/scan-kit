@@ -1,15 +1,15 @@
 // app/(tabs)/tools.tsx
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/theme-context';
 
 type Tool = {
   id: string;
-  icon: keyof typeof Ionicons.glyphMap;
+  icon: string;
   label: string;
-  color: string;   // icon & bg tint colour
+  color: string;
   soon?: boolean;
   action?: () => void;
 };
@@ -24,7 +24,11 @@ function ToolItem({ tool }: { tool: Tool }) {
       onPress={!tool.soon && tool.action ? tool.action : undefined}
     >
       <View style={[styles.iconWrap, { backgroundColor: bg }, tool.soon && styles.iconSoon]}>
-        <Ionicons name={tool.icon} size={26} color={tool.soon ? '#555' : tool.color} />
+        <MaterialCommunityIcons
+          name={tool.icon as any}
+          size={26}
+          color={tool.soon ? '#555' : tool.color}
+        />
         {tool.soon && (
           <View style={styles.soonBadge}>
             <Text style={styles.soonText}>Soon</Text>
@@ -52,14 +56,14 @@ export default function ToolsScreen() {
       tools: [
         {
           id: 'idcard',
-          icon: 'card-outline',
+          icon: 'card-account-details-outline',
           label: 'ID Card',
           color: '#26C6A6',
           action: () => router.push('/tools/id-card'),
         },
         {
           id: 'ocr',
-          icon: 'text-outline',
+          icon: 'text-recognition',
           label: 'Extract Text',
           color: '#66BB6A',
           action: () =>
@@ -70,28 +74,28 @@ export default function ToolsScreen() {
         },
         {
           id: 'qr',
-          icon: 'qr-code-outline',
+          icon: 'qrcode-scan',
           label: 'QR / Barcode',
           color: '#42A5F5',
           action: () => router.push('/tools/qr'),
         },
         {
           id: 'timestamp',
-          icon: 'time-outline',
+          icon: 'calendar-clock',
           label: 'Timestamp',
           color: '#CE93D8',
           action: () => router.push('/tools/timestamp'),
         },
         {
           id: 'whiteboard',
-          icon: 'easel-outline',
+          icon: 'presentation',
           label: 'Whiteboard',
           color: '#4FC3F7',
           soon: true,
         },
         {
           id: 'book',
-          icon: 'book-outline',
+          icon: 'book-open-page-variant',
           label: 'Book Mode',
           color: '#FFA726',
           soon: true,
@@ -103,7 +107,7 @@ export default function ToolsScreen() {
       tools: [
         {
           id: 'import-images',
-          icon: 'images-outline',
+          icon: 'image-multiple-outline',
           label: 'Import Images',
           color: '#26C6A6',
           action: () =>
@@ -114,7 +118,7 @@ export default function ToolsScreen() {
         },
         {
           id: 'import-files',
-          icon: 'cloud-download-outline',
+          icon: 'file-import-outline',
           label: 'Import Files',
           color: '#42A5F5',
           action: () =>
@@ -130,7 +134,7 @@ export default function ToolsScreen() {
       tools: [
         {
           id: 'pdf-to-images',
-          icon: 'image-outline',
+          icon: 'file-image-outline',
           label: 'PDF to Images',
           color: '#FFA726',
           action: () =>
@@ -140,31 +144,31 @@ export default function ToolsScreen() {
             ),
         },
         {
+          id: 'pdf-to-long',
+          icon: 'arrow-expand-vertical',
+          label: 'PDF to Long Image',
+          color: '#AB47BC',
+          action: () => router.push('/tools/long-image'),
+        },
+        {
           id: 'to-word',
-          icon: 'document-text-outline',
+          icon: 'microsoft-word',
           label: 'To Word',
           color: '#42A5F5',
           soon: true,
         },
         {
           id: 'to-excel',
-          icon: 'grid-outline',
+          icon: 'microsoft-excel',
           label: 'To Excel',
           color: '#66BB6A',
           soon: true,
         },
         {
           id: 'to-ppt',
-          icon: 'easel-outline',
+          icon: 'microsoft-powerpoint',
           label: 'To PPT',
           color: '#EF5350',
-          soon: true,
-        },
-        {
-          id: 'pdf-to-long',
-          icon: 'albums-outline',
-          label: 'PDF to Long Image',
-          color: '#AB47BC',
           soon: true,
         },
       ],
@@ -174,35 +178,35 @@ export default function ToolsScreen() {
       tools: [
         {
           id: 'sign',
-          icon: 'create-outline',
+          icon: 'draw',
           label: 'Sign',
           color: '#CE93D8',
           action: () => router.push('/tools/sign'),
         },
         {
           id: 'watermark',
-          icon: 'water-outline',
+          icon: 'watermark',
           label: 'Add Watermark',
           color: '#42A5F5',
           action: () => router.push('/tools/watermark'),
         },
         {
           id: 'merge',
-          icon: 'git-merge-outline',
+          icon: 'merge',
           label: 'Merge Files',
           color: '#26C6A6',
           action: () => router.push('/tools/merge'),
         },
         {
           id: 'extract',
-          icon: 'cut-outline',
+          icon: 'content-cut',
           label: 'Extract Pages',
           color: '#FFA726',
           action: () => router.push('/tools/extract'),
         },
         {
           id: 'reorder',
-          icon: 'swap-vertical-outline',
+          icon: 'reorder-horizontal',
           label: 'Reorder Pages',
           color: '#66BB6A',
           action: () =>
@@ -213,14 +217,14 @@ export default function ToolsScreen() {
         },
         {
           id: 'compress',
-          icon: 'archive-outline',
+          icon: 'zip-box-outline',
           label: 'Compress PDF',
           color: '#90A4AE',
           action: () => router.push('/tools/compress'),
         },
         {
           id: 'lock',
-          icon: 'lock-closed-outline',
+          icon: 'file-lock-outline',
           label: 'Lock PDF',
           color: '#90A4AE',
           action: () =>
@@ -231,14 +235,14 @@ export default function ToolsScreen() {
         },
         {
           id: 'smart-erase',
-          icon: 'color-wand-outline',
+          icon: 'eraser',
           label: 'Smart Erase',
           color: '#EF5350',
           soon: true,
         },
         {
           id: 'erase-marks',
-          icon: 'brush-outline',
+          icon: 'eraser-variant',
           label: 'Erase Marks',
           color: '#FF8A65',
           soon: true,
@@ -250,30 +254,16 @@ export default function ToolsScreen() {
       tools: [
         {
           id: 'print',
-          icon: 'print-outline',
+          icon: 'printer-outline',
           label: 'Print',
           color: '#90A4AE',
           action: () =>
             Alert.alert('Print', 'Open a document and tap Export → Print to send to a printer.'),
         },
         {
-          id: 'measure',
-          icon: 'resize-outline',
-          label: 'Measure',
-          color: '#66BB6A',
-          soon: true,
-        },
-        {
-          id: '3d-scan',
-          icon: 'cube-outline',
-          label: '3D Scanning',
-          color: '#42A5F5',
-          soon: true,
-        },
-        {
-          id: 'ai-tools',
-          icon: 'flash-outline',
-          label: 'AI Tools',
+          id: 'ask-ai',
+          icon: 'robot-outline',
+          label: 'Ask AI',
           color: '#CE93D8',
           soon: true,
         },
