@@ -91,7 +91,7 @@ export default function ToolsScreen() {
           icon: 'presentation',
           label: 'Whiteboard',
           color: '#4FC3F7',
-          soon: true,
+          action: () => router.push('/tools/whiteboard'),
         },
         {
           id: 'book',
