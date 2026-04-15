@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "scan-kit",
+    "name": "Scan Kit",
     "slug": "scan-kit",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -17,6 +17,7 @@
       "bundleIdentifier": "com.6yato9.scan-kit"
     },
     "android": {
+      "package": "com.sixyato9.scankit",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
