@@ -1,3 +1,4 @@
+// app/tools/whiteboard.tsx
 import { useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
@@ -21,14 +22,12 @@ export default function WhiteboardScreen() {
       const { scannedImages } = await DocumentScanner.scanDocument({
         croppedImageQuality: 90,
       });
-      if (!scannedImages?.length) {
-        setScanning(false);
-        return;
-      }
+      if (!scannedImages?.length) return;
       await openImport(scannedImages, 'enhanced');
       router.back();
     } catch {
       Alert.alert('Scan failed', 'Could not scan. Please try again.');
+    } finally {
       setScanning(false);
     }
   };
