@@ -148,3 +148,19 @@ export async function saveThemePreference(p: ThemePreference): Promise<void> {
   _themePrefCache = p;
   await AsyncStorage.setItem(THEME_KEY, p);
 }
+
+// ── AI key ──────────────────────────────────────────────────────────────────
+const AI_KEY_STORAGE = '@scan_kit_ai_key';
+
+export async function getAiKey(): Promise<string | null> {
+  const val = await AsyncStorage.getItem(AI_KEY_STORAGE);
+  return val && val.length > 0 ? val : null;
+}
+
+export async function saveAiKey(key: string): Promise<void> {
+  return AsyncStorage.setItem(AI_KEY_STORAGE, key);
+}
+
+export async function clearAiKey(): Promise<void> {
+  return AsyncStorage.removeItem(AI_KEY_STORAGE);
+}
