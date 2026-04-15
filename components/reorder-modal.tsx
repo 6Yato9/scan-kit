@@ -35,7 +35,7 @@ export function ReorderModal({ visible, pages, filters, onConfirm, onCancel }: P
     onConfirm(items.map(item => item.index));
   }
 
-  const renderItem = ({ item, index, drag, isActive }: RenderItemParams<PageItem>) => {
+  const renderItem = ({ item, getIndex, drag, isActive }: RenderItemParams<PageItem>) => {
     const fStyle = filterStyle(item.filter);
     return (
       <ScaleDecorator>
@@ -49,7 +49,7 @@ export function ReorderModal({ visible, pages, filters, onConfirm, onCancel }: P
             style={[styles.thumb, { backgroundColor: colors.placeholder }, fStyle ? ({ filter: fStyle } as any) : undefined]}
             resizeMode="cover"
           />
-          <Text style={[styles.pageLabel, { color: colors.text }]}>Page {index + 1}</Text>
+          <Text style={[styles.pageLabel, { color: colors.text }]}>Page {(getIndex() ?? 0) + 1}</Text>
           <Text style={[styles.dragHandle, { color: colors.border }]}>☰</Text>
         </Pressable>
       </ScaleDecorator>

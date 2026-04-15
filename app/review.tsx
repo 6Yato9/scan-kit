@@ -144,7 +144,7 @@ export default function ReviewScreen() {
   const handleCrop = useCallback(async () => {
     const targetIndex = focusedIndex;
     try {
-      const { scannedImages } = await DocumentScanner.scanDocument({ letUserAdjustCrop: true });
+      const { scannedImages } = await DocumentScanner.scanDocument({ croppedImageQuality: Math.round(pendingQuality * 100), maxNumDocuments: 1 });
       if (!scannedImages?.length) return;
       setPages(prev => {
         const next = [...prev];
@@ -173,7 +173,7 @@ export default function ReviewScreen() {
 
   const handleAddPage = useCallback(async () => {
     try {
-      const { scannedImages } = await DocumentScanner.scanDocument({ letUserAdjustCrop: true });
+      const { scannedImages } = await DocumentScanner.scanDocument({ croppedImageQuality: Math.round(pendingQuality * 100) });
       if (!scannedImages?.length) return;
       const prevLength = pages.length;
       setPages(prev => [...prev, ...scannedImages]);
