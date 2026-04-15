@@ -1,3 +1,4 @@
+// app/tools/erase-marks.tsx
 import { useCallback, useState } from 'react';
 import {
   Alert,

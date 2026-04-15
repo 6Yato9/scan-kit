@@ -1,5 +1,5 @@
 // app/tools/ask-ai.tsx
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -15,7 +15,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system';
@@ -73,10 +73,12 @@ export default function AskAiScreen() {
   const [loading, setLoading] = useState(false);
   const [answer, setAnswer] = useState<string | null>(null);
 
-  useEffect(() => {
-    getAiKey().then(setApiKey);
-    getDocuments().then(docs => setDocuments(docs.filter(d => d.pages.length > 0)));
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      getAiKey().then(setApiKey);
+      getDocuments().then(docs => setDocuments(docs.filter(d => d.pages.length > 0)));
+    }, [])
+  );
 
   const handleSaveKey = async () => {
     const trimmed = keyInput.trim();
@@ -85,9 +87,14 @@ export default function AskAiScreen() {
       return;
     }
     setSavingKey(true);
-    await saveAiKey(trimmed);
-    setApiKey(trimmed);
-    setSavingKey(false);
+    try {
+      await saveAiKey(trimmed);
+      setApiKey(trimmed);
+    } catch {
+      Alert.alert('Error', 'Failed to save key. Please try again.');
+    } finally {
+      setSavingKey(false);
+    }
   };
 
   const handleClearKey = () => {
