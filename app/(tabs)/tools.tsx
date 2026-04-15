@@ -217,7 +217,7 @@ export default function ToolsScreen() {
           icon: 'eraser-variant',
           label: 'Erase Marks',
           color: '#FF8A65',
-          soon: true,
+          action: () => router.push('/tools/erase-marks'),
         },
       ],
     },
