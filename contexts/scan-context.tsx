@@ -11,13 +11,14 @@ type ScanContextType = {
   reviewVisible: boolean;
   lastSaved: number;
   triggerScan: () => Promise<void>;
-  openImport: (pages: string[]) => Promise<void>;
+  openImport: (pages: string[], defaultFilter?: PageFilter | 'original') => Promise<void>;
   openPdfImport: (uri: string) => Promise<void>;
   clearPending: () => void;
   bumpLastSaved: () => void;
 };
 
 const QUALITY_MAP = { low: 0.5, medium: 0.75, high: 0.9 } as const;
+const SCAN_QUALITY_MAP = { low: 50, medium: 75, high: 90 } as const;
 
 const ScanContext = createContext<ScanContextType | null>(null);
 
@@ -33,7 +34,7 @@ export function ScanProvider({ children }: { children: ReactNode }) {
     try {
       const settings = await getScanSettings();
       const { scannedImages } = await DocumentScanner.scanDocument({
-        letUserAdjustCrop: settings.autoCrop,
+        croppedImageQuality: SCAN_QUALITY_MAP[settings.quality],
       });
       if (!scannedImages?.length) return;
       setPendingPages(scannedImages);
@@ -46,13 +47,13 @@ export function ScanProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const openImport = useCallback(async (pages: string[]) => {
+  const openImport = useCallback(async (pages: string[], defaultFilter?: PageFilter | 'original') => {
     try {
       const settings = await getScanSettings();
       setPendingPages(pages);
       setPendingPdfUri(null);
       setPendingQuality(QUALITY_MAP[settings.quality]);
-      setPendingDefaultFilter('original');
+      setPendingDefaultFilter(defaultFilter ?? 'original');
       setReviewVisible(true);
     } catch (err) {
       console.error('Import failed', err);
