@@ -232,13 +232,6 @@ export default function ToolsScreen() {
           action: () =>
             Alert.alert('Print', 'Open a document and tap Export → Print to send to a printer.'),
         },
-        {
-          id: 'ask-ai',
-          icon: 'robot-outline',
-          label: 'Ask AI',
-          color: '#CE93D8',
-          action: () => router.push('/tools/ask-ai'),
-        },
       ],
     },
   ];
