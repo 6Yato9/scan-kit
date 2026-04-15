@@ -150,27 +150,6 @@ export default function ToolsScreen() {
           color: '#AB47BC',
           action: () => router.push('/tools/long-image'),
         },
-        {
-          id: 'to-word',
-          icon: 'microsoft-word',
-          label: 'To Word',
-          color: '#42A5F5',
-          soon: true,
-        },
-        {
-          id: 'to-excel',
-          icon: 'microsoft-excel',
-          label: 'To Excel',
-          color: '#66BB6A',
-          soon: true,
-        },
-        {
-          id: 'to-ppt',
-          icon: 'microsoft-powerpoint',
-          label: 'To PPT',
-          color: '#EF5350',
-          soon: true,
-        },
       ],
     },
     {
@@ -232,13 +211,6 @@ export default function ToolsScreen() {
               'Lock PDF',
               'PDF password protection is not supported natively on iOS. Export your PDF and use a PDF editor app to add a password.',
             ),
-        },
-        {
-          id: 'smart-erase',
-          icon: 'eraser',
-          label: 'Smart Erase',
-          color: '#EF5350',
-          soon: true,
         },
         {
           id: 'erase-marks',
