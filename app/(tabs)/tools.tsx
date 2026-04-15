@@ -237,7 +237,7 @@ export default function ToolsScreen() {
           icon: 'robot-outline',
           label: 'Ask AI',
           color: '#CE93D8',
-          soon: true,
+          action: () => router.push('/tools/ask-ai'),
         },
       ],
     },
