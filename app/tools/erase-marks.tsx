@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
   Alert,
   FlatList,
@@ -9,14 +9,14 @@ import {
   Text,
   View,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/theme-context';
 import { getDocuments, updateDocument } from '@/lib/storage';
-import type { Document, PageAdjustment } from '@/types/document';
+import type { Document, PageAdjustment, PageFilter } from '@/types/document';
 
-const ERASE_FILTER = 'bw' as const;
+const ERASE_FILTER: PageFilter = 'bw';
 const ERASE_ADJUSTMENT: PageAdjustment = { brightness: 30, contrast: 30, saturation: 0 };
 
 export default function EraseMarksScreen() {
@@ -30,9 +30,11 @@ export default function EraseMarksScreen() {
   const [applying, setApplying] = useState(false);
   const [done, setDone] = useState(false);
 
-  useEffect(() => {
-    getDocuments().then(docs => setDocuments(docs.filter(d => d.pages.length > 0)));
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      getDocuments().then(docs => setDocuments(docs.filter(d => d.pages.length > 0)));
+    }, [])
+  );
 
   const handleApply = useCallback(async () => {
     if (!selectedDoc) return;
@@ -42,8 +44,8 @@ export default function EraseMarksScreen() {
       const pageCount = selectedDoc.pages.length;
       await updateDocument({
         ...selectedDoc,
-        filters: Array(pageCount).fill(ERASE_FILTER),
-        adjustments: Array(pageCount).fill(ERASE_ADJUSTMENT),
+        filters: Array.from({ length: pageCount }, () => ERASE_FILTER),
+        adjustments: Array.from({ length: pageCount }, () => ({ ...ERASE_ADJUSTMENT })),
         updatedAt: Date.now(),
       });
       setDone(true);
