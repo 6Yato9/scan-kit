@@ -260,7 +260,7 @@ export default function AskAiScreen() {
             renderItem={({ item }) => (
               <Pressable
                 style={[styles.listItem, { borderBottomColor: borderColor }]}
-                onPress={() => { setSelectedDoc(item); setPickerVisible(false); }}
+                onPress={() => { setSelectedDoc(item); setAnswer(null); setPickerVisible(false); }}
               >
                 <Image source={{ uri: item.pages[0] }} style={styles.listThumb} />
                 <Text style={[styles.docName, { color: colors.text, flex: 1 }]} numberOfLines={2}>
