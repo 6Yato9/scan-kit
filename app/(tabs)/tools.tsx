@@ -98,7 +98,7 @@ export default function ToolsScreen() {
           icon: 'book-open-page-variant',
           label: 'Book Mode',
           color: '#FFA726',
-          soon: true,
+          action: () => router.push('/tools/book'),
         },
       ],
     },
