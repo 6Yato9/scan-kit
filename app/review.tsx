@@ -1,5 +1,5 @@
 // app/review.tsx
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -20,7 +20,7 @@ import DocumentScanner from 'react-native-document-scanner-plugin';
 import { useScan } from '@/contexts/scan-context';
 import { useTheme } from '@/contexts/theme-context';
 import { PageFilter } from '@/types/document';
-import { saveDocument } from '@/lib/storage';
+import { saveDocument, getScanSettings, getDocSettings } from '@/lib/storage';
 import { copyPageWithQuality, copyPdfToStorage, deleteDocumentFiles } from '@/lib/files';
 import { filterStyle } from '@/lib/filters';
 import { autoName } from '@/lib/auto-name';
@@ -51,7 +51,27 @@ export default function ReviewScreen() {
   const [filters, setFilters] = useState<(PageFilter | 'original')[]>(
     pendingPages.map(() => pendingDefaultFilter)
   );
-  const [name, setName] = useState(autoName());
+  const initialName = useMemo(() => autoName(), []);
+  const [name, setName] = useState(initialName);
+
+  useEffect(() => {
+    let cancelled = false;
+    getDocSettings().then(s => {
+      if (cancelled) return;
+      // Only override the placeholder if the user hasn't started editing yet.
+      // Without this, an in-flight async settings read could stomp the user's typing.
+      setName(prev => (prev === initialName ? autoName(new Date(), s.namePrefix) : prev));
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [initialName]);
+
+  // If the user backs out of review (gesture or hardware back) without saving
+  // or discarding, reset reviewVisible so the tab layout doesn't re-push us
+  // back into review on the next focus.
+  useEffect(() => {
+    return () => { clearPending(); };
+  }, [clearPending]);
+
   const [focusedIndex, setFocused] = useState(0);
   const [rotating, setRotating] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -144,7 +164,12 @@ export default function ReviewScreen() {
   const handleCrop = useCallback(async () => {
     const targetIndex = focusedIndex;
     try {
-      const { scannedImages } = await DocumentScanner.scanDocument({ croppedImageQuality: Math.round(pendingQuality * 100), maxNumDocuments: 1 });
+      const settings = await getScanSettings();
+      const { scannedImages } = await DocumentScanner.scanDocument({
+        croppedImageQuality: Math.round(pendingQuality * 100),
+        maxNumDocuments: 1,
+        letUserAdjustCrop: settings.autoCrop,
+      } as any);
       if (!scannedImages?.length) return;
       setPages(prev => {
         const next = [...prev];
@@ -154,7 +179,7 @@ export default function ReviewScreen() {
     } catch (err) {
       console.error('Crop failed', err);
     }
-  }, [focusedIndex]);
+  }, [focusedIndex, pendingQuality]);
 
   const handleDeletePage = useCallback(() => {
     if (pages.length === 1) {
@@ -173,7 +198,11 @@ export default function ReviewScreen() {
 
   const handleAddPage = useCallback(async () => {
     try {
-      const { scannedImages } = await DocumentScanner.scanDocument({ croppedImageQuality: Math.round(pendingQuality * 100) });
+      const settings = await getScanSettings();
+      const { scannedImages } = await DocumentScanner.scanDocument({
+        croppedImageQuality: Math.round(pendingQuality * 100),
+        letUserAdjustCrop: settings.autoCrop,
+      } as any);
       if (!scannedImages?.length) return;
       const prevLength = pages.length;
       setPages(prev => [...prev, ...scannedImages]);
@@ -185,7 +214,7 @@ export default function ReviewScreen() {
     } catch (err) {
       console.error('Add page failed', err);
     }
-  }, [pages.length, pendingDefaultFilter]);
+  }, [pages.length, pendingDefaultFilter, pendingQuality]);
 
   const renderPage = useCallback(({ item: uri, index }: { item: string; index: number }) => {
     const fStyle = filterStyle(filters[index] as PageFilter);

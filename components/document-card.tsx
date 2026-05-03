@@ -22,7 +22,7 @@ export function DocumentCard({ document, onPress, onLongPress, isSelected, isMul
   return (
     <Pressable style={[styles.card, { backgroundColor: colors.card }]} onPress={onPress} onLongPress={onLongPress}>
       {document.pages[0] ? (
-        <Image source={{ uri: document.pages[0] }} style={styles.thumbnail} />
+        <Image source={{ uri: `${document.pages[0]}?v=${document.updatedAt}` }} style={styles.thumbnail} />
       ) : (
         <View style={[styles.thumbnail, { backgroundColor: colors.placeholder }]} />
       )}

@@ -1,5 +1,5 @@
 // app/tools/id-card.tsx
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -27,8 +27,11 @@ export default function IdCardScreen() {
   const [frontUri, setFrontUri] = useState<string | null>(null);
   const [backUri, setBackUri] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const scanningRef = useRef(false);
 
   const scanSide = async (side: 'front' | 'back') => {
+    if (scanningRef.current) return;
+    scanningRef.current = true;
     try {
       const { scannedImages } = await DocumentScanner.scanDocument({ letUserAdjustCrop: true } as any);
       if (!scannedImages?.length) return;
@@ -36,6 +39,8 @@ export default function IdCardScreen() {
       else setBackUri(scannedImages[0]);
     } catch {
       Alert.alert('Scan failed', 'Could not open scanner. Make sure you are using the dev build.');
+    } finally {
+      scanningRef.current = false;
     }
   };
 
@@ -51,7 +56,7 @@ export default function IdCardScreen() {
       );
       await saveDocument({
         id,
-        name: `ID Card ${autoName().replace('Scan ', '')}`,
+        name: autoName(new Date(), 'ID Card'),
         pages,
         createdAt: now,
         updatedAt: now,

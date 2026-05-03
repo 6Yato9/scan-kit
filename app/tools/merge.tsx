@@ -12,16 +12,14 @@ import {
   View,
 } from 'react-native';
 import * as Crypto from 'expo-crypto';
-import * as FileSystem from 'expo-file-system';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/theme-context';
 import { getDocuments, saveDocument } from '@/lib/storage';
+import { appendPages, deleteDocumentFiles } from '@/lib/files';
 import { autoName } from '@/lib/auto-name';
 import type { Document, PageAdjustment, PageFilter } from '@/types/document';
-
-const DOCS_DIR = FileSystem.documentDirectory + 'documents/';
 
 export default function MergeScreen() {
   const router = useRouter();
@@ -29,7 +27,7 @@ export default function MergeScreen() {
   const { colors } = useTheme();
   const [docs, setDocs] = useState<Document[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
-  const [name, setName] = useState(`Merged ${autoName().replace('Scan ', '')}`);
+  const [name, setName] = useState(autoName(new Date(), 'Merged'));
   const [merging, setMerging] = useState(false);
 
   useEffect(() => {
@@ -55,11 +53,9 @@ export default function MergeScreen() {
     if (!name.trim()) return;
 
     setMerging(true);
+    const id = Crypto.randomUUID();
     try {
-      const id = Crypto.randomUUID();
       const now = Date.now();
-      const dir = DOCS_DIR + id + '/';
-      await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
 
       const pages: string[] = [];
       const filters: PageFilter[] = [];
@@ -67,16 +63,13 @@ export default function MergeScreen() {
 
       let pageIdx = 0;
       for (const doc of selectedDocs) {
+        const newUris = appendPages(doc.pages, id, pageIdx);
+        pages.push(...newUris);
         for (let i = 0; i < doc.pages.length; i++) {
-          const srcUri = doc.pages[i];
-          const destUri = dir + `page_${pageIdx}.jpg`;
-          await FileSystem.copyAsync({ from: srcUri, to: destUri });
-          pages.push(destUri);
           filters.push(doc.filters?.[i] ?? 'original');
-          const adj = doc.adjustments?.[i] ?? { brightness: 0, contrast: 0, saturation: 0 };
-          adjustments.push(adj);
-          pageIdx++;
+          adjustments.push(doc.adjustments?.[i] ?? { brightness: 0, contrast: 0, saturation: 0 });
         }
+        pageIdx += doc.pages.length;
       }
 
       const allOriginal = filters.every(f => f === 'original');
@@ -98,6 +91,8 @@ export default function MergeScreen() {
         { text: 'OK', onPress: () => router.back() },
       ]);
     } catch {
+      // Roll back any files we copied so we don't leave orphans.
+      try { deleteDocumentFiles(id); } catch {}
       Alert.alert('Error', 'Could not merge documents.');
     } finally {
       setMerging(false);
@@ -158,7 +153,7 @@ export default function MergeScreen() {
               >
                 {/* Thumbnail */}
                 <Image
-                  source={{ uri: doc.pages[0] }}
+                  source={{ uri: `${doc.pages[0]}?v=${doc.updatedAt}` }}
                   style={styles.thumb}
                   resizeMode="cover"
                 />

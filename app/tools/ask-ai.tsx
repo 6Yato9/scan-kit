@@ -23,7 +23,14 @@ import { useTheme } from '@/contexts/theme-context';
 import { getAiKey, saveAiKey, clearAiKey, getDocuments } from '@/lib/storage';
 import type { Document } from '@/types/document';
 
-async function askClaude(apiKey: string, imageBase64: string, question: string): Promise<string> {
+// Claude vision accepts up to 20 images per message; cap to stay well within limits.
+const MAX_PAGES_PER_REQUEST = 20;
+
+async function askClaude(apiKey: string, imagesBase64: string[], question: string): Promise<string> {
+  const imageBlocks = imagesBase64.map(data => ({
+    type: 'image' as const,
+    source: { type: 'base64' as const, media_type: 'image/jpeg' as const, data },
+  }));
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -37,13 +44,7 @@ async function askClaude(apiKey: string, imageBase64: string, question: string):
       messages: [
         {
           role: 'user',
-          content: [
-            {
-              type: 'image',
-              source: { type: 'base64', media_type: 'image/jpeg', data: imageBase64 },
-            },
-            { type: 'text', text: question },
-          ],
+          content: [...imageBlocks, { type: 'text', text: question }],
         },
       ],
     }),
@@ -117,12 +118,17 @@ export default function AskAiScreen() {
     setLoading(true);
     setAnswer(null);
     try {
-      const pageUri = selectedDoc.pages[0];
-      const base64 = await FileSystem.readAsStringAsync(pageUri, {
-        encoding: 'base64',
-      });
-      const result = await askClaude(apiKey, base64, question.trim());
-      setAnswer(result);
+      const pages = selectedDoc.pages.slice(0, MAX_PAGES_PER_REQUEST);
+      const truncated = selectedDoc.pages.length > MAX_PAGES_PER_REQUEST;
+      const images = await Promise.all(
+        pages.map(uri => FileSystem.readAsStringAsync(uri, { encoding: 'base64' })),
+      );
+      const result = await askClaude(apiKey, images, question.trim());
+      setAnswer(
+        truncated
+          ? `(Only the first ${MAX_PAGES_PER_REQUEST} pages were sent — the rest were skipped.)\n\n${result}`
+          : result,
+      );
     } catch (err: any) {
       Alert.alert('Error', err?.message ?? 'Something went wrong. Check your API key.');
     } finally {
@@ -202,7 +208,7 @@ export default function AskAiScreen() {
         >
           {selectedDoc ? (
             <View style={styles.pickerRow}>
-              <Image source={{ uri: selectedDoc.pages[0] }} style={styles.thumb} />
+              <Image source={{ uri: `${selectedDoc.pages[0]}?v=${selectedDoc.updatedAt}` }} style={styles.thumb} />
               <Text style={[styles.docName, { color: colors.text }]} numberOfLines={1}>
                 {selectedDoc.name}
               </Text>
@@ -252,7 +258,7 @@ export default function AskAiScreen() {
         )}
       </ScrollView>
 
-      <Modal visible={pickerVisible} animationType="slide" presentationStyle="pageSheet">
+      <Modal visible={pickerVisible} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setPickerVisible(false)}>
         <View style={[styles.modal, { backgroundColor: colors.bg }]}>
           <View style={[styles.header, { paddingTop: 16 }]}>
             <Text style={[styles.title, { color: colors.text }]}>Select Document</Text>
@@ -269,7 +275,7 @@ export default function AskAiScreen() {
                 style={[styles.listItem, { borderBottomColor: borderColor }]}
                 onPress={() => { setSelectedDoc(item); setAnswer(null); setPickerVisible(false); }}
               >
-                <Image source={{ uri: item.pages[0] }} style={styles.listThumb} />
+                <Image source={{ uri: `${item.pages[0]}?v=${item.updatedAt}` }} style={styles.listThumb} />
                 <Text style={[styles.docName, { color: colors.text, flex: 1 }]} numberOfLines={2}>
                   {item.name}
                 </Text>

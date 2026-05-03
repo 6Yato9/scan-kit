@@ -1,6 +1,6 @@
 // app/viewer.tsx
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
+import { useCallback, useRef, useState } from 'react';
 import {
   Alert,
   Dimensions,
@@ -17,7 +17,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import * as Sharing from 'expo-sharing';
 import DocumentScanner from 'react-native-document-scanner-plugin';
-import { getDocuments, updateDocument, deleteDocument } from '@/lib/storage';
+import { getDocuments, updateDocument, deleteDocument, getScanSettings } from '@/lib/storage';
 import { appendPages, deleteSinglePage, reorderPages, deleteDocumentFiles } from '@/lib/files';
 import { rotatePage } from '@/lib/image';
 import { combinedFilterStyle } from '@/lib/filters';
@@ -51,11 +51,25 @@ export default function ViewerScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
 
-  useEffect(() => {
-    getDocuments().then(docs => {
-      setDocument(docs.find(d => d.id === id) ?? null);
-    });
-  }, [id]);
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      getDocuments().then(docs => {
+        if (cancelled) return;
+        const fresh = docs.find(d => d.id === id) ?? null;
+        // Only replace state if something actually changed — avoids needless re-renders
+        // when returning from a screen that didn't touch this doc.
+        setDocument(prev => {
+          if (!prev || !fresh) return fresh;
+          if (prev.updatedAt === fresh.updatedAt && prev.pages.length === fresh.pages.length) {
+            return prev;
+          }
+          return fresh;
+        });
+      });
+      return () => { cancelled = true; };
+    }, [id])
+  );
 
   const saveDoc = useCallback(async (updated: Document) => {
     setDocument(updated);
@@ -89,18 +103,26 @@ export default function ViewerScreen() {
     });
   }, [document, currentPage, saveDoc]);
 
-  const handleAdjust = useCallback(async (adj: PageAdjustment) => {
+  const adjustPersistTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleAdjust = useCallback((adj: PageAdjustment) => {
     if (!document) return;
     const base = document.adjustments ?? document.pages.map(() => ({ brightness: 0, contrast: 0, saturation: 0 }));
     const newAdj = [...base];
     newAdj[currentPage] = adj;
     const allDefault = newAdj.every(a => a.brightness === 0 && a.contrast === 0 && a.saturation === 0);
-    await saveDoc({
+    const next: Document = {
       ...document,
       adjustments: allDefault ? undefined : newAdj,
       updatedAt: Date.now(),
-    });
-  }, [document, currentPage, saveDoc]);
+    };
+    // Update visible state immediately so the slider feels responsive,
+    // but coalesce the AsyncStorage write to once every 250ms.
+    setDocument(next);
+    if (adjustPersistTimer.current) clearTimeout(adjustPersistTimer.current);
+    adjustPersistTimer.current = setTimeout(() => {
+      updateDocument(next).catch(err => console.error('persist adjustments', err));
+    }, 250);
+  }, [document, currentPage]);
 
   const handleDeletePage = useCallback(async () => {
     if (!document) return;
@@ -151,7 +173,10 @@ export default function ViewerScreen() {
   const handleAddMore = useCallback(async () => {
     if (!document) return;
     try {
-      const { scannedImages } = await DocumentScanner.scanDocument();
+      const settings = await getScanSettings();
+      const { scannedImages } = await DocumentScanner.scanDocument({
+        letUserAdjustCrop: settings.autoCrop,
+      } as any);
       if (!scannedImages?.length) return;
       const startIndex = document.pages.length;
       const newUris = appendPages(scannedImages, document.id, startIndex);
@@ -284,10 +309,11 @@ export default function ViewerScreen() {
         onScrollToIndexFailed={() => {}}
         renderItem={({ item, index }) => {
           const fStyle = combinedFilterStyle(document.filters?.[index], document.adjustments?.[index]);
+          // Append updatedAt so RN's Image cache reloads after rotate/annotate/compress overwrite the file in place.
           return (
             <View style={styles.page}>
               <Image
-                source={{ uri: item }}
+                source={{ uri: `${item}?v=${document.updatedAt}` }}
                 style={[styles.pageImage, fStyle ? ({ filter: fStyle } as any) : undefined]}
                 resizeMode="contain"
               />
@@ -304,6 +330,7 @@ export default function ViewerScreen() {
         onPagePress={handleThumbnailPress}
         onAddPress={handleAddMore}
         bottomInset={insets.bottom}
+        cacheBust={document.updatedAt}
       />
 
       <ExportSheet
@@ -335,7 +362,7 @@ export default function ViewerScreen() {
       />
 
       {/* OCR result modal */}
-      <Modal visible={ocrResult !== null} animationType="slide" transparent>
+      <Modal visible={ocrResult !== null} animationType="slide" transparent onRequestClose={() => setOcrResult(null)}>
         <View style={styles.ocrOverlay}>
           <View style={styles.ocrSheet}>
             <View style={styles.ocrHeader}>

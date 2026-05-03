@@ -38,10 +38,17 @@ const SIGNATURE_HTML = `
 <script>
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
-canvas.width = window.innerWidth;
-canvas.height = 180;
+const SUPERSAMPLE = 3;
+const dpr = (window.devicePixelRatio || 1) * SUPERSAMPLE;
+const cssWidth = window.innerWidth;
+const cssHeight = 180;
+canvas.style.width = cssWidth + 'px';
+canvas.style.height = cssHeight + 'px';
+canvas.width = Math.round(cssWidth * dpr);
+canvas.height = Math.round(cssHeight * dpr);
+ctx.scale(dpr, dpr);
 ctx.strokeStyle = '#000';
-ctx.lineWidth = 2.5;
+ctx.lineWidth = 2.2;
 ctx.lineCap = 'round';
 ctx.lineJoin = 'round';
 let drawing = false, hasDrawn = false;
@@ -68,7 +75,10 @@ function getDataUrl() {
   window.ReactNativeWebView.postMessage(canvas.toDataURL('image/png'));
 }
 function clearCanvas() {
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.restore();
   hasDrawn = false;
 }
 </script>

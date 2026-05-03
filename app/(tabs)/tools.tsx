@@ -66,11 +66,7 @@ export default function ToolsScreen() {
           icon: 'text-recognition',
           label: 'Extract Text',
           color: '#66BB6A',
-          action: () =>
-            Alert.alert(
-              'Extract Text',
-              'Open any document in the viewer and tap the T button in the header to extract text with OCR.',
-            ),
+          action: () => router.push('/tools/extract-text'),
         },
         {
           id: 'qr',

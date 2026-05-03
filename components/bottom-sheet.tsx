@@ -14,9 +14,10 @@ type Props = {
   visible: boolean;
   onClose?: () => void;
   children: React.ReactNode;
+  transparentBackdrop?: boolean;
 };
 
-export function BottomSheet({ visible, onClose, children }: Props) {
+export function BottomSheet({ visible, onClose, children, transparentBackdrop }: Props) {
   const { colors } = useTheme();
   return (
     <Modal
@@ -30,7 +31,7 @@ export function BottomSheet({ visible, onClose, children }: Props) {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <Pressable
-          style={styles.backdrop}
+          style={[styles.backdrop, transparentBackdrop && styles.backdropTransparent]}
           onPress={() => {
             if (!onClose) return;
             Keyboard.dismiss();
@@ -46,6 +47,7 @@ export function BottomSheet({ visible, onClose, children }: Props) {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)' },
+  backdropTransparent: { backgroundColor: 'transparent' },
   sheet: {
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,

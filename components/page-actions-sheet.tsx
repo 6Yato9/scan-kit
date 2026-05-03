@@ -59,21 +59,9 @@ export function PageActionsSheet({
   }
 
   const adj = adjustment ?? DEFAULT_ADJ;
-  const fStyle = combinedFilterStyle(filter, adjustment);
 
   return (
-    <BottomSheet visible={visible} onClose={rotating ? undefined : onClose}>
-      <Text style={[styles.heading, { color: colors.text }]}>Page Actions</Text>
-
-      {/* Preview */}
-      <View style={styles.previewRow}>
-        <Image
-          source={{ uri }}
-          style={[styles.preview, { backgroundColor: colors.secondary }, fStyle ? ({ filter: fStyle } as any) : undefined]}
-          resizeMode="contain"
-        />
-      </View>
-
+    <BottomSheet visible={visible} onClose={rotating ? undefined : onClose} transparentBackdrop>
       {/* Action buttons */}
       <View style={styles.row}>
         {rotating ? (
@@ -172,9 +160,6 @@ export function PageActionsSheet({
 }
 
 const styles = StyleSheet.create({
-  heading: { fontSize: 17, fontWeight: '700', marginBottom: 12 },
-  previewRow: { alignItems: 'center', marginBottom: 12 },
-  preview: { width: 80, height: 100, borderRadius: 4 },
   row: {
     flexDirection: 'row',
     gap: 8,

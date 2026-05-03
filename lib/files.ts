@@ -78,25 +78,45 @@ export function deleteSinglePage(
 export function reorderPages(docId: string, newOrderIndices: number[]): string[] {
   const dir = new Directory(Paths.document, 'scan-kit', docId);
   const n = newOrderIndices.length;
-  // Step 1: copy originals to temp names
-  for (let i = 0; i < n; i++) {
-    const src = new File(dir, `page-${newOrderIndices[i]}.jpg`);
-    const tmp = new File(dir, `page-tmp-${i}.jpg`);
-    src.copy(tmp);
+
+  const cleanupTemps = () => {
+    for (let i = 0; i < n; i++) {
+      const tmp = new File(dir, `page-tmp-${i}.jpg`);
+      if (tmp.exists) {
+        try { tmp.delete(); } catch {}
+      }
+    }
+  };
+
+  try {
+    // Step 1: copy originals to temp names. Bail early if any source is missing.
+    for (let i = 0; i < n; i++) {
+      const src = new File(dir, `page-${newOrderIndices[i]}.jpg`);
+      if (!src.exists) {
+        cleanupTemps();
+        throw new Error(`reorderPages: source page-${newOrderIndices[i]}.jpg missing`);
+      }
+      const tmp = new File(dir, `page-tmp-${i}.jpg`);
+      if (tmp.exists) tmp.delete();
+      src.copy(tmp);
+    }
+    // Step 2: delete old files
+    for (let i = 0; i < n; i++) {
+      const old = new File(dir, `page-${i}.jpg`);
+      if (old.exists) old.delete();
+    }
+    // Step 3: move temp to final
+    for (let i = 0; i < n; i++) {
+      const tmp = new File(dir, `page-tmp-${i}.jpg`);
+      const dest = new File(dir, `page-${i}.jpg`);
+      tmp.copy(dest);
+      tmp.delete();
+    }
+    return Array.from({ length: n }, (_, i) => new File(dir, `page-${i}.jpg`).uri);
+  } catch (err) {
+    cleanupTemps();
+    throw err;
   }
-  // Step 2: delete old files
-  for (let i = 0; i < n; i++) {
-    const old = new File(dir, `page-${i}.jpg`);
-    if (old.exists) old.delete();
-  }
-  // Step 3: move temp to final
-  for (let i = 0; i < n; i++) {
-    const tmp = new File(dir, `page-tmp-${i}.jpg`);
-    const dest = new File(dir, `page-${i}.jpg`);
-    tmp.copy(dest);
-    tmp.delete();
-  }
-  return Array.from({ length: n }, (_, i) => new File(dir, `page-${i}.jpg`).uri);
 }
 
 /** Copies all page files from sourceId to a new destId directory. */

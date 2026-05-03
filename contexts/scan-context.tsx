@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, useState, ReactNode } from 'react';
+import { createContext, useCallback, useContext, useMemo, useRef, useState, ReactNode } from 'react';
 import DocumentScanner from 'react-native-document-scanner-plugin';
 import { PageFilter } from '@/types/document';
 import { getScanSettings } from '@/lib/storage';
@@ -29,13 +29,17 @@ export function ScanProvider({ children }: { children: ReactNode }) {
   const [pendingDefaultFilter, setPendingDefaultFilter] = useState<PageFilter | 'original'>('original');
   const [reviewVisible, setReviewVisible] = useState(false);
   const [lastSaved, setLastSaved] = useState(0);
+  const scanningRef = useRef(false);
 
   const triggerScan = useCallback(async () => {
+    if (scanningRef.current) return;
+    scanningRef.current = true;
     try {
       const settings = await getScanSettings();
       const { scannedImages } = await DocumentScanner.scanDocument({
         croppedImageQuality: SCAN_QUALITY_MAP[settings.quality],
-      });
+        letUserAdjustCrop: settings.autoCrop,
+      } as any);
       if (!scannedImages?.length) return;
       setPendingPages(scannedImages);
       setPendingPdfUri(null);
@@ -44,6 +48,8 @@ export function ScanProvider({ children }: { children: ReactNode }) {
       setReviewVisible(true);
     } catch (err) {
       console.error('Scan failed', err);
+    } finally {
+      scanningRef.current = false;
     }
   }, []);
 

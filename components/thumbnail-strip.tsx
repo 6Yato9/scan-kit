@@ -20,6 +20,8 @@ type Props = {
   onPagePress: (index: number) => void;
   onAddPress: () => void;
   bottomInset: number;
+  /** Cache-bust value (typically document.updatedAt) so RN <Image> reloads after page files are overwritten by rotate/annotate/compress. */
+  cacheBust?: number;
 };
 
 export function ThumbnailStrip({
@@ -30,6 +32,7 @@ export function ThumbnailStrip({
   onPagePress,
   onAddPress,
   bottomInset,
+  cacheBust,
 }: Props) {
   const { colors } = useTheme();
   const listRef = useRef<FlatList>(null);
@@ -58,7 +61,7 @@ export function ThumbnailStrip({
               onPress={() => onPagePress(index)}
             >
               <Image
-                source={{ uri: item }}
+                source={{ uri: cacheBust ? `${item}?v=${cacheBust}` : item }}
                 style={[styles.thumbImage, fStyle ? ({ filter: fStyle } as any) : undefined]}
                 resizeMode="cover"
               />

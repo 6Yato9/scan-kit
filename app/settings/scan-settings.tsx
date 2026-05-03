@@ -67,9 +67,14 @@ export default function ScanSettingsScreen() {
       </View>
 
       <View style={[styles.section, { backgroundColor: colors.card }]}>
-        <Text style={[styles.sectionTitle, { color: colors.muted }]}>AUTO-CROP</Text>
+        <Text style={[styles.sectionTitle, { color: colors.muted }]}>CROP PRECISION</Text>
         <View style={[styles.row, { borderTopColor: colors.separator }]}>
-          <Text style={[styles.rowLabel, { color: colors.text }]}>Allow manual crop adjustment</Text>
+          <View style={{ flex: 1, paddingRight: 12 }}>
+            <Text style={[styles.rowLabel, { color: colors.text }]}>Confirm crop after capture</Text>
+            <Text style={[styles.rowDesc, { color: colors.muted }]}>
+              Adds a step after each shot so you can fine-tune the corners. Helps when the auto-shutter fires before the page is framed perfectly.
+            </Text>
+          </View>
           <Switch
             value={settings.autoCrop}
             onValueChange={v => update({ autoCrop: v })}

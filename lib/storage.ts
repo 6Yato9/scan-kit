@@ -22,38 +22,60 @@ export type DocSettings = {
   pdfQuality: 'standard' | 'high';
 };
 
-export async function getDocuments(): Promise<Document[]> {
+// Serialize all docs read-modify-write ops so concurrent mutations don't lose writes.
+let _docsQueue: Promise<unknown> = Promise.resolve();
+function withDocsLock<T>(fn: () => Promise<T>): Promise<T> {
+  const next = _docsQueue.then(fn, fn);
+  _docsQueue = next.catch(() => {});
+  return next;
+}
+
+async function readDocsRaw(): Promise<Document[]> {
   const raw = await AsyncStorage.getItem(KEY);
   if (!raw) return [];
   try {
     return JSON.parse(raw);
   } catch {
+    console.warn('storage: corrupt documents JSON, resetting to []');
+    await AsyncStorage.setItem(KEY, '[]');
     return [];
   }
 }
 
-export async function saveDocument(doc: Document): Promise<void> {
-  const docs = await getDocuments();
-  await AsyncStorage.setItem(KEY, JSON.stringify([doc, ...docs]));
+export function getDocuments(): Promise<Document[]> {
+  return withDocsLock(readDocsRaw);
 }
 
-export async function updateDocument(doc: Document): Promise<void> {
-  const docs = await getDocuments();
-  await AsyncStorage.setItem(
-    KEY,
-    JSON.stringify(docs.map(d => (d.id === doc.id ? doc : d)))
-  );
+export function saveDocument(doc: Document): Promise<void> {
+  return withDocsLock(async () => {
+    const docs = await readDocsRaw();
+    await AsyncStorage.setItem(KEY, JSON.stringify([doc, ...docs]));
+  });
 }
 
-export async function deleteDocument(id: string): Promise<void> {
-  const docs = await getDocuments();
-  await AsyncStorage.setItem(KEY, JSON.stringify(docs.filter(d => d.id !== id)));
+export function updateDocument(doc: Document): Promise<void> {
+  return withDocsLock(async () => {
+    const docs = await readDocsRaw();
+    await AsyncStorage.setItem(
+      KEY,
+      JSON.stringify(docs.map(d => (d.id === doc.id ? doc : d)))
+    );
+  });
 }
 
-export async function deleteDocuments(ids: string[]): Promise<void> {
-  const set = new Set(ids);
-  const docs = await getDocuments();
-  await AsyncStorage.setItem(KEY, JSON.stringify(docs.filter(d => !set.has(d.id))));
+export function deleteDocument(id: string): Promise<void> {
+  return withDocsLock(async () => {
+    const docs = await readDocsRaw();
+    await AsyncStorage.setItem(KEY, JSON.stringify(docs.filter(d => d.id !== id)));
+  });
+}
+
+export function deleteDocuments(ids: string[]): Promise<void> {
+  return withDocsLock(async () => {
+    const set = new Set(ids);
+    const docs = await readDocsRaw();
+    await AsyncStorage.setItem(KEY, JSON.stringify(docs.filter(d => !set.has(d.id))));
+  });
 }
 
 export async function getSortPreference(): Promise<SortKey> {
@@ -84,27 +106,33 @@ export async function saveFolder(name: string): Promise<void> {
   await AsyncStorage.setItem(FOLDERS_KEY, JSON.stringify([...folders, name]));
 }
 
-export async function deleteFolder(name: string): Promise<void> {
-  // Remove from folders list
-  const folders = await getFolders();
-  await AsyncStorage.setItem(FOLDERS_KEY, JSON.stringify(folders.filter(f => f !== name)));
-  // Clear folder field on all docs that had this folder
-  const docs = await getDocuments();
-  const updated = docs.map(d => {
-    if (d.folder !== name) return d;
-    const { folder: _removed, ...rest } = d;
-    return rest as Document;
+export function deleteFolder(name: string): Promise<void> {
+  return withDocsLock(async () => {
+    // Remove from folders list
+    const folders = await getFolders();
+    await AsyncStorage.setItem(FOLDERS_KEY, JSON.stringify(folders.filter(f => f !== name)));
+    // Clear folder field on all docs that had this folder
+    const docs = await readDocsRaw();
+    const updated = docs.map(d => {
+      if (d.folder !== name) return d;
+      const { folder: _removed, ...rest } = d;
+      return rest as Document;
+    });
+    await AsyncStorage.setItem(KEY, JSON.stringify(updated));
   });
-  await AsyncStorage.setItem(KEY, JSON.stringify(updated));
 }
+
+const DEFAULT_SCAN_SETTINGS: ScanSettings = { quality: 'high', autoCrop: true, defaultFilter: 'original' };
 
 export async function getScanSettings(): Promise<ScanSettings> {
   const raw = await AsyncStorage.getItem(SCAN_SETTINGS_KEY);
-  if (!raw) return { quality: 'high', autoCrop: true, defaultFilter: 'original' };
+  if (!raw) return DEFAULT_SCAN_SETTINGS;
   try {
-    return JSON.parse(raw);
+    return { ...DEFAULT_SCAN_SETTINGS, ...JSON.parse(raw) };
   } catch {
-    return { quality: 'high', autoCrop: true, defaultFilter: 'original' };
+    console.warn('storage: corrupt scan settings, resetting to defaults');
+    await AsyncStorage.setItem(SCAN_SETTINGS_KEY, JSON.stringify(DEFAULT_SCAN_SETTINGS));
+    return DEFAULT_SCAN_SETTINGS;
   }
 }
 
@@ -112,13 +140,17 @@ export async function saveScanSettings(s: ScanSettings): Promise<void> {
   await AsyncStorage.setItem(SCAN_SETTINGS_KEY, JSON.stringify(s));
 }
 
+const DEFAULT_DOC_SETTINGS: DocSettings = { namePrefix: 'Scan', pdfPageSize: 'A4', pdfQuality: 'standard' };
+
 export async function getDocSettings(): Promise<DocSettings> {
   const raw = await AsyncStorage.getItem(DOC_SETTINGS_KEY);
-  if (!raw) return { namePrefix: 'Scan', pdfPageSize: 'A4', pdfQuality: 'standard' };
+  if (!raw) return DEFAULT_DOC_SETTINGS;
   try {
-    return JSON.parse(raw);
+    return { ...DEFAULT_DOC_SETTINGS, ...JSON.parse(raw) };
   } catch {
-    return { namePrefix: 'Scan', pdfPageSize: 'A4', pdfQuality: 'standard' };
+    console.warn('storage: corrupt doc settings, resetting to defaults');
+    await AsyncStorage.setItem(DOC_SETTINGS_KEY, JSON.stringify(DEFAULT_DOC_SETTINGS));
+    return DEFAULT_DOC_SETTINGS;
   }
 }
 

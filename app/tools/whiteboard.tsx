@@ -1,5 +1,5 @@
 // app/tools/whiteboard.tsx
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -7,6 +7,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import DocumentScanner from 'react-native-document-scanner-plugin';
 import { useScan } from '@/contexts/scan-context';
 import { useTheme } from '@/contexts/theme-context';
+import { getScanSettings } from '@/lib/storage';
 
 export default function WhiteboardScreen() {
   const { openImport } = useScan();
@@ -14,20 +15,25 @@ export default function WhiteboardScreen() {
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
   const [scanning, setScanning] = useState(false);
+  const scanningRef = useRef(false);
 
   const handleScan = async () => {
-    if (scanning) return;
+    if (scanningRef.current) return;
+    scanningRef.current = true;
     setScanning(true);
     try {
+      const settings = await getScanSettings();
       const { scannedImages } = await DocumentScanner.scanDocument({
         croppedImageQuality: 90,
-      });
+        letUserAdjustCrop: settings.autoCrop,
+      } as any);
       if (!scannedImages?.length) return;
       await openImport(scannedImages, 'enhanced');
       router.back();
     } catch {
       Alert.alert('Scan failed', 'Could not scan. Please try again.');
     } finally {
+      scanningRef.current = false;
       setScanning(false);
     }
   };

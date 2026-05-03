@@ -111,6 +111,8 @@ export default function HomeScreen() {
           name: `Copy of ${doc.name}`,
           pages: newPages,
           filters: doc.filters ? [...doc.filters] : undefined,
+          adjustments: doc.adjustments ? doc.adjustments.map(a => ({ ...a })) : undefined,
+          folder: doc.folder,
           createdAt: now,
           updatedAt: now,
         };
@@ -135,12 +137,20 @@ export default function HomeScreen() {
     const newPageUris = appendPages(sourceDoc.pages, targetDoc.id, targetDoc.pages.length);
     const targetFilters: PageFilter[] = targetDoc.filters ?? targetDoc.pages.map(() => 'original' as PageFilter);
     const sourceFilters: PageFilter[] = sourceDoc.filters ?? sourceDoc.pages.map(() => 'original' as PageFilter);
-    const combined = [...targetFilters, ...sourceFilters];
-    const allOriginal = combined.every(f => f === 'original');
+    const combinedFilters = [...targetFilters, ...sourceFilters];
+    const allOriginal = combinedFilters.every(f => f === 'original');
+
+    const defaultAdj = { brightness: 0, contrast: 0, saturation: 0 };
+    const targetAdj = targetDoc.adjustments ?? targetDoc.pages.map(() => ({ ...defaultAdj }));
+    const sourceAdj = sourceDoc.adjustments ?? sourceDoc.pages.map(() => ({ ...defaultAdj }));
+    const combinedAdj = [...targetAdj, ...sourceAdj];
+    const allDefault = combinedAdj.every(a => a.brightness === 0 && a.contrast === 0 && a.saturation === 0);
+
     const updated: Document = {
       ...targetDoc,
       pages: [...targetDoc.pages, ...newPageUris],
-      filters: allOriginal ? undefined : combined,
+      filters: allOriginal ? undefined : combinedFilters,
+      adjustments: allDefault ? undefined : combinedAdj,
       updatedAt: Date.now(),
     };
     await updateDocument(updated);
@@ -198,7 +208,7 @@ export default function HomeScreen() {
                 <Ionicons name="document-text" size={28} color={colors.muted} />
               </View>
             ) : item.pages[0] ? (
-              <Image source={{ uri: item.pages[0] }} style={styles.thumb} resizeMode="cover" />
+              <Image source={{ uri: `${item.pages[0]}?v=${item.updatedAt}` }} style={styles.thumb} resizeMode="cover" />
             ) : (
               <View style={[styles.thumb, { backgroundColor: colors.placeholder }]} />
             )}

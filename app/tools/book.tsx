@@ -1,6 +1,6 @@
 // app/tools/book.tsx
-import { useState } from 'react';
-import { Alert, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useRef, useState } from 'react';
+import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -8,12 +8,7 @@ import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import DocumentScanner from 'react-native-document-scanner-plugin';
 import { useScan } from '@/contexts/scan-context';
 import { useTheme } from '@/contexts/theme-context';
-
-function getImageSize(uri: string): Promise<{ width: number; height: number }> {
-  return new Promise((resolve, reject) => {
-    Image.getSize(uri, (width, height) => resolve({ width, height }), reject);
-  });
-}
+import { getScanSettings } from '@/lib/storage';
 
 export default function BookScreen() {
   const { openImport } = useScan();
@@ -21,28 +16,37 @@ export default function BookScreen() {
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
   const [scanning, setScanning] = useState(false);
+  const scanningRef = useRef(false);
 
   const handleScan = async () => {
-    if (scanning) return;
+    if (scanningRef.current) return;
+    scanningRef.current = true;
     setScanning(true);
     try {
+      const settings = await getScanSettings();
       const { scannedImages } = await DocumentScanner.scanDocument({
         croppedImageQuality: 90,
         maxNumDocuments: 1,
-      });
+        letUserAdjustCrop: settings.autoCrop,
+      } as any);
       if (!scannedImages?.length) return;
       const uri = scannedImages[0];
-      const { width, height } = await getImageSize(uri);
+
+      const normalized = await manipulateAsync(uri, [], {
+        compress: 1,
+        format: SaveFormat.JPEG,
+      });
+      const { width, height, uri: normalizedUri } = normalized;
       const halfWidth = Math.floor(width / 2);
 
       const [leftResult, rightResult] = await Promise.all([
         manipulateAsync(
-          uri,
+          normalizedUri,
           [{ crop: { originX: 0, originY: 0, width: halfWidth, height } }],
           { compress: 0.9, format: SaveFormat.JPEG }
         ),
         manipulateAsync(
-          uri,
+          normalizedUri,
           [{ crop: { originX: halfWidth, originY: 0, width: width - halfWidth, height } }],
           { compress: 0.9, format: SaveFormat.JPEG }
         ),
@@ -53,6 +57,7 @@ export default function BookScreen() {
     } catch {
       Alert.alert('Scan failed', 'Could not process book scan. Please try again.');
     } finally {
+      scanningRef.current = false;
       setScanning(false);
     }
   };

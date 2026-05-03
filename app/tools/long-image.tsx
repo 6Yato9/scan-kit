@@ -8,10 +8,12 @@ import {
   Pressable,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import * as FileSystem from 'expo-file-system';
+import { Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -28,7 +30,16 @@ export default function LongImageScreen() {
   const [selected, setSelected] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
   const [webviewHtml, setWebviewHtml] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
   const selectedDocRef = useRef<Document | null>(null);
+  const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearWatchdog = () => {
+    if (watchdogRef.current) {
+      clearTimeout(watchdogRef.current);
+      watchdogRef.current = null;
+    }
+  };
 
   useEffect(() => {
     getDocuments()
@@ -37,6 +48,8 @@ export default function LongImageScreen() {
   }, []);
 
   const selectedDoc = docs.find(d => d.id === selected) ?? null;
+  const q = query.trim().toLowerCase();
+  const filteredDocs = q ? docs.filter(d => d.name.toLowerCase().includes(q)) : docs;
 
   const handleGenerate = async () => {
     if (!selectedDoc) return;
@@ -86,6 +99,13 @@ export default function LongImageScreen() {
 </body></html>`;
 
       setWebviewHtml(html);
+      // Watchdog: if the canvas script silently throws or hangs, recover after 30s.
+      clearWatchdog();
+      watchdogRef.current = setTimeout(() => {
+        setWebviewHtml(null);
+        setProcessing(false);
+        Alert.alert('Timed out', 'Stitching took too long. Try fewer or smaller pages.');
+      }, 30000);
     } catch {
       setProcessing(false);
       Alert.alert('Error', 'Could not read document pages.');
@@ -93,6 +113,7 @@ export default function LongImageScreen() {
   };
 
   const handleWebViewMessage = async (event: { nativeEvent: { data: string } }) => {
+    clearWatchdog();
     setWebviewHtml(null);
     const doc = selectedDocRef.current;
 
@@ -104,7 +125,7 @@ export default function LongImageScreen() {
       }
       if (msg.type === 'done' && msg.data) {
         const safeName = (doc?.name ?? 'document').replace(/[^a-z0-9]/gi, '_');
-        const uri = `${FileSystem.cacheDirectory}${safeName}_long.jpg`;
+        const uri = `${Paths.cache.uri}${safeName}_long.jpg`;
         await FileSystem.writeAsStringAsync(uri, msg.data, { encoding: 'base64' as const });
         await Sharing.shareAsync(uri, {
           mimeType: 'image/jpeg',
@@ -149,8 +170,26 @@ export default function LongImageScreen() {
       ) : (
         <>
           <Text style={[styles.sectionLabel, { color: colors.muted }]}>SELECT DOCUMENT</Text>
+          <View style={[styles.searchWrap, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <Ionicons name="search" size={16} color={colors.muted} />
+            <TextInput
+              value={query}
+              onChangeText={setQuery}
+              placeholder="Search by name"
+              placeholderTextColor={colors.muted}
+              style={[styles.searchInput, { color: colors.text }]}
+              autoCorrect={false}
+              autoCapitalize="none"
+              returnKeyType="search"
+            />
+            {query.length > 0 && (
+              <Pressable onPress={() => setQuery('')} hitSlop={8}>
+                <Ionicons name="close-circle" size={18} color={colors.muted} />
+              </Pressable>
+            )}
+          </View>
           <FlatList
-            data={docs}
+            data={filteredDocs}
             keyExtractor={d => d.id}
             contentContainerStyle={styles.listContent}
             ListEmptyComponent={
@@ -171,7 +210,7 @@ export default function LongImageScreen() {
                   ]}
                   onPress={() => setSelected(isSelected ? null : item.id)}
                 >
-                  <Image source={{ uri: item.pages[0] }} style={styles.thumb} resizeMode="cover" />
+                  <Image source={{ uri: `${item.pages[0]}?v=${item.updatedAt}` }} style={styles.thumb} resizeMode="cover" />
                   <View style={{ flex: 1 }}>
                     <Text style={[styles.docName, { color: colors.text }]} numberOfLines={1}>
                       {item.name}
@@ -231,6 +270,18 @@ const styles = StyleSheet.create({
     marginHorizontal: 16,
     marginBottom: 8,
   },
+  searchWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 16,
+    marginBottom: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  searchInput: { flex: 1, fontSize: 15, padding: 0 },
   listContent: { paddingHorizontal: 16, paddingBottom: 16 },
   emptyText: { fontSize: 14, fontStyle: 'italic' },
   docRow: {

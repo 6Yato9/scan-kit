@@ -117,7 +117,7 @@ export default function EraseMarksScreen() {
         </Pressable>
       </View>
 
-      <Modal visible={pickerVisible} animationType="slide" presentationStyle="pageSheet">
+      <Modal visible={pickerVisible} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setPickerVisible(false)}>
         <View style={[styles.modal, { backgroundColor: colors.bg }]}>
           <View style={[styles.header, { paddingTop: 16 }]}>
             <Text style={[styles.title, { color: colors.text }]}>Select Document</Text>
@@ -134,7 +134,7 @@ export default function EraseMarksScreen() {
                 style={[styles.listItem, { borderBottomColor: borderColor }]}
                 onPress={() => { setSelectedDoc(item); setPickerVisible(false); }}
               >
-                <Image source={{ uri: item.pages[0] }} style={styles.listThumb} />
+                <Image source={{ uri: `${item.pages[0]}?v=${item.updatedAt}` }} style={styles.listThumb} />
                 <Text style={[styles.docName, { color: colors.text, flex: 1 }]} numberOfLines={2}>
                   {item.name}
                 </Text>

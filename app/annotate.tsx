@@ -24,7 +24,7 @@ const COLORS = [
   { id: 'green', hex: '#2e7d32', label: 'Green' },
 ];
 
-function buildHtml(b64: string): string {
+function buildHtml(imageSrc: string): string {
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -39,7 +39,7 @@ body { background:#111; overflow:hidden; width:100vw; height:100vh; }
 </head>
 <body>
 <div id="wrap">
-  <img id="bg" src="data:image/jpeg;base64,${b64}" />
+  <img id="bg" src="${imageSrc}" crossorigin="anonymous" />
   <canvas id="c"></canvas>
 </div>
 <script>
@@ -177,15 +177,19 @@ export default function AnnotateScreen() {
   const [eraser, setEraser] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       const docs = await getDocuments();
       const found = docs.find(d => d.id === docId);
-      if (!found) return;
+      if (!found || cancelled) return;
       setDoc(found);
       const uri = found.pages[pageIndex];
-      const b64 = await FileSystem.readAsStringAsync(uri, { encoding: 'base64' });
-      setHtml(buildHtml(b64));
+      // Load the page directly via file:// rather than a base64 data URL — saves
+      // megabytes of JS string + WebView heap on large scans and avoids OOM.
+      const fileSrc = uri.startsWith('file://') ? uri : `file://${uri}`;
+      setHtml(buildHtml(fileSrc));
     })();
+    return () => { cancelled = true; };
   }, [docId, pageIndex]);
 
   const handleMessage = async (event: { nativeEvent: { data: string } }) => {
@@ -254,11 +258,14 @@ export default function AnnotateScreen() {
         {html ? (
           <WebView
             ref={webRef}
-            source={{ html }}
+            source={{ html, baseUrl: 'file:///' }}
             style={styles.webview}
             scrollEnabled={false}
             onMessage={handleMessage}
             originWhitelist={['*']}
+            allowFileAccess
+            allowFileAccessFromFileURLs
+            allowUniversalAccessFromFileURLs
           />
         ) : (
           <ActivityIndicator color="#fff" style={{ flex: 1 }} />

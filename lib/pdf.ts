@@ -4,10 +4,13 @@ import * as FileSystem from 'expo-file-system';
 import { PageAdjustment, PageFilter } from '../types/document';
 import { combinedFilterCss } from './filters';
 
+type PageSize = 'A4' | 'Letter';
+
 export async function generatePdf(
   pages: string[],
   filters?: PageFilter[],
   adjustments?: PageAdjustment[],
+  pageSize: PageSize = 'A4',
 ): Promise<string> {
   const imgTags = await Promise.all(
     pages.map(async (uri, i) => {
@@ -22,7 +25,8 @@ export async function generatePdf(
       return `<img src="data:${mime};base64,${b64}" style="width:100%;display:block;page-break-after:always;${filterAttr}" />`;
     })
   );
-  const html = `<html><body style="margin:0;padding:0;">${imgTags.join('')}</body></html>`;
+  const sizeCss = pageSize === 'Letter' ? 'letter' : 'A4';
+  const html = `<html><head><style>@page { size: ${sizeCss}; margin: 0; }</style></head><body style="margin:0;padding:0;">${imgTags.join('')}</body></html>`;
   const { uri } = await Print.printToFileAsync({ html });
   return uri;
 }

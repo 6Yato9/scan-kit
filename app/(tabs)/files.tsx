@@ -93,12 +93,6 @@ export default function FilesScreen() {
   useFocusEffect(useCallback(() => { load(); }, [load]));
   useEffect(() => { if (lastSaved > 0) load(); }, [lastSaved, load]);
 
-  // Handle URL params from Tools tab shortcuts.
-  useEffect(() => {
-    if (params.action === 'importImages') handleImportImages();
-    else if (params.action === 'importFiles') handleImportFiles();
-  }, [params.action, handleImportImages, handleImportFiles]);
-
   const displayedDocuments = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     let filtered = q ? documents.filter(d => d.name.toLowerCase().includes(q)) : documents;
@@ -143,6 +137,16 @@ export default function FilesScreen() {
       Alert.alert('Import Failed', 'Could not import file.');
     }
   }, [openImport, openPdfImport]);
+
+  // Handle URL params from Tools tab shortcuts. Clear the param after firing so
+  // it doesn't re-trigger every time the tab regains focus.
+  useEffect(() => {
+    if (!params.action) return;
+    const action = params.action;
+    router.setParams({ action: undefined } as any);
+    if (action === 'importImages') handleImportImages();
+    else if (action === 'importFiles') handleImportFiles();
+  }, [params.action, router, handleImportImages, handleImportFiles]);
 
   const handleNewFolder = useCallback(() => {
     setNewFolderName('');
@@ -228,6 +232,8 @@ export default function FilesScreen() {
           name: `Copy of ${doc.name}`,
           pages: newPages,
           filters: doc.filters ? [...doc.filters] : undefined,
+          adjustments: doc.adjustments ? doc.adjustments.map(a => ({ ...a })) : undefined,
+          folder: doc.folder,
           createdAt: now,
           updatedAt: now,
         };
@@ -245,12 +251,20 @@ export default function FilesScreen() {
     const newPageUris = appendPages(sourceDoc.pages, targetDoc.id, targetDoc.pages.length);
     const targetFilters: PageFilter[] = targetDoc.filters ?? targetDoc.pages.map(() => 'original' as PageFilter);
     const sourceFilters: PageFilter[] = sourceDoc.filters ?? sourceDoc.pages.map(() => 'original' as PageFilter);
-    const combined = [...targetFilters, ...sourceFilters];
-    const allOriginal = combined.every(f => f === 'original');
+    const combinedFilters = [...targetFilters, ...sourceFilters];
+    const allOriginal = combinedFilters.every(f => f === 'original');
+
+    const defaultAdj = { brightness: 0, contrast: 0, saturation: 0 };
+    const targetAdj = targetDoc.adjustments ?? targetDoc.pages.map(() => ({ ...defaultAdj }));
+    const sourceAdj = sourceDoc.adjustments ?? sourceDoc.pages.map(() => ({ ...defaultAdj }));
+    const combinedAdj = [...targetAdj, ...sourceAdj];
+    const allDefault = combinedAdj.every(a => a.brightness === 0 && a.contrast === 0 && a.saturation === 0);
+
     const updated: Document = {
       ...targetDoc,
       pages: [...targetDoc.pages, ...newPageUris],
-      filters: allOriginal ? undefined : combined,
+      filters: allOriginal ? undefined : combinedFilters,
+      adjustments: allDefault ? undefined : combinedAdj,
       updatedAt: Date.now(),
     };
     await updateDocument(updated);
@@ -280,9 +294,10 @@ export default function FilesScreen() {
           style: 'destructive',
           onPress: async () => {
             const ids = Array.from(selectedIds);
+            const idSet = new Set(ids);
             await deleteDocuments(ids);
             ids.forEach(id => deleteDocumentFiles(id));
-            setDocuments(prev => prev.filter(d => !ids.includes(d.id)));
+            setDocuments(prev => prev.filter(d => !idSet.has(d.id)));
             setSelectedIds(new Set());
           },
         },

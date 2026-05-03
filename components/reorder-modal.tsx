@@ -1,6 +1,6 @@
 // components/reorder-modal.tsx
 import { Modal, Pressable, SafeAreaView, StyleSheet, Text, View, Image } from 'react-native';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import DraggableFlatList, {
   ScaleDecorator,
   RenderItemParams,
@@ -26,6 +26,14 @@ type Props = {
 export function ReorderModal({ visible, pages, filters, onConfirm, onCancel }: Props) {
   const { colors } = useTheme();
   const [items, setItems] = useState<PageItem[]>([]);
+
+  // Re-init whenever the modal becomes visible OR the underlying pages change.
+  // (Relying solely on `onShow` left the modal showing stale state if the doc
+  // changed between opens.)
+  useEffect(() => {
+    if (!visible) return;
+    setItems(pages.map((uri, index) => ({ index, uri, filter: filters?.[index] })));
+  }, [visible, pages, filters]);
 
   function handleShow() {
     setItems(pages.map((uri, index) => ({ index, uri, filter: filters?.[index] })));

@@ -40,7 +40,7 @@ export function MergeSheet({ visible, targetDoc, allDocs, onMerge, onClose }: Pr
               onPress={() => { onClose(); onMerge(targetDoc!, item); }}
             >
               {item.pages[0] ? (
-                <Image source={{ uri: item.pages[0] }} style={styles.thumb} />
+                <Image source={{ uri: `${item.pages[0]}?v=${item.updatedAt}` }} style={styles.thumb} />
               ) : (
                 <View style={[styles.thumb, { backgroundColor: colors.placeholder }]} />
               )}

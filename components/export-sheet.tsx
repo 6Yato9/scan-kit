@@ -1,9 +1,10 @@
 // components/export-sheet.tsx
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useState } from 'react';
 import * as Sharing from 'expo-sharing';
 import * as Print from 'expo-print';
 import * as FileSystem from 'expo-file-system';
+import { Paths } from 'expo-file-system';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { SaveFormat } from 'expo-image-manipulator';
 import JSZip from 'jszip';
@@ -12,6 +13,7 @@ import { combinedFilterCss } from '@/lib/filters';
 import { BottomSheet } from '@/components/bottom-sheet';
 import { Document } from '@/types/document';
 import { useTheme } from '@/contexts/theme-context';
+import { getDocSettings } from '@/lib/storage';
 
 type Props = {
   visible: boolean;
@@ -25,18 +27,24 @@ export function ExportSheet({ visible, document, onClose }: Props) {
   const [loadingLabel, setLoadingLabel] = useState('');
 
   async function handleExportPdf(quality: 'medium' | 'high') {
-    setLoadingLabel(quality === 'medium' ? 'Generating PDF…' : 'Generating PDF…');
+    setLoadingLabel('Generating PDF…');
     setLoading(true);
     try {
+      const settings = await getDocSettings();
       let pages = document.pages;
 
-      // For medium quality, re-compress each page image first
-      if (quality === 'medium') {
+      // Honor the user's PDF quality preference: 'standard' is medium, 'high' keeps full res.
+      // The explicit "Medium" button always recompresses regardless of the setting.
+      const compressFactor = quality === 'medium'
+        ? 0.55
+        : settings.pdfQuality === 'standard' ? 0.75 : 1;
+
+      if (compressFactor < 1) {
         setLoadingLabel('Optimising images…');
         const recompressed = await Promise.all(
           document.pages.map(uri =>
             ImageManipulator.manipulateAsync(uri, [], {
-              compress: 0.55,
+              compress: compressFactor,
               format: SaveFormat.JPEG,
             }).then(r => r.uri)
           )
@@ -45,12 +53,15 @@ export function ExportSheet({ visible, document, onClose }: Props) {
       }
 
       setLoadingLabel('Building PDF…');
-      const uri = await generatePdf(pages, document.filters, document.adjustments);
+      const uri = await generatePdf(pages, document.filters, document.adjustments, settings.pdfPageSize);
       await Sharing.shareAsync(uri, {
         mimeType: 'application/pdf',
         dialogTitle: document.name,
         UTI: 'com.adobe.pdf',
       });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Could not generate PDF.';
+      Alert.alert('Export failed', msg);
     } finally {
       setLoading(false);
       setLoadingLabel('');
@@ -71,13 +82,16 @@ export function ExportSheet({ visible, document, onClose }: Props) {
       }
       const zipB64 = await zip.generateAsync({ type: 'base64', compression: 'DEFLATE' });
       const safeName = document.name.replace(/[^a-z0-9]/gi, '_');
-      const tempUri = `${FileSystem.cacheDirectory}${safeName}.zip`;
+      const tempUri = `${Paths.cache.uri}${safeName}.zip`;
       await FileSystem.writeAsStringAsync(tempUri, zipB64, { encoding: 'base64' });
       await Sharing.shareAsync(tempUri, {
         mimeType: 'application/zip',
         dialogTitle: document.name,
         UTI: 'public.zip-archive',
       });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Could not build ZIP.';
+      Alert.alert('Export failed', msg);
     } finally {
       setLoading(false);
       setLoadingLabel('');
@@ -98,6 +112,10 @@ export function ExportSheet({ visible, document, onClose }: Props) {
         .join('');
       const html = `<html><body style="margin:0;padding:0;">${imgTags}</body></html>`;
       await Print.printAsync({ html });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Could not print.';
+      // User-cancelled iOS print dialogs throw — only alert if it looks like a real failure.
+      if (!/cancel/i.test(msg)) Alert.alert('Print failed', msg);
     } finally {
       setLoading(false);
       setLoadingLabel('');
