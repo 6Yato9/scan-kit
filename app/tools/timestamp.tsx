@@ -82,6 +82,7 @@ export default function TimestampScreen() {
         name: `${selectedDoc.name} (Timestamped)`,
         pages: [],
         pdfUri: stored,
+        folder: selectedDoc.folder,
         createdAt: now,
         updatedAt: now,
       });

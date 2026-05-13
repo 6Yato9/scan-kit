@@ -5,25 +5,27 @@ import DraggableFlatList, {
   ScaleDecorator,
   RenderItemParams,
 } from 'react-native-draggable-flatlist';
-import { PageFilter } from '@/types/document';
-import { filterStyle } from '@/lib/filters';
+import { PageAdjustment, PageFilter } from '@/types/document';
+import { combinedFilterStyle } from '@/lib/filters';
 import { useTheme } from '@/contexts/theme-context';
 
 type PageItem = {
   index: number;
   uri: string;
   filter?: PageFilter;
+  adjustment?: PageAdjustment;
 };
 
 type Props = {
   visible: boolean;
   pages: string[];
   filters?: PageFilter[];
+  adjustments?: PageAdjustment[];
   onConfirm: (newOrderIndices: number[]) => void;
   onCancel: () => void;
 };
 
-export function ReorderModal({ visible, pages, filters, onConfirm, onCancel }: Props) {
+export function ReorderModal({ visible, pages, filters, adjustments, onConfirm, onCancel }: Props) {
   const { colors } = useTheme();
   const [items, setItems] = useState<PageItem[]>([]);
 
@@ -32,15 +34,20 @@ export function ReorderModal({ visible, pages, filters, onConfirm, onCancel }: P
   // changed between opens.)
   useEffect(() => {
     if (!visible) return;
-    setItems(pages.map((uri, index) => ({ index, uri, filter: filters?.[index] })));
-  }, [visible, pages, filters]);
+    setItems(pages.map((uri, index) => ({
+      index,
+      uri,
+      filter: filters?.[index],
+      adjustment: adjustments?.[index],
+    })));
+  }, [visible, pages, filters, adjustments]);
 
   function handleConfirm() {
     onConfirm(items.map(item => item.index));
   }
 
   const renderItem = ({ item, getIndex, drag, isActive }: RenderItemParams<PageItem>) => {
-    const fStyle = filterStyle(item.filter);
+    const fStyle = combinedFilterStyle(item.filter, item.adjustment);
     return (
       <ScaleDecorator>
         <Pressable

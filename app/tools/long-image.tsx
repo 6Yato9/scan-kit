@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import * as FileSystem from 'expo-file-system';
-import { Paths } from 'expo-file-system';
+import { File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -126,14 +126,22 @@ export default function LongImageScreen() {
         return;
       }
       if (msg.type === 'done' && msg.data) {
-        const safeName = (doc?.name ?? 'document').replace(/[^a-z0-9]/gi, '_');
-        const uri = `${Paths.cache.uri}${safeName}_long.jpg`;
+        const safeName = (doc?.name ?? 'document').replace(/[^a-z0-9]/gi, '_').slice(0, 40) || 'document';
+        // Include the doc id so two different docs that sanitise to the same
+        // base name don't overwrite each other's cached output.
+        const idSuffix = doc?.id?.slice(0, 8) ?? Math.random().toString(36).slice(2, 10);
+        const uri = `${Paths.cache.uri}${safeName}_${idSuffix}_long.jpg`;
         await FileSystem.writeAsStringAsync(uri, msg.data, { encoding: 'base64' as const });
-        await Sharing.shareAsync(uri, {
-          mimeType: 'image/jpeg',
-          dialogTitle: doc?.name,
-          UTI: 'public.jpeg',
-        });
+        try {
+          await Sharing.shareAsync(uri, {
+            mimeType: 'image/jpeg',
+            dialogTitle: doc?.name,
+            UTI: 'public.jpeg',
+          });
+        } finally {
+          // Best-effort cleanup so the cache doesn't accumulate stitched images.
+          try { new File(uri.split('?')[0]).delete(); } catch {}
+        }
       }
     } catch {
       Alert.alert('Error', 'Could not generate long image.');

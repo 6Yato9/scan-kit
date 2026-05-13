@@ -94,6 +94,7 @@ export default function ExtractScreen() {
         pages: newPages,
         filters: allOriginal ? undefined : newFilters,
         adjustments: allDefault ? undefined : newAdjustments,
+        folder: selectedDoc.folder,
         createdAt: now,
         updatedAt: now,
       });

@@ -33,7 +33,11 @@ export default function EraseMarksScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      getDocuments().then(docs => setDocuments(docs.filter(d => d.pages.length > 0)));
+      let cancelled = false;
+      getDocuments()
+        .then(docs => { if (!cancelled) setDocuments(docs.filter(d => d.pages.length > 0 && !d.pdfUri)); })
+        .catch(console.error);
+      return () => { cancelled = true; };
     }, [])
   );
 

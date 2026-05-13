@@ -3,7 +3,6 @@ import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
-  Dimensions,
   FlatList,
   Image,
   Modal,
@@ -11,6 +10,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -27,7 +27,6 @@ import { PageActionsSheet } from '@/components/page-actions-sheet';
 import { ThumbnailStrip } from '@/components/thumbnail-strip';
 import { ReorderModal } from '@/components/reorder-modal';
 
-const SCREEN_WIDTH = Dimensions.get('window').width;
 
 // OCR is optional — imported lazily so the app won't crash if the native module isn't linked yet
 let TextRecognition: { recognize: (uri: string) => Promise<{ text: string }> } | null = null;
@@ -40,6 +39,7 @@ try {
 
 export default function ViewerScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  const { width: screenWidth } = useWindowDimensions();
   const [document, setDocument] = useState<Document | null>(null);
   const [currentPage, setCurrentPage] = useState(0);
   const [exportVisible, setExportVisible] = useState(false);
@@ -241,16 +241,20 @@ export default function ViewerScreen() {
   const handleReorder = useCallback(async (newOrderIndices: number[]) => {
     if (!document) return;
     const newUris = reorderPages(document.id, newOrderIndices);
+    const defaultAdj = { brightness: 0, contrast: 0, saturation: 0 };
     const oldFilters = document.filters ?? document.pages.map(() => 'original' as PageFilter);
-    const newFilters = newOrderIndices.map(i => oldFilters[i]);
+    const oldAdj = document.adjustments ?? document.pages.map(() => ({ ...defaultAdj }));
+    // Map with fallback so a length-drift in either array can't produce
+    // `undefined` entries that break filter math downstream.
+    const newFilters = newOrderIndices.map(i => oldFilters[i] ?? 'original' as PageFilter);
+    const newAdj = newOrderIndices.map(i => oldAdj[i] ?? { ...defaultAdj });
     const allOriginal = newFilters.every(f => f === 'original');
-    const oldAdj = document.adjustments;
-    const newAdj = oldAdj ? newOrderIndices.map(i => oldAdj[i]) : undefined;
+    const allDefault = newAdj.every(a => a.brightness === 0 && a.contrast === 0 && a.saturation === 0);
     await saveDoc({
       ...document,
       pages: newUris,
       filters: allOriginal ? undefined : newFilters,
-      adjustments: newAdj,
+      adjustments: allDefault ? undefined : newAdj,
       updatedAt: Date.now(),
     });
     setReorderVisible(false);
@@ -339,9 +343,11 @@ export default function ViewerScreen() {
           <Pressable onPress={handleOcr} hitSlop={12} style={styles.headerBtn} disabled={ocrRunning}>
             <Text style={[styles.headerBtnText, ocrRunning && { opacity: 0.4 }]}>T</Text>
           </Pressable>
-          <Pressable onPress={() => setReorderVisible(true)} hitSlop={12} style={styles.headerBtn}>
-            <Text style={styles.headerBtnText}>⇅</Text>
-          </Pressable>
+          {document.pages.length > 1 && (
+            <Pressable onPress={() => setReorderVisible(true)} hitSlop={12} style={styles.headerBtn}>
+              <Text style={styles.headerBtnText}>⇅</Text>
+            </Pressable>
+          )}
           <Pressable onPress={() => setActionsVisible(true)} hitSlop={12} style={styles.headerBtn}>
             <Text style={styles.headerBtnText}>•••</Text>
           </Pressable>
@@ -359,17 +365,17 @@ export default function ViewerScreen() {
         pagingEnabled
         showsHorizontalScrollIndicator={false}
         onMomentumScrollEnd={e => {
-          setCurrentPage(Math.round(e.nativeEvent.contentOffset.x / SCREEN_WIDTH));
+          setCurrentPage(Math.round(e.nativeEvent.contentOffset.x / screenWidth));
         }}
         onScrollToIndexFailed={() => {}}
         renderItem={({ item, index }) => {
           const fStyle = combinedFilterStyle(document.filters?.[index], document.adjustments?.[index]);
           // Append updatedAt so RN's Image cache reloads after rotate/annotate/compress overwrite the file in place.
           return (
-            <View style={styles.page}>
+            <View style={[styles.page, { width: screenWidth }]}>
               <Image
                 source={{ uri: `${item}?v=${document.updatedAt}` }}
-                style={[styles.pageImage, fStyle ? ({ filter: fStyle } as any) : undefined]}
+                style={[styles.pageImage, { width: screenWidth - 32 }, fStyle ? ({ filter: fStyle } as any) : undefined]}
                 resizeMode="contain"
               />
             </View>
@@ -412,6 +418,7 @@ export default function ViewerScreen() {
         visible={reorderVisible}
         pages={document.pages}
         filters={document.filters}
+        adjustments={document.adjustments}
         onConfirm={handleReorder}
         onCancel={() => setReorderVisible(false)}
       />
@@ -452,13 +459,12 @@ const styles = StyleSheet.create({
   headerBtnText: { fontSize: 16, color: '#fff' },
   exportBtn: { fontSize: 15, color: '#4ec6e0', fontWeight: '600' },
   page: {
-    width: SCREEN_WIDTH,
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 16,
   },
-  pageImage: { width: SCREEN_WIDTH - 32, flex: 1 },
+  pageImage: { flex: 1 },
   webView: { flex: 1, backgroundColor: '#111' },
   // OCR modal
   ocrOverlay: {

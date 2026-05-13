@@ -4,7 +4,7 @@ import { useState } from 'react';
 import * as Sharing from 'expo-sharing';
 import * as Print from 'expo-print';
 import * as FileSystem from 'expo-file-system';
-import { Paths } from 'expo-file-system';
+import { File, Paths } from 'expo-file-system';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { SaveFormat } from 'expo-image-manipulator';
 import JSZip from 'jszip';
@@ -83,14 +83,19 @@ export function ExportSheet({ visible, document, onClose }: Props) {
         zip.file(`page_${String(i + 1).padStart(2, '0')}.jpg`, b64, { base64: true });
       }
       const zipB64 = await zip.generateAsync({ type: 'base64', compression: 'DEFLATE' });
-      const safeName = document.name.replace(/[^a-z0-9]/gi, '_');
-      const tempUri = `${Paths.cache.uri}${safeName}.zip`;
+      const safeName = document.name.replace(/[^a-z0-9]/gi, '_').slice(0, 40) || 'document';
+      // Include doc id so different docs that sanitise to the same name don't collide.
+      const tempUri = `${Paths.cache.uri}${safeName}_${document.id.slice(0, 8)}.zip`;
       await FileSystem.writeAsStringAsync(tempUri, zipB64, { encoding: 'base64' });
-      await Sharing.shareAsync(tempUri, {
-        mimeType: 'application/zip',
-        dialogTitle: document.name,
-        UTI: 'public.zip-archive',
-      });
+      try {
+        await Sharing.shareAsync(tempUri, {
+          mimeType: 'application/zip',
+          dialogTitle: document.name,
+          UTI: 'public.zip-archive',
+        });
+      } finally {
+        try { new File(tempUri).delete(); } catch {}
+      }
       onClose();
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Could not build ZIP.';

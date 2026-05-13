@@ -148,6 +148,7 @@ export default function SignScreen() {
         name: `${selectedDoc.name} (Signed)`,
         pages: [],
         pdfUri: stored,
+        folder: selectedDoc.folder,
         createdAt: now,
         updatedAt: now,
       });

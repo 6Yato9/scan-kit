@@ -181,16 +181,22 @@ export default function AnnotateScreen() {
     (async () => {
       const docs = await getDocuments();
       const found = docs.find(d => d.id === docId);
-      if (!found || cancelled) return;
+      if (cancelled) return;
+      // Defend against bad routing: doc deleted, PDF-only doc, or pageIndex
+      // out of range. Bail back rather than crashing on `pages[NaN]`.
+      if (!found || found.pdfUri || !Number.isInteger(pageIndex) || pageIndex < 0 || pageIndex >= found.pages.length) {
+        router.back();
+        return;
+      }
       setDoc(found);
-      const uri = found.pages[pageIndex];
+      const uri = found.pages[pageIndex].split('?')[0];
       // Load the page directly via file:// rather than a base64 data URL — saves
       // megabytes of JS string + WebView heap on large scans and avoids OOM.
       const fileSrc = uri.startsWith('file://') ? uri : `file://${uri}`;
       setHtml(buildHtml(fileSrc));
     })();
     return () => { cancelled = true; };
-  }, [docId, pageIndex]);
+  }, [docId, pageIndex, router]);
 
   const handleMessage = async (event: { nativeEvent: { data: string } }) => {
     const dataUrl = event.nativeEvent.data;

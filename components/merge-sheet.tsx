@@ -20,7 +20,9 @@ function formatDate(ts: number): string {
 
 export function MergeSheet({ visible, targetDoc, allDocs, onMerge, onClose }: Props) {
   const { colors } = useTheme();
-  const sources = allDocs.filter(d => d.id !== targetDoc?.id);
+  // Exclude PDF-only docs from the merge picker — the merge code path appends
+  // image pages and can't combine PDFs.
+  const sources = allDocs.filter(d => d.id !== targetDoc?.id && !d.pdfUri && d.pages.length > 0);
 
   return (
     <BottomSheet visible={visible} onClose={onClose}>

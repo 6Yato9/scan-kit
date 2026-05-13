@@ -78,7 +78,7 @@ export default function AskAiScreen() {
   useFocusEffect(
     useCallback(() => {
       getAiKey().then(setApiKey);
-      getDocuments().then(docs => setDocuments(docs.filter(d => d.pages.length > 0)));
+      getDocuments().then(docs => setDocuments(docs.filter(d => d.pages.length > 0 && !d.pdfUri)));
     }, [])
   );
 

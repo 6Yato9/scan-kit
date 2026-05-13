@@ -1,5 +1,6 @@
 // components/document-card.tsx
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { Document } from '@/types/document';
 import { useTheme } from '@/contexts/theme-context';
 
@@ -21,7 +22,12 @@ export function DocumentCard({ document, onPress, onLongPress, isSelected, isMul
   const { colors } = useTheme();
   return (
     <Pressable style={[styles.card, { backgroundColor: colors.card }]} onPress={onPress} onLongPress={onLongPress}>
-      {document.pages[0] ? (
+      {document.pdfUri ? (
+        <View style={[styles.thumbnail, styles.pdfThumb, { backgroundColor: colors.placeholder }]}>
+          <Ionicons name="document-text" size={32} color={colors.muted} />
+          <Text style={[styles.pdfLabel, { color: colors.muted }]}>PDF</Text>
+        </View>
+      ) : document.pages[0] ? (
         <Image source={{ uri: `${document.pages[0]}?v=${document.updatedAt}` }} style={styles.thumbnail} />
       ) : (
         <View style={[styles.thumbnail, { backgroundColor: colors.placeholder }]} />
@@ -29,7 +35,7 @@ export function DocumentCard({ document, onPress, onLongPress, isSelected, isMul
       <View style={styles.info}>
         <Text style={[styles.name, { color: colors.text }]} numberOfLines={2}>{document.name}</Text>
         <Text style={[styles.meta, { color: colors.faint }]}>
-          {document.pages.length} page{document.pages.length !== 1 ? 's' : ''} · {formatDate(document.createdAt)}
+          {document.pdfUri ? 'PDF' : `${document.pages.length} page${document.pages.length !== 1 ? 's' : ''}`} · {formatDate(document.createdAt)}
         </Text>
       </View>
       {isMultiSelectMode && (
@@ -54,6 +60,8 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   thumbnail: { width: '100%', aspectRatio: 0.75 },
+  pdfThumb: { alignItems: 'center', justifyContent: 'center', gap: 4 },
+  pdfLabel: { fontSize: 11, fontWeight: '700' },
   info: { padding: 10 },
   name: { fontSize: 13, fontWeight: '600', marginBottom: 3 },
   meta: { fontSize: 11 },

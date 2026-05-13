@@ -226,6 +226,7 @@ export default function FilesScreen() {
           name: `Copy of ${doc.name}`,
           pages: [],
           pdfUri: storedUri,
+          folder: doc.folder,
           createdAt: now,
           updatedAt: now,
         };
@@ -389,7 +390,15 @@ export default function FilesScreen() {
               <Text style={[styles.noResultsText, { color: colors.muted }]}>No results for "{searchQuery.trim()}"</Text>
             </View>
           ) : (
-            <EmptyState />
+            <EmptyState
+              variant={
+                searchQuery.trim() ? 'no-search-results'
+                : activeFolder !== null ? 'empty-folder'
+                : 'no-docs'
+              }
+              folderName={activeFolder ?? undefined}
+              query={searchQuery.trim()}
+            />
           )
         }
         renderItem={({ item }) => (
@@ -426,7 +435,14 @@ export default function FilesScreen() {
         document={docActionsTarget}
         onRename={doc => { setDocActionsTarget(null); setRenameTarget(doc); }}
         onDuplicate={doc => { setDocActionsTarget(null); handleDuplicate(doc).catch(console.error); }}
-        onMerge={doc => { setDocActionsTarget(null); setMergeTarget(doc); }}
+        onMerge={doc => {
+          setDocActionsTarget(null);
+          if (doc.pdfUri) {
+            Alert.alert('Cannot merge', 'PDF documents can\'t be merged. Only scanned image documents support merging.');
+            return;
+          }
+          setMergeTarget(doc);
+        }}
         onSelect={doc => { setDocActionsTarget(null); setSelectedIds(new Set([doc.id])); }}
         onDelete={doc => { setDocActionsTarget(null); handleDelete(doc); }}
         onClose={() => setDocActionsTarget(null)}

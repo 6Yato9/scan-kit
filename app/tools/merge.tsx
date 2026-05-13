@@ -4,6 +4,8 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -79,12 +81,17 @@ export default function MergeScreen() {
         a => a.brightness === 0 && a.contrast === 0 && a.saturation === 0,
       );
 
+      // If all sources share a folder, inherit it; otherwise leave folder unset.
+      const folders = selectedDocs.map(d => d.folder);
+      const sharedFolder = folders.every(f => f === folders[0]) ? folders[0] : undefined;
+
       await saveDocument({
         id,
         name: name.trim(),
         pages,
         filters: allOriginal ? undefined : filters,
         adjustments: allDefault ? undefined : adjustments,
+        folder: sharedFolder,
         createdAt: now,
         updatedAt: now,
       });
@@ -102,7 +109,10 @@ export default function MergeScreen() {
   };
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.bg }]}>
+    <KeyboardAvoidingView
+      style={[styles.container, { backgroundColor: colors.bg }]}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
       {/* Header */}
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
         <Pressable onPress={() => router.back()} hitSlop={12}>
@@ -214,7 +224,7 @@ export default function MergeScreen() {
           Pages are merged in the order you selected. Your original documents are unchanged.
         </Text>
       </ScrollView>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 

@@ -76,6 +76,7 @@ export default function WatermarkScreen() {
         name: `${selectedDoc.name} (Watermark)`,
         pages: [],
         pdfUri: stored,
+        folder: selectedDoc.folder,
         createdAt: now,
         updatedAt: now,
       });

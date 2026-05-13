@@ -55,6 +55,7 @@ export default function HomeScreen() {
   const [mergeTarget, setMergeTarget] = useState<Document | null>(null);
   const [moveFolderTarget, setMoveFolderTarget] = useState<Document | null>(null);
   const [folders, setFolders] = useState<string[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { lastSaved } = useScan();
@@ -65,6 +66,7 @@ export default function HomeScreen() {
     setDocuments(docs);
     setSortKey(sort);
     setFolders(fldrs);
+    setLoaded(true);
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
@@ -104,6 +106,7 @@ export default function HomeScreen() {
           name: `Copy of ${doc.name}`,
           pages: [],
           pdfUri: storedUri,
+          folder: doc.folder,
           createdAt: now,
           updatedAt: now,
         };
@@ -199,13 +202,15 @@ export default function HomeScreen() {
       <FlatList
         data={displayed}
         keyExtractor={d => d.id}
-        contentContainerStyle={styles.listContent}
+        contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + 110 }]}
         ListEmptyComponent={
           <View style={styles.empty}>
             <Text style={[styles.emptyText, { color: colors.muted }]}>
-              {searchQuery.trim()
-                ? `No results for "${searchQuery.trim()}"`
-                : 'No documents yet. Tap the camera button to scan.'}
+              {!loaded
+                ? 'Loading…'
+                : searchQuery.trim()
+                  ? `No results for "${searchQuery.trim()}"`
+                  : 'No documents yet. Tap the camera button to scan.'}
             </Text>
           </View>
         }
@@ -249,7 +254,14 @@ export default function HomeScreen() {
         document={docActionsTarget}
         onRename={doc => { setDocActionsTarget(null); setRenameTarget(doc); }}
         onDuplicate={doc => { setDocActionsTarget(null); handleDuplicate(doc).catch(console.error); }}
-        onMerge={doc => { setDocActionsTarget(null); setMergeTarget(doc); }}
+        onMerge={doc => {
+          setDocActionsTarget(null);
+          if (doc.pdfUri) {
+            Alert.alert('Cannot merge', 'PDF documents can\'t be merged. Only scanned image documents support merging.');
+            return;
+          }
+          setMergeTarget(doc);
+        }}
         onDelete={doc => { setDocActionsTarget(null); handleDelete(doc); }}
         onMoveToFolder={doc => { setDocActionsTarget(null); setMoveFolderTarget(doc); }}
         onClose={() => setDocActionsTarget(null)}
@@ -302,7 +314,7 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
     fontSize: 15,
   },
-  listContent: { paddingHorizontal: 14, paddingBottom: 80 },
+  listContent: { paddingHorizontal: 14 },
   empty: { alignItems: 'center', paddingTop: 60 },
   emptyText: { fontSize: 15, textAlign: 'center' },
   row: {

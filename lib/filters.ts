@@ -21,21 +21,27 @@ export function filterCss(filter?: PageFilter): string {
   }
 }
 
+// Coerce any non-finite value (NaN / Infinity / null / undefined) to 0 so a
+// corrupt stored doc can't produce `brightness(NaN)` and blank out the image.
+const safe = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+
 function adjStyle(adj?: PageAdjustment): string {
   if (!adj) return '';
+  const b = safe(adj.brightness), c = safe(adj.contrast), s = safe(adj.saturation);
   const parts: string[] = [];
-  if (adj.brightness !== 0) parts.push(`brightness(${(100 + adj.brightness) / 100})`);
-  if (adj.contrast !== 0)   parts.push(`contrast(${(100 + adj.contrast) / 100})`);
-  if (adj.saturation !== 0) parts.push(`saturate(${(100 + adj.saturation) / 100})`);
+  if (b !== 0) parts.push(`brightness(${(100 + b) / 100})`);
+  if (c !== 0) parts.push(`contrast(${(100 + c) / 100})`);
+  if (s !== 0) parts.push(`saturate(${(100 + s) / 100})`);
   return parts.join(' ');
 }
 
 function adjCss(adj?: PageAdjustment): string {
   if (!adj) return '';
+  const b = safe(adj.brightness), c = safe(adj.contrast), s = safe(adj.saturation);
   const parts: string[] = [];
-  if (adj.brightness !== 0) parts.push(`brightness(${100 + adj.brightness}%)`);
-  if (adj.contrast !== 0)   parts.push(`contrast(${100 + adj.contrast}%)`);
-  if (adj.saturation !== 0) parts.push(`saturate(${100 + adj.saturation}%)`);
+  if (b !== 0) parts.push(`brightness(${100 + b}%)`);
+  if (c !== 0) parts.push(`contrast(${100 + c}%)`);
+  if (s !== 0) parts.push(`saturate(${100 + s}%)`);
   return parts.join(' ');
 }
 
