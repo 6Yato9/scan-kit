@@ -5,6 +5,7 @@ import {
   FlatList,
   Image,
   Modal,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -35,7 +36,12 @@ export default function EraseMarksScreen() {
     useCallback(() => {
       let cancelled = false;
       getDocuments()
-        .then(docs => { if (!cancelled) setDocuments(docs.filter(d => d.pages.length > 0 && !d.pdfUri)); })
+        .then(docs => {
+          if (cancelled) return;
+          const filtered = docs.filter(d => d.pages.length > 0 && !d.pdfUri);
+          setDocuments(filtered);
+          setSelectedDoc(prev => (prev && filtered.some(d => d.id === prev.id) ? prev : null));
+        })
         .catch(console.error);
       return () => { cancelled = true; };
     }, [])
@@ -146,7 +152,7 @@ export default function EraseMarksScreen() {
 
       <Modal visible={pickerVisible} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setPickerVisible(false)}>
         <View style={[styles.modal, { backgroundColor: colors.bg }]}>
-          <View style={[styles.header, { paddingTop: 16 }]}>
+          <View style={[styles.header, { paddingTop: Platform.OS === 'android' ? insets.top + 16 : 16 }]}>
             <Text style={[styles.title, { color: colors.text }]}>Select Document</Text>
             <Pressable onPress={() => setPickerVisible(false)} style={styles.backBtn}>
               <MaterialCommunityIcons name="close" size={24} color={colors.text} />

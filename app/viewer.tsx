@@ -112,14 +112,23 @@ export default function ViewerScreen() {
   }, [document, currentPage, saveDoc]);
 
   const adjustPersistTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingAdjustDoc = useRef<Document | null>(null);
 
-  // Make sure a pending adjust write doesn't try to fire after the viewer
-  // unmounts (e.g. user closes the viewer within 250 ms of releasing the slider).
+  // Flush any pending adjust write on unmount so the last 0-250 ms of slider
+  // movement isn't silently dropped.
   useEffect(() => {
     return () => {
       if (adjustPersistTimer.current) {
         clearTimeout(adjustPersistTimer.current);
         adjustPersistTimer.current = null;
+        if (pendingAdjustDoc.current) {
+          // Fire-and-forget; can't await in cleanup. The lock in lib/storage
+          // serializes this with anything else in flight.
+          updateDocument(pendingAdjustDoc.current).catch(err =>
+            console.error('flush pending adjust', err),
+          );
+          pendingAdjustDoc.current = null;
+        }
       }
     };
   }, []);
@@ -136,10 +145,13 @@ export default function ViewerScreen() {
       updatedAt: Date.now(),
     };
     // Update visible state immediately so the slider feels responsive,
-    // but coalesce the AsyncStorage write to once every 250ms.
+    // but coalesce the AsyncStorage write to once every 250ms. Stash the
+    // latest pending doc in a ref so the unmount cleanup can flush it.
     setDocument(next);
+    pendingAdjustDoc.current = next;
     if (adjustPersistTimer.current) clearTimeout(adjustPersistTimer.current);
     adjustPersistTimer.current = setTimeout(() => {
+      pendingAdjustDoc.current = null;
       updateDocument(next).catch(err => console.error('persist adjustments', err));
     }, 250);
   }, [document, currentPage]);
@@ -282,9 +294,14 @@ export default function ViewerScreen() {
     }
   }, [document]);
 
+  const annotateNavRef = useRef(false);
   const handleAnnotate = useCallback(() => {
     if (!document) return;
+    // Guard against tap-spam pushing two annotate screens onto the stack.
+    if (annotateNavRef.current) return;
+    annotateNavRef.current = true;
     router.push({ pathname: '/annotate', params: { docId: document.id, pageIndex: String(currentPage) } } as any);
+    setTimeout(() => { annotateNavRef.current = false; }, 600);
   }, [document, currentPage, router]);
 
   const handleOcr = useCallback(async () => {
@@ -340,18 +357,42 @@ export default function ViewerScreen() {
         </Pressable>
         <Text style={styles.title} numberOfLines={1}>{document.name}</Text>
         <View style={styles.headerRight}>
-          <Pressable onPress={handleOcr} hitSlop={12} style={styles.headerBtn} disabled={ocrRunning}>
+          <Pressable
+            onPress={handleOcr}
+            hitSlop={12}
+            style={styles.headerBtn}
+            disabled={ocrRunning}
+            accessibilityRole="button"
+            accessibilityLabel="Extract text"
+          >
             <Text style={[styles.headerBtnText, ocrRunning && { opacity: 0.4 }]}>T</Text>
           </Pressable>
           {document.pages.length > 1 && (
-            <Pressable onPress={() => setReorderVisible(true)} hitSlop={12} style={styles.headerBtn}>
+            <Pressable
+              onPress={() => setReorderVisible(true)}
+              hitSlop={12}
+              style={styles.headerBtn}
+              accessibilityRole="button"
+              accessibilityLabel="Reorder pages"
+            >
               <Text style={styles.headerBtnText}>⇅</Text>
             </Pressable>
           )}
-          <Pressable onPress={() => setActionsVisible(true)} hitSlop={12} style={styles.headerBtn}>
+          <Pressable
+            onPress={() => setActionsVisible(true)}
+            hitSlop={12}
+            style={styles.headerBtn}
+            accessibilityRole="button"
+            accessibilityLabel="Page actions"
+          >
             <Text style={styles.headerBtnText}>•••</Text>
           </Pressable>
-          <Pressable onPress={() => setExportVisible(true)} hitSlop={12}>
+          <Pressable
+            onPress={() => setExportVisible(true)}
+            hitSlop={12}
+            accessibilityRole="button"
+            accessibilityLabel="Export document"
+          >
             <Text style={styles.exportBtn}>Export</Text>
           </Pressable>
         </View>

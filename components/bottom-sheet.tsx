@@ -32,7 +32,7 @@ export function BottomSheet({ visible, onClose, children, transparentBackdrop }:
     >
       <KeyboardAvoidingView
         style={styles.container}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         <Pressable
           style={[styles.backdrop, transparentBackdrop && styles.backdropTransparent]}

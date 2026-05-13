@@ -109,6 +109,9 @@ export default function QrScreen() {
   if (!permission) return <View style={[styles.container, { backgroundColor: colors.bg }]} />;
 
   if (!permission.granted) {
+    // After the user has tapped "Don't Allow" once, the OS won't show the
+    // permission dialog again — sending them to Settings is the only path.
+    const mustGoToSettings = permission.canAskAgain === false;
     return (
       <View style={[styles.container, styles.centered, { backgroundColor: colors.bg, paddingTop: insets.top }]}>
         <Pressable onPress={() => router.back()} style={[styles.backBtn, { top: insets.top + 8 }]}>
@@ -116,9 +119,18 @@ export default function QrScreen() {
         </Pressable>
         <Ionicons name="camera-outline" size={56} color={colors.muted} />
         <Text style={[styles.permTitle, { color: colors.text }]}>Camera Access Needed</Text>
-        <Text style={[styles.permSub, { color: colors.muted }]}>Allow camera access to scan QR codes and barcodes.</Text>
-        <Pressable style={[styles.permBtn, { backgroundColor: colors.accent }]} onPress={requestPermission}>
-          <Text style={styles.permBtnText}>Allow Camera</Text>
+        <Text style={[styles.permSub, { color: colors.muted }]}>
+          {mustGoToSettings
+            ? 'Camera access is blocked. Open Settings to enable it for this app.'
+            : 'Allow camera access to scan QR codes and barcodes.'}
+        </Text>
+        <Pressable
+          style={[styles.permBtn, { backgroundColor: colors.accent }]}
+          onPress={mustGoToSettings ? () => Linking.openSettings() : requestPermission}
+        >
+          <Text style={styles.permBtnText}>
+            {mustGoToSettings ? 'Open Settings' : 'Allow Camera'}
+          </Text>
         </Pressable>
       </View>
     );

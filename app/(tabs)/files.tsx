@@ -194,10 +194,15 @@ export default function FilesScreen() {
   }, [isMultiSelectMode]);
 
   const handleRename = useCallback(async (doc: Document, newName: string) => {
-    const updated = { ...doc, name: newName, updatedAt: Date.now() };
-    await updateDocument(updated);
-    setDocuments(prev => prev.map(d => (d.id === doc.id ? updated : d)));
-    setRenameTarget(null);
+    try {
+      const updated = { ...doc, name: newName, updatedAt: Date.now() };
+      await updateDocument(updated);
+      setDocuments(prev => prev.map(d => (d.id === doc.id ? updated : d)));
+      setRenameTarget(null);
+    } catch (err) {
+      console.error('Rename failed', err);
+      Alert.alert('Rename failed', err instanceof Error ? err.message : 'Could not rename document.');
+    }
   }, []);
 
   const handleDelete = useCallback(async (doc: Document) => {
@@ -254,35 +259,45 @@ export default function FilesScreen() {
   }, []);
 
   const handleMerge = useCallback(async (targetDoc: Document, sourceDoc: Document) => {
-    // Non-destructive merge: source document is preserved. Pages are copied into target.
-    const newPageUris = appendPages(sourceDoc.pages, targetDoc.id, targetDoc.pages.length);
-    const targetFilters: PageFilter[] = targetDoc.filters ?? targetDoc.pages.map(() => 'original' as PageFilter);
-    const sourceFilters: PageFilter[] = sourceDoc.filters ?? sourceDoc.pages.map(() => 'original' as PageFilter);
-    const combinedFilters = [...targetFilters, ...sourceFilters];
-    const allOriginal = combinedFilters.every(f => f === 'original');
+    try {
+      // Non-destructive merge: source document is preserved. Pages are copied into target.
+      const newPageUris = appendPages(sourceDoc.pages, targetDoc.id, targetDoc.pages.length);
+      const targetFilters: PageFilter[] = targetDoc.filters ?? targetDoc.pages.map(() => 'original' as PageFilter);
+      const sourceFilters: PageFilter[] = sourceDoc.filters ?? sourceDoc.pages.map(() => 'original' as PageFilter);
+      const combinedFilters = [...targetFilters, ...sourceFilters];
+      const allOriginal = combinedFilters.every(f => f === 'original');
 
-    const defaultAdj = { brightness: 0, contrast: 0, saturation: 0 };
-    const targetAdj = targetDoc.adjustments ?? targetDoc.pages.map(() => ({ ...defaultAdj }));
-    const sourceAdj = sourceDoc.adjustments ?? sourceDoc.pages.map(() => ({ ...defaultAdj }));
-    const combinedAdj = [...targetAdj, ...sourceAdj];
-    const allDefault = combinedAdj.every(a => a.brightness === 0 && a.contrast === 0 && a.saturation === 0);
+      const defaultAdj = { brightness: 0, contrast: 0, saturation: 0 };
+      const targetAdj = targetDoc.adjustments ?? targetDoc.pages.map(() => ({ ...defaultAdj }));
+      const sourceAdj = sourceDoc.adjustments ?? sourceDoc.pages.map(() => ({ ...defaultAdj }));
+      const combinedAdj = [...targetAdj, ...sourceAdj];
+      const allDefault = combinedAdj.every(a => a.brightness === 0 && a.contrast === 0 && a.saturation === 0);
 
-    const updated: Document = {
-      ...targetDoc,
-      pages: [...targetDoc.pages, ...newPageUris],
-      filters: allOriginal ? undefined : combinedFilters,
-      adjustments: allDefault ? undefined : combinedAdj,
-      updatedAt: Date.now(),
-    };
-    await updateDocument(updated);
-    setDocuments(prev => prev.map(d => (d.id === updated.id ? updated : d)));
+      const updated: Document = {
+        ...targetDoc,
+        pages: [...targetDoc.pages, ...newPageUris],
+        filters: allOriginal ? undefined : combinedFilters,
+        adjustments: allDefault ? undefined : combinedAdj,
+        updatedAt: Date.now(),
+      };
+      await updateDocument(updated);
+      setDocuments(prev => prev.map(d => (d.id === updated.id ? updated : d)));
+    } catch (err) {
+      console.error('Merge failed', err);
+      Alert.alert('Merge failed', err instanceof Error ? err.message : 'Could not merge documents.');
+    }
   }, []);
 
   const handleMoveToFolder = useCallback(async (doc: Document, folder: string | null) => {
-    const updated: Document = { ...doc, folder: folder ?? undefined, updatedAt: Date.now() };
-    await updateDocument(updated);
-    setDocuments(prev => prev.map(d => (d.id === doc.id ? updated : d)));
-    setMoveFolderTarget(null);
+    try {
+      const updated: Document = { ...doc, folder: folder ?? undefined, updatedAt: Date.now() };
+      await updateDocument(updated);
+      setDocuments(prev => prev.map(d => (d.id === doc.id ? updated : d)));
+      setMoveFolderTarget(null);
+    } catch (err) {
+      console.error('Move to folder failed', err);
+      Alert.alert('Move failed', err instanceof Error ? err.message : 'Could not move document.');
+    }
   }, []);
 
   const handleSort = useCallback(async (key: SortKey) => {

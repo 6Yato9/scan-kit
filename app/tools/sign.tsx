@@ -99,7 +99,14 @@ export default function SignScreen() {
   useFocusEffect(useCallback(() => {
     let cancelled = false;
     getDocuments()
-      .then(all => { if (!cancelled) setDocs(all.filter(d => d.pages.length > 0 && !d.pdfUri)); })
+      .then(all => {
+        if (cancelled) return;
+        const filtered = all.filter(d => d.pages.length > 0 && !d.pdfUri);
+        setDocs(filtered);
+        // If the previously selected doc was deleted elsewhere, clear the selection
+        // so the user can't trigger an apply against a missing doc.
+        setSelectedDoc(prev => (prev && filtered.some(d => d.id === prev.id) ? prev : null));
+      })
       .catch(console.error);
     return () => { cancelled = true; };
   }, []));

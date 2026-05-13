@@ -32,7 +32,12 @@ export default function ExtractScreen() {
   useFocusEffect(useCallback(() => {
     let cancelled = false;
     getDocuments()
-      .then(all => { if (!cancelled) setDocs(all.filter(d => d.pages.length > 1)); })
+      .then(all => {
+        if (cancelled) return;
+        const filtered = all.filter(d => d.pages.length > 1 && !d.pdfUri);
+        setDocs(filtered);
+        setSelectedDoc(prev => (prev && filtered.some(d => d.id === prev.id) ? prev : null));
+      })
       .catch(console.error);
     return () => { cancelled = true; };
   }, []));

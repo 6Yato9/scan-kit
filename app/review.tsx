@@ -107,9 +107,18 @@ export default function ReviewScreen() {
         const storedUri = copyPdfToStorage(pendingPdfUri, id);
         await saveDocument({ id, name: trimmedName, pages: [], pdfUri: storedUri, createdAt: now, updatedAt: now });
       } else {
-        const savedPages = await Promise.all(
-          pages.map((uri, i) => copyPageWithQuality(uri, id, i, pendingQuality))
-        );
+        // Sequential writes so a single failure surfaces the failing page and
+        // keeps peak memory bounded (Promise.all manipulator runs concurrently).
+        const savedPages: string[] = [];
+        for (let i = 0; i < pages.length; i++) {
+          try {
+            const uri = await copyPageWithQuality(pages[i], id, i, pendingQuality);
+            savedPages.push(uri);
+          } catch (err) {
+            const m = err instanceof Error ? err.message : String(err);
+            throw new Error(`Page ${i + 1}: ${m}`);
+          }
+        }
         const allOriginal = filters.every(f => f === 'original');
         await saveDocument({
           id,
@@ -128,7 +137,8 @@ export default function ReviewScreen() {
       console.error('Save failed', err);
       // Clean up any partially-written files for this document id
       try { deleteDocumentFiles(id); } catch { /* ignore secondary failure */ }
-      Alert.alert('Save Failed', 'Could not save document. Please try again.');
+      const msg = err instanceof Error ? err.message : 'Could not save document.';
+      Alert.alert('Save Failed', msg);
       setSaving(false);
     }
   }, [name, saving, pages, filters, pendingPdfUri, pendingQuality, clearPending, bumpLastSaved, router]);

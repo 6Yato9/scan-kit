@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState, ReactNode } from 'react';
-import { Alert } from 'react-native';
+import { Alert, Linking } from 'react-native';
 import DocumentScanner from 'react-native-document-scanner-plugin';
 import { PageFilter } from '@/types/document';
 import { getScanSettings } from '@/lib/storage';
@@ -51,8 +51,19 @@ export function ScanProvider({ children }: { children: ReactNode }) {
       console.error('Scan failed', err);
       const msg = err instanceof Error ? err.message : String(err);
       // Only alert on real failures, not user-cancelled scans.
-      if (!/cancel|user.+(stop|dismiss)/i.test(msg)) {
-        Alert.alert('Scan failed', 'Could not start the scanner. If this keeps happening, check that Camera permission is granted in Settings.');
+      if (/cancel|user.+(stop|dismiss)/i.test(msg)) {
+        // user-cancelled, ignore
+      } else if (/permission|denied|not.+granted/i.test(msg)) {
+        Alert.alert(
+          'Camera access needed',
+          'Scan Kit needs Camera permission to scan documents. Open Settings to enable it.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => Linking.openSettings() },
+          ],
+        );
+      } else {
+        Alert.alert('Scan failed', 'Could not start the scanner. Try again.');
       }
     } finally {
       scanningRef.current = false;

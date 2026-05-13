@@ -1,5 +1,5 @@
 // app/tools/ask-ai.tsx
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -26,8 +26,16 @@ import type { Document } from '@/types/document';
 
 // Claude vision accepts up to 20 images per message; cap to stay well within limits.
 const MAX_PAGES_PER_REQUEST = 20;
+// Hard timeout for the full request — if the network stalls (or the user
+// backgrounds the app), we don't want to leave the loading spinner forever.
+const REQUEST_TIMEOUT_MS = 60_000;
 
-async function askClaude(apiKey: string, imagesBase64: string[], question: string): Promise<string> {
+async function askClaude(
+  apiKey: string,
+  imagesBase64: string[],
+  question: string,
+  signal?: AbortSignal,
+): Promise<string> {
   const imageBlocks = imagesBase64.map(data => ({
     type: 'image' as const,
     source: { type: 'base64' as const, media_type: 'image/jpeg' as const, data },
@@ -49,6 +57,7 @@ async function askClaude(apiKey: string, imagesBase64: string[], question: strin
         },
       ],
     }),
+    signal,
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -74,11 +83,16 @@ export default function AskAiScreen() {
   const [question, setQuestion] = useState('');
   const [loading, setLoading] = useState(false);
   const [answer, setAnswer] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   useFocusEffect(
     useCallback(() => {
       getAiKey().then(setApiKey);
-      getDocuments().then(docs => setDocuments(docs.filter(d => d.pages.length > 0 && !d.pdfUri)));
+      getDocuments().then(docs => {
+        const filtered = docs.filter(d => d.pages.length > 0 && !d.pdfUri);
+        setDocuments(filtered);
+        setSelectedDoc(prev => (prev && filtered.some(d => d.id === prev.id) ? prev : null));
+      });
     }, [])
   );
 
@@ -118,6 +132,13 @@ export default function AskAiScreen() {
     if (!apiKey || !selectedDoc || !question.trim()) return;
     setLoading(true);
     setAnswer(null);
+
+    // Create a fresh AbortController for this request. The timeout will trip
+    // it if the network stalls; the Cancel button calls abortRef.current.abort().
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    const timeoutId = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+
     try {
       const pages = selectedDoc.pages.slice(0, MAX_PAGES_PER_REQUEST);
       const truncated = selectedDoc.pages.length > MAX_PAGES_PER_REQUEST;
@@ -125,6 +146,7 @@ export default function AskAiScreen() {
       // 30-60MB of base64 in memory for a high-res multi-page doc.
       const images: string[] = [];
       for (const uri of pages) {
+        if (ctrl.signal.aborted) throw new Error('cancelled');
         // Strip any cache-bust suffix.
         const sourcePath = uri.split('?')[0];
         // Downscale to ~1600px wide and re-encode at quality 0.7 — Claude's
@@ -137,18 +159,40 @@ export default function AskAiScreen() {
         const b64 = await FileSystem.readAsStringAsync(resized.uri, { encoding: 'base64' });
         images.push(b64);
       }
-      const result = await askClaude(apiKey, images, question.trim());
+      const result = await askClaude(apiKey, images, question.trim(), ctrl.signal);
       setAnswer(
         truncated
           ? `(Only the first ${MAX_PAGES_PER_REQUEST} pages were sent — the rest were skipped.)\n\n${result}`
           : result,
       );
     } catch (err: any) {
-      Alert.alert('Error', err?.message ?? 'Something went wrong. Check your API key.');
+      // Don't alert on a user-initiated cancel.
+      const name = err?.name;
+      const msg = err?.message ?? '';
+      if (name === 'AbortError' || msg === 'cancelled') {
+        // Silently swallow.
+      } else if (ctrl.signal.aborted) {
+        Alert.alert('Timed out', 'The request took too long. Check your connection and try again.');
+      } else {
+        Alert.alert('Error', msg || 'Something went wrong. Check your API key.');
+      }
     } finally {
+      clearTimeout(timeoutId);
+      if (abortRef.current === ctrl) abortRef.current = null;
       setLoading(false);
     }
   }, [apiKey, selectedDoc, question]);
+
+  const handleCancel = useCallback(() => {
+    abortRef.current?.abort();
+  }, []);
+
+  // Cancel any in-flight request when the screen unmounts.
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
 
   const borderColor = isDark ? '#2a2a2a' : '#e0e0e0';
   const inputBg = isDark ? '#1a1a1a' : '#f5f5f5';
@@ -264,6 +308,16 @@ export default function AskAiScreen() {
           )}
         </Pressable>
 
+        {loading && (
+          <Pressable
+            style={[styles.sendBtn, { backgroundColor: colors.secondary, marginTop: 8 }]}
+            onPress={handleCancel}
+          >
+            <MaterialCommunityIcons name="close" size={18} color={colors.text} />
+            <Text style={[styles.btnText, { color: colors.text }]}>Cancel</Text>
+          </Pressable>
+        )}
+
         {answer !== null && (
           <View style={[styles.answerBox, { backgroundColor: inputBg, borderColor }]}>
             <Text style={[styles.label, { color: colors.faint }]}>ANSWER</Text>
@@ -274,7 +328,8 @@ export default function AskAiScreen() {
 
       <Modal visible={pickerVisible} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setPickerVisible(false)}>
         <View style={[styles.modal, { backgroundColor: colors.bg }]}>
-          <View style={[styles.header, { paddingTop: 16 }]}>
+          {/* On iOS pageSheet, the parent already insets us; on Android we need to push past the status bar. */}
+          <View style={[styles.header, { paddingTop: Platform.OS === 'android' ? insets.top + 16 : 16 }]}>
             <Text style={[styles.title, { color: colors.text }]}>Select Document</Text>
             <Pressable onPress={() => setPickerVisible(false)} style={styles.backBtn}>
               <MaterialCommunityIcons name="close" size={24} color={colors.text} />

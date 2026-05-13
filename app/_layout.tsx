@@ -1,12 +1,15 @@
 // app/_layout.tsx
 import { Stack } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { ScanProvider } from '@/contexts/scan-context';
 import { ThemeProvider, useTheme } from '@/contexts/theme-context';
 
 function ThemedStack() {
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
   return (
+    <>
+    <StatusBar style={isDark ? 'light' : 'dark'} />
     <Stack
       screenOptions={{
         headerStyle: { backgroundColor: colors.card },
@@ -60,6 +63,7 @@ function ThemedStack() {
       <Stack.Screen name="tools/ask-ai" options={{ headerShown: false, presentation: 'card' }} />
       <Stack.Screen name="tools/extract-text" options={{ headerShown: false, presentation: 'card' }} />
     </Stack>
+    </>
   );
 }
 

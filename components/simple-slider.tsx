@@ -43,6 +43,9 @@ export function SimpleSlider({ label, value, min = -100, max = 100, onValueChang
       },
       onPanResponderMove: (_, gs) => {
         if (!state.current.measured) return;
+        // Bail when a second finger is on screen — gs.moveX is averaged across
+        // touches and produces jittery values.
+        if (gs.numberActiveTouches > 1) return;
         const { x, width, min: mn, max: mx, onChange } = state.current;
         const pct = Math.max(0, Math.min(1, (gs.moveX - x) / width));
         onChange(Math.round(mn + pct * (mx - mn)));

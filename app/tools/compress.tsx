@@ -37,7 +37,12 @@ export default function CompressScreen() {
   useFocusEffect(useCallback(() => {
     let cancelled = false;
     getDocuments()
-      .then(all => { if (!cancelled) setDocs(all.filter(d => d.pages.length > 0 && !d.pdfUri)); })
+      .then(all => {
+        if (cancelled) return;
+        const filtered = all.filter(d => d.pages.length > 0 && !d.pdfUri);
+        setDocs(filtered);
+        setSelectedDoc(prev => (prev && filtered.some(d => d.id === prev.id) ? prev : null));
+      })
       .catch(console.error);
     return () => { cancelled = true; };
   }, []));
