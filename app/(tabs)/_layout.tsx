@@ -176,7 +176,7 @@ function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
           );
         }
 
-        const color = isFocused ? colors.accent : isDark ? '#666' : '#aaa';
+        const color = isFocused ? colors.accent : colors.muted;
 
         return (
           <Pressable
@@ -191,7 +191,7 @@ function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
               size={22}
               color={color}
             />
-            <Text style={[styles.tabLabel, { color }]}>
+            <Text allowFontScaling={false} style={[styles.tabLabel, { color }]}>
               {TAB_LABELS[route.name] ?? route.name}
             </Text>
           </Pressable>

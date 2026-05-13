@@ -167,7 +167,7 @@ export default function ExtractScreen() {
                   >
                     <Image source={{ uri }} style={styles.pageThumb} resizeMode="cover" />
                     <View style={[styles.pageIndex, { backgroundColor: isSelected ? colors.accent : 'rgba(0,0,0,0.4)' }]}>
-                      <Text style={styles.pageIndexText}>{i + 1}</Text>
+                      <Text allowFontScaling={false} style={styles.pageIndexText}>{i + 1}</Text>
                     </View>
                     {isSelected && (
                       <View style={styles.checkOverlay}>
@@ -234,7 +234,7 @@ const styles = StyleSheet.create({
   pageIndex: {
     position: 'absolute',
     top: 4,
-    left: 4,
+    start: 4,
     borderRadius: 10,
     paddingHorizontal: 6,
     paddingVertical: 2,

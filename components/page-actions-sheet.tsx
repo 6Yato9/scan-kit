@@ -70,23 +70,23 @@ export function PageActionsSheet({
           <>
             <Pressable style={[styles.actionBtn, { backgroundColor: colors.actionBtnBg }]} onPress={() => rotate('ccw')}>
               <Text style={[styles.actionIcon, { color: colors.text }]}>↺</Text>
-              <Text style={[styles.actionLabel, { color: colors.subtext }]}>Rotate L</Text>
+              <Text allowFontScaling={false} style={[styles.actionLabel, { color: colors.subtext }]}>Rotate L</Text>
             </Pressable>
             <Pressable style={[styles.actionBtn, { backgroundColor: colors.actionBtnBg }]} onPress={() => rotate('cw')}>
               <Text style={[styles.actionIcon, { color: colors.text }]}>↻</Text>
-              <Text style={[styles.actionLabel, { color: colors.subtext }]}>Rotate R</Text>
+              <Text allowFontScaling={false} style={[styles.actionLabel, { color: colors.subtext }]}>Rotate R</Text>
             </Pressable>
             <Pressable style={[styles.actionBtn, { backgroundColor: colors.actionBtnBg }]} onPress={() => { onClose(); onAnnotate(); }}>
               <Text style={[styles.actionIcon, { color: colors.text }]}>✏️</Text>
-              <Text style={[styles.actionLabel, { color: colors.subtext }]}>Annotate</Text>
+              <Text allowFontScaling={false} style={[styles.actionLabel, { color: colors.subtext }]}>Annotate</Text>
             </Pressable>
             <Pressable style={[styles.actionBtn, { backgroundColor: colors.actionBtnBg }]} onPress={onShare}>
               <Text style={[styles.actionIcon, { color: colors.text }]}>↑</Text>
-              <Text style={[styles.actionLabel, { color: colors.subtext }]}>Share</Text>
+              <Text allowFontScaling={false} style={[styles.actionLabel, { color: colors.subtext }]}>Share</Text>
             </Pressable>
             <Pressable style={[styles.actionBtn, { backgroundColor: colors.dangerBg }]} onPress={onDelete}>
               <Text style={[styles.actionIcon, { color: colors.danger }]}>✕</Text>
-              <Text style={[styles.actionLabel, { color: colors.danger }]}>Delete</Text>
+              <Text allowFontScaling={false} style={[styles.actionLabel, { color: colors.danger }]}>Delete</Text>
             </Pressable>
           </>
         )}
@@ -124,7 +124,7 @@ export function PageActionsSheet({
                   style={[styles.filterPreview, { backgroundColor: colors.placeholder }, fs ? ({ filter: fs } as any) : undefined]}
                   resizeMode="cover"
                 />
-                <Text style={[styles.filterLabel, { color: filter === key ? colors.accent : colors.muted }, filter === key && styles.filterLabelActive]}>
+                <Text allowFontScaling={false} style={[styles.filterLabel, { color: filter === key ? colors.accent : colors.muted }, filter === key && styles.filterLabelActive]}>
                   {label}
                 </Text>
               </Pressable>

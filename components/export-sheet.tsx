@@ -157,7 +157,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
                   Full resolution{hasFilters ? ' · filters applied' : ''}
                 </Text>
               </View>
-              <Text style={[styles.badge, { backgroundColor: colors.accentLight, color: colors.accent }]}>HD</Text>
+              <Text allowFontScaling={false} style={[styles.badge, { backgroundColor: colors.accentLight, color: colors.accent }]}>HD</Text>
             </Pressable>
             <Pressable
               style={styles.option}
@@ -167,7 +167,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
                 <Text style={[styles.optionTitle, { color: colors.text }]}>Medium Quality</Text>
                 <Text style={[styles.optionSub, { color: colors.faint }]}>Smaller file size</Text>
               </View>
-              <Text style={[styles.badge, { backgroundColor: colors.secondary, color: colors.muted }]}>SD</Text>
+              <Text allowFontScaling={false} style={[styles.badge, { backgroundColor: colors.secondary, color: colors.muted }]}>SD</Text>
             </Pressable>
           </View>
 

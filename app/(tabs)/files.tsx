@@ -353,15 +353,15 @@ export default function FilesScreen() {
       <View style={styles.actionBar}>
         <Pressable style={[styles.actionBtn, { backgroundColor: colors.card }]} onPress={handleImportImages}>
           <Ionicons name="images-outline" size={16} color={colors.accent} />
-          <Text style={[styles.actionBtnText, { color: colors.text }]}>Import Images</Text>
+          <Text allowFontScaling={false} style={[styles.actionBtnText, { color: colors.text }]}>Import Images</Text>
         </Pressable>
         <Pressable style={[styles.actionBtn, { backgroundColor: colors.card }]} onPress={handleImportFiles}>
           <Ionicons name="cloud-download-outline" size={16} color={colors.accent} />
-          <Text style={[styles.actionBtnText, { color: colors.text }]}>Import Files</Text>
+          <Text allowFontScaling={false} style={[styles.actionBtnText, { color: colors.text }]}>Import Files</Text>
         </Pressable>
         <Pressable style={[styles.actionBtn, { backgroundColor: colors.card }]} onPress={handleNewFolder}>
           <Ionicons name="folder-open-outline" size={16} color={colors.accent} />
-          <Text style={[styles.actionBtnText, { color: colors.text }]}>New Folder</Text>
+          <Text allowFontScaling={false} style={[styles.actionBtnText, { color: colors.text }]}>New Folder</Text>
         </Pressable>
       </View>
 

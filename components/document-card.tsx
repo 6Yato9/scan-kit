@@ -25,7 +25,7 @@ export function DocumentCard({ document, onPress, onLongPress, isSelected, isMul
       {document.pdfUri ? (
         <View style={[styles.thumbnail, styles.pdfThumb, { backgroundColor: colors.placeholder }]}>
           <Ionicons name="document-text" size={32} color={colors.muted} />
-          <Text style={[styles.pdfLabel, { color: colors.muted }]}>PDF</Text>
+          <Text allowFontScaling={false} style={[styles.pdfLabel, { color: colors.muted }]}>PDF</Text>
         </View>
       ) : document.pages[0] ? (
         <Image source={{ uri: `${document.pages[0]}?v=${document.updatedAt}` }} style={styles.thumbnail} />
@@ -40,7 +40,7 @@ export function DocumentCard({ document, onPress, onLongPress, isSelected, isMul
       </View>
       {isMultiSelectMode && (
         <View style={[styles.checkbox, isSelected && { backgroundColor: colors.accent, borderColor: colors.accent }]}>
-          {isSelected && <Text style={styles.checkmark}>✓</Text>}
+          {isSelected && <Text allowFontScaling={false} style={styles.checkmark}>✓</Text>}
         </View>
       )}
     </Pressable>
@@ -68,7 +68,7 @@ const styles = StyleSheet.create({
   checkbox: {
     position: 'absolute',
     top: 8,
-    right: 8,
+    end: 8,
     width: 24,
     height: 24,
     borderRadius: 12,

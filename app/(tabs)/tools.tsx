@@ -31,7 +31,7 @@ function ToolItem({ tool }: { tool: Tool }) {
         />
         {tool.soon && (
           <View style={styles.soonBadge}>
-            <Text style={styles.soonText}>Soon</Text>
+            <Text allowFontScaling={false} style={styles.soonText}>Soon</Text>
           </View>
         )}
       </View>
@@ -298,7 +298,7 @@ const styles = StyleSheet.create({
   soonBadge: {
     position: 'absolute',
     top: -5,
-    right: -5,
+    end: -5,
     backgroundColor: '#FFA726',
     borderRadius: 5,
     paddingHorizontal: 4,

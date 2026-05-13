@@ -5,6 +5,8 @@ import {
   Alert,
   FlatList,
   Image,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -151,7 +153,10 @@ export default function LongImageScreen() {
   };
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.bg }]}>
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      style={[styles.container, { backgroundColor: colors.bg }]}
+    >
       {/* Header */}
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
         <Pressable onPress={() => router.back()} hitSlop={12}>
@@ -256,7 +261,7 @@ export default function LongImageScreen() {
           )}
         </>
       )}
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 

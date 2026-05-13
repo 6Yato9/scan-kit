@@ -1,8 +1,15 @@
-import { createContext, useCallback, useContext, useMemo, useRef, useState, ReactNode } from 'react';
-import { Alert, Linking } from 'react-native';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, ReactNode } from 'react';
+import { Alert, AppState, AppStateStatus, Linking } from 'react-native';
 import DocumentScanner from 'react-native-document-scanner-plugin';
+import { File } from 'expo-file-system';
 import { PageFilter } from '@/types/document';
-import { getScanSettings } from '@/lib/storage';
+import {
+  clearPendingState,
+  getPendingState,
+  getScanSettings,
+  setPendingState,
+  type PendingState,
+} from '@/lib/storage';
 
 type ScanContextType = {
   pendingPages: string[];
@@ -31,6 +38,83 @@ export function ScanProvider({ children }: { children: ReactNode }) {
   const [reviewVisible, setReviewVisible] = useState(false);
   const [lastSaved, setLastSaved] = useState(0);
   const scanningRef = useRef(false);
+
+  // Track latest state for the AppState listener so it never sees stale values.
+  const latestRef = useRef<PendingState>({
+    pages: [],
+    pdfUri: null,
+    quality: 0.9,
+    defaultFilter: 'original',
+    reviewVisible: false,
+  });
+  useEffect(() => {
+    latestRef.current = {
+      pages: pendingPages,
+      pdfUri: pendingPdfUri,
+      quality: pendingQuality,
+      defaultFilter: pendingDefaultFilter,
+      reviewVisible,
+    };
+  }, [pendingPages, pendingPdfUri, pendingQuality, pendingDefaultFilter, reviewVisible]);
+
+  // Restore a pending review on mount if files are still present.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const saved = await getPendingState();
+        if (cancelled || !saved || !saved.reviewVisible) return;
+        const candidates = [...saved.pages, ...(saved.pdfUri ? [saved.pdfUri] : [])];
+        const anyExists = candidates.some(uri => {
+          try {
+            return new File(uri).exists;
+          } catch {
+            return false;
+          }
+        });
+        if (!anyExists) {
+          try { await clearPendingState(); } catch (err) { console.warn('clearPendingState failed', err); }
+          return;
+        }
+        setPendingPages(saved.pages);
+        setPendingPdfUri(saved.pdfUri);
+        setPendingQuality(saved.quality);
+        setPendingDefaultFilter(saved.defaultFilter);
+        setReviewVisible(true);
+      } catch (err) {
+        console.warn('Failed to restore pending review state', err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Persist pending review state on background/inactive so iOS killing JS
+  // doesn't silently drop in-progress scans.
+  useEffect(() => {
+    const onChange = (next: AppStateStatus) => {
+      if (next !== 'background' && next !== 'inactive') return;
+      const s = latestRef.current;
+      (async () => {
+        try {
+          if (s.reviewVisible) {
+            await setPendingState({
+              pages: s.pages,
+              pdfUri: s.pdfUri,
+              quality: s.quality,
+              defaultFilter: s.defaultFilter,
+              reviewVisible: true,
+            });
+          } else {
+            await clearPendingState();
+          }
+        } catch (err) {
+          console.warn('Failed to persist pending review state', err);
+        }
+      })();
+    };
+    const sub = AppState.addEventListener('change', onChange);
+    return () => sub.remove();
+  }, []);
 
   const triggerScan = useCallback(async () => {
     if (scanningRef.current) return;
@@ -100,6 +184,7 @@ export function ScanProvider({ children }: { children: ReactNode }) {
     setPendingPages([]);
     setPendingPdfUri(null);
     setReviewVisible(false);
+    clearPendingState().catch(err => console.warn('clearPendingState failed', err));
   }, []);
 
   const bumpLastSaved = useCallback(() => setLastSaved(Date.now()), []);

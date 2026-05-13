@@ -200,7 +200,10 @@ export default function AskAiScreen() {
   // ── Setup screen (no API key) ─────────────────────────────────────────────
   if (!apiKey) {
     return (
-      <View style={[styles.container, { backgroundColor: colors.bg }]}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={[styles.container, { backgroundColor: colors.bg }]}
+      >
         <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
           <Pressable onPress={() => router.back()} style={styles.backBtn}>
             <MaterialCommunityIcons name="arrow-left" size={24} color={colors.text} />
@@ -234,7 +237,7 @@ export default function AskAiScreen() {
             <Text style={styles.btnText}>{savingKey ? 'Saving…' : 'Save Key'}</Text>
           </Pressable>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     );
   }
 

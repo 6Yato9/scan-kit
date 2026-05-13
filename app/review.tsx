@@ -5,6 +5,8 @@ import {
   Alert,
   FlatList,
   Image,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -262,7 +264,10 @@ export default function ReviewScreen() {
   // PDF import mode: simple preview, title editable, no filters or actions
   if (pendingPdfUri) {
     return (
-      <View style={[styles.container, { backgroundColor: colors.bg }]}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={[styles.container, { backgroundColor: colors.bg }]}
+      >
         <View style={[styles.topBar, { paddingTop: insets.top + 8, borderBottomColor: colors.border }]}>
           <Pressable onPress={handleDiscard} hitSlop={12} style={styles.closeBtn}>
             <Text style={[styles.closeBtnText, { color: colors.text }]}>✕</Text>
@@ -289,12 +294,15 @@ export default function ReviewScreen() {
           <Text style={[styles.pdfLabel, { color: colors.muted }]}>PDF Document</Text>
           <Text style={[styles.pdfSub, { color: colors.muted }]}>Tap Done to save</Text>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     );
   }
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.bg }]}>
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      style={[styles.container, { backgroundColor: colors.bg }]}
+    >
       {/* ① Top bar */}
       <View style={[styles.topBar, { paddingTop: insets.top + 8, borderBottomColor: colors.border }]}>
         <Pressable onPress={handleDiscard} hitSlop={12} style={styles.closeBtn}>
@@ -335,7 +343,7 @@ export default function ReviewScreen() {
         />
         {/* Page counter */}
         <View style={styles.pageCounter}>
-          <Text style={styles.pageCounterText}>{focusedIndex + 1} / {pages.length}</Text>
+          <Text allowFontScaling={false} style={styles.pageCounterText}>{focusedIndex + 1} / {pages.length}</Text>
         </View>
       </View>
 
@@ -373,7 +381,7 @@ export default function ReviewScreen() {
                     resizeMode="cover"
                   />
                 </View>
-                <Text style={[styles.filterItemLabel, { color: isSelected ? colors.accent : colors.muted }]}>
+                <Text allowFontScaling={false} style={[styles.filterItemLabel, { color: isSelected ? colors.accent : colors.muted }]}>
                   {f.label}
                 </Text>
               </Pressable>
@@ -387,7 +395,7 @@ export default function ReviewScreen() {
         {/* Retake */}
         <Pressable style={styles.actionBtn} onPress={handleRetake}>
           <Text style={styles.actionIcon}>↩</Text>
-          <Text style={[styles.actionLabel, { color: colors.muted }]}>Retake</Text>
+          <Text allowFontScaling={false} style={[styles.actionLabel, { color: colors.muted }]}>Retake</Text>
         </Pressable>
 
         {/* Rotate */}
@@ -395,28 +403,28 @@ export default function ReviewScreen() {
           <Text style={[styles.actionIcon, rotating && { opacity: 0.4 }]}>
             {rotating ? '⏳' : '↻'}
           </Text>
-          <Text style={[styles.actionLabel, { color: colors.muted }]}>Rotate</Text>
+          <Text allowFontScaling={false} style={[styles.actionLabel, { color: colors.muted }]}>Rotate</Text>
         </Pressable>
 
         {/* Crop (re-scan this page) */}
         <Pressable style={styles.actionBtn} onPress={handleCrop}>
           <Text style={styles.actionIcon}>✂</Text>
-          <Text style={[styles.actionLabel, { color: colors.muted }]}>Crop</Text>
+          <Text allowFontScaling={false} style={[styles.actionLabel, { color: colors.muted }]}>Crop</Text>
         </Pressable>
 
         {/* Delete */}
         <Pressable style={styles.actionBtn} onPress={handleDeletePage}>
           <Text style={styles.actionIcon}>🗑</Text>
-          <Text style={[styles.actionLabel, { color: colors.muted }]}>Delete</Text>
+          <Text allowFontScaling={false} style={[styles.actionLabel, { color: colors.muted }]}>Delete</Text>
         </Pressable>
 
         {/* Add Page */}
         <Pressable style={styles.actionBtn} onPress={handleAddPage}>
           <Text style={styles.actionIcon}>📷</Text>
-          <Text style={[styles.actionLabel, { color: colors.muted }]}>Add Page</Text>
+          <Text allowFontScaling={false} style={[styles.actionLabel, { color: colors.muted }]}>Add Page</Text>
         </Pressable>
       </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -466,7 +474,7 @@ const styles = StyleSheet.create({
   pageCounter: {
     position: 'absolute',
     bottom: 12,
-    right: 12,
+    end: 12,
     backgroundColor: 'rgba(0,0,0,0.55)',
     borderRadius: 10,
     paddingHorizontal: 10,
@@ -485,7 +493,7 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '700',
     letterSpacing: 0.6,
-    marginLeft: 14,
+    marginStart: 14,
     marginBottom: 6,
   },
   filterItem: {

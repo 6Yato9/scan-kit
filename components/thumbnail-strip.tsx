@@ -81,7 +81,7 @@ export function ThumbnailStrip({
         ListFooterComponent={
           <Pressable style={[styles.addBtn, { borderColor: colors.border }]} onPress={onAddPress}>
             <Text style={[styles.addIcon, { color: colors.muted }]}>＋</Text>
-            <Text style={[styles.addLabel, { color: colors.muted }]}>Add</Text>
+            <Text allowFontScaling={false} style={[styles.addLabel, { color: colors.muted }]}>Add</Text>
           </Pressable>
         }
       />

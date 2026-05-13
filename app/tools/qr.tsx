@@ -255,7 +255,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   actionBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 },
-  backBtn: { position: 'absolute', left: 16, zIndex: 10, padding: 8 },
+  backBtn: { position: 'absolute', start: 16, zIndex: 10, padding: 8 },
   permTitle: { fontSize: 20, fontWeight: '700', marginTop: 16, marginBottom: 8, textAlign: 'center' },
   permSub: { fontSize: 14, textAlign: 'center', lineHeight: 20, marginBottom: 24 },
   permBtn: { paddingHorizontal: 28, paddingVertical: 14, borderRadius: 14 },
