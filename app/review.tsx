@@ -139,8 +139,10 @@ export default function ReviewScreen() {
     setTimeout(triggerScan, 350);
   }, [clearPending, router, triggerScan]);
 
+  const rotatingRef = useRef(false);
   const handleRotate = useCallback(async () => {
-    if (rotating) return;
+    if (rotatingRef.current) return;
+    rotatingRef.current = true;
     const targetIndex = focusedIndex;
     setRotating(true);
     try {
@@ -157,11 +159,15 @@ export default function ReviewScreen() {
     } catch (err) {
       console.error('Rotate failed', err);
     } finally {
+      rotatingRef.current = false;
       setRotating(false);
     }
-  }, [rotating, pages, focusedIndex, pendingQuality]);
+  }, [pages, focusedIndex, pendingQuality]);
 
+  const croppingRef = useRef(false);
   const handleCrop = useCallback(async () => {
+    if (croppingRef.current) return;
+    croppingRef.current = true;
     const targetIndex = focusedIndex;
     try {
       const settings = await getScanSettings();
@@ -178,6 +184,8 @@ export default function ReviewScreen() {
       });
     } catch (err) {
       console.error('Crop failed', err);
+    } finally {
+      croppingRef.current = false;
     }
   }, [focusedIndex, pendingQuality]);
 
@@ -196,7 +204,10 @@ export default function ReviewScreen() {
     }, 50);
   }, [pages.length, focusedIndex, clearPending, router]);
 
+  const addingPageRef = useRef(false);
   const handleAddPage = useCallback(async () => {
+    if (addingPageRef.current) return;
+    addingPageRef.current = true;
     try {
       const settings = await getScanSettings();
       const { scannedImages } = await DocumentScanner.scanDocument({
@@ -213,6 +224,8 @@ export default function ReviewScreen() {
       }, 100);
     } catch (err) {
       console.error('Add page failed', err);
+    } finally {
+      addingPageRef.current = false;
     }
   }, [pages.length, pendingDefaultFilter, pendingQuality]);
 
