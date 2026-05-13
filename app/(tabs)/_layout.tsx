@@ -103,6 +103,16 @@ function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
     }
   }, [state.index, moveSelectorTo]);
 
+  // Clear the fade timer on unmount so it doesn't fire on unmounted Animated.Values.
+  useEffect(() => {
+    return () => {
+      if (fadeTimer.current) {
+        clearTimeout(fadeTimer.current);
+        fadeTimer.current = null;
+      }
+    };
+  }, []);
+
   return (
     <View
       onLayout={onBarLayout}

@@ -39,22 +39,45 @@ export default function EraseMarksScreen() {
 
   const handleApply = useCallback(async () => {
     if (!selectedDoc) return;
-    setApplying(true);
-    setDone(false);
-    try {
-      const pageCount = selectedDoc.pages.length;
-      await updateDocument({
-        ...selectedDoc,
-        filters: Array.from({ length: pageCount }, () => ERASE_FILTER),
-        adjustments: Array.from({ length: pageCount }, () => ({ ...ERASE_ADJUSTMENT })),
-        updatedAt: Date.now(),
-      });
-      setDone(true);
-    } catch {
-      Alert.alert('Error', 'Failed to apply. Please try again.');
-    } finally {
-      setApplying(false);
+
+    // Erase-marks replaces existing filters AND adjustments. Warn the user if
+    // they had any custom values so they don't silently lose work.
+    const hasCustomFilter = selectedDoc.filters?.some(f => f && f !== 'original');
+    const hasCustomAdj = selectedDoc.adjustments?.some(
+      a => a && (a.brightness !== 0 || a.contrast !== 0 || a.saturation !== 0),
+    );
+
+    const run = async () => {
+      setApplying(true);
+      setDone(false);
+      try {
+        const pageCount = selectedDoc.pages.length;
+        await updateDocument({
+          ...selectedDoc,
+          filters: Array.from({ length: pageCount }, () => ERASE_FILTER),
+          adjustments: Array.from({ length: pageCount }, () => ({ ...ERASE_ADJUSTMENT })),
+          updatedAt: Date.now(),
+        });
+        setDone(true);
+      } catch {
+        Alert.alert('Error', 'Failed to apply. Please try again.');
+      } finally {
+        setApplying(false);
+      }
+    };
+
+    if (hasCustomFilter || hasCustomAdj) {
+      Alert.alert(
+        'Overwrite custom edits?',
+        'This document has filter or adjustment edits that will be replaced. Continue?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Overwrite', style: 'destructive', onPress: () => { run(); } },
+        ],
+      );
+      return;
     }
+    await run();
   }, [selectedDoc]);
 
   const borderColor = isDark ? '#2a2a2a' : '#e0e0e0';

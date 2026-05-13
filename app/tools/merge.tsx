@@ -1,5 +1,5 @@
 // app/tools/merge.tsx
-import { useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import * as Crypto from 'expo-crypto';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/theme-context';
 import { getDocuments, saveDocument } from '@/lib/storage';
@@ -30,11 +30,13 @@ export default function MergeScreen() {
   const [name, setName] = useState(autoName(new Date(), 'Merged'));
   const [merging, setMerging] = useState(false);
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
+    let cancelled = false;
     getDocuments()
-      .then(all => setDocs(all.filter(d => d.pages.length > 0)))
+      .then(all => { if (!cancelled) setDocs(all.filter(d => d.pages.length > 0 && !d.pdfUri)); })
       .catch(console.error);
-  }, []);
+    return () => { cancelled = true; };
+  }, []));
 
   const toggle = (id: string) => {
     setSelected(prev =>

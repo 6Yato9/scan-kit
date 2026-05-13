@@ -33,7 +33,9 @@ export default function ScanSettingsScreen() {
   });
 
   useFocusEffect(useCallback(() => {
-    getScanSettings().then(setSettings);
+    let cancelled = false;
+    getScanSettings().then(s => { if (!cancelled) setSettings(s); });
+    return () => { cancelled = true; };
   }, []));
 
   const update = async (patch: Partial<ScanSettings>) => {

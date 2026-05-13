@@ -1,6 +1,6 @@
 // app/viewer.tsx
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Dimensions,
@@ -76,17 +76,25 @@ export default function ViewerScreen() {
     await updateDocument(updated);
   }, []);
 
+  const rotatingRef = useRef(false);
   const handleRotate = useCallback(async (direction: 'cw' | 'ccw') => {
     if (!document) return;
-    const newUri = await rotatePage(
-      document.pages[currentPage],
-      direction,
-      document.id,
-      currentPage
-    );
-    const newPages = [...document.pages];
-    newPages[currentPage] = newUri;
-    await saveDoc({ ...document, pages: newPages, updatedAt: Date.now() });
+    if (rotatingRef.current) return;
+    rotatingRef.current = true;
+    try {
+      // Use the canonical doc-page path (strip any `?v=` cache-bust suffix the
+      // viewer may have applied to the Image URI).
+      const sourceUri = document.pages[currentPage].split('?')[0];
+      const newUri = await rotatePage(sourceUri, direction, document.id, currentPage);
+      const newPages = [...document.pages];
+      newPages[currentPage] = newUri;
+      await saveDoc({ ...document, pages: newPages, updatedAt: Date.now() });
+    } catch (err) {
+      console.error('Rotate failed', err);
+      Alert.alert('Rotate failed', 'Could not rotate this page.');
+    } finally {
+      rotatingRef.current = false;
+    }
   }, [document, currentPage, saveDoc]);
 
   const handleFilter = useCallback(async (filter: PageFilter) => {
@@ -104,6 +112,18 @@ export default function ViewerScreen() {
   }, [document, currentPage, saveDoc]);
 
   const adjustPersistTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Make sure a pending adjust write doesn't try to fire after the viewer
+  // unmounts (e.g. user closes the viewer within 250 ms of releasing the slider).
+  useEffect(() => {
+    return () => {
+      if (adjustPersistTimer.current) {
+        clearTimeout(adjustPersistTimer.current);
+        adjustPersistTimer.current = null;
+      }
+    };
+  }, []);
+
   const handleAdjust = useCallback((adj: PageAdjustment) => {
     if (!document) return;
     const base = document.adjustments ?? document.pages.map(() => ({ brightness: 0, contrast: 0, saturation: 0 }));
@@ -145,18 +165,30 @@ export default function ViewerScreen() {
       );
       return;
     }
-    deleteSinglePage(document.id, currentPage, document.pages.length);
+    try {
+      deleteSinglePage(document.id, currentPage, document.pages.length);
+    } catch (err) {
+      console.error('deleteSinglePage failed', err);
+      Alert.alert('Delete failed', 'Could not delete this page. Please try again.');
+      return;
+    }
     const newPages = document.pages.filter((_, i) => i !== currentPage);
     const newFilters = document.filters?.filter((_, i) => i !== currentPage);
     const newAdjustments = document.adjustments?.filter((_, i) => i !== currentPage);
     const safePage = Math.min(currentPage, newPages.length - 1);
-    await saveDoc({
-      ...document,
-      pages: newPages,
-      filters: newFilters?.length ? newFilters : undefined,
-      adjustments: newAdjustments?.length ? newAdjustments : undefined,
-      updatedAt: Date.now(),
-    });
+    try {
+      await saveDoc({
+        ...document,
+        pages: newPages,
+        filters: newFilters?.length ? newFilters : undefined,
+        adjustments: newAdjustments?.length ? newAdjustments : undefined,
+        updatedAt: Date.now(),
+      });
+    } catch (err) {
+      console.error('saveDoc failed after deleteSinglePage', err);
+      Alert.alert('Save failed', 'The page was removed but the document record could not be updated. Re-open the document to sync.');
+      return;
+    }
     setCurrentPage(safePage);
     setActionsVisible(false);
   }, [document, currentPage, saveDoc, router]);
@@ -164,14 +196,26 @@ export default function ViewerScreen() {
   const handleSharePage = useCallback(async () => {
     if (!document) return;
     setActionsVisible(false);
-    await Sharing.shareAsync(document.pages[currentPage], {
-      mimeType: 'image/jpeg',
-      dialogTitle: `${document.name} — Page ${currentPage + 1}`,
-    });
+    try {
+      // Strip any cache-bust suffix the viewer might have applied.
+      const uri = document.pages[currentPage].split('?')[0];
+      await Sharing.shareAsync(uri, {
+        mimeType: 'image/jpeg',
+        dialogTitle: `${document.name} — Page ${currentPage + 1}`,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!/cancel/i.test(msg)) {
+        Alert.alert('Share failed', msg);
+      }
+    }
   }, [document, currentPage]);
 
+  const addingMoreRef = useRef(false);
   const handleAddMore = useCallback(async () => {
     if (!document) return;
+    if (addingMoreRef.current) return;
+    addingMoreRef.current = true;
     try {
       const settings = await getScanSettings();
       const { scannedImages } = await DocumentScanner.scanDocument({
@@ -187,6 +231,10 @@ export default function ViewerScreen() {
       });
     } catch (err) {
       console.error('Add pages failed', err);
+      const msg = err instanceof Error ? err.message : 'Could not add pages.';
+      Alert.alert('Add pages failed', msg);
+    } finally {
+      addingMoreRef.current = false;
     }
   }, [document, saveDoc]);
 
@@ -217,10 +265,17 @@ export default function ViewerScreen() {
 
   const handleSharePdf = useCallback(async () => {
     if (!document?.pdfUri) return;
-    await Sharing.shareAsync(document.pdfUri, {
-      mimeType: 'application/pdf',
-      dialogTitle: document.name,
-    });
+    try {
+      await Sharing.shareAsync(document.pdfUri, {
+        mimeType: 'application/pdf',
+        dialogTitle: document.name,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!/cancel/i.test(msg)) {
+        Alert.alert('Share failed', msg);
+      }
+    }
   }, [document]);
 
   const handleAnnotate = useCallback(() => {

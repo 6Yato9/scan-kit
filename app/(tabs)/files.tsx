@@ -28,6 +28,7 @@ import {
   saveSortPreference,
   getFolders,
   saveFolder,
+  getScanSettings,
   SortKey,
 } from '@/lib/storage';
 import {
@@ -87,7 +88,9 @@ export default function FilesScreen() {
     setDocuments(docs);
     setSortKey(sort);
     setFolders(fldrs);
-    setSelectedIds(new Set());
+    // Don't clear selectedIds here — the user might be mid-multi-select and just
+    // switched tabs / came back. Selection is only cleared on explicit Cancel or
+    // after a bulk action.
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
@@ -106,10 +109,13 @@ export default function FilesScreen() {
 
   const handleImportImages = useCallback(async () => {
     try {
+      // Honor the user's Scan Quality preference when importing from the library.
+      const settings = await getScanSettings();
+      const qualityMap = { low: 0.5, medium: 0.75, high: 0.9 };
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
         allowsMultipleSelection: true,
-        quality: 1,
+        quality: qualityMap[settings.quality],
       });
       if (result.canceled || !result.assets.length) return;
       await openImport(result.assets.map(a => a.uri));

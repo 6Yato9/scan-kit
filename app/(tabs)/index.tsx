@@ -22,6 +22,7 @@ import {
   saveDocument,
   getSortPreference,
   saveSortPreference,
+  getFolders,
   SortKey,
 } from '@/lib/storage';
 import { deleteDocumentFiles, copyDocumentFiles, appendPages } from '@/lib/files';
@@ -30,6 +31,7 @@ import { useTheme } from '@/contexts/theme-context';
 import { DocActionsSheet } from '@/components/doc-actions-sheet';
 import { RenameSheet } from '@/components/rename-sheet';
 import { MergeSheet } from '@/components/merge-sheet';
+import { MoveFolderSheet } from '@/components/move-folder-sheet';
 import { SortSheet } from '@/components/sort-sheet';
 
 function sortDocuments(docs: Document[], key: SortKey): Document[] {
@@ -51,15 +53,18 @@ export default function HomeScreen() {
   const [docActionsTarget, setDocActionsTarget] = useState<Document | null>(null);
   const [renameTarget, setRenameTarget] = useState<Document | null>(null);
   const [mergeTarget, setMergeTarget] = useState<Document | null>(null);
+  const [moveFolderTarget, setMoveFolderTarget] = useState<Document | null>(null);
+  const [folders, setFolders] = useState<string[]>([]);
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { lastSaved } = useScan();
   const { colors } = useTheme();
 
   const load = useCallback(async () => {
-    const [docs, sort] = await Promise.all([getDocuments(), getSortPreference()]);
+    const [docs, sort, fldrs] = await Promise.all([getDocuments(), getSortPreference(), getFolders()]);
     setDocuments(docs);
     setSortKey(sort);
+    setFolders(fldrs);
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
@@ -162,6 +167,13 @@ export default function HomeScreen() {
     await saveSortPreference(key);
   }, []);
 
+  const handleMoveToFolder = useCallback(async (doc: Document, folder: string | null) => {
+    const updated: Document = { ...doc, folder: folder ?? undefined, updatedAt: Date.now() };
+    await updateDocument(updated);
+    setDocuments(prev => prev.map(d => (d.id === doc.id ? updated : d)));
+    setMoveFolderTarget(null);
+  }, []);
+
   return (
     <View style={[styles.container, { paddingTop: insets.top, backgroundColor: colors.bg }]}>
       <View style={styles.header}>
@@ -238,9 +250,8 @@ export default function HomeScreen() {
         onRename={doc => { setDocActionsTarget(null); setRenameTarget(doc); }}
         onDuplicate={doc => { setDocActionsTarget(null); handleDuplicate(doc).catch(console.error); }}
         onMerge={doc => { setDocActionsTarget(null); setMergeTarget(doc); }}
-        onSelect={() => setDocActionsTarget(null)}
         onDelete={doc => { setDocActionsTarget(null); handleDelete(doc); }}
-        onMoveToFolder={() => setDocActionsTarget(null)}
+        onMoveToFolder={doc => { setDocActionsTarget(null); setMoveFolderTarget(doc); }}
         onClose={() => setDocActionsTarget(null)}
       />
 
@@ -258,6 +269,14 @@ export default function HomeScreen() {
         allDocs={documents}
         onMerge={handleMerge}
         onClose={() => setMergeTarget(null)}
+      />
+
+      <MoveFolderSheet
+        visible={moveFolderTarget !== null}
+        document={moveFolderTarget}
+        folders={folders}
+        onMove={handleMoveToFolder}
+        onClose={() => setMoveFolderTarget(null)}
       />
     </View>
   );

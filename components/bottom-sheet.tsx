@@ -19,12 +19,16 @@ type Props = {
 
 export function BottomSheet({ visible, onClose, children, transparentBackdrop }: Props) {
   const { colors } = useTheme();
+  // RN Modal warns + breaks Android hardware back when onRequestClose is undefined.
+  // Pass a no-op when the sheet is intentionally non-dismissable (e.g. while a
+  // long-running export is in flight) so the warning + back-button breakage go away.
+  const noop = () => {};
   return (
     <Modal
       transparent
       visible={visible}
       animationType="slide"
-      onRequestClose={onClose}
+      onRequestClose={onClose ?? noop}
     >
       <KeyboardAvoidingView
         style={styles.container}

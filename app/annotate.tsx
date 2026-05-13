@@ -198,32 +198,43 @@ export default function AnnotateScreen() {
     setSaving(true);
     try {
       const b64 = dataUrl.replace(/^data:image\/jpeg;base64,/, '');
-      const pageUri = doc.pages[pageIndex];
+      // Strip cache-bust suffix the viewer may have applied to URIs.
+      const pageUri = doc.pages[pageIndex].split('?')[0];
       await FileSystem.writeAsStringAsync(pageUri, b64, { encoding: 'base64' });
-      // Touch updatedAt so viewer reloads
+      // Touch updatedAt so viewer reloads & Image cache busts.
       await updateDocument({ ...doc, updatedAt: Date.now() });
       router.back();
-    } catch {
-      Alert.alert('Error', 'Could not save annotation.');
+    } catch (err) {
+      console.error('Annotate save failed', err);
+      const msg = err instanceof Error ? err.message : 'Could not save annotation.';
+      Alert.alert('Error', msg);
     } finally {
       setSaving(false);
     }
   };
 
-  const inject = (js: string) => webRef.current?.injectJavaScript(`${js}; true;`);
+  const inject = (js: string) => {
+    if (!webRef.current || !html) return;
+    webRef.current.injectJavaScript(`${js}; true;`);
+  };
+
+  const ready = html !== null;
 
   const selectColor = (hex: string) => {
+    if (!ready) return;
     setPenColor(hex);
     setEraser(false);
     inject(`setColor('${hex}')`);
   };
 
   const selectSize = (size: number) => {
+    if (!ready) return;
     setPenSize(size);
     inject(`setWidth(${size})`);
   };
 
   const toggleEraser = () => {
+    if (!ready) return;
     const next = !eraser;
     setEraser(next);
     if (next) {
@@ -243,12 +254,12 @@ export default function AnnotateScreen() {
         <Text style={styles.topTitle}>Annotate</Text>
         <Pressable
           onPress={() => inject('getResult()')}
-          disabled={saving}
+          disabled={saving || !ready}
           hitSlop={12}
         >
           {saving
             ? <ActivityIndicator color="#fff" />
-            : <Text style={[styles.topBtn, { color: colors.accent }]}>Done</Text>
+            : <Text style={[styles.topBtn, { color: ready ? colors.accent : colors.muted, opacity: ready ? 1 : 0.4 }]}>Done</Text>
           }
         </Pressable>
       </View>

@@ -33,6 +33,8 @@ export default function ExtractTextScreen() {
   const [text, setText] = useState<string | null>(null);
   const busyRef = useRef(false);
 
+  const ocrAvailable = TextRecognition !== null;
+
   const runScanAndOcr = async () => {
     if (busyRef.current) return;
     if (!TextRecognition) {
@@ -54,8 +56,9 @@ export default function ExtractTextScreen() {
       if (!scannedImages?.length) return;
       const result = await TextRecognition.recognize(scannedImages[0]);
       setText(result.text?.trim() || '');
-    } catch {
-      Alert.alert('Failed', 'Could not extract text. Please try again.');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      Alert.alert('Failed', msg || 'Could not extract text. Please try again.');
     } finally {
       busyRef.current = false;
       setBusy(false);
@@ -96,12 +99,14 @@ export default function ExtractTextScreen() {
           </View>
           <Text style={[styles.heading, { color: colors.text }]}>Quick Text Scan</Text>
           <Text style={[styles.sub, { color: colors.faint }]}>
-            Point the camera at any page. The text is recognised automatically and ready to copy or share.
+            {ocrAvailable
+              ? 'Point the camera at any page. The text is recognised automatically and ready to copy or share.'
+              : 'OCR is not available in this build. Rebuild your dev client after installing @react-native-ml-kit/text-recognition.'}
           </Text>
           <Pressable
-            style={[styles.btn, { opacity: busy ? 0.6 : 1 }]}
+            style={[styles.btn, { opacity: busy || !ocrAvailable ? 0.6 : 1 }]}
             onPress={runScanAndOcr}
-            disabled={busy}
+            disabled={busy || !ocrAvailable}
           >
             {busy ? (
               <ActivityIndicator color="#fff" />

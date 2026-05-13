@@ -35,10 +35,6 @@ export function ReorderModal({ visible, pages, filters, onConfirm, onCancel }: P
     setItems(pages.map((uri, index) => ({ index, uri, filter: filters?.[index] })));
   }, [visible, pages, filters]);
 
-  function handleShow() {
-    setItems(pages.map((uri, index) => ({ index, uri, filter: filters?.[index] })));
-  }
-
   function handleConfirm() {
     onConfirm(items.map(item => item.index));
   }
@@ -69,7 +65,6 @@ export function ReorderModal({ visible, pages, filters, onConfirm, onCancel }: P
       visible={visible}
       animationType="slide"
       presentationStyle="pageSheet"
-      onShow={handleShow}
       onRequestClose={onCancel}
     >
       <SafeAreaView style={[styles.container, { backgroundColor: colors.card }]}>

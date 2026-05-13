@@ -43,8 +43,12 @@ export function ThumbnailStrip({
     }
   }, [currentPage, pages.length]);
 
+  // Width 48 + gap 6 in content style = 54 px stride. Providing getItemLayout
+  // makes scrollToIndex deterministic even before items have laid out.
+  const ITEM_STRIDE = 54;
+
   return (
-    <View style={[styles.container, { paddingBottom: bottomInset + 8 }]}>
+    <View style={[styles.container, { paddingBottom: bottomInset + 8, backgroundColor: colors.card }]}>
       <FlatList
         ref={listRef}
         data={pages}
@@ -52,7 +56,13 @@ export function ThumbnailStrip({
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.content}
-        onScrollToIndexFailed={() => {}}
+        getItemLayout={(_, i) => ({ length: ITEM_STRIDE, offset: ITEM_STRIDE * i, index: i })}
+        onScrollToIndexFailed={({ index }) => {
+          // Layout race: retry after a tick.
+          setTimeout(() => {
+            listRef.current?.scrollToOffset({ offset: ITEM_STRIDE * index, animated: false });
+          }, 50);
+        }}
         renderItem={({ item, index }) => {
           const fStyle = combinedFilterStyle(filters?.[index], adjustments?.[index]);
           return (
@@ -69,9 +79,9 @@ export function ThumbnailStrip({
           );
         }}
         ListFooterComponent={
-          <Pressable style={styles.addBtn} onPress={onAddPress}>
-            <Text style={styles.addIcon}>＋</Text>
-            <Text style={styles.addLabel}>Add</Text>
+          <Pressable style={[styles.addBtn, { borderColor: colors.border }]} onPress={onAddPress}>
+            <Text style={[styles.addIcon, { color: colors.muted }]}>＋</Text>
+            <Text style={[styles.addLabel, { color: colors.muted }]}>Add</Text>
           </Pressable>
         }
       />
@@ -81,7 +91,6 @@ export function ThumbnailStrip({
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: '#1a1a1a',
     paddingTop: 8,
   },
   content: {
@@ -105,11 +114,10 @@ const styles = StyleSheet.create({
     height: 64,
     borderRadius: 4,
     borderWidth: 1.5,
-    borderColor: '#555',
     borderStyle: 'dashed',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  addIcon: { fontSize: 18, color: '#999' },
-  addLabel: { fontSize: 9, color: '#999', marginTop: 2 },
+  addIcon: { fontSize: 18 },
+  addLabel: { fontSize: 9, marginTop: 2 },
 });

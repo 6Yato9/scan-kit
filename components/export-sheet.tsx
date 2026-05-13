@@ -40,15 +40,16 @@ export function ExportSheet({ visible, document, onClose }: Props) {
         : settings.pdfQuality === 'standard' ? 0.75 : 1;
 
       if (compressFactor < 1) {
-        setLoadingLabel('Optimising images…');
-        const recompressed = await Promise.all(
-          document.pages.map(uri =>
-            ImageManipulator.manipulateAsync(uri, [], {
-              compress: compressFactor,
-              format: SaveFormat.JPEG,
-            }).then(r => r.uri)
-          )
-        );
+        // Recompress pages sequentially to keep peak memory bounded.
+        const recompressed: string[] = [];
+        for (let i = 0; i < document.pages.length; i++) {
+          setLoadingLabel(`Optimising image ${i + 1}/${document.pages.length}…`);
+          const r = await ImageManipulator.manipulateAsync(document.pages[i], [], {
+            compress: compressFactor,
+            format: SaveFormat.JPEG,
+          });
+          recompressed.push(r.uri);
+        }
         pages = recompressed;
       }
 
@@ -59,13 +60,14 @@ export function ExportSheet({ visible, document, onClose }: Props) {
         dialogTitle: document.name,
         UTI: 'com.adobe.pdf',
       });
+      onClose();
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Could not generate PDF.';
+      // Surface the error but keep the sheet open so the user can retry.
       Alert.alert('Export failed', msg);
     } finally {
       setLoading(false);
       setLoadingLabel('');
-      onClose();
     }
   }
 
@@ -89,13 +91,13 @@ export function ExportSheet({ visible, document, onClose }: Props) {
         dialogTitle: document.name,
         UTI: 'public.zip-archive',
       });
+      onClose();
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Could not build ZIP.';
       Alert.alert('Export failed', msg);
     } finally {
       setLoading(false);
       setLoadingLabel('');
-      onClose();
     }
   }
 
@@ -112,6 +114,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
         .join('');
       const html = `<html><body style="margin:0;padding:0;">${imgTags}</body></html>`;
       await Print.printAsync({ html });
+      onClose();
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Could not print.';
       // User-cancelled iOS print dialogs throw — only alert if it looks like a real failure.
@@ -119,7 +122,6 @@ export function ExportSheet({ visible, document, onClose }: Props) {
     } finally {
       setLoading(false);
       setLoadingLabel('');
-      onClose();
     }
   }
 

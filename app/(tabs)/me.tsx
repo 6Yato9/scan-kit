@@ -32,7 +32,9 @@ export default function MeScreen() {
   const { preference, setPreference, colors } = useTheme();
 
   useFocusEffect(useCallback(() => {
-    getSortPreference().then(setSortKey);
+    let cancelled = false;
+    getSortPreference().then(k => { if (!cancelled) setSortKey(k); });
+    return () => { cancelled = true; };
   }, []));
 
   const handleRow = (row: Row) => {

@@ -68,11 +68,41 @@ export default function QrScreen() {
 
   const handleOpen = () => {
     if (!result) return;
-    const url = isUrl(result.data) && !result.data.startsWith('http')
-      ? `https://${result.data}`
-      : result.data;
-    Linking.openURL(url).catch(() =>
-      Alert.alert('Cannot open', 'Could not open this URL.')
+    let url = result.data;
+    // Normalize www-prefixed URLs.
+    if (isUrl(url) && !/^https?:\/\//i.test(url)) {
+      url = `https://${url}`;
+    }
+    // QR codes can encode arbitrary URLs including `tel:`, `sms:`, custom deep
+    // links, `javascript:`, `itms-services:`, etc. Auto-open only http(s);
+    // confirm for low-risk known schemes; reject the rest.
+    const safeAutoOpen = /^https?:\/\//i.test(url);
+    const requiresConfirm = /^(mailto:|tel:|sms:|geo:|maps:)/i.test(url);
+
+    const openIt = () => {
+      Linking.openURL(url).catch(() =>
+        Alert.alert('Cannot open', 'Could not open this URL.'),
+      );
+    };
+
+    if (safeAutoOpen) {
+      openIt();
+      return;
+    }
+    if (requiresConfirm) {
+      Alert.alert(
+        'Open this link?',
+        url,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Open', onPress: openIt },
+        ],
+      );
+      return;
+    }
+    Alert.alert(
+      'Unsupported link',
+      `This QR code points to a non-standard URL. For your safety it won't be opened directly.\n\n${url}`,
     );
   };
 

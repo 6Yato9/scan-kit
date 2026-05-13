@@ -11,7 +11,8 @@ type Props = {
   onDuplicate: (doc: Document) => void;
   onMerge: (doc: Document) => void;
   onMoveToFolder: (doc: Document) => void;
-  onSelect: (doc: Document) => void;
+  /** Optional — when omitted the "Select" row is hidden (e.g. on the Recent tab which has no multi-select mode). */
+  onSelect?: (doc: Document) => void;
   onDelete: (doc: Document) => void;
   onClose: () => void;
 };
@@ -54,9 +55,11 @@ export function DocActionsSheet({
         <Text style={[styles.optionText, { color: colors.text }]}>Move to Folder…</Text>
       </Pressable>
 
-      <Pressable style={[styles.option, { borderBottomColor: colors.border }]} onPress={wrap(onSelect)}>
-        <Text style={[styles.optionText, { color: colors.text }]}>Select</Text>
-      </Pressable>
+      {onSelect && (
+        <Pressable style={[styles.option, { borderBottomColor: colors.border }]} onPress={wrap(onSelect)}>
+          <Text style={[styles.optionText, { color: colors.text }]}>Select</Text>
+        </Pressable>
+      )}
 
       <Pressable style={[styles.option, styles.optionLast]} onPress={wrap(onDelete)}>
         <Text style={[styles.optionText, { color: colors.danger }]}>Delete</Text>

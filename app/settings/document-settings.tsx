@@ -26,7 +26,9 @@ export default function DocumentSettingsScreen() {
   });
 
   useFocusEffect(useCallback(() => {
-    getDocSettings().then(setSettings);
+    let cancelled = false;
+    getDocSettings().then(s => { if (!cancelled) setSettings(s); });
+    return () => { cancelled = true; };
   }, []));
 
   const update = async (patch: Partial<DocSettings>) => {

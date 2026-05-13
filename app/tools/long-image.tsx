@@ -1,5 +1,5 @@
 // app/tools/long-image.tsx
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -16,7 +16,7 @@ import * as FileSystem from 'expo-file-system';
 import { Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/theme-context';
 import { getDocuments } from '@/lib/storage';
@@ -41,11 +41,13 @@ export default function LongImageScreen() {
     }
   };
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
+    let cancelled = false;
     getDocuments()
-      .then(all => setDocs(all.filter(d => d.pages.length > 0)))
+      .then(all => { if (!cancelled) setDocs(all.filter(d => d.pages.length > 0 && !d.pdfUri)); })
       .catch(console.error);
-  }, []);
+    return () => { cancelled = true; };
+  }, []));
 
   const selectedDoc = docs.find(d => d.id === selected) ?? null;
   const q = query.trim().toLowerCase();

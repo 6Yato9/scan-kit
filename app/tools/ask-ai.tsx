@@ -19,6 +19,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { useTheme } from '@/contexts/theme-context';
 import { getAiKey, saveAiKey, clearAiKey, getDocuments } from '@/lib/storage';
 import type { Document } from '@/types/document';
@@ -120,9 +121,22 @@ export default function AskAiScreen() {
     try {
       const pages = selectedDoc.pages.slice(0, MAX_PAGES_PER_REQUEST);
       const truncated = selectedDoc.pages.length > MAX_PAGES_PER_REQUEST;
-      const images = await Promise.all(
-        pages.map(uri => FileSystem.readAsStringAsync(uri, { encoding: 'base64' })),
-      );
+      // Read pages sequentially and downscale before encoding so we don't hold
+      // 30-60MB of base64 in memory for a high-res multi-page doc.
+      const images: string[] = [];
+      for (const uri of pages) {
+        // Strip any cache-bust suffix.
+        const sourcePath = uri.split('?')[0];
+        // Downscale to ~1600px wide and re-encode at quality 0.7 — Claude's
+        // vision model doesn't need the full resolution to read a page.
+        const resized = await manipulateAsync(
+          sourcePath,
+          [{ resize: { width: 1600 } }],
+          { compress: 0.7, format: SaveFormat.JPEG },
+        );
+        const b64 = await FileSystem.readAsStringAsync(resized.uri, { encoding: 'base64' });
+        images.push(b64);
+      }
       const result = await askClaude(apiKey, images, question.trim());
       setAnswer(
         truncated

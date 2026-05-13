@@ -1,5 +1,5 @@
 // app/tools/compress.tsx
-import { useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/theme-context';
 import { getDocuments, updateDocument } from '@/lib/storage';
@@ -32,10 +32,15 @@ export default function CompressScreen() {
   const [selectedDoc, setSelectedDoc] = useState<Document | null>(null);
   const [quality, setQuality] = useState(0.65);
   const [compressing, setCompressing] = useState(false);
+  const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
 
-  useEffect(() => {
-    getDocuments().then(all => setDocs(all.filter(d => d.pages.length > 0))).catch(console.error);
-  }, []);
+  useFocusEffect(useCallback(() => {
+    let cancelled = false;
+    getDocuments()
+      .then(all => { if (!cancelled) setDocs(all.filter(d => d.pages.length > 0 && !d.pdfUri)); })
+      .catch(console.error);
+    return () => { cancelled = true; };
+  }, []));
 
   const handleCompress = async () => {
     if (!selectedDoc) return;
@@ -49,11 +54,15 @@ export default function CompressScreen() {
           style: 'destructive',
           onPress: async () => {
             setCompressing(true);
+            setProgress({ current: 0, total: selectedDoc.pages.length });
             try {
               const newPages: string[] = [];
               for (let i = 0; i < selectedDoc.pages.length; i++) {
+                setProgress({ current: i + 1, total: selectedDoc.pages.length });
+                // Strip any cache-bust suffix before handing to manipulateAsync.
+                const sourceUri = selectedDoc.pages[i].split('?')[0];
                 const result = await manipulateAsync(
-                  selectedDoc.pages[i],
+                  sourceUri,
                   [],
                   { compress: quality, format: SaveFormat.JPEG }
                 );
@@ -68,6 +77,7 @@ export default function CompressScreen() {
               Alert.alert('Error', 'Compression failed. Some pages may be unchanged.');
             } finally {
               setCompressing(false);
+              setProgress(null);
             }
           },
         },
@@ -135,10 +145,18 @@ export default function CompressScreen() {
             onPress={handleCompress}
             disabled={compressing}
           >
-            {compressing
-              ? <ActivityIndicator color="#fff" />
-              : <Text style={styles.applyBtnText}>Compress Document</Text>
-            }
+            {compressing ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <ActivityIndicator color="#fff" />
+                {progress && (
+                  <Text style={styles.applyBtnText}>
+                    Compressing {progress.current}/{progress.total}…
+                  </Text>
+                )}
+              </View>
+            ) : (
+              <Text style={styles.applyBtnText}>Compress Document</Text>
+            )}
           </Pressable>
         )}
       </ScrollView>

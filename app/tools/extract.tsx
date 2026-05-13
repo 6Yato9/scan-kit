@@ -1,5 +1,5 @@
 // app/tools/extract.tsx
-import { useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -13,10 +13,11 @@ import {
 import * as Crypto from 'expo-crypto';
 import { Directory, File, Paths } from 'expo-file-system';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/theme-context';
 import { getDocuments, saveDocument } from '@/lib/storage';
+import { deleteDocumentFiles } from '@/lib/files';
 import type { Document } from '@/types/document';
 
 export default function ExtractScreen() {
@@ -28,9 +29,13 @@ export default function ExtractScreen() {
   const [selectedPages, setSelectedPages] = useState<Set<number>>(new Set());
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    getDocuments().then(all => setDocs(all.filter(d => d.pages.length > 1))).catch(console.error);
-  }, []);
+  useFocusEffect(useCallback(() => {
+    let cancelled = false;
+    getDocuments()
+      .then(all => { if (!cancelled) setDocs(all.filter(d => d.pages.length > 1)); })
+      .catch(console.error);
+    return () => { cancelled = true; };
+  }, []));
 
   const togglePage = (index: number) => {
     setSelectedPages(prev => {
@@ -49,30 +54,46 @@ export default function ExtractScreen() {
   const handleExtract = async () => {
     if (!selectedDoc || selectedPages.size === 0) return;
     setSaving(true);
+    const newId = Crypto.randomUUID();
     try {
       const sorted = [...selectedPages].sort((a, b) => a - b);
-      const newId = Crypto.randomUUID();
       const now = Date.now();
 
       const destDir = new Directory(Paths.document, 'scan-kit', newId);
       destDir.create({ intermediates: true, idempotent: true });
 
+      // Copy from the actual page URIs stored on the doc (not a reconstructed path)
+      // so we don't assume the on-disk layout matches the doc.pages array order.
       const newPages = sorted.map((srcIdx, destIdx) => {
-        const src = new File(new Directory(Paths.document, 'scan-kit', selectedDoc.id), `page-${srcIdx}.jpg`);
+        const sourceUri = selectedDoc.pages[srcIdx];
+        if (!sourceUri) throw new Error(`Source page ${srcIdx} missing in document`);
+        // Strip any cache-bust query suffix before constructing File()
+        const srcPath = sourceUri.split('?')[0];
+        const src = new File(srcPath);
+        if (!src.exists) throw new Error(`Source file missing: ${srcPath}`);
         const dest = new File(destDir, `page-${destIdx}.jpg`);
         src.copy(dest);
         return dest.uri;
       });
 
       const newFilters = selectedDoc.filters
-        ? sorted.map(i => selectedDoc.filters![i]).filter((f): f is NonNullable<typeof f> => f != null)
+        ? sorted.map(i => selectedDoc.filters![i] ?? 'original')
         : undefined;
+      const allOriginal = !newFilters || newFilters.every(f => f === 'original');
+
+      const newAdjustments = selectedDoc.adjustments
+        ? sorted.map(i => selectedDoc.adjustments![i] ?? { brightness: 0, contrast: 0, saturation: 0 })
+        : undefined;
+      const allDefault = !newAdjustments || newAdjustments.every(
+        a => a.brightness === 0 && a.contrast === 0 && a.saturation === 0,
+      );
 
       await saveDocument({
         id: newId,
         name: `${selectedDoc.name} (Extract)`,
         pages: newPages,
-        filters: newFilters?.length ? newFilters : undefined,
+        filters: allOriginal ? undefined : newFilters,
+        adjustments: allDefault ? undefined : newAdjustments,
         createdAt: now,
         updatedAt: now,
       });
@@ -80,8 +101,11 @@ export default function ExtractScreen() {
       Alert.alert('Done', `${sorted.length} page${sorted.length !== 1 ? 's' : ''} extracted as a new document.`, [
         { text: 'OK', onPress: () => router.back() },
       ]);
-    } catch {
-      Alert.alert('Error', 'Could not extract pages.');
+    } catch (err) {
+      // Roll back any half-copied files so we don't leave an orphan directory.
+      try { deleteDocumentFiles(newId); } catch {}
+      const msg = err instanceof Error ? err.message : 'Could not extract pages.';
+      Alert.alert('Error', msg);
     } finally {
       setSaving(false);
     }

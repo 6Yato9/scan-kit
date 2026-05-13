@@ -22,13 +22,28 @@ export function deleteDocumentFiles(docId: string): void {
   }
 }
 
-/** Overwrites a stored page with a new file (e.g. after rotation). */
+/**
+ * Overwrites a stored page with a new file (e.g. after rotation).
+ * Atomic: copies the new file to a side path first; only deletes the old
+ * page and promotes the side file after the copy succeeds.
+ */
 export function replacePage(newUri: string, docId: string, pageIndex: number): string {
   const dir = new Directory(Paths.document, 'scan-kit', docId);
   const dest = new File(dir, `page-${pageIndex}.jpg`);
-  if (dest.exists) dest.delete();
+  const side = new File(dir, `page-${pageIndex}.new.jpg`);
   const src = new File(newUri);
-  src.copy(dest);
+
+  if (side.exists) {
+    try { side.delete(); } catch {}
+  }
+  src.copy(side); // throws if the copy fails — dest is untouched
+
+  // Copy succeeded. Swap.
+  if (dest.exists) {
+    try { dest.delete(); } catch {}
+  }
+  side.copy(dest);
+  try { side.delete(); } catch {}
   return dest.uri;
 }
 
@@ -51,6 +66,9 @@ export function appendPages(
 /**
  * Deletes a single page file and shifts subsequent pages down by one index.
  * After calling this, update document.pages in the caller.
+ *
+ * Implementation: 2-phase copy-to-tmp then promote so a crash mid-shift can be
+ * rolled back (caller can re-call after recovering from the failure).
  */
 export function deleteSinglePage(
   docId: string,
@@ -58,15 +76,50 @@ export function deleteSinglePage(
   totalPages: number
 ): void {
   const dir = new Directory(Paths.document, 'scan-kit', docId);
-  const target = new File(dir, `page-${pageIndex}.jpg`);
-  if (target.exists) target.delete();
-  for (let i = pageIndex + 1; i < totalPages; i++) {
-    const src = new File(dir, `page-${i}.jpg`);
-    const dest = new File(dir, `page-${i - 1}.jpg`);
-    if (src.exists) {
-      src.copy(dest);
-      src.delete();
+  const tmpName = (i: number) => `page-${i}.shifting.jpg`;
+  const cleanupTmps = () => {
+    for (let i = pageIndex + 1; i < totalPages; i++) {
+      const t = new File(dir, tmpName(i));
+      if (t.exists) {
+        try { t.delete(); } catch {}
+      }
     }
+  };
+
+  try {
+    // Phase 1: copy each shifted source to a tmp name keyed to its destination.
+    for (let i = pageIndex + 1; i < totalPages; i++) {
+      const src = new File(dir, `page-${i}.jpg`);
+      if (!src.exists) continue; // tolerate gaps
+      const tmp = new File(dir, tmpName(i));
+      if (tmp.exists) tmp.delete();
+      src.copy(tmp);
+    }
+
+    // Phase 2: delete the target, delete the old src files, promote tmps.
+    const target = new File(dir, `page-${pageIndex}.jpg`);
+    if (target.exists) target.delete();
+
+    for (let i = pageIndex + 1; i < totalPages; i++) {
+      const src = new File(dir, `page-${i}.jpg`);
+      if (src.exists) {
+        try { src.delete(); } catch {}
+      }
+    }
+
+    for (let i = pageIndex + 1; i < totalPages; i++) {
+      const tmp = new File(dir, tmpName(i));
+      if (!tmp.exists) continue;
+      const dest = new File(dir, `page-${i - 1}.jpg`);
+      if (dest.exists) {
+        try { dest.delete(); } catch {}
+      }
+      tmp.copy(dest);
+      try { tmp.delete(); } catch {}
+    }
+  } catch (err) {
+    cleanupTmps();
+    throw err;
   }
 }
 

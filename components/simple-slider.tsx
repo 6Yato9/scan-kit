@@ -17,7 +17,10 @@ export function SimpleSlider({ label, value, min = -100, max = 100, onValueChang
   const { colors } = useTheme();
 
   // Mutable ref holds everything panResponder closures need, updated every render.
-  const state = useRef({ x: 0, width: 1, min, max, onChange: onValueChange });
+  // `measured` is false until the first `measure()` callback resolves — the move
+  // handler short-circuits before then so we don't compute against the sentinel
+  // `width: 1` and emit a huge value on the first frame.
+  const state = useRef({ x: 0, width: 1, measured: false, min, max, onChange: onValueChange });
   state.current.min = min;
   state.current.max = max;
   state.current.onChange = onValueChange;
@@ -31,16 +34,24 @@ export function SimpleSlider({ label, value, min = -100, max = 100, onValueChang
       onPanResponderGrant: (_, gs) => {
         trackRef.current?.measure((_, __, w, ___, pageX) => {
           state.current.x = pageX;
-          state.current.width = w;
-          const { min: mn, max: mx, onChange, x, width } = state.current;
-          const pct = Math.max(0, Math.min(1, (gs.x0 - x) / width));
+          state.current.width = Math.max(1, w);
+          state.current.measured = true;
+          const { min: mn, max: mx, onChange } = state.current;
+          const pct = Math.max(0, Math.min(1, (gs.x0 - pageX) / state.current.width));
           onChange(Math.round(mn + pct * (mx - mn)));
         });
       },
       onPanResponderMove: (_, gs) => {
+        if (!state.current.measured) return;
         const { x, width, min: mn, max: mx, onChange } = state.current;
         const pct = Math.max(0, Math.min(1, (gs.moveX - x) / width));
         onChange(Math.round(mn + pct * (mx - mn)));
+      },
+      onPanResponderRelease: () => {
+        state.current.measured = false;
+      },
+      onPanResponderTerminate: () => {
+        state.current.measured = false;
       },
     })
   ).current;

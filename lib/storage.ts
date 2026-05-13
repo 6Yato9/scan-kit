@@ -100,10 +100,14 @@ export async function getFolders(): Promise<string[]> {
   }
 }
 
-export async function saveFolder(name: string): Promise<void> {
-  const folders = await getFolders();
-  if (folders.includes(name)) return;
-  await AsyncStorage.setItem(FOLDERS_KEY, JSON.stringify([...folders, name]));
+export function saveFolder(name: string): Promise<void> {
+  // Shares the docs lock because deleteFolder also writes both keys; using one
+  // lock for both keeps the two writers strictly ordered.
+  return withDocsLock(async () => {
+    const folders = await getFolders();
+    if (folders.includes(name)) return;
+    await AsyncStorage.setItem(FOLDERS_KEY, JSON.stringify([...folders, name]));
+  });
 }
 
 export function deleteFolder(name: string): Promise<void> {
@@ -164,21 +168,41 @@ type ThemePreference = 'light' | 'dark' | 'system';
 // In-memory cache so ThemeProvider can read synchronously on every render
 // after the first async load — prevents the light→dark flash on nav push.
 let _themePrefCache: ThemePreference = 'system';
+// Monotonic version: any write bumps it; reads only write the cache if the
+// version hasn't changed since the read started. Prevents a stale getter
+// from clobbering a more recent saveThemePreference value.
+let _themePrefVersion = 0;
+let _themePrefQueue: Promise<unknown> = Promise.resolve();
+
+function withThemeLock<T>(fn: () => Promise<T>): Promise<T> {
+  const next = _themePrefQueue.then(fn, fn);
+  _themePrefQueue = next.catch(() => {});
+  return next;
+}
 
 export function getThemePreferenceSync(): ThemePreference {
   return _themePrefCache;
 }
 
-export async function getThemePreference(): Promise<ThemePreference> {
-  const raw = await AsyncStorage.getItem(THEME_KEY);
-  const pref = (raw === 'light' || raw === 'dark' || raw === 'system') ? raw : 'system';
-  _themePrefCache = pref;
-  return pref;
+export function getThemePreference(): Promise<ThemePreference> {
+  return withThemeLock(async () => {
+    const versionAtStart = _themePrefVersion;
+    const raw = await AsyncStorage.getItem(THEME_KEY);
+    const pref: ThemePreference = (raw === 'light' || raw === 'dark' || raw === 'system') ? raw : 'system';
+    // Only update the cache if no write has happened since we started.
+    if (_themePrefVersion === versionAtStart) {
+      _themePrefCache = pref;
+    }
+    return pref;
+  });
 }
 
-export async function saveThemePreference(p: ThemePreference): Promise<void> {
-  _themePrefCache = p;
-  await AsyncStorage.setItem(THEME_KEY, p);
+export function saveThemePreference(p: ThemePreference): Promise<void> {
+  return withThemeLock(async () => {
+    _themePrefVersion++;
+    _themePrefCache = p;
+    await AsyncStorage.setItem(THEME_KEY, p);
+  });
 }
 
 // ── AI key ──────────────────────────────────────────────────────────────────
