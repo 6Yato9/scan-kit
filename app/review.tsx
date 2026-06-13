@@ -26,7 +26,7 @@ import { PageFilter } from '@/types/document';
 import { saveDocument, updateDocument, getScanSettings, getDocSettings } from '@/lib/storage';
 import { copyPageWithQuality, copyPdfToStorage, deleteDocumentFiles } from '@/lib/files';
 import { ocrAvailable, extractDocText } from '@/lib/ocr';
-import { filterStyle } from '@/lib/filters';
+import { combinedFilterRN } from '@/lib/filters';
 import { autoName } from '@/lib/auto-name';
 import { notifySuccess } from '@/lib/haptics';
 
@@ -256,7 +256,7 @@ export default function ReviewScreen() {
   }, [pages.length, pendingDefaultFilter, pendingQuality]);
 
   const renderPage = useCallback(({ item: uri, index }: { item: string; index: number }) => {
-    const fStyle = filterStyle(filters[index] as PageFilter);
+    const fStyle = combinedFilterRN(filters[index] as PageFilter);
     const isFocused = index === focusedIndex;
     return (
       <View style={{ height: ITEM_HEIGHT, justifyContent: 'center', alignItems: 'center', paddingVertical: 16, paddingHorizontal: 24 }}>
@@ -374,7 +374,7 @@ export default function ReviewScreen() {
           contentContainerStyle={{ paddingHorizontal: 12, gap: 10 }}
           renderItem={({ item: f }) => {
             const isSelected = filters[focusedIndex] === f.value;
-            const fStyle = filterStyle(f.value as PageFilter);
+            const fStyle = combinedFilterRN(f.value as PageFilter);
             const thumbUri = pages[focusedIndex];
             return (
               <Pressable

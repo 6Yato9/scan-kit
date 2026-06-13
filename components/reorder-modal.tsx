@@ -6,7 +6,7 @@ import DraggableFlatList, {
   RenderItemParams,
 } from 'react-native-draggable-flatlist';
 import { PageAdjustment, PageFilter } from '@/types/document';
-import { combinedFilterStyle } from '@/lib/filters';
+import { combinedFilterRN } from '@/lib/filters';
 import { useTheme } from '@/contexts/theme-context';
 
 type PageItem = {
@@ -47,7 +47,7 @@ export function ReorderModal({ visible, pages, filters, adjustments, onConfirm, 
   }
 
   const renderItem = ({ item, getIndex, drag, isActive }: RenderItemParams<PageItem>) => {
-    const fStyle = combinedFilterStyle(item.filter, item.adjustment);
+    const fStyle = combinedFilterRN(item.filter, item.adjustment);
     return (
       <ScaleDecorator>
         <Pressable

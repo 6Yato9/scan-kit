@@ -21,7 +21,7 @@ import DocumentScanner from 'react-native-document-scanner-plugin';
 import { getDocuments, updateDocument, deleteDocument, getScanSettings } from '@/lib/storage';
 import { appendPages, deleteSinglePage, reorderPages, deleteDocumentFiles } from '@/lib/files';
 import { rotatePage } from '@/lib/image';
-import { combinedFilterStyle } from '@/lib/filters';
+import { combinedFilterRN } from '@/lib/filters';
 import { notifySuccess } from '@/lib/haptics';
 import { ocrAvailable, recognizeLines, extractDocText } from '@/lib/ocr';
 import { Document, PageAdjustment, PageFilter } from '@/types/document';
@@ -416,7 +416,7 @@ export default function ViewerScreen() {
         }}
         onScrollToIndexFailed={() => {}}
         renderItem={({ item, index }) => {
-          const fStyle = combinedFilterStyle(document.filters?.[index], document.adjustments?.[index]);
+          const fStyle = combinedFilterRN(document.filters?.[index], document.adjustments?.[index]);
           // Append updatedAt so RN's Image cache reloads after rotate/annotate/compress overwrite the file in place.
           return (
             <View style={[styles.page, { width: screenWidth }]}>

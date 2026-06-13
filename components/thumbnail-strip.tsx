@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { PageAdjustment, PageFilter } from '@/types/document';
-import { combinedFilterStyle } from '@/lib/filters';
+import { combinedFilterRN } from '@/lib/filters';
 import { useTheme } from '@/contexts/theme-context';
 
 type Props = {
@@ -65,7 +65,7 @@ export function ThumbnailStrip({
           }, 50);
         }}
         renderItem={({ item, index }) => {
-          const fStyle = combinedFilterStyle(filters?.[index], adjustments?.[index]);
+          const fStyle = combinedFilterRN(filters?.[index], adjustments?.[index]);
           return (
             <Pressable
               style={[styles.thumb, index === currentPage && { borderColor: colors.accent }]}

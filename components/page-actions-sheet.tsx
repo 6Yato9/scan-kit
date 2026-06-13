@@ -4,7 +4,7 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useState } from 'react';
 import { BottomSheet } from '@/components/bottom-sheet';
 import { PageFilter, PageAdjustment } from '@/types/document';
-import { combinedFilterStyle } from '@/lib/filters';
+import { combinedFilterRN } from '@/lib/filters';
 import { SimpleSlider } from '@/components/simple-slider';
 import { useTheme } from '@/contexts/theme-context';
 
@@ -113,7 +113,7 @@ export function PageActionsSheet({
       {tab === 'filter' ? (
         <View style={styles.filterRow}>
           {FILTERS.map(({ key, label }) => {
-            const fs = combinedFilterStyle(key, adjustment);
+            const fs = combinedFilterRN(key, adjustment);
             return (
               <Pressable
                 key={key}
