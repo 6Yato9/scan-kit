@@ -14,6 +14,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/theme-context';
+import { useToast } from '@/components/toast';
+import { notifySuccess, tapLight } from '@/lib/haptics';
 
 type BarcodeResult = {
   type: string;
@@ -45,6 +47,7 @@ export default function QrScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { colors, isDark } = useTheme();
+  const { show } = useToast();
   const [permission, requestPermission] = useCameraPermissions();
   const [result, setResult] = useState<BarcodeResult | null>(null);
   const scanned = useRef(false);
@@ -52,6 +55,7 @@ export default function QrScreen() {
   const handleBarcode = useCallback(({ type, data }: BarcodeResult) => {
     if (scanned.current) return;
     scanned.current = true;
+    notifySuccess();
     setResult({ type, data });
   }, []);
 
@@ -63,7 +67,8 @@ export default function QrScreen() {
   const handleCopy = async () => {
     if (!result) return;
     await Clipboard.setStringAsync(result.data);
-    Alert.alert('Copied', 'Result copied to clipboard.');
+    tapLight();
+    show('Copied');
   };
 
   const handleOpen = () => {

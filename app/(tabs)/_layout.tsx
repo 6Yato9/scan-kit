@@ -14,6 +14,7 @@ import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useScan } from '@/contexts/scan-context';
 import { useTheme } from '@/contexts/theme-context';
+import { selection, tapMedium } from '@/lib/haptics';
 
 const TAB_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
   index: 'home',
@@ -160,7 +161,7 @@ function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
           return (
             <Pressable
               key={route.key}
-              onPress={triggerScan}
+              onPress={() => { tapMedium(); triggerScan(); }}
               style={styles.scanBtn}
               accessibilityLabel="Scan document"
             >
@@ -182,7 +183,7 @@ function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
           <Pressable
             key={route.key}
             onPress={() => {
-              if (!isFocused) navigation.navigate(route.name);
+              if (!isFocused) { selection(); navigation.navigate(route.name); }
             }}
             style={styles.tabBtn}
           >

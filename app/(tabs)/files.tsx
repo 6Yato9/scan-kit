@@ -39,6 +39,7 @@ import {
 } from '@/lib/files';
 import { useScan } from '@/contexts/scan-context';
 import { useTheme } from '@/contexts/theme-context';
+import { notifySuccess } from '@/lib/haptics';
 import { DocumentCard } from '@/components/document-card';
 import { EmptyState } from '@/components/empty-state';
 import { RenameSheet } from '@/components/rename-sheet';
@@ -215,6 +216,7 @@ export default function FilesScreen() {
           await deleteDocument(doc.id);
           deleteDocumentFiles(doc.id);
           setDocuments(prev => prev.filter(d => d.id !== doc.id));
+          notifySuccess();
         },
       },
     ]);
@@ -321,6 +323,7 @@ export default function FilesScreen() {
             ids.forEach(id => deleteDocumentFiles(id));
             setDocuments(prev => prev.filter(d => !idSet.has(d.id)));
             setSelectedIds(new Set());
+            notifySuccess();
           },
         },
       ]

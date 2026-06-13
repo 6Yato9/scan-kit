@@ -21,6 +21,7 @@ import { useTheme } from '@/contexts/theme-context';
 import { getDocuments, saveDocument } from '@/lib/storage';
 import { appendPages, deleteDocumentFiles } from '@/lib/files';
 import { autoName } from '@/lib/auto-name';
+import { notifySuccess, notifyError } from '@/lib/haptics';
 import type { Document, PageAdjustment, PageFilter } from '@/types/document';
 
 export default function MergeScreen() {
@@ -96,12 +97,14 @@ export default function MergeScreen() {
         updatedAt: now,
       });
 
+      notifySuccess();
       Alert.alert('Done', `"${name.trim()}" saved with ${totalPages} pages.`, [
         { text: 'OK', onPress: () => router.back() },
       ]);
     } catch {
       // Roll back any files we copied so we don't leave orphans.
       try { deleteDocumentFiles(id); } catch {}
+      notifyError();
       Alert.alert('Error', 'Could not merge documents.');
     } finally {
       setMerging(false);

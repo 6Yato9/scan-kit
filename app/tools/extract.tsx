@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/theme-context';
 import { getDocuments, saveDocument } from '@/lib/storage';
 import { deleteDocumentFiles } from '@/lib/files';
+import { notifySuccess, notifyError } from '@/lib/haptics';
 import type { Document } from '@/types/document';
 
 export default function ExtractScreen() {
@@ -104,12 +105,14 @@ export default function ExtractScreen() {
         updatedAt: now,
       });
 
+      notifySuccess();
       Alert.alert('Done', `${sorted.length} page${sorted.length !== 1 ? 's' : ''} extracted as a new document.`, [
         { text: 'OK', onPress: () => router.back() },
       ]);
     } catch (err) {
       // Roll back any half-copied files so we don't leave an orphan directory.
       try { deleteDocumentFiles(newId); } catch {}
+      notifyError();
       const msg = err instanceof Error ? err.message : 'Could not extract pages.';
       Alert.alert('Error', msg);
     } finally {

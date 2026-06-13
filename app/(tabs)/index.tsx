@@ -28,6 +28,8 @@ import {
 import { deleteDocumentFiles, copyDocumentFiles, appendPages } from '@/lib/files';
 import { useScan } from '@/contexts/scan-context';
 import { useTheme } from '@/contexts/theme-context';
+import { notifySuccess } from '@/lib/haptics';
+import { EmptyState } from '@/components/empty-state';
 import { DocActionsSheet } from '@/components/doc-actions-sheet';
 import { RenameSheet } from '@/components/rename-sheet';
 import { MergeSheet } from '@/components/merge-sheet';
@@ -58,7 +60,7 @@ export default function HomeScreen() {
   const [loaded, setLoaded] = useState(false);
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { lastSaved } = useScan();
+  const { lastSaved, triggerScan } = useScan();
   const { colors } = useTheme();
 
   const load = useCallback(async () => {
@@ -89,6 +91,7 @@ export default function HomeScreen() {
           await deleteDocument(doc.id);
           deleteDocumentFiles(doc.id);
           setDocuments(prev => prev.filter(d => d.id !== doc.id));
+          notifySuccess();
         },
       },
     ]);
@@ -217,17 +220,17 @@ export default function HomeScreen() {
       <FlatList
         data={displayed}
         keyExtractor={d => d.id}
-        contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + 110 }]}
+        contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + 110 }, displayed.length === 0 && styles.listContentEmpty]}
         ListEmptyComponent={
-          <View style={styles.empty}>
-            <Text style={[styles.emptyText, { color: colors.muted }]}>
-              {!loaded
-                ? 'Loading…'
-                : searchQuery.trim()
-                  ? `No results for "${searchQuery.trim()}"`
-                  : 'No documents yet. Tap the camera button to scan.'}
-            </Text>
-          </View>
+          !loaded ? (
+            <View style={styles.empty}>
+              <Text style={[styles.emptyText, { color: colors.muted }]}>Loading…</Text>
+            </View>
+          ) : searchQuery.trim() ? (
+            <EmptyState variant="no-search-results" query={searchQuery.trim()} />
+          ) : (
+            <EmptyState variant="no-docs" actionLabel="Scan a document" onAction={triggerScan} />
+          )
         }
         renderItem={({ item }) => (
           <Pressable
@@ -330,6 +333,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
   listContent: { paddingHorizontal: 14 },
+  listContentEmpty: { flexGrow: 1 },
   empty: { alignItems: 'center', paddingTop: 60 },
   emptyText: { fontSize: 15, textAlign: 'center' },
   row: {

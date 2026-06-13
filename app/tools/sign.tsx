@@ -20,6 +20,7 @@ import { useTheme } from '@/contexts/theme-context';
 import { getDocuments, saveDocument } from '@/lib/storage';
 import { copyPdfToStorage } from '@/lib/files';
 import { combinedFilterCss } from '@/lib/filters';
+import { notifySuccess, notifyError } from '@/lib/haptics';
 import type { Document } from '@/types/document';
 
 const SIGNATURE_HTML = `
@@ -160,6 +161,7 @@ export default function SignScreen() {
         updatedAt: now,
       });
 
+      notifySuccess();
       Alert.alert('Done', 'Signed PDF saved to your documents.', [
         { text: 'OK', onPress: () => router.back() },
       ]);
@@ -169,6 +171,7 @@ export default function SignScreen() {
         const { deleteDocumentFiles } = await import('@/lib/files');
         deleteDocumentFiles(id);
       } catch {}
+      notifyError();
       Alert.alert('Error', 'Could not apply signature.');
     } finally {
       setApplying(false);

@@ -3,6 +3,7 @@ import { Alert, AppState, AppStateStatus, Linking } from 'react-native';
 import DocumentScanner from 'react-native-document-scanner-plugin';
 import { File } from 'expo-file-system';
 import { PageFilter } from '@/types/document';
+import { notifySuccess, notifyError } from '@/lib/haptics';
 import {
   clearPendingState,
   getPendingState,
@@ -126,6 +127,7 @@ export function ScanProvider({ children }: { children: ReactNode }) {
         letUserAdjustCrop: settings.autoCrop,
       } as any);
       if (!scannedImages?.length) return;
+      notifySuccess();
       setPendingPages(scannedImages);
       setPendingPdfUri(null);
       setPendingQuality(QUALITY_MAP[settings.quality]);
@@ -138,6 +140,7 @@ export function ScanProvider({ children }: { children: ReactNode }) {
       if (/cancel|user.+(stop|dismiss)/i.test(msg)) {
         // user-cancelled, ignore
       } else if (/permission|denied|not.+granted/i.test(msg)) {
+        notifyError();
         Alert.alert(
           'Camera access needed',
           'Scan Kit needs Camera permission to scan documents. Open Settings to enable it.',
@@ -147,6 +150,7 @@ export function ScanProvider({ children }: { children: ReactNode }) {
           ],
         );
       } else {
+        notifyError();
         Alert.alert('Scan failed', 'Could not start the scanner. Try again.');
       }
     } finally {

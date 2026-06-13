@@ -21,6 +21,7 @@ import { getDocuments, updateDocument, deleteDocument, getScanSettings } from '@
 import { appendPages, deleteSinglePage, reorderPages, deleteDocumentFiles } from '@/lib/files';
 import { rotatePage } from '@/lib/image';
 import { combinedFilterStyle } from '@/lib/filters';
+import { notifySuccess } from '@/lib/haptics';
 import { Document, PageAdjustment, PageFilter } from '@/types/document';
 import { ExportSheet } from '@/components/export-sheet';
 import { PageActionsSheet } from '@/components/page-actions-sheet';
@@ -203,6 +204,7 @@ export default function ViewerScreen() {
     }
     setCurrentPage(safePage);
     setActionsVisible(false);
+    notifySuccess();
   }, [document, currentPage, saveDoc, router]);
 
   const handleSharePage = useCallback(async () => {

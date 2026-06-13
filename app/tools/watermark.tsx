@@ -20,6 +20,7 @@ import { useTheme } from '@/contexts/theme-context';
 import { getDocuments, saveDocument } from '@/lib/storage';
 import { copyPdfToStorage, deleteDocumentFiles } from '@/lib/files';
 import { combinedFilterCss } from '@/lib/filters';
+import { notifySuccess, notifyError } from '@/lib/haptics';
 import type { Document } from '@/types/document';
 
 const POSITIONS = [
@@ -86,11 +87,13 @@ export default function WatermarkScreen() {
         updatedAt: now,
       });
 
+      notifySuccess();
       Alert.alert('Done', 'Watermarked PDF saved to your documents.', [
         { text: 'OK', onPress: () => router.back() },
       ]);
     } catch {
       try { deleteDocumentFiles(id); } catch {}
+      notifyError();
       Alert.alert('Error', 'Could not apply watermark.');
     } finally {
       setApplying(false);

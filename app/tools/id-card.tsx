@@ -19,6 +19,7 @@ import { useTheme } from '@/contexts/theme-context';
 import { copyPageWithQuality } from '@/lib/files';
 import { saveDocument } from '@/lib/storage';
 import { autoName } from '@/lib/auto-name';
+import { notifySuccess, notifyError } from '@/lib/haptics';
 
 export default function IdCardScreen() {
   const router = useRouter();
@@ -61,10 +62,12 @@ export default function IdCardScreen() {
         createdAt: now,
         updatedAt: now,
       });
+      notifySuccess();
       Alert.alert('Saved', 'ID card saved to your documents.', [
         { text: 'OK', onPress: () => router.back() },
       ]);
     } catch {
+      notifyError();
       Alert.alert('Error', 'Could not save the ID card.');
     } finally {
       setSaving(false);

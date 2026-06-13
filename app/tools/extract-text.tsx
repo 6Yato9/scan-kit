@@ -16,6 +16,8 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import DocumentScanner from 'react-native-document-scanner-plugin';
 import { useTheme } from '@/contexts/theme-context';
+import { useToast } from '@/components/toast';
+import { tapLight } from '@/lib/haptics';
 import { getScanSettings } from '@/lib/storage';
 
 let TextRecognition: { recognize: (uri: string) => Promise<{ text: string }> } | null = null;
@@ -29,6 +31,7 @@ export default function ExtractTextScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
+  const { show } = useToast();
   const [busy, setBusy] = useState(false);
   const [text, setText] = useState<string | null>(null);
   const busyRef = useRef(false);
@@ -68,7 +71,8 @@ export default function ExtractTextScreen() {
   const handleCopy = async () => {
     if (!text) return;
     await Clipboard.setStringAsync(text);
-    Alert.alert('Copied', 'Text copied to clipboard.');
+    tapLight();
+    show('Copied to clipboard');
   };
 
   const handleShare = async () => {

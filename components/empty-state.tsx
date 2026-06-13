@@ -1,5 +1,5 @@
 // components/empty-state.tsx
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useTheme } from '@/contexts/theme-context';
 
 type Variant = 'no-docs' | 'empty-folder' | 'no-search-results';
@@ -8,6 +8,8 @@ type Props = {
   variant?: Variant;
   folderName?: string;
   query?: string;
+  onAction?: () => void;
+  actionLabel?: string;
 };
 
 const COPY: Record<Variant, { title: string; subtitle: string; icon: string }> = {
@@ -16,7 +18,7 @@ const COPY: Record<Variant, { title: string; subtitle: string; icon: string }> =
   'no-search-results': { icon: '🔎', title: 'No results',         subtitle: 'Try a different search term' },
 };
 
-export function EmptyState({ variant = 'no-docs', folderName, query }: Props) {
+export function EmptyState({ variant = 'no-docs', folderName, query, onAction, actionLabel }: Props) {
   const { colors } = useTheme();
   const copy = COPY[variant];
   const title = variant === 'empty-folder' && folderName
@@ -30,6 +32,16 @@ export function EmptyState({ variant = 'no-docs', folderName, query }: Props) {
       <Text style={styles.icon}>{copy.icon}</Text>
       <Text style={[styles.title, { color: colors.text }]}>{title}</Text>
       <Text style={[styles.subtitle, { color: colors.faint }]}>{subtitle}</Text>
+      {onAction && actionLabel ? (
+        <Pressable
+          onPress={onAction}
+          style={[styles.cta, { backgroundColor: colors.accent }]}
+          accessibilityRole="button"
+          accessibilityLabel={actionLabel}
+        >
+          <Text style={styles.ctaText}>{actionLabel}</Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 }
@@ -55,5 +67,16 @@ const styles = StyleSheet.create({
     fontSize: 15,
     textAlign: 'center',
     lineHeight: 22,
+  },
+  cta: {
+    marginTop: 24,
+    paddingHorizontal: 24,
+    paddingVertical: 13,
+    borderRadius: 14,
+  },
+  ctaText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '700',
   },
 });

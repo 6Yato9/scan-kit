@@ -5,6 +5,7 @@ import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { ScanProvider } from '@/contexts/scan-context';
 import { ThemeProvider, useTheme } from '@/contexts/theme-context';
+import { ToastProvider } from '@/components/toast';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { garbageCollectOrphans } from '@/lib/files';
 import { getDocuments } from '@/lib/storage';
@@ -87,9 +88,11 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <ErrorBoundary>
         <ThemeProvider>
-          <ScanProvider>
-            <ThemedStack />
-          </ScanProvider>
+          <ToastProvider>
+            <ScanProvider>
+              <ThemedStack />
+            </ScanProvider>
+          </ToastProvider>
         </ThemeProvider>
       </ErrorBoundary>
     </GestureHandlerRootView>

@@ -26,6 +26,7 @@ import { saveDocument, getScanSettings, getDocSettings } from '@/lib/storage';
 import { copyPageWithQuality, copyPdfToStorage, deleteDocumentFiles } from '@/lib/files';
 import { filterStyle } from '@/lib/filters';
 import { autoName } from '@/lib/auto-name';
+import { notifySuccess } from '@/lib/haptics';
 
 const FILTERS: { label: string; value: PageFilter | 'original' }[] = [
   { label: 'Original', value: 'original' },
@@ -134,6 +135,7 @@ export default function ReviewScreen() {
 
       bumpLastSaved();
       clearPending();
+      notifySuccess();
       router.replace('/(tabs)/files');
     } catch (err) {
       console.error('Save failed', err);

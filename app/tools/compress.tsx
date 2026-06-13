@@ -16,6 +16,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/theme-context';
 import { getDocuments, updateDocument } from '@/lib/storage';
 import { replacePage } from '@/lib/files';
+import { notifySuccess, notifyError } from '@/lib/haptics';
 import type { Document } from '@/types/document';
 
 const QUALITY_OPTIONS = [
@@ -75,10 +76,12 @@ export default function CompressScreen() {
                 newPages.push(stored);
               }
               await updateDocument({ ...selectedDoc, pages: newPages, updatedAt: Date.now() });
+              notifySuccess();
               Alert.alert('Done', `"${selectedDoc.name}" has been compressed.`, [
                 { text: 'OK', onPress: () => router.back() },
               ]);
             } catch {
+              notifyError();
               Alert.alert('Error', 'Compression failed. Some pages may be unchanged.');
             } finally {
               setCompressing(false);
