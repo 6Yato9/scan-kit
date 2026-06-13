@@ -8,6 +8,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { PageAdjustment, PageFilter } from '@/types/document';
 import { combinedFilterStyle } from '@/lib/filters';
 import { useTheme } from '@/contexts/theme-context';
@@ -80,7 +81,7 @@ export function ThumbnailStrip({
         }}
         ListFooterComponent={
           <Pressable style={[styles.addBtn, { borderColor: colors.border }]} onPress={onAddPress}>
-            <Text style={[styles.addIcon, { color: colors.muted }]}>＋</Text>
+            <Ionicons name="add" size={24} color={colors.muted} />
             <Text allowFontScaling={false} style={[styles.addLabel, { color: colors.muted }]}>Add</Text>
           </Pressable>
         }
@@ -118,6 +119,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  addIcon: { fontSize: 18 },
   addLabel: { fontSize: 9, marginTop: 2 },
 });

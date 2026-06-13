@@ -14,6 +14,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { WebView } from 'react-native-webview';
 import * as Sharing from 'expo-sharing';
 import DocumentScanner from 'react-native-document-scanner-plugin';
@@ -331,7 +332,10 @@ export default function ViewerScreen() {
       <View style={[styles.container, { paddingTop: insets.top }]}>
         <View style={styles.header}>
           <Pressable onPress={() => router.back()} hitSlop={12}>
-            <Text style={styles.back}>‹ Back</Text>
+            <View style={styles.backRow}>
+              <Ionicons name="chevron-back" size={24} color="#fff" />
+              <Text style={styles.back}>Back</Text>
+            </View>
           </Pressable>
           <Text style={styles.title} numberOfLines={1}>{document.name}</Text>
           <Pressable onPress={handleSharePdf} hitSlop={12}>
@@ -352,7 +356,10 @@ export default function ViewerScreen() {
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
         <Pressable onPress={() => router.back()} hitSlop={12}>
-          <Text style={styles.back}>‹ Back</Text>
+          <View style={styles.backRow}>
+            <Ionicons name="chevron-back" size={24} color="#fff" />
+            <Text style={styles.back}>Back</Text>
+          </View>
         </Pressable>
         <Text style={styles.title} numberOfLines={1}>{document.name}</Text>
         <View style={styles.headerRight}>
@@ -364,7 +371,7 @@ export default function ViewerScreen() {
             accessibilityRole="button"
             accessibilityLabel="Extract text"
           >
-            <Text style={[styles.headerBtnText, ocrRunning && { opacity: 0.4 }]}>T</Text>
+            <MaterialCommunityIcons name="text-recognition" size={22} color="#fff" style={ocrRunning && { opacity: 0.4 }} />
           </Pressable>
           {document.pages.length > 1 && (
             <Pressable
@@ -374,7 +381,7 @@ export default function ViewerScreen() {
               accessibilityRole="button"
               accessibilityLabel="Reorder pages"
             >
-              <Text style={styles.headerBtnText}>⇅</Text>
+              <Ionicons name="swap-vertical" size={22} color="#fff" />
             </Pressable>
           )}
           <Pressable
@@ -384,7 +391,7 @@ export default function ViewerScreen() {
             accessibilityRole="button"
             accessibilityLabel="Page actions"
           >
-            <Text style={styles.headerBtnText}>•••</Text>
+            <Ionicons name="ellipsis-horizontal" size={22} color="#fff" />
           </Pressable>
           <Pressable
             onPress={() => setExportVisible(true)}
@@ -470,7 +477,7 @@ export default function ViewerScreen() {
             <View style={styles.ocrHeader}>
               <Text style={styles.ocrTitle}>Extracted Text</Text>
               <Pressable onPress={() => setOcrResult(null)} hitSlop={12}>
-                <Text style={styles.ocrClose}>✕</Text>
+                <Ionicons name="close" size={20} color="#888" />
               </Pressable>
             </View>
             <ScrollView style={styles.ocrBody}>
@@ -492,11 +499,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
   },
-  back: { fontSize: 22, color: '#fff', fontWeight: '300' },
+  backRow: { flexDirection: 'row', alignItems: 'center' },
+  back: { fontSize: 16, color: '#fff', fontWeight: '400' },
   title: { flex: 1, fontSize: 15, color: '#ccc', fontWeight: '600', textAlign: 'center', marginHorizontal: 8 },
   headerRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   headerBtn: { paddingHorizontal: 6 },
-  headerBtnText: { fontSize: 16, color: '#fff' },
   exportBtn: { fontSize: 15, color: '#4ec6e0', fontWeight: '600' },
   page: {
     flex: 1,
@@ -529,7 +536,6 @@ const styles = StyleSheet.create({
     borderBottomColor: '#333',
   },
   ocrTitle: { fontSize: 17, fontWeight: '700', color: '#f0f0f0' },
-  ocrClose: { fontSize: 18, color: '#888' },
   ocrBody: { padding: 20 },
   ocrText: { fontSize: 15, color: '#ddd', lineHeight: 22 },
 });

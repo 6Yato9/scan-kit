@@ -1,5 +1,6 @@
 // components/empty-state.tsx
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/theme-context';
 
 type Variant = 'no-docs' | 'empty-folder' | 'no-search-results';
@@ -12,10 +13,10 @@ type Props = {
   actionLabel?: string;
 };
 
-const COPY: Record<Variant, { title: string; subtitle: string; icon: string }> = {
-  'no-docs':           { icon: '📄', title: 'No scans yet',       subtitle: 'Tap the camera button to scan your first document' },
-  'empty-folder':      { icon: '📁', title: 'This folder is empty', subtitle: 'Long-press a document elsewhere to move it here' },
-  'no-search-results': { icon: '🔎', title: 'No results',         subtitle: 'Try a different search term' },
+const COPY: Record<Variant, { title: string; subtitle: string; icon: keyof typeof Ionicons.glyphMap }> = {
+  'no-docs':           { icon: 'scan-outline',        title: 'No scans yet',         subtitle: 'Tap the camera button to scan your first document' },
+  'empty-folder':      { icon: 'folder-open-outline', title: 'This folder is empty', subtitle: 'Long-press a document elsewhere to move it here' },
+  'no-search-results': { icon: 'search-outline',      title: 'No results',           subtitle: 'Try a different search term' },
 };
 
 export function EmptyState({ variant = 'no-docs', folderName, query, onAction, actionLabel }: Props) {
@@ -29,7 +30,7 @@ export function EmptyState({ variant = 'no-docs', folderName, query, onAction, a
     : copy.subtitle;
   return (
     <View style={styles.container}>
-      <Text style={styles.icon}>{copy.icon}</Text>
+      <Ionicons name={copy.icon} size={64} color={colors.muted} style={styles.icon} />
       <Text style={[styles.title, { color: colors.text }]}>{title}</Text>
       <Text style={[styles.subtitle, { color: colors.faint }]}>{subtitle}</Text>
       {onAction && actionLabel ? (
@@ -54,7 +55,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 48,
   },
   icon: {
-    fontSize: 72,
     marginBottom: 20,
   },
   title: {

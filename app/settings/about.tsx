@@ -1,5 +1,6 @@
 // app/settings/about.tsx
 import { StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/theme-context';
@@ -11,7 +12,7 @@ export default function AboutScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.bg, paddingTop: insets.top + 24 }]}>
-      <Text style={styles.icon}>📄</Text>
+      <Ionicons name="document-text-outline" size={48} color={colors.muted} style={styles.icon} />
       <Text style={[styles.appName, { color: colors.text }]}>Scan Kit</Text>
       <Text style={[styles.version, { color: colors.muted }]}>Version {version}</Text>
       <Text style={[styles.desc, { color: colors.subtext }]}>
@@ -27,7 +28,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 32,
   },
-  icon: { fontSize: 56, marginBottom: 12 },
+  icon: { marginBottom: 12 },
   appName: { fontSize: 26, fontWeight: '800' },
   version: { fontSize: 14, marginTop: 4, marginBottom: 20 },
   desc: {

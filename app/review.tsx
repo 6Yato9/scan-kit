@@ -15,6 +15,7 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Crypto from 'expo-crypto';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
@@ -283,7 +284,7 @@ export default function ReviewScreen() {
       >
         <View style={[styles.topBar, { paddingTop: insets.top + 8, borderBottomColor: colors.border }]}>
           <Pressable onPress={handleDiscard} hitSlop={12} style={styles.closeBtn}>
-            <Text style={[styles.closeBtnText, { color: colors.text }]}>✕</Text>
+            <Ionicons name="close" size={22} color={colors.text} />
           </Pressable>
           <TextInput
             style={[styles.titleInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.input }]}
@@ -299,7 +300,7 @@ export default function ReviewScreen() {
           >
             {saving
               ? <ActivityIndicator color="#fff" size="small" />
-              : <Text style={styles.doneBtnText}>Done ✓</Text>
+              : <Text style={styles.doneBtnText}>Done</Text>
             }
           </Pressable>
         </View>
@@ -319,7 +320,7 @@ export default function ReviewScreen() {
       {/* ① Top bar */}
       <View style={[styles.topBar, { paddingTop: insets.top + 8, borderBottomColor: colors.border }]}>
         <Pressable onPress={handleDiscard} hitSlop={12} style={styles.closeBtn}>
-          <Text style={[styles.closeBtnText, { color: colors.text }]}>✕</Text>
+          <Ionicons name="close" size={22} color={colors.text} />
         </Pressable>
         <TextInput
           style={[styles.titleInput, { color: colors.text, borderColor: colors.border, backgroundColor: colors.input }]}
@@ -335,7 +336,7 @@ export default function ReviewScreen() {
         >
           {saving
             ? <ActivityIndicator color="#fff" size="small" />
-            : <Text style={styles.doneBtnText}>Done ✓</Text>
+            : <Text style={styles.doneBtnText}>Done</Text>
           }
         </Pressable>
       </View>
@@ -407,33 +408,34 @@ export default function ReviewScreen() {
       <View style={[styles.actionRow, { backgroundColor: isDark ? 'rgba(18,18,18,0.95)' : 'rgba(248,248,248,0.95)', borderTopColor: colors.border, paddingBottom: insets.bottom + 8 }]}>
         {/* Retake */}
         <Pressable style={styles.actionBtn} onPress={handleRetake}>
-          <Text style={styles.actionIcon}>↩</Text>
+          <MaterialCommunityIcons name="camera-retake-outline" size={24} color={colors.muted} />
           <Text allowFontScaling={false} style={[styles.actionLabel, { color: colors.muted }]}>Retake</Text>
         </Pressable>
 
         {/* Rotate */}
         <Pressable style={styles.actionBtn} onPress={handleRotate} disabled={rotating}>
-          <Text style={[styles.actionIcon, rotating && { opacity: 0.4 }]}>
-            {rotating ? '⏳' : '↻'}
-          </Text>
+          {rotating
+            ? <ActivityIndicator size="small" color={colors.muted} />
+            : <MaterialCommunityIcons name="rotate-right" size={24} color={colors.muted} />
+          }
           <Text allowFontScaling={false} style={[styles.actionLabel, { color: colors.muted }]}>Rotate</Text>
         </Pressable>
 
         {/* Crop (re-scan this page) */}
         <Pressable style={styles.actionBtn} onPress={handleCrop}>
-          <Text style={styles.actionIcon}>✂</Text>
+          <Ionicons name="crop" size={24} color={colors.muted} />
           <Text allowFontScaling={false} style={[styles.actionLabel, { color: colors.muted }]}>Crop</Text>
         </Pressable>
 
         {/* Delete */}
         <Pressable style={styles.actionBtn} onPress={handleDeletePage}>
-          <Text style={styles.actionIcon}>🗑</Text>
+          <Ionicons name="trash-outline" size={24} color={colors.muted} />
           <Text allowFontScaling={false} style={[styles.actionLabel, { color: colors.muted }]}>Delete</Text>
         </Pressable>
 
         {/* Add Page */}
         <Pressable style={styles.actionBtn} onPress={handleAddPage}>
-          <Text style={styles.actionIcon}>📷</Text>
+          <MaterialCommunityIcons name="camera-plus-outline" size={24} color={colors.muted} />
           <Text allowFontScaling={false} style={[styles.actionLabel, { color: colors.muted }]}>Add Page</Text>
         </Pressable>
       </View>
@@ -452,7 +454,6 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   closeBtn: { padding: 4 },
-  closeBtnText: { fontSize: 18, fontWeight: '600' },
   titleInput: {
     flex: 1,
     borderWidth: 1,
@@ -536,9 +537,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 3,
     paddingHorizontal: 8,
-  },
-  actionIcon: {
-    fontSize: 20,
   },
   actionLabel: {
     fontSize: 10,

@@ -1,5 +1,6 @@
 // components/page-actions-sheet.tsx
 import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useState } from 'react';
 import { BottomSheet } from '@/components/bottom-sheet';
 import { PageFilter, PageAdjustment } from '@/types/document';
@@ -69,23 +70,23 @@ export function PageActionsSheet({
         ) : (
           <>
             <Pressable style={[styles.actionBtn, { backgroundColor: colors.actionBtnBg }]} onPress={() => rotate('ccw')} accessibilityRole="button" accessibilityLabel="Rotate left">
-              <Text style={[styles.actionIcon, { color: colors.text }]}>↺</Text>
+              <MaterialCommunityIcons name="rotate-left" size={22} color={colors.text} />
               <Text allowFontScaling={false} style={[styles.actionLabel, { color: colors.subtext }]}>Rotate L</Text>
             </Pressable>
             <Pressable style={[styles.actionBtn, { backgroundColor: colors.actionBtnBg }]} onPress={() => rotate('cw')} accessibilityRole="button" accessibilityLabel="Rotate right">
-              <Text style={[styles.actionIcon, { color: colors.text }]}>↻</Text>
+              <MaterialCommunityIcons name="rotate-right" size={22} color={colors.text} />
               <Text allowFontScaling={false} style={[styles.actionLabel, { color: colors.subtext }]}>Rotate R</Text>
             </Pressable>
             <Pressable style={[styles.actionBtn, { backgroundColor: colors.actionBtnBg }]} onPress={() => { onClose(); onAnnotate(); }} accessibilityRole="button" accessibilityLabel="Annotate">
-              <Text style={[styles.actionIcon, { color: colors.text }]}>✏️</Text>
+              <Ionicons name="create-outline" size={22} color={colors.text} />
               <Text allowFontScaling={false} style={[styles.actionLabel, { color: colors.subtext }]}>Annotate</Text>
             </Pressable>
             <Pressable style={[styles.actionBtn, { backgroundColor: colors.actionBtnBg }]} onPress={onShare} accessibilityRole="button" accessibilityLabel="Share">
-              <Text style={[styles.actionIcon, { color: colors.text }]}>↑</Text>
+              <Ionicons name="share-outline" size={22} color={colors.text} />
               <Text allowFontScaling={false} style={[styles.actionLabel, { color: colors.subtext }]}>Share</Text>
             </Pressable>
             <Pressable style={[styles.actionBtn, { backgroundColor: colors.dangerBg }]} onPress={onDelete} accessibilityRole="button" accessibilityLabel="Delete">
-              <Text style={[styles.actionIcon, { color: colors.danger }]}>✕</Text>
+              <Ionicons name="trash-outline" size={22} color={colors.danger} />
               <Text allowFontScaling={false} style={[styles.actionLabel, { color: colors.danger }]}>Delete</Text>
             </Pressable>
           </>
@@ -171,7 +172,6 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 10,
   },
-  actionIcon: { fontSize: 18 },
   actionLabel: { fontSize: 10, marginTop: 2 },
   tabRow: {
     flexDirection: 'row',

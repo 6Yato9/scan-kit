@@ -10,6 +10,7 @@ import {
   View,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -314,7 +315,7 @@ export default function AnnotateScreen() {
             accessibilityRole="button"
             accessibilityLabel="Eraser"
           >
-            <Text style={styles.eraserText}>⌫</Text>
+            <MaterialCommunityIcons name="eraser" size={20} color="#ccc" />
           </Pressable>
 
           {/* Undo */}
@@ -324,7 +325,7 @@ export default function AnnotateScreen() {
             accessibilityRole="button"
             accessibilityLabel="Undo"
           >
-            <Text style={styles.eraserText}>↩</Text>
+            <Ionicons name="arrow-undo-outline" size={20} color="#ccc" />
           </Pressable>
 
           {/* Pen sizes */}
@@ -388,7 +389,6 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: 'transparent',
   },
-  eraserText: { fontSize: 16, color: '#ccc' },
   sizeBtn: {
     width: 36,
     height: 36,
