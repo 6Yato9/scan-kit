@@ -7,6 +7,7 @@ import { ScanProvider } from '@/contexts/scan-context';
 import { ThemeProvider, useTheme } from '@/contexts/theme-context';
 import { ToastProvider } from '@/components/toast';
 import { ErrorBoundary } from '@/components/error-boundary';
+import { LockGate } from '@/components/lock-gate';
 import { garbageCollectOrphans } from '@/lib/files';
 import { getDocuments, getOnboarded } from '@/lib/storage';
 
@@ -41,6 +42,7 @@ function ThemedStack() {
     <>
     <StatusBar style={isDark ? 'light' : 'dark'} />
     <OnboardingGate />
+    <LockGate>
     <Stack
       screenOptions={{
         headerStyle: { backgroundColor: colors.card },
@@ -98,6 +100,7 @@ function ThemedStack() {
       <Stack.Screen name="tools/ask-ai" options={{ headerShown: false, presentation: 'card' }} />
       <Stack.Screen name="tools/extract-text" options={{ headerShown: false, presentation: 'card' }} />
     </Stack>
+    </LockGate>
     </>
   );
 }

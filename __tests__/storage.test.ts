@@ -288,6 +288,36 @@ describe('getScanSettings', () => {
   });
 });
 
+// --- App lock flag ---
+
+describe('app lock flag', () => {
+  it('getAppLockEnabled defaults to false when nothing stored', async () => {
+    expect(await storage.getAppLockEnabled()).toBe(false);
+  });
+
+  it('returns true after setAppLockEnabled(true)', async () => {
+    await storage.setAppLockEnabled(true);
+    expect(await storage.getAppLockEnabled()).toBe(true);
+  });
+
+  it('returns false after setAppLockEnabled(false)', async () => {
+    await storage.setAppLockEnabled(true);
+    await storage.setAppLockEnabled(false);
+    expect(await storage.getAppLockEnabled()).toBe(false);
+  });
+
+  it('removes the key when disabled', async () => {
+    await storage.setAppLockEnabled(true);
+    await storage.setAppLockEnabled(false);
+    expect(await AsyncStorage.getItem('@scan_kit_app_lock')).toBeNull();
+  });
+
+  it('getAppLockEnabled returns false (not throws) when getItem rejects', async () => {
+    jest.spyOn(AsyncStorage, 'getItem').mockRejectedValueOnce(new Error('boom'));
+    expect(await storage.getAppLockEnabled()).toBe(false);
+  });
+});
+
 // --- DocSettings ---
 
 describe('getDocSettings', () => {

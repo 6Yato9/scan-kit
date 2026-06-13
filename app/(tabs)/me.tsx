@@ -1,12 +1,14 @@
 // app/(tabs)/me.tsx
 import { useCallback, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Directory, File, Paths } from 'expo-file-system';
 import { SortSheet } from '@/components/sort-sheet';
-import { getSortPreference, saveSortPreference, SortKey } from '@/lib/storage';
+import { getAppLockEnabled, getSortPreference, saveSortPreference, setAppLockEnabled, SortKey } from '@/lib/storage';
+import { authenticate } from '@/lib/biometrics';
+import { tapLight } from '@/lib/haptics';
 import { useTheme } from '@/contexts/theme-context';
 
 /** Recursively sums the byte size of every file under a directory. */
@@ -56,11 +58,13 @@ export default function MeScreen() {
   const [sortSheetVisible, setSortSheetVisible] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>('dateAdded');
   const [storageUsed, setStorageUsed] = useState<string>('—');
+  const [appLock, setAppLock] = useState(false);
   const { preference, setPreference, colors } = useTheme();
 
   useFocusEffect(useCallback(() => {
     let cancelled = false;
     getSortPreference().then(k => { if (!cancelled) setSortKey(k); });
+    getAppLockEnabled().then(v => { if (!cancelled) setAppLock(v); });
     try {
       const root = new Directory(Paths.document, 'scan-kit');
       const bytes = root.exists ? dirSize(root) : 0;
@@ -90,6 +94,33 @@ export default function MeScreen() {
     await saveSortPreference(key);
   };
 
+  // Toggle the whole-app lock. Both directions require an auth gate so a user
+  // can't enable a lock they can't pass, nor leave one stuck on with a broken
+  // sensor (fail-open on 'unavailable' when turning OFF).
+  const handleToggleAppLock = async (next: boolean) => {
+    tapLight();
+    if (next) {
+      const result = await authenticate('Enable App Lock');
+      if (result === 'success') {
+        await setAppLockEnabled(true);
+        setAppLock(true);
+      } else if (result === 'unavailable') {
+        Alert.alert('Biometrics not available', 'This device has no biometric or passcode authentication set up.');
+      } else {
+        Alert.alert('Authentication failed', 'App Lock was not enabled.');
+      }
+    } else {
+      const result = await authenticate('Disable App Lock');
+      // Fail open when turning OFF: a broken sensor must not trap the lock on.
+      if (result === 'success' || result === 'unavailable') {
+        await setAppLockEnabled(false);
+        setAppLock(false);
+      } else {
+        Alert.alert('Authentication failed', 'App Lock is still on.');
+      }
+    }
+  };
+
   return (
     <ScrollView
       style={[styles.container, { backgroundColor: colors.bg }]}
@@ -115,6 +146,15 @@ export default function MeScreen() {
               </Text>
             </Pressable>
           ))}
+        </View>
+      </View>
+
+      <View style={[styles.section, { marginBottom: 12 }]}>
+        <Text style={[styles.sectionLabel, { color: colors.muted }]}>SECURITY</Text>
+        <View style={[styles.lockRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <Ionicons name="lock-closed-outline" size={20} color={colors.muted} style={styles.rowIcon} />
+          <Text style={[styles.rowLabel, { color: colors.text }]}>App Lock</Text>
+          <Switch value={appLock} onValueChange={handleToggleAppLock} />
         </View>
       </View>
 
@@ -156,6 +196,7 @@ const styles = StyleSheet.create({
   },
   sectionLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.8, marginHorizontal: 14, marginBottom: 6 },
   themeRow: { flexDirection: 'row', marginHorizontal: 14, borderRadius: 10, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
+  lockRow: { flexDirection: 'row', alignItems: 'center', marginHorizontal: 14, borderRadius: 10, borderWidth: StyleSheet.hairlineWidth, paddingVertical: 11, paddingHorizontal: 14, gap: 12 },
   themeBtn: { flex: 1, paddingVertical: 10, alignItems: 'center' },
   themeBtnText: { fontSize: 14, fontWeight: '600' },
   settingsSection: {

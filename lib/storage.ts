@@ -382,6 +382,25 @@ export async function setOnboarded(): Promise<void> {
   await AsyncStorage.setItem(ONBOARDED_KEY, '1');
 }
 
+// ── App lock flag ────────────────────────────────────────────────────────────
+const APP_LOCK_KEY = '@scan_kit_app_lock';
+
+export async function getAppLockEnabled(): Promise<boolean> {
+  try {
+    return (await AsyncStorage.getItem(APP_LOCK_KEY)) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export async function setAppLockEnabled(enabled: boolean): Promise<void> {
+  if (enabled) {
+    await AsyncStorage.setItem(APP_LOCK_KEY, '1');
+  } else {
+    await AsyncStorage.removeItem(APP_LOCK_KEY);
+  }
+}
+
 // ── AI key ──────────────────────────────────────────────────────────────────
 const AI_KEY_STORAGE = '@scan_kit_ai_key';
 

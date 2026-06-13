@@ -59,7 +59,13 @@
           }
         }
       ],
-      "react-native-document-scanner-plugin"
+      "react-native-document-scanner-plugin",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Unlock Scan Kit with Face ID."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
