@@ -22,21 +22,12 @@ import { appendPages, deleteSinglePage, reorderPages, deleteDocumentFiles } from
 import { rotatePage } from '@/lib/image';
 import { combinedFilterStyle } from '@/lib/filters';
 import { notifySuccess } from '@/lib/haptics';
+import { ocrAvailable, recognizeLines, extractDocText } from '@/lib/ocr';
 import { Document, PageAdjustment, PageFilter } from '@/types/document';
 import { ExportSheet } from '@/components/export-sheet';
 import { PageActionsSheet } from '@/components/page-actions-sheet';
 import { ThumbnailStrip } from '@/components/thumbnail-strip';
 import { ReorderModal } from '@/components/reorder-modal';
-
-
-// OCR is optional — imported lazily so the app won't crash if the native module isn't linked yet
-let TextRecognition: { recognize: (uri: string) => Promise<{ text: string }> } | null = null;
-try {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  TextRecognition = require('@react-native-ml-kit/text-recognition').default;
-} catch {
-  // package not linked — OCR button will show an info alert
-}
 
 export default function ViewerScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -308,7 +299,7 @@ export default function ViewerScreen() {
 
   const handleOcr = useCallback(async () => {
     if (!document) return;
-    if (!TextRecognition) {
+    if (!ocrAvailable()) {
       Alert.alert(
         'OCR not available',
         'Rebuild your dev client after installing @react-native-ml-kit/text-recognition to enable text extraction.'
@@ -317,8 +308,14 @@ export default function ViewerScreen() {
     }
     setOcrRunning(true);
     try {
-      const result = await TextRecognition.recognize(document.pages[currentPage]);
-      setOcrResult(result.text || '(No text found)');
+      const { text } = await recognizeLines(document.pages[currentPage]);
+      setOcrResult(text || '(No text found)');
+      // Also refresh the full-doc content index in the background so search can
+      // match this document. Fire-and-forget; write via updateDocument with the
+      // existing updatedAt so the list ordering doesn't shift.
+      extractDocText(document.pages)
+        .then(text => { if (text) updateDocument({ ...document, ocrText: text }); })
+        .catch(() => {});
     } catch {
       Alert.alert('OCR failed', 'Could not extract text from this page.');
     } finally {

@@ -22,8 +22,9 @@ import DocumentScanner from 'react-native-document-scanner-plugin';
 import { useScan } from '@/contexts/scan-context';
 import { useTheme } from '@/contexts/theme-context';
 import { PageFilter } from '@/types/document';
-import { saveDocument, getScanSettings, getDocSettings } from '@/lib/storage';
+import { saveDocument, updateDocument, getScanSettings, getDocSettings } from '@/lib/storage';
 import { copyPageWithQuality, copyPdfToStorage, deleteDocumentFiles } from '@/lib/files';
+import { ocrAvailable, extractDocText } from '@/lib/ocr';
 import { filterStyle } from '@/lib/filters';
 import { autoName } from '@/lib/auto-name';
 import { notifySuccess } from '@/lib/haptics';
@@ -123,14 +124,24 @@ export default function ReviewScreen() {
           }
         }
         const allOriginal = filters.every(f => f === 'original');
-        await saveDocument({
+        const savedDoc = {
           id,
           name: trimmedName,
           pages: savedPages,
           filters: allOriginal ? undefined : (filters as PageFilter[]),
           createdAt: now,
           updatedAt: now,
-        });
+        };
+        await saveDocument(savedDoc);
+
+        // Fire-and-forget content index so search can match recognized text.
+        // Not awaited — save/navigation stays instant. Keep updatedAt unchanged
+        // so the freshly-saved doc doesn't jump in the list when indexing lands.
+        if (ocrAvailable()) {
+          extractDocText(savedPages)
+            .then(text => { if (text) updateDocument({ ...savedDoc, ocrText: text }); })
+            .catch(() => {});
+        }
       }
 
       bumpLastSaved();

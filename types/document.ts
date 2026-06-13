@@ -17,4 +17,7 @@ export type Document = {
   updatedAt: number;
   folder?: string;       // folder name; undefined = no folder
   pdfUri?: string;       // set for imported PDFs; pages will be []
+  // Concatenated OCR text across all pages, used for content search. May go stale
+  // after page edits (rotate/crop/delete/reorder); refreshed on the next OCR run.
+  ocrText?: string;
 };

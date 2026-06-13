@@ -99,7 +99,9 @@ export default function FilesScreen() {
 
   const displayedDocuments = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    let filtered = q ? documents.filter(d => d.name.toLowerCase().includes(q)) : documents;
+    let filtered = q
+      ? documents.filter(d => d.name.toLowerCase().includes(q) || (d.ocrText?.toLowerCase().includes(q) ?? false))
+      : documents;
     if (activeFolder !== null) {
       filtered = filtered.filter(d => d.folder === activeFolder);
     }

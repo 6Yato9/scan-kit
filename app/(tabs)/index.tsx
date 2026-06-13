@@ -76,7 +76,9 @@ export default function HomeScreen() {
 
   const displayed = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    const filtered = q ? documents.filter(d => d.name.toLowerCase().includes(q)) : documents;
+    const filtered = q
+      ? documents.filter(d => d.name.toLowerCase().includes(q) || (d.ocrText?.toLowerCase().includes(q) ?? false))
+      : documents;
     const sorted = sortDocuments(filtered, sortKey);
     return q ? sorted : sorted.slice(0, 10);
   }, [documents, searchQuery, sortKey]);

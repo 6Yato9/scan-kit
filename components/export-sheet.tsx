@@ -8,7 +8,8 @@ import { File, Paths } from 'expo-file-system';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { SaveFormat } from 'expo-image-manipulator';
 import JSZip from 'jszip';
-import { generatePdf } from '@/lib/pdf';
+import { generatePdf, generateSearchablePdf } from '@/lib/pdf';
+import { ocrAvailable } from '@/lib/ocr';
 import { combinedFilterCss } from '@/lib/filters';
 import { BottomSheet } from '@/components/bottom-sheet';
 import { Document } from '@/types/document';
@@ -63,6 +64,34 @@ export function ExportSheet({ visible, document, onClose }: Props) {
       onClose();
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Could not generate PDF.';
+      // Surface the error but keep the sheet open so the user can retry.
+      Alert.alert('Export failed', msg);
+    } finally {
+      setLoading(false);
+      setLoadingLabel('');
+    }
+  }
+
+  async function handleExportSearchablePdf() {
+    setLoadingLabel('Building PDF…');
+    setLoading(true);
+    try {
+      const settings = await getDocSettings();
+      const uri = await generateSearchablePdf(
+        document.pages,
+        document.filters,
+        document.adjustments,
+        settings.pdfPageSize,
+        (done, total) => setLoadingLabel(`Reading text ${done}/${total}…`),
+      );
+      await Sharing.shareAsync(uri, {
+        mimeType: 'application/pdf',
+        dialogTitle: document.name,
+        UTI: 'com.adobe.pdf',
+      });
+      onClose();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Could not generate searchable PDF.';
       // Surface the error but keep the sheet open so the user can retry.
       Alert.alert('Export failed', msg);
     } finally {
@@ -132,6 +161,8 @@ export function ExportSheet({ visible, document, onClose }: Props) {
 
   const pageCount = document.pages.length;
   const hasFilters = document.filters?.some(f => f !== 'original') || !!document.adjustments?.length;
+  // Searchable PDF needs OCR and real image pages (not an imported pdfUri doc).
+  const canSearchablePdf = ocrAvailable() && pageCount > 0 && !document.pdfUri;
 
   return (
     <BottomSheet visible={visible} onClose={loading ? undefined : onClose}>
@@ -160,7 +191,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
               <Text allowFontScaling={false} style={[styles.badge, { backgroundColor: colors.accentLight, color: colors.accent }]}>HD</Text>
             </Pressable>
             <Pressable
-              style={styles.option}
+              style={[styles.option, canSearchablePdf && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }]}
               onPress={() => handleExportPdf('medium')}
             >
               <View style={styles.optionText}>
@@ -169,6 +200,18 @@ export function ExportSheet({ visible, document, onClose }: Props) {
               </View>
               <Text allowFontScaling={false} style={[styles.badge, { backgroundColor: colors.secondary, color: colors.muted }]}>SD</Text>
             </Pressable>
+            {canSearchablePdf && (
+              <Pressable
+                style={styles.option}
+                onPress={handleExportSearchablePdf}
+              >
+                <View style={styles.optionText}>
+                  <Text style={[styles.optionTitle, { color: colors.text }]}>Searchable PDF</Text>
+                  <Text style={[styles.optionSub, { color: colors.faint }]}>Selectable text layer · OCR</Text>
+                </View>
+                <Text allowFontScaling={false} style={[styles.badge, { backgroundColor: colors.accentLight, color: colors.accent }]}>OCR</Text>
+              </Pressable>
+            )}
           </View>
 
           {/* ZIP section */}
