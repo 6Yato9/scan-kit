@@ -1,9 +1,13 @@
 // app/_layout.tsx
+import { useEffect } from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { ScanProvider } from '@/contexts/scan-context';
 import { ThemeProvider, useTheme } from '@/contexts/theme-context';
+import { ErrorBoundary } from '@/components/error-boundary';
+import { garbageCollectOrphans } from '@/lib/files';
+import { getDocuments } from '@/lib/storage';
 
 function ThemedStack() {
   const { colors, isDark } = useTheme();
@@ -68,13 +72,26 @@ function ThemedStack() {
 }
 
 export default function RootLayout() {
+  useEffect(() => {
+    // Fire-and-forget startup sweep of orphaned doc dirs and interrupted-
+    // operation temp files. Delayed slightly so it never competes with render.
+    const t = setTimeout(() => {
+      getDocuments()
+        .then(docs => garbageCollectOrphans(docs.map(d => d.id)))
+        .catch(() => {});
+    }, 2000);
+    return () => clearTimeout(t);
+  }, []);
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <ThemeProvider>
-        <ScanProvider>
-          <ThemedStack />
-        </ScanProvider>
-      </ThemeProvider>
+      <ErrorBoundary>
+        <ThemeProvider>
+          <ScanProvider>
+            <ThemedStack />
+          </ScanProvider>
+        </ThemeProvider>
+      </ErrorBoundary>
     </GestureHandlerRootView>
   );
 }

@@ -41,6 +41,9 @@
         {
           "ios": {
             "deploymentTarget": "15.5"
+          },
+          "android": {
+            "androidStorageSize": 50
           }
         }
       ],

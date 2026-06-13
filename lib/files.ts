@@ -213,6 +213,69 @@ export async function copyPageWithQuality(
   return dest.uri;
 }
 
+/** Returns the last path segment of a file:// uri (the basename), or ''. */
+function baseName(uri: string): string {
+  const trimmed = uri.replace(/\/+$/, '');
+  const idx = trimmed.lastIndexOf('/');
+  return idx >= 0 ? trimmed.slice(idx + 1) : trimmed;
+}
+
+const STALE_TEMP = [/\.tmp\.jpg$/, /\.new\.jpg$/, /\.shifting\.jpg$/, /^page-tmp-.*\.jpg$/];
+
+/**
+ * Startup sweep. Deletes:
+ *  - any directory under scan-kit/ whose name is NOT in validDocIds (orphans
+ *    whose doc record is gone), and
+ *  - stale interrupted-operation temp files inside the VALID doc dirs.
+ *
+ * Extremely defensive: every item is wrapped in its own try/catch so a single
+ * failure never aborts the sweep, and if listing fails entirely it returns 0.
+ * NEVER deletes a directory whose id IS in validDocIds.
+ */
+export async function garbageCollectOrphans(validDocIds: string[]): Promise<number> {
+  let deleted = 0;
+  const valid = new Set(validDocIds);
+  let children: (Directory | File)[];
+  try {
+    const root = new Directory(Paths.document, 'scan-kit');
+    if (!root.exists) return 0;
+    children = root.list();
+  } catch {
+    return 0;
+  }
+
+  for (const child of children) {
+    try {
+      if (child instanceof Directory) {
+        const id = baseName(child.uri);
+        if (valid.has(id)) {
+          // Valid doc dir: sweep only interrupted-operation leftovers inside it.
+          let inner: (Directory | File)[];
+          try {
+            inner = child.list();
+          } catch {
+            continue;
+          }
+          for (const item of inner) {
+            try {
+              if (item instanceof File && STALE_TEMP.some(re => re.test(baseName(item.uri)))) {
+                item.delete();
+                deleted++;
+              }
+            } catch {}
+          }
+        } else {
+          // Orphan directory: its doc record is gone. Remove it entirely.
+          child.delete();
+          deleted++;
+        }
+      }
+    } catch {}
+  }
+
+  return deleted;
+}
+
 /**
  * Copies an imported PDF from a temp URI to permanent storage.
  * Returns the stored file:// URI.
