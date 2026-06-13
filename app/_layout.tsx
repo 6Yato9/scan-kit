@@ -1,6 +1,6 @@
 // app/_layout.tsx
-import { useEffect } from 'react';
-import { Stack } from 'expo-router';
+import { useEffect, useState } from 'react';
+import { Stack, usePathname, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { ScanProvider } from '@/contexts/scan-context';
@@ -8,13 +8,39 @@ import { ThemeProvider, useTheme } from '@/contexts/theme-context';
 import { ToastProvider } from '@/components/toast';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { garbageCollectOrphans } from '@/lib/files';
-import { getDocuments } from '@/lib/storage';
+import { getDocuments, getOnboarded } from '@/lib/storage';
+
+// First-run gate: after mount, read the onboarding flag and redirect to the
+// onboarding screen if it hasn't been completed. Kept separate from the tabs
+// review effect. Doesn't block render — a brief flash of tabs is acceptable.
+function OnboardingGate() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const [onboarded, setOnboardedState] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getOnboarded().then(v => { if (!cancelled) setOnboardedState(v); });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    // Only redirect once the check has resolved false and we're not already
+    // on the onboarding screen (avoids a redirect loop).
+    if (onboarded === false && pathname !== '/onboarding') {
+      router.replace('/onboarding');
+    }
+  }, [onboarded, pathname, router]);
+
+  return null;
+}
 
 function ThemedStack() {
   const { colors, isDark } = useTheme();
   return (
     <>
     <StatusBar style={isDark ? 'light' : 'dark'} />
+    <OnboardingGate />
     <Stack
       screenOptions={{
         headerStyle: { backgroundColor: colors.card },
@@ -25,6 +51,10 @@ function ThemedStack() {
       }}
     >
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      <Stack.Screen
+        name="onboarding"
+        options={{ headerShown: false, presentation: 'fullScreenModal' }}
+      />
       <Stack.Screen
         name="viewer"
         options={{ presentation: 'fullScreenModal', headerShown: false }}

@@ -68,23 +68,23 @@ export function PageActionsSheet({
           <ActivityIndicator style={{ flex: 1 }} />
         ) : (
           <>
-            <Pressable style={[styles.actionBtn, { backgroundColor: colors.actionBtnBg }]} onPress={() => rotate('ccw')}>
+            <Pressable style={[styles.actionBtn, { backgroundColor: colors.actionBtnBg }]} onPress={() => rotate('ccw')} accessibilityRole="button" accessibilityLabel="Rotate left">
               <Text style={[styles.actionIcon, { color: colors.text }]}>↺</Text>
               <Text allowFontScaling={false} style={[styles.actionLabel, { color: colors.subtext }]}>Rotate L</Text>
             </Pressable>
-            <Pressable style={[styles.actionBtn, { backgroundColor: colors.actionBtnBg }]} onPress={() => rotate('cw')}>
+            <Pressable style={[styles.actionBtn, { backgroundColor: colors.actionBtnBg }]} onPress={() => rotate('cw')} accessibilityRole="button" accessibilityLabel="Rotate right">
               <Text style={[styles.actionIcon, { color: colors.text }]}>↻</Text>
               <Text allowFontScaling={false} style={[styles.actionLabel, { color: colors.subtext }]}>Rotate R</Text>
             </Pressable>
-            <Pressable style={[styles.actionBtn, { backgroundColor: colors.actionBtnBg }]} onPress={() => { onClose(); onAnnotate(); }}>
+            <Pressable style={[styles.actionBtn, { backgroundColor: colors.actionBtnBg }]} onPress={() => { onClose(); onAnnotate(); }} accessibilityRole="button" accessibilityLabel="Annotate">
               <Text style={[styles.actionIcon, { color: colors.text }]}>✏️</Text>
               <Text allowFontScaling={false} style={[styles.actionLabel, { color: colors.subtext }]}>Annotate</Text>
             </Pressable>
-            <Pressable style={[styles.actionBtn, { backgroundColor: colors.actionBtnBg }]} onPress={onShare}>
+            <Pressable style={[styles.actionBtn, { backgroundColor: colors.actionBtnBg }]} onPress={onShare} accessibilityRole="button" accessibilityLabel="Share">
               <Text style={[styles.actionIcon, { color: colors.text }]}>↑</Text>
               <Text allowFontScaling={false} style={[styles.actionLabel, { color: colors.subtext }]}>Share</Text>
             </Pressable>
-            <Pressable style={[styles.actionBtn, { backgroundColor: colors.dangerBg }]} onPress={onDelete}>
+            <Pressable style={[styles.actionBtn, { backgroundColor: colors.dangerBg }]} onPress={onDelete} accessibilityRole="button" accessibilityLabel="Delete">
               <Text style={[styles.actionIcon, { color: colors.danger }]}>✕</Text>
               <Text allowFontScaling={false} style={[styles.actionLabel, { color: colors.danger }]}>Delete</Text>
             </Pressable>

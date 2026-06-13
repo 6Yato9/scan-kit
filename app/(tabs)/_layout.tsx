@@ -186,6 +186,8 @@ function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
               if (!isFocused) { selection(); navigation.navigate(route.name); }
             }}
             style={styles.tabBtn}
+            accessibilityRole="button"
+            accessibilityLabel={TAB_LABELS[route.name] ?? route.name}
           >
             <Ionicons
               name={TAB_ICONS[route.name] ?? 'help-circle'}

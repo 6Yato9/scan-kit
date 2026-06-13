@@ -334,7 +334,7 @@ export default function FilesScreen() {
     <View style={[styles.container, { paddingTop: insets.top, backgroundColor: colors.bg }]}>
       <View style={styles.header}>
         <Text style={[styles.title, { color: colors.text }]}>Files</Text>
-        <Pressable style={styles.sortBtnRow} onPress={() => setSortSheetVisible(true)} hitSlop={12}>
+        <Pressable style={styles.sortBtnRow} onPress={() => setSortSheetVisible(true)} hitSlop={12} accessibilityRole="button" accessibilityLabel="Sort">
           <Ionicons name="swap-vertical" size={16} color={colors.accent} />
           <Text style={[styles.sortBtn, { color: colors.accent }]}>Sort</Text>
         </Pressable>
@@ -354,15 +354,15 @@ export default function FilesScreen() {
 
       {/* Quick action bar */}
       <View style={styles.actionBar}>
-        <Pressable style={[styles.actionBtn, { backgroundColor: colors.card }]} onPress={handleImportImages}>
+        <Pressable style={[styles.actionBtn, { backgroundColor: colors.card }]} onPress={handleImportImages} accessibilityRole="button" accessibilityLabel="Import Images">
           <Ionicons name="images-outline" size={16} color={colors.accent} />
           <Text allowFontScaling={false} style={[styles.actionBtnText, { color: colors.text }]}>Import Images</Text>
         </Pressable>
-        <Pressable style={[styles.actionBtn, { backgroundColor: colors.card }]} onPress={handleImportFiles}>
+        <Pressable style={[styles.actionBtn, { backgroundColor: colors.card }]} onPress={handleImportFiles} accessibilityRole="button" accessibilityLabel="Import Files">
           <Ionicons name="cloud-download-outline" size={16} color={colors.accent} />
           <Text allowFontScaling={false} style={[styles.actionBtnText, { color: colors.text }]}>Import Files</Text>
         </Pressable>
-        <Pressable style={[styles.actionBtn, { backgroundColor: colors.card }]} onPress={handleNewFolder}>
+        <Pressable style={[styles.actionBtn, { backgroundColor: colors.card }]} onPress={handleNewFolder} accessibilityRole="button" accessibilityLabel="New Folder">
           <Ionicons name="folder-open-outline" size={16} color={colors.accent} />
           <Text allowFontScaling={false} style={[styles.actionBtnText, { color: colors.text }]}>New Folder</Text>
         </Pressable>

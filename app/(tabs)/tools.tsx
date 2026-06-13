@@ -22,6 +22,8 @@ function ToolItem({ tool }: { tool: Tool }) {
     <Pressable
       style={styles.toolItem}
       onPress={!tool.soon && tool.action ? tool.action : undefined}
+      accessibilityRole="button"
+      accessibilityLabel={tool.label}
     >
       <View style={[styles.iconWrap, { backgroundColor: bg }, tool.soon && styles.iconSoon]}>
         <MaterialCommunityIcons

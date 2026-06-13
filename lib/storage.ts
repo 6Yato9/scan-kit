@@ -367,6 +367,21 @@ export async function clearPendingState(): Promise<void> {
   await AsyncStorage.removeItem(PENDING_KEY);
 }
 
+// ── First-run onboarding flag ────────────────────────────────────────────────
+const ONBOARDED_KEY = '@scan_kit_onboarded';
+
+export async function getOnboarded(): Promise<boolean> {
+  try {
+    return (await AsyncStorage.getItem(ONBOARDED_KEY)) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export async function setOnboarded(): Promise<void> {
+  await AsyncStorage.setItem(ONBOARDED_KEY, '1');
+}
+
 // ── AI key ──────────────────────────────────────────────────────────────────
 const AI_KEY_STORAGE = '@scan_kit_ai_key';
 

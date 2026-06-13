@@ -254,7 +254,7 @@ export default function AnnotateScreen() {
     <View style={[styles.container, { backgroundColor: '#111' }]}>
       {/* Top bar */}
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
-        <Pressable onPress={() => router.back()} hitSlop={12}>
+        <Pressable onPress={() => router.back()} hitSlop={12} accessibilityRole="button" accessibilityLabel="Cancel">
           <Text style={styles.topBtn}>Cancel</Text>
         </Pressable>
         <Text style={styles.topTitle}>Annotate</Text>
@@ -262,6 +262,8 @@ export default function AnnotateScreen() {
           onPress={() => inject('getResult()')}
           disabled={saving || !ready}
           hitSlop={12}
+          accessibilityRole="button"
+          accessibilityLabel="Done"
         >
           {saving
             ? <ActivityIndicator color="#fff" />
@@ -309,6 +311,8 @@ export default function AnnotateScreen() {
           <Pressable
             style={[styles.eraserBtn, eraser && { borderColor: colors.accent }]}
             onPress={toggleEraser}
+            accessibilityRole="button"
+            accessibilityLabel="Eraser"
           >
             <Text style={styles.eraserText}>⌫</Text>
           </Pressable>
@@ -317,6 +321,8 @@ export default function AnnotateScreen() {
           <Pressable
             style={styles.eraserBtn}
             onPress={() => inject('undo()')}
+            accessibilityRole="button"
+            accessibilityLabel="Undo"
           >
             <Text style={styles.eraserText}>↩</Text>
           </Pressable>

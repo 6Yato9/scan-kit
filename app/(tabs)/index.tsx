@@ -199,7 +199,7 @@ export default function HomeScreen() {
     <View style={[styles.container, { paddingTop: insets.top, backgroundColor: colors.bg }]}>
       <View style={styles.header}>
         <Text style={[styles.title, { color: colors.text }]}>Recent</Text>
-        <Pressable style={styles.sortBtnRow} onPress={() => setSortSheetVisible(true)} hitSlop={12}>
+        <Pressable style={styles.sortBtnRow} onPress={() => setSortSheetVisible(true)} hitSlop={12} accessibilityRole="button" accessibilityLabel="Sort">
           <Ionicons name="swap-vertical" size={16} color={colors.accent} />
           <Text style={[styles.sortBtn, { color: colors.accent }]}>Sort</Text>
         </Pressable>

@@ -119,7 +119,7 @@ export default function QrScreen() {
     const mustGoToSettings = permission.canAskAgain === false;
     return (
       <View style={[styles.container, styles.centered, { backgroundColor: colors.bg, paddingTop: insets.top }]}>
-        <Pressable onPress={() => router.back()} style={[styles.backBtn, { top: insets.top + 8 }]}>
+        <Pressable onPress={() => router.back()} style={[styles.backBtn, { top: insets.top + 8 }]} accessibilityRole="button" accessibilityLabel="Close">
           <Ionicons name="close" size={24} color={colors.text} />
         </Pressable>
         <Ionicons name="camera-outline" size={56} color={colors.muted} />
@@ -154,7 +154,7 @@ export default function QrScreen() {
 
       {/* Top bar */}
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.closeBtn}>
+        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.closeBtn} accessibilityRole="button" accessibilityLabel="Close">
           <Ionicons name="close" size={24} color="#fff" />
         </Pressable>
         <Text style={styles.topTitle}>QR / Barcode</Text>

@@ -81,7 +81,7 @@ export default function IdCardScreen() {
     >
       {/* Header */}
       <View style={[styles.topBar, { top: insets.top }]}>
-        <Pressable onPress={() => router.back()} hitSlop={12}>
+        <Pressable onPress={() => router.back()} hitSlop={12} accessibilityRole="button" accessibilityLabel="Close">
           <Ionicons name="close" size={24} color={colors.text} />
         </Pressable>
         <Text style={[styles.title, { color: colors.text }]}>ID Card</Text>
