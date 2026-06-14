@@ -23,7 +23,7 @@ import DocumentScanner from 'react-native-document-scanner-plugin';
 import { useScan } from '@/contexts/scan-context';
 import { useTheme } from '@/contexts/theme-context';
 import { PageFilter } from '@/types/document';
-import { saveDocument, updateDocument, getScanSettings, getDocSettings } from '@/lib/storage';
+import { saveDocument, updateDocument, getDocuments, getScanSettings, getDocSettings } from '@/lib/storage';
 import { copyPageWithQuality, copyPdfToStorage, deleteDocumentFiles } from '@/lib/files';
 import { ocrAvailable, extractDocText } from '@/lib/ocr';
 import { combinedFilterRN } from '@/lib/filters';
@@ -138,11 +138,18 @@ export default function ReviewScreen() {
         await saveDocument(savedDoc);
 
         // Fire-and-forget content index so search can match recognized text.
-        // Not awaited — save/navigation stays instant. Keep updatedAt unchanged
-        // so the freshly-saved doc doesn't jump in the list when indexing lands.
+        // Not awaited — save/navigation stays instant. Re-read the doc by id when
+        // OCR lands so we (a) don't resurrect a doc the user deleted meanwhile and
+        // (b) don't clobber edits (rename/reorder) made during the OCR pass.
         if (ocrAvailable()) {
           extractDocText(savedPages)
-            .then(text => { if (text) updateDocument({ ...savedDoc, ocrText: text }); })
+            .then(async text => {
+              if (!text) return;
+              const docs = await getDocuments();
+              const current = docs.find(d => d.id === id);
+              if (!current) return; // deleted during indexing — don't resurrect
+              await updateDocument({ ...current, ocrText: text });
+            })
             .catch(() => {});
         }
       }

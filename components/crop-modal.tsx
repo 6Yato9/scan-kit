@@ -215,7 +215,10 @@ const styles = StyleSheet.create({
   cancel: { color: '#ccc', fontSize: 16 },
   title: { color: '#fff', fontSize: 17, fontWeight: '700' },
   done: { fontSize: 16, fontWeight: '700' },
-  cropArea: { flex: 1, margin: 16, position: 'relative', overflow: 'hidden' },
+  // No overflow:hidden — corner handles sit at the image edge and would be
+  // clipped (ungrabbable) on edge-to-edge images. The dim is drawn as explicit
+  // bands, so nothing relies on clipping here.
+  cropArea: { flex: 1, margin: 16, position: 'relative' },
   dim: { position: 'absolute', backgroundColor: 'rgba(0,0,0,0.55)' },
   cropBorder: { position: 'absolute', borderWidth: 2 },
   handle: { position: 'absolute', width: HANDLE, height: HANDLE, alignItems: 'center', justifyContent: 'center' },

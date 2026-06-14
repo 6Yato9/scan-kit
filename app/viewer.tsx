@@ -40,6 +40,7 @@ export default function ViewerScreen() {
   const [reorderVisible, setReorderVisible] = useState(false);
   const [ocrResult, setOcrResult] = useState<string | null>(null);
   const [ocrRunning, setOcrRunning] = useState(false);
+  const ocrIndexingRef = useRef(false);
   const flatListRef = useRef<FlatList>(null);
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -311,12 +312,24 @@ export default function ViewerScreen() {
     try {
       const { text } = await recognizeLines(document.pages[currentPage]);
       setOcrResult(text || '(No text found)');
-      // Also refresh the full-doc content index in the background so search can
-      // match this document. Fire-and-forget; write via updateDocument with the
-      // existing updatedAt so the list ordering doesn't shift.
-      extractDocText(document.pages)
-        .then(text => { if (text) updateDocument({ ...document, ocrText: text }); })
-        .catch(() => {});
+      // Refresh the full-doc content index in the background so search can match
+      // this document. Guarded so rapid taps don't spawn concurrent full-doc OCR
+      // passes; re-reads the doc by id so a delete/edit during indexing isn't
+      // resurrected or clobbered.
+      if (!ocrIndexingRef.current) {
+        ocrIndexingRef.current = true;
+        const targetId = document.id;
+        extractDocText(document.pages)
+          .then(async docText => {
+            if (!docText) return;
+            const docs = await getDocuments();
+            const current = docs.find(d => d.id === targetId);
+            if (!current) return; // deleted during indexing — don't resurrect
+            await updateDocument({ ...current, ocrText: docText });
+          })
+          .catch(() => {})
+          .finally(() => { ocrIndexingRef.current = false; });
+      }
     } catch {
       Alert.alert('OCR failed', 'Could not extract text from this page.');
     } finally {
