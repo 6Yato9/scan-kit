@@ -27,6 +27,7 @@ import { saveDocument, updateDocument, getScanSettings, getDocSettings } from '@
 import { copyPageWithQuality, copyPdfToStorage, deleteDocumentFiles } from '@/lib/files';
 import { ocrAvailable, extractDocText } from '@/lib/ocr';
 import { combinedFilterRN } from '@/lib/filters';
+import { CropModal } from '@/components/crop-modal';
 import { autoName } from '@/lib/auto-name';
 import { notifySuccess } from '@/lib/haptics';
 
@@ -80,6 +81,7 @@ export default function ReviewScreen() {
   const [focusedIndex, setFocused] = useState(0);
   const [rotating, setRotating] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [cropVisible, setCropVisible] = useState(false);
 
   const pagerRef = useRef<FlatList>(null);
   const onViewableItemsChanged = useRef(({ viewableItems }: any) => {
@@ -190,30 +192,20 @@ export default function ReviewScreen() {
     }
   }, [pages, focusedIndex, pendingQuality]);
 
-  const croppingRef = useRef(false);
-  const handleCrop = useCallback(async () => {
-    if (croppingRef.current) return;
-    croppingRef.current = true;
+  // Crop the CURRENT page in place via the crop UI (not a re-scan).
+  const handleCrop = useCallback(() => {
+    setCropVisible(true);
+  }, []);
+
+  const handleCropDone = useCallback((croppedUri: string) => {
     const targetIndex = focusedIndex;
-    try {
-      const settings = await getScanSettings();
-      const { scannedImages } = await DocumentScanner.scanDocument({
-        croppedImageQuality: Math.round(pendingQuality * 100),
-        maxNumDocuments: 1,
-        letUserAdjustCrop: settings.autoCrop,
-      } as any);
-      if (!scannedImages?.length) return;
-      setPages(prev => {
-        const next = [...prev];
-        next[targetIndex] = scannedImages[0];
-        return next;
-      });
-    } catch (err) {
-      console.error('Crop failed', err);
-    } finally {
-      croppingRef.current = false;
-    }
-  }, [focusedIndex, pendingQuality]);
+    setPages(prev => {
+      const next = [...prev];
+      next[targetIndex] = croppedUri;
+      return next;
+    });
+    setCropVisible(false);
+  }, [focusedIndex]);
 
   const handleDeletePage = useCallback(() => {
     if (pages.length === 1) {
@@ -439,6 +431,15 @@ export default function ReviewScreen() {
           <Text allowFontScaling={false} style={[styles.actionLabel, { color: colors.muted }]}>Add Page</Text>
         </Pressable>
       </View>
+
+      {pages[focusedIndex] && (
+        <CropModal
+          visible={cropVisible}
+          uri={pages[focusedIndex]}
+          onCancel={() => setCropVisible(false)}
+          onDone={handleCropDone}
+        />
+      )}
     </KeyboardAvoidingView>
   );
 }
