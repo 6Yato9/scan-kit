@@ -1,9 +1,11 @@
 // __tests__/pdf.test.ts
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Print from 'expo-print';
 import { generatePdf } from '../lib/pdf';
 
-jest.mock('expo-file-system', () => ({
+// lib/pdf.ts reads page files via the legacy filesystem API (the v19 main-export
+// functions throw at runtime), so the mock targets the legacy subpath.
+jest.mock('expo-file-system/legacy', () => ({
   readAsStringAsync: jest.fn().mockResolvedValue('FAKEBASE64'),
   EncodingType: { Base64: 'base64' },
 }));

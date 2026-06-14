@@ -1,6 +1,6 @@
 // lib/pdf.ts
 import * as Print from 'expo-print';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import { Image } from 'react-native';
 import { PageAdjustment, PageFilter } from '../types/document';
 import { combinedFilterCss } from './filters';
