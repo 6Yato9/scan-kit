@@ -92,8 +92,8 @@ drops the primitives regardless.
 Chosen approach: bake at capture, keep the original alongside.
 
 - `page-N.jpg` — the **displayed** image, with filter and adjustments already in the pixels.
-- `page-N.orig.jpg` — the pristine source, created the first time a filter or adjustment
-  is applied to that page by copying the then-current `page-N.jpg`.
+- `page-N.orig.jpg` — the pristine source, created immediately before the first bake of
+  that page by copying the then-current `page-N.jpg`.
 - Changing a filter or adjustment re-derives `page-N.jpg` from `page-N.orig.jpg`, so
   changes never compound JPEG loss and Enhanced→Original is always possible.
 
@@ -144,13 +144,43 @@ are untouched and gain no `.orig`.
 The migration runs through the existing memoized migration path in `lib/storage.ts` and
 must be idempotent — a page that already has `.orig` is skipped.
 
+## How baking actually works
+
+`expo-image-manipulator` cannot do this. Its `Action` union is
+`ActionResize | ActionRotate | ActionFlip | ActionCrop | ActionExtent` — geometry only,
+no colour operations. An earlier draft of this spec assumed the filter could ride along
+in the existing manipulate pass; that is not possible.
+
+The mechanism is instead the pipeline `app/annotate.tsx` already uses: a WebView loads
+the page over `file://`, draws it to an offscreen canvas at natural resolution, and
+returns `canvas.toDataURL('image/jpeg', 0.92)` via `postMessage`, which RN writes to
+disk. Baking a filter is that same pipeline with `ctx.filter` set before `drawImage`.
+
+This reuses the CSS strings `combinedFilterCss` already produces, so on-screen pixels
+and PDF export share one filter definition.
+
+### Baking is deferred, not synchronous
+
+A WebView round-trip per page is too slow to sit on the scan path. So the save is never
+blocked on it:
+
+1. Scan saves immediately with raw pixels; the viewer opens at once.
+2. Baking runs per page in the background and swaps each page file, mirroring the
+   fire-and-forget OCR indexing already in `handleSave`.
+3. The viewer's existing `?v=${updatedAt}` cache-bust makes the enhanced page appear
+   with no new refresh machinery.
+
+`document.filters[i]` is written **only after** page `i` bakes successfully. Until then
+the document is honestly unfiltered — pixels and metadata agree — so an export that
+races the bake yields unenhanced output rather than wrong output, and double-application
+stays impossible.
+
 ## Error handling
 
-- Baking uses `expo-image-manipulator`, the same dependency `copyPageWithQuality`
-  already uses; the filter rides along in the existing manipulate pass at save, adding
-  no extra round-trip.
-- If baking a page fails during a scan, the page is saved **unfiltered** rather than
-  failing the whole save. A scan reaching storage matters more than the filter landing.
+- If baking a page fails, the page keeps its raw pixels and `filters[i]` is left unset.
+  The scan is already saved; a failed enhancement must never cost the user the scan.
+- Baking is re-entrant: a page whose `filters[i]` is already set is skipped, so an
+  interrupted bake resumes safely on the next attempt.
 - If re-deriving from `.orig` fails on a filter change, the current `page-N.jpg` is left
   untouched and the change is reported, matching how `replacePage` already behaves.
 - Save failure keeps the existing behaviour in `handleSave`: delete partial files for
@@ -163,8 +193,8 @@ must be idempotent — a page that already has `.orig` is skipped.
 Existing suites cover `lib/` only; these changes are concentrated there, which is
 favourable.
 
-- `__tests__/filters.test.ts` — assert `combinedFilterRN` is gone and that the bake
-  helper produces the expected manipulator action list per filter.
+- `__tests__/filters.test.ts` — assert `combinedFilterRN` is gone and that
+  `combinedFilterCss` still produces the exact strings the bake canvas depends on.
 - `__tests__/files.test.ts` — `.orig` is created on first filter application and not
   before; re-derivation reads from `.orig`; idempotency when `.orig` already exists.
 - `__tests__/storage.test.ts` — v2→v3 migration bakes only documents with recorded
