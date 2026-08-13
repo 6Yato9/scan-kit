@@ -23,7 +23,6 @@ import DocumentScanner from 'react-native-document-scanner-plugin';
 import { getDocuments, updateDocument, deleteDocument, getScanSettings } from '@/lib/storage';
 import { appendPages, deleteSinglePage, reorderPages, deleteDocumentFiles, replacePage } from '@/lib/files';
 import { rotatePage } from '@/lib/image';
-import { combinedFilterRN } from '@/lib/filters';
 import { notifySuccess } from '@/lib/haptics';
 import { ocrAvailable, recognizeLines, extractDocText } from '@/lib/ocr';
 import { Document, PageAdjustment, PageFilter } from '@/types/document';
@@ -500,14 +499,13 @@ export default function ViewerScreen() {
         // scrollToIndex fails for any page outside the render window and the pager
         // silently stays put while currentPage has already moved.
         getItemLayout={(_, index) => ({ length: screenWidth, offset: screenWidth * index, index })}
-        renderItem={({ item, index }) => {
-          const fStyle = combinedFilterRN(document.filters?.[index], document.adjustments?.[index]);
+        renderItem={({ item }) => {
           // Append updatedAt so RN's Image cache reloads after rotate/annotate/compress overwrite the file in place.
           return (
             <View style={[styles.page, { width: screenWidth }]}>
               <Image
                 source={{ uri: `${item}?v=${document.updatedAt}` }}
-                style={[styles.pageImage, { width: screenWidth - 32 }, fStyle ? ({ filter: fStyle } as any) : undefined]}
+                style={[styles.pageImage, { width: screenWidth - 32 }]}
                 resizeMode="contain"
               />
             </View>

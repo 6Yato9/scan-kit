@@ -10,7 +10,6 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { PageAdjustment, PageFilter } from '@/types/document';
-import { combinedFilterRN } from '@/lib/filters';
 import { useTheme } from '@/contexts/theme-context';
 
 type Props = {
@@ -65,7 +64,6 @@ export function ThumbnailStrip({
           }, 50);
         }}
         renderItem={({ item, index }) => {
-          const fStyle = combinedFilterRN(filters?.[index], adjustments?.[index]);
           return (
             <Pressable
               style={[styles.thumb, index === currentPage && { borderColor: colors.accent }]}
@@ -73,7 +71,7 @@ export function ThumbnailStrip({
             >
               <Image
                 source={{ uri: cacheBust ? `${item}?v=${cacheBust}` : item }}
-                style={[styles.thumbImage, fStyle ? ({ filter: fStyle } as any) : undefined]}
+                style={styles.thumbImage}
                 resizeMode="cover"
               />
             </Pressable>

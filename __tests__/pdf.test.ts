@@ -38,8 +38,13 @@ test('returns the URI from printToFileAsync', async () => {
   expect(uri).toBe('file:///output.pdf');
 });
 
-test('applies CSS filter when filter is not original', async () => {
-  await generatePdf(['file:///page0.jpg'], ['grayscale']);
+// Regression guard: filters are now baked into page pixels (see lib/bake.ts)
+// before generatePdf ever reads them, so the exported HTML must never inject
+// a CSS `filter:` — doing so would double-apply the filter on top of already-
+// filtered pixels. Passing a non-'original' filters array here should have no
+// effect on the generated HTML.
+test('never injects a CSS filter, even when a filters array is passed', async () => {
+  await generatePdf(['file:///page0.jpg'], ['grayscale'], [{ brightness: 20, contrast: 0, saturation: 0 }]);
   const { html } = mockPrint.mock.calls[0][0];
-  expect(html).toContain('filter:grayscale(100%)');
+  expect(html).not.toContain('filter:');
 });

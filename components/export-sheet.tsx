@@ -10,7 +10,6 @@ import { SaveFormat } from 'expo-image-manipulator';
 import JSZip from 'jszip';
 import { generatePdf, generateSearchablePdf } from '@/lib/pdf';
 import { ocrAvailable } from '@/lib/ocr';
-import { combinedFilterCss } from '@/lib/filters';
 import { BottomSheet } from '@/components/bottom-sheet';
 import { Document } from '@/types/document';
 import { useTheme } from '@/contexts/theme-context';
@@ -140,11 +139,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
     setLoadingLabel('Sending to printer…');
     try {
       const imgTags = document.pages
-        .map((uri, i) => {
-          const css = combinedFilterCss(document.filters?.[i], document.adjustments?.[i]);
-          const filterAttr = css !== 'none' ? `filter:${css};` : '';
-          return `<img src="${uri}" style="width:100%;display:block;page-break-after:always;${filterAttr}" />`;
-        })
+        .map(uri => `<img src="${uri}" style="width:100%;display:block;page-break-after:always;" />`)
         .join('');
       const html = `<html><body style="margin:0;padding:0;">${imgTags}</body></html>`;
       await Print.printAsync({ html });

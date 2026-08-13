@@ -119,6 +119,15 @@ export function PageActionsSheet({
       {tab === 'filter' ? (
         <View style={styles.filterRow}>
           {FILTERS.map(({ key, label }) => {
+            // These tiles preview what each filter WOULD look like if applied —
+            // they render the CURRENT (already-baked) page pixels with an
+            // RN `filter` style layered on top, not the stored page itself.
+            // combinedFilterRN is otherwise retired as a render path (filters
+            // are now baked into JPEG pixels; see lib/bake.ts), but it's kept
+            // for exactly this: on iOS, RN's filter style only honors
+            // brightness/opacity, so these previews will NOT visibly differ
+            // for grayscale/bw/enhanced until the preview itself is baked
+            // client-side too (follow-on work).
             const fs = combinedFilterRN(key, adjustment);
             return (
               <Pressable

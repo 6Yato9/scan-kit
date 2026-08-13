@@ -19,7 +19,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/theme-context';
 import { getDocuments, saveDocument } from '@/lib/storage';
 import { copyPdfToStorage, deleteDocumentFiles } from '@/lib/files';
-import { combinedFilterCss } from '@/lib/filters';
 import { notifySuccess, notifyError } from '@/lib/haptics';
 import type { Document } from '@/types/document';
 
@@ -63,13 +62,11 @@ export default function WatermarkScreen() {
       const imgTags: string[] = [];
       for (let i = 0; i < selectedDoc.pages.length; i++) {
         const uri = selectedDoc.pages[i];
-        const css = combinedFilterCss(selectedDoc.filters?.[i], selectedDoc.adjustments?.[i]);
-        const filterAttr = css !== 'none' ? `filter:${css};` : '';
         const b64 = await FileSystem.readAsStringAsync(uri, { encoding: 'base64' });
         const overlay = isAbsolute
           ? `<div style="${pos.css}color:rgba(0,0,0,0.5);font-weight:bold;white-space:nowrap;">${text}</div>`
           : `<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;overflow:hidden;"><span style="${pos.css}color:rgba(0,0,0,0.5);font-weight:bold;white-space:nowrap;">${text}</span></div>`;
-        imgTags.push(`<div style="position:relative;page-break-after:always;margin:0;padding:0;"><img src="data:image/jpeg;base64,${b64}" style="width:100%;display:block;${filterAttr}" />${overlay}</div>`);
+        imgTags.push(`<div style="position:relative;page-break-after:always;margin:0;padding:0;"><img src="data:image/jpeg;base64,${b64}" style="width:100%;display:block;" />${overlay}</div>`);
       }
 
       const html = `<html><body style="margin:0;padding:0;">${imgTags.join('')}</body></html>`;

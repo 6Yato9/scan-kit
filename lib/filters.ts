@@ -43,8 +43,14 @@ function adjRNParts(adj?: PageAdjustment): RNFilter[] {
 
 /**
  * Combined page filter + per-page adjustments as a React Native `filter` style
- * array, or undefined when there's nothing to apply. Use this for on-device
- * <Image> rendering. (Use combinedFilterCss for PDF/print HTML.)
+ * array, or undefined when there's nothing to apply.
+ *
+ * PREVIEW-ONLY — this is NOT the render path anymore. Filters are now baked
+ * directly into a page's JPEG pixels (see lib/bake.ts) because RN's iOS
+ * `filter` style implementation only honors brightness/opacity and silently
+ * drops grayscale/contrast/saturate. The one remaining caller is
+ * components/page-actions-sheet.tsx's filter-picker tiles, which use it to
+ * preview what a filter WOULD look like before the user applies it.
  */
 export function combinedFilterRN(filter?: PageFilter, adj?: PageAdjustment): RNFilter[] | undefined {
   const parts = [...filterRNParts(filter), ...adjRNParts(adj)];

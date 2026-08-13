@@ -3,7 +3,6 @@ import * as Print from 'expo-print';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Image } from 'react-native';
 import { PageAdjustment, PageFilter } from '../types/document';
-import { combinedFilterCss } from './filters';
 import { recognizeLines, OcrLine } from './ocr';
 
 type PageSize = 'A4' | 'Letter';
@@ -63,8 +62,6 @@ export async function generatePdf(
   const imgTags: string[] = [];
   for (let i = 0; i < pages.length; i++) {
     const uri = pages[i];
-    const css = combinedFilterCss(filters?.[i], adjustments?.[i]);
-    const filterAttr = css !== 'none' ? `filter:${css};` : '';
     const mime = uri.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
     let b64: string;
     try {
@@ -74,7 +71,7 @@ export async function generatePdf(
       throw new Error(`generatePdf: failed to read page ${i} (${uri}): ${msg}`);
     }
     imgTags.push(
-      `<img src="data:${mime};base64,${b64}" style="width:100%;display:block;page-break-after:always;${filterAttr}" />`,
+      `<img src="data:${mime};base64,${b64}" style="width:100%;display:block;page-break-after:always;" />`,
     );
   }
 
@@ -104,8 +101,6 @@ export async function generateSearchablePdf(
   for (let i = 0; i < pages.length; i++) {
     const uri = pages[i];
     const clean = cleanUri(uri);
-    const css = combinedFilterCss(filters?.[i], adjustments?.[i]);
-    const filterAttr = css !== 'none' ? `filter:${css};` : '';
     const mime = clean.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
 
     let b64: string;
@@ -149,7 +144,7 @@ export async function generateSearchablePdf(
     // wrapperHeight in vw keeps the wrapper exactly as tall as the scaled image.
     pageHtml.push(
       `<div style="position:relative; width:100vw; page-break-after:always; overflow:hidden;">` +
-        `<img src="data:${mime};base64,${b64}" style="width:100vw; height:auto; display:block; ${filterAttr}" />` +
+        `<img src="data:${mime};base64,${b64}" style="width:100vw; height:auto; display:block;" />` +
         spans +
       `</div>`,
     );
