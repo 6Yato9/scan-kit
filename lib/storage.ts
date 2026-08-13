@@ -1,6 +1,6 @@
 // lib/storage.ts
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Document, PageFilter } from '../types/document';
+import { Document, PageAdjustment, PageFilter } from '../types/document';
 
 const KEY = '@scan_kit_documents'; // legacy single-blob key — kept as a read-only backup, never written after migration
 const DOC_INDEX_KEY = '@scan_kit_doc_index'; // JSON array of doc ids, newest-first
@@ -202,6 +202,57 @@ export function patchDocument(id: string, patch: Partial<Document>): Promise<voi
       console.warn(`storage: corrupt doc ${id}, skipping patch`);
       return;
     }
+    await AsyncStorage.setItem(docKey(id), JSON.stringify({ ...current, ...patch }));
+  });
+}
+
+/**
+ * Records that page `pageIndex` now has `filter`/`adjustment` baked into its
+ * pixels. Models `patchDocument`'s single-lock read-modify-write, but since
+ * `document.filters`/`document.adjustments` are ARRAYS shared across all
+ * pages, this must build the new array from the current one under the SAME
+ * lock acquisition as the read — otherwise two sibling pages baking
+ * concurrently (or a rename landing mid-bake) could clobber each other via a
+ * stale read-modify-write. No-op if the document was deleted mid-bake, and
+ * tolerates a corrupt record the way `patchDocument` does.
+ */
+export function setPageBaked(
+  id: string,
+  pageIndex: number,
+  filter: PageFilter,
+  adjustment: PageAdjustment | undefined,
+): Promise<void> {
+  return withDocsLock(async () => {
+    await ensureMigrated();
+    const raw = await AsyncStorage.getItem(docKey(id));
+    if (raw == null) return; // deleted or never existed — don't resurrect
+    let current: Document;
+    try {
+      current = JSON.parse(raw) as Document;
+    } catch {
+      console.warn(`storage: corrupt doc ${id}, skipping setPageBaked`);
+      return;
+    }
+
+    const filters = current.filters ?? current.pages.map((): PageFilter => 'original');
+    const newFilters = [...filters];
+    newFilters[pageIndex] = filter;
+    const allOriginal = newFilters.every(f => f === 'original');
+
+    const patch: Partial<Document> = {
+      filters: allOriginal ? undefined : newFilters,
+      updatedAt: Date.now(),
+    };
+
+    if (adjustment !== undefined) {
+      const adjustments = current.adjustments ?? current.pages.map(
+        (): PageAdjustment => ({ brightness: 0, contrast: 0, saturation: 0 })
+      );
+      const newAdjustments = [...adjustments];
+      newAdjustments[pageIndex] = adjustment;
+      patch.adjustments = newAdjustments;
+    }
+
     await AsyncStorage.setItem(docKey(id), JSON.stringify({ ...current, ...patch }));
   });
 }

@@ -109,6 +109,91 @@ describe('patchDocument', () => {
   });
 });
 
+describe('setPageBaked', () => {
+  const doc3: Document = {
+    ...doc,
+    id: 'baked-doc',
+    pages: ['file:///p0.jpg', 'file:///p1.jpg', 'file:///p2.jpg'],
+  };
+
+  it('sets one page filter without disturbing sibling filters', async () => {
+    await storage.saveDocument({ ...doc3, filters: ['grayscale', 'grayscale', 'grayscale'] });
+    await storage.setPageBaked('baked-doc', 1, 'bw', undefined);
+    const d = (await storage.getDocuments()).find(x => x.id === 'baked-doc')!;
+    expect(d.filters).toEqual(['grayscale', 'bw', 'grayscale']);
+  });
+
+  it('collapses filters to undefined once every page is back to original', async () => {
+    await storage.saveDocument({ ...doc3, filters: ['grayscale', 'original', 'original'] });
+    await storage.setPageBaked('baked-doc', 0, 'original', undefined);
+    const d = (await storage.getDocuments()).find(x => x.id === 'baked-doc')!;
+    expect(d.filters).toBeUndefined();
+  });
+
+  it('only touches adjustments when an adjustment is passed', async () => {
+    const existingAdj = [
+      { brightness: 5, contrast: 0, saturation: 0 },
+      { brightness: 0, contrast: 0, saturation: 0 },
+      { brightness: 0, contrast: 0, saturation: 0 },
+    ];
+    await storage.saveDocument({ ...doc3, adjustments: existingAdj });
+    await storage.setPageBaked('baked-doc', 2, 'grayscale', undefined);
+    const d = (await storage.getDocuments()).find(x => x.id === 'baked-doc')!;
+    // adjustments untouched since no adjustment was passed
+    expect(d.adjustments).toEqual(existingAdj);
+    expect(d.filters?.[2]).toBe('grayscale');
+  });
+
+  it('sets the adjustment at pageIndex and fills siblings with defaults when passed', async () => {
+    await storage.saveDocument(doc3);
+    await storage.setPageBaked('baked-doc', 1, 'grayscale', { brightness: 10, contrast: 0, saturation: 0 });
+    const d = (await storage.getDocuments()).find(x => x.id === 'baked-doc')!;
+    expect(d.adjustments?.[1]).toEqual({ brightness: 10, contrast: 0, saturation: 0 });
+    expect(d.adjustments?.[0]).toEqual({ brightness: 0, contrast: 0, saturation: 0 });
+  });
+
+  it('bumps updatedAt', async () => {
+    await storage.saveDocument({ ...doc3, updatedAt: 1000 });
+    await storage.setPageBaked('baked-doc', 0, 'grayscale', undefined);
+    const d = (await storage.getDocuments()).find(x => x.id === 'baked-doc')!;
+    expect(d.updatedAt).toBeGreaterThan(1000);
+  });
+
+  it('is a no-op for a missing id (does not resurrect a deleted document)', async () => {
+    await storage.setPageBaked('does-not-exist', 0, 'grayscale', undefined);
+    expect(await storage.getDocuments()).toEqual([]);
+  });
+
+  it('is a no-op for a corrupt stored record', async () => {
+    await AsyncStorage.setItem('@scan_kit_doc:corrupt', '{not valid json');
+    await AsyncStorage.setItem('@scan_kit_doc_index', JSON.stringify(['corrupt']));
+    await storage.setPageBaked('corrupt', 0, 'grayscale', undefined);
+    // Still corrupt / unchanged — no throw, no crash.
+    expect(await AsyncStorage.getItem('@scan_kit_doc:corrupt')).toBe('{not valid json');
+  });
+
+  it('merges onto the CURRENT record, so a concurrent rename is not clobbered', async () => {
+    await storage.saveDocument(doc3);
+    // Simulate a rename landing mid-bake.
+    await storage.updateDocument({ ...doc3, name: 'Renamed' });
+    await storage.setPageBaked('baked-doc', 0, 'grayscale', undefined);
+    const d = (await storage.getDocuments()).find(x => x.id === 'baked-doc')!;
+    expect(d.name).toBe('Renamed');
+    expect(d.filters?.[0]).toBe('grayscale');
+  });
+
+  it('two sibling pages baking concurrently both land (no lost update)', async () => {
+    await storage.saveDocument(doc3);
+    await Promise.all([
+      storage.setPageBaked('baked-doc', 0, 'grayscale', undefined),
+      storage.setPageBaked('baked-doc', 2, 'bw', undefined),
+    ]);
+    const d = (await storage.getDocuments()).find(x => x.id === 'baked-doc')!;
+    expect(d.filters?.[0]).toBe('grayscale');
+    expect(d.filters?.[2]).toBe('bw');
+  });
+});
+
 test('deleteDocument removes document by id', async () => {
   await storage.saveDocument(doc);
   await storage.deleteDocument(doc.id);
