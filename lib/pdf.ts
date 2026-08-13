@@ -2,7 +2,6 @@
 import * as Print from 'expo-print';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Image } from 'react-native';
-import { PageAdjustment, PageFilter } from '../types/document';
 import { recognizeLines, OcrLine } from './ocr';
 
 type PageSize = 'A4' | 'Letter';
@@ -51,10 +50,15 @@ function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, ch => HTML_ESCAPES[ch]);
 }
 
+/**
+ * Renders pages to a PDF at the given paper size.
+ *
+ * Takes no filter/adjustment arguments on purpose: filters are baked into the
+ * stored pixels (see lib/bake.ts), so re-applying them here would double-filter
+ * the output.
+ */
 export async function generatePdf(
   pages: string[],
-  filters?: PageFilter[],
-  adjustments?: PageAdjustment[],
   pageSize: PageSize = 'A4',
 ): Promise<string> {
   // Read each page sequentially to keep peak JS heap bounded. A 50-page doc at
@@ -92,8 +96,6 @@ export async function generatePdf(
  */
 export async function generateSearchablePdf(
   pages: string[],
-  filters?: PageFilter[],
-  adjustments?: PageAdjustment[],
   pageSize: PageSize = 'A4',
   onProgress?: (done: number, total: number) => void,
 ): Promise<string> {

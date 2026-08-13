@@ -54,7 +54,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
       }
 
       setLoadingLabel('Building PDF…');
-      const uri = await generatePdf(pages, document.filters, document.adjustments, settings.pdfPageSize);
+      const uri = await generatePdf(pages, settings.pdfPageSize);
       await Sharing.shareAsync(uri, {
         mimeType: 'application/pdf',
         dialogTitle: document.name,
@@ -78,8 +78,6 @@ export function ExportSheet({ visible, document, onClose }: Props) {
       const settings = await getDocSettings();
       const uri = await generateSearchablePdf(
         document.pages,
-        document.filters,
-        document.adjustments,
         settings.pdfPageSize,
         (done, total) => setLoadingLabel(`Reading text ${done}/${total}…`),
       );
