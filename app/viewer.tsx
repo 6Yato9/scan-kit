@@ -101,12 +101,17 @@ export default function ViewerScreen() {
     if (!document) return;
     try {
       const stored = replacePage(croppedUri, document.id, currentPage);
-      // Clean up the manipulator temp file so it doesn't accumulate in cache,
-      // mirroring what rotatePage does for the rotate path.
-      try {
-        const tmp = new File(croppedUri);
-        if (tmp.exists) tmp.delete();
-      } catch {}
+      // Only clean up the manipulator's temp file when it is genuinely a different
+      // file from the stored page. expo-image-manipulator can return its input path
+      // (see the same guard in lib/image.ts rotatePage), and deleting `stored` here
+      // would remove the page replacePage just wrote.
+      const tmpPath = croppedUri.split('?')[0];
+      if (tmpPath !== stored.split('?')[0]) {
+        try {
+          const tmp = new File(tmpPath);
+          if (tmp.exists) tmp.delete();
+        } catch {}
+      }
       const pages = [...document.pages];
       pages[currentPage] = stored;
       await saveDoc({ ...document, pages, updatedAt: Date.now() });
