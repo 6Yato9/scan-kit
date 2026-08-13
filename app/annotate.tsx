@@ -14,9 +14,16 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useTheme } from '@/contexts/theme-context';
+import { StatusBar } from 'expo-status-bar';
 import { getDocuments, updateDocument } from '@/lib/storage';
+import { Colors } from '@/lib/theme';
 import type { Document } from '@/types/document';
+
+// This screen's chrome is always dark (like the viewer), so it must use the dark
+// palette explicitly rather than the active theme. Pulling `colors` from useTheme
+// put light-theme foregrounds on a #111 surface: `muted` #666 scored 3.29:1 and
+// `accent` #0a7ea4 scored 4.08:1, both under the WCAG AA 4.5:1 minimum.
+const DARK = Colors.dark;
 
 const COLORS = [
   { id: 'black', hex: '#000000', label: 'Black' },
@@ -168,7 +175,6 @@ export default function AnnotateScreen() {
   const pageIndex = parseInt(pageIndexStr ?? '0', 10);
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { colors } = useTheme();
   const webRef = useRef<WebView>(null);
   const [html, setHtml] = useState<string | null>(null);
   const [doc, setDoc] = useState<Document | null>(null);
@@ -253,6 +259,7 @@ export default function AnnotateScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: '#111' }]}>
+      <StatusBar style="light" />
       {/* Top bar */}
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
         <Pressable onPress={() => router.back()} hitSlop={12} accessibilityRole="button" accessibilityLabel="Cancel">
@@ -268,7 +275,7 @@ export default function AnnotateScreen() {
         >
           {saving
             ? <ActivityIndicator color="#fff" />
-            : <Text style={[styles.topBtn, { color: ready ? colors.accent : colors.muted, opacity: ready ? 1 : 0.4 }]}>Done</Text>
+            : <Text style={[styles.topBtn, { color: ready ? DARK.accent : DARK.muted, opacity: ready ? 1 : 0.4 }]}>Done</Text>
           }
         </Pressable>
       </View>
@@ -310,7 +317,7 @@ export default function AnnotateScreen() {
 
           {/* Eraser */}
           <Pressable
-            style={[styles.eraserBtn, eraser && { borderColor: colors.accent }]}
+            style={[styles.eraserBtn, eraser && { borderColor: DARK.accent }]}
             onPress={toggleEraser}
             accessibilityRole="button"
             accessibilityLabel="Eraser"
@@ -332,7 +339,7 @@ export default function AnnotateScreen() {
           {[2, 4, 8].map(size => (
             <Pressable
               key={size}
-              style={[styles.sizeBtn, penSize === size && { borderColor: colors.accent }]}
+              style={[styles.sizeBtn, penSize === size && { borderColor: DARK.accent }]}
               onPress={() => selectSize(size)}
             >
               <View style={[styles.sizeDot, { width: size * 2, height: size * 2, borderRadius: size, backgroundColor: eraser ? '#aaa' : penColor }]} />

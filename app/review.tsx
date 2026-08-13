@@ -282,7 +282,7 @@ export default function ReviewScreen() {
         style={[styles.container, { backgroundColor: colors.bg }]}
       >
         <View style={[styles.topBar, { paddingTop: insets.top + 8, borderBottomColor: colors.border }]}>
-          <Pressable onPress={handleDiscard} hitSlop={12} style={styles.closeBtn}>
+          <Pressable onPress={handleDiscard} hitSlop={12} style={styles.closeBtn} accessibilityRole="button" accessibilityLabel="Discard scan">
             <Ionicons name="close" size={22} color={colors.text} />
           </Pressable>
           <TextInput
@@ -318,7 +318,7 @@ export default function ReviewScreen() {
     >
       {/* ① Top bar */}
       <View style={[styles.topBar, { paddingTop: insets.top + 8, borderBottomColor: colors.border }]}>
-        <Pressable onPress={handleDiscard} hitSlop={12} style={styles.closeBtn}>
+        <Pressable onPress={handleDiscard} hitSlop={12} style={styles.closeBtn} accessibilityRole="button" accessibilityLabel="Discard scan">
           <Ionicons name="close" size={22} color={colors.text} />
         </Pressable>
         <TextInput

@@ -15,7 +15,6 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
-import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/theme-context';
 
 type Props = {

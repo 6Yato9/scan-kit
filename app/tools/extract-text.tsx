@@ -22,6 +22,9 @@ import { getScanSettings } from '@/lib/storage';
 
 let TextRecognition: { recognize: (uri: string) => Promise<{ text: string }> } | null = null;
 try {
+  // Lazily required so the screen still loads when the native module is absent
+  // (e.g. Expo Go). Must stay a require — a static import would fail at load.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   TextRecognition = require('@react-native-ml-kit/text-recognition').default;
 } catch {
   TextRecognition = null;

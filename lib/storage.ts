@@ -370,15 +370,29 @@ export async function clearPendingState(): Promise<void> {
 // ── First-run onboarding flag ────────────────────────────────────────────────
 const ONBOARDED_KEY = '@scan_kit_onboarded';
 
+// In-memory mirror so the onboarding gate can consult the *current* value
+// synchronously. Without it the gate keeps its mount-time `false` after
+// setOnboarded() runs and redirects the user straight back into onboarding,
+// making first run impossible to complete without force-quitting.
+let _onboardedCache: boolean | null = null;
+
+export function getOnboardedSync(): boolean | null {
+  return _onboardedCache;
+}
+
 export async function getOnboarded(): Promise<boolean> {
   try {
-    return (await AsyncStorage.getItem(ONBOARDED_KEY)) === '1';
+    const v = (await AsyncStorage.getItem(ONBOARDED_KEY)) === '1';
+    _onboardedCache = v;
+    return v;
   } catch {
     return false;
   }
 }
 
 export async function setOnboarded(): Promise<void> {
+  // Set before the await so a redirect racing this write still sees `true`.
+  _onboardedCache = true;
   await AsyncStorage.setItem(ONBOARDED_KEY, '1');
 }
 

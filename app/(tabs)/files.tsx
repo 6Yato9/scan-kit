@@ -402,12 +402,17 @@ export default function FilesScreen() {
         numColumns={2}
         style={styles.list}
         contentContainerStyle={
-          displayedDocuments.length === 0 ? styles.emptyContent : styles.gridContent
+          displayedDocuments.length === 0
+            ? styles.emptyContent
+            // Clear the floating tab bar (insets.bottom + 8 + 64 tall), and the
+            // multi-select action bar when it's up. A static paddingBottom can't
+            // see insets, so it only cleared these by ~10px on a home-indicator device.
+            : [styles.gridContent, { paddingBottom: insets.bottom + (isMultiSelectMode ? 130 : 110) }]
         }
         ListEmptyComponent={
           searchQuery.trim() ? (
             <View style={styles.noResults}>
-              <Text style={[styles.noResultsText, { color: colors.muted }]}>No results for "{searchQuery.trim()}"</Text>
+              <Text style={[styles.noResultsText, { color: colors.muted }]}>No results for &ldquo;{searchQuery.trim()}&rdquo;</Text>
             </View>
           ) : (
             <EmptyState
@@ -572,7 +577,7 @@ const styles = StyleSheet.create({
     borderColor: 'transparent',
   },
   chipText: { fontSize: 13, fontWeight: '500' },
-  gridContent: { padding: 10, paddingBottom: 120 },
+  gridContent: { padding: 10 },
   emptyContent: { flex: 1 },
   noResults: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 80 },
   noResultsText: { fontSize: 16 },

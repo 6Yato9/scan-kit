@@ -118,13 +118,13 @@ export async function generateSearchablePdf(
 
     // Natural pixel dimensions drive the vw scale factor. Fall back to a
     // 1:1-ish guess if getSize fails so a single bad page can't abort export.
+    // Only the width matters: `s` converts image pixels to vw, and the wrapper
+    // height follows the image's own aspect ratio via `height:auto`.
     let imgW = 1000;
-    let imgH = 1414;
     try {
       const size = await getImageSize(clean);
       if (size.width > 0 && size.height > 0) {
         imgW = size.width;
-        imgH = size.height;
       }
     } catch {
       // keep fallback dims

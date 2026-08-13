@@ -10,7 +10,7 @@ type RecognizeResult = { text: string; blocks: TextBlock[] };
 
 let TextRecognition: { recognize: (uri: string) => Promise<RecognizeResult> } | null = null;
 try {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   TextRecognition = require('@react-native-ml-kit/text-recognition').default;
 } catch {
   // package not linked — OCR features will degrade gracefully.

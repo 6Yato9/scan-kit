@@ -54,7 +54,7 @@ export default function DocumentSettingsScreen() {
             returnKeyType="done"
           />
         </View>
-        <Text style={[styles.hint, { color: colors.muted }]}>New scans will be named "{settings.namePrefix || 'Scan'} Apr 10, 2026".</Text>
+        <Text style={[styles.hint, { color: colors.muted }]}>New scans will be named &ldquo;{settings.namePrefix || 'Scan'} Apr 10, 2026&rdquo;.</Text>
       </View>
 
       <View style={[styles.section, { backgroundColor: colors.card }]}>

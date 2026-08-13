@@ -27,7 +27,7 @@ export function MergeSheet({ visible, targetDoc, allDocs, onMerge, onClose }: Pr
   return (
     <BottomSheet visible={visible} onClose={onClose}>
       <Text style={[styles.heading, { color: colors.text }]}>Merge with…</Text>
-      <Text style={[styles.sub, { color: colors.muted }]}>Pages will be appended to "{targetDoc?.name}"</Text>
+      <Text style={[styles.sub, { color: colors.muted }]}>Pages will be appended to &ldquo;{targetDoc?.name}&rdquo;</Text>
       {sources.length === 0 ? (
         <Text style={[styles.empty, { color: colors.faint }]}>No other documents to merge with.</Text>
       ) : (

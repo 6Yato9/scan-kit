@@ -14,6 +14,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { WebView } from 'react-native-webview';
 import * as Sharing from 'expo-sharing';
@@ -343,6 +344,10 @@ export default function ViewerScreen() {
   if (document.pdfUri) {
     return (
       <View style={[styles.container, { paddingTop: insets.top }]}>
+        {/* Chrome is always dark here regardless of app theme, so the status bar
+            must be light — the global one in _layout follows the theme and would
+            render black glyphs on this near-black background in light mode. */}
+        <StatusBar style="light" />
         <View style={styles.header}>
           <Pressable onPress={() => router.back()} hitSlop={12}>
             <View style={styles.backRow}>
@@ -367,6 +372,7 @@ export default function ViewerScreen() {
   // JPEG pager mode
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
+      <StatusBar style="light" />
       <View style={styles.header}>
         <Pressable onPress={() => router.back()} hitSlop={12}>
           <View style={styles.backRow}>
@@ -427,7 +433,10 @@ export default function ViewerScreen() {
         onMomentumScrollEnd={e => {
           setCurrentPage(Math.round(e.nativeEvent.contentOffset.x / screenWidth));
         }}
-        onScrollToIndexFailed={() => {}}
+        // Every page is exactly screenWidth, so the layout is exact. Without this,
+        // scrollToIndex fails for any page outside the render window and the pager
+        // silently stays put while currentPage has already moved.
+        getItemLayout={(_, index) => ({ length: screenWidth, offset: screenWidth * index, index })}
         renderItem={({ item, index }) => {
           const fStyle = combinedFilterRN(document.filters?.[index], document.adjustments?.[index]);
           // Append updatedAt so RN's Image cache reloads after rotate/annotate/compress overwrite the file in place.
@@ -489,7 +498,7 @@ export default function ViewerScreen() {
           <View style={styles.ocrSheet}>
             <View style={styles.ocrHeader}>
               <Text style={styles.ocrTitle}>Extracted Text</Text>
-              <Pressable onPress={() => setOcrResult(null)} hitSlop={12}>
+              <Pressable onPress={() => setOcrResult(null)} hitSlop={12} accessibilityRole="button" accessibilityLabel="Close extracted text">
                 <Ionicons name="close" size={20} color="#888" />
               </Pressable>
             </View>

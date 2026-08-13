@@ -9,7 +9,7 @@ import { ToastProvider } from '@/components/toast';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { LockGate } from '@/components/lock-gate';
 import { garbageCollectOrphans } from '@/lib/files';
-import { getDocuments, getOnboarded } from '@/lib/storage';
+import { getDocuments, getOnboarded, getOnboardedSync } from '@/lib/storage';
 
 // First-run gate: after mount, read the onboarding flag and redirect to the
 // onboarding screen if it hasn't been completed. Kept separate from the tabs
@@ -28,7 +28,12 @@ function OnboardingGate() {
   useEffect(() => {
     // Only redirect once the check has resolved false and we're not already
     // on the onboarding screen (avoids a redirect loop).
-    if (onboarded === false && pathname !== '/onboarding') {
+    //
+    // `onboarded` is read once on mount and never refreshes, so after the user
+    // finishes onboarding it is still false while pathname has moved to the
+    // tabs — which used to bounce them straight back into onboarding, forever.
+    // getOnboardedSync() reflects setOnboarded() immediately and breaks that loop.
+    if (onboarded === false && getOnboardedSync() !== true && pathname !== '/onboarding') {
       router.replace('/onboarding');
     }
   }, [onboarded, pathname, router]);

@@ -24,7 +24,7 @@ import { notifySuccess, notifyError } from '@/lib/haptics';
 export default function IdCardScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
   const [frontUri, setFrontUri] = useState<string | null>(null);
   const [backUri, setBackUri] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
