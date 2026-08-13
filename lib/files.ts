@@ -213,6 +213,29 @@ export async function copyPageWithQuality(
   return dest.uri;
 }
 
+/** Returns the file:// URI of a page's pristine, pre-filter source copy. */
+export function originalUri(docId: string, pageIndex: number): string {
+  const dir = new Directory(Paths.document, 'scan-kit', docId);
+  return new File(dir, `page-${pageIndex}.orig.jpg`).uri;
+}
+
+/**
+ * Ensures a pristine `.orig.jpg` copy of a page exists, copying it from the
+ * current `page-N.jpg` only if the `.orig` doesn't already exist. Idempotent
+ * by design: every filter change re-derives from this same pristine source,
+ * so re-baking a filter never compounds JPEG generation loss, and reverting
+ * to Original is always possible. Returns the `.orig` URI either way.
+ */
+export function ensureOriginal(docId: string, pageIndex: number): string {
+  const dir = new Directory(Paths.document, 'scan-kit', docId);
+  const orig = new File(dir, `page-${pageIndex}.orig.jpg`);
+  if (!orig.exists) {
+    const src = new File(dir, `page-${pageIndex}.jpg`);
+    src.copy(orig);
+  }
+  return orig.uri;
+}
+
 /** Returns the last path segment of a file:// uri (the basename), or ''. */
 function baseName(uri: string): string {
   const trimmed = uri.replace(/\/+$/, '');
