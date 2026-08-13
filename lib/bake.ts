@@ -1,0 +1,38 @@
+// lib/bake.ts
+//
+// Orchestrates baking a filter into a page's actual JPEG pixels. Always
+// bakes FROM the pristine .orig copy (see lib/files.ts's ensureOriginal),
+// never from the current page-N.jpg — that keeps repeated filter changes
+// from compounding JPEG generation loss and keeps "Original" reachable.
+//
+// Ordering matters: the filter is only recorded in storage AFTER the baked
+// pixels have been written to disk. If the bake or the write fails, nothing
+// is recorded, so pixels and metadata never disagree, and a page export
+// racing an in-flight bake yields unenhanced (not wrong) output.
+import { Directory, File, Paths } from 'expo-file-system';
+import { writeAsStringAsync } from 'expo-file-system/legacy';
+import { PageAdjustment, PageFilter } from '../types/document';
+import { enqueueBake } from './bake-queue';
+import { ensureOriginal } from './files';
+import { combinedFilterCss } from './filters';
+import { setPageBaked } from './storage';
+
+const DATA_URL_PREFIX = /^data:image\/jpeg;base64,/;
+
+export async function bakePage(
+  docId: string,
+  pageIndex: number,
+  filter: PageFilter,
+  adjustment: PageAdjustment | undefined,
+): Promise<void> {
+  const src = ensureOriginal(docId, pageIndex);
+  const css = combinedFilterCss(filter, adjustment);
+  const dataUrl = await enqueueBake({ docId, pageIndex, src, css });
+
+  const base64 = dataUrl.replace(DATA_URL_PREFIX, '');
+  const dir = new Directory(Paths.document, 'scan-kit', docId);
+  const dest = new File(dir, `page-${pageIndex}.jpg`);
+  await writeAsStringAsync(dest.uri, base64, { encoding: 'base64' });
+
+  await setPageBaked(docId, pageIndex, filter, adjustment);
+}
