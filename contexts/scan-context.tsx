@@ -1,7 +1,6 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState, ReactNode } from 'react';
 import { Alert, Linking } from 'react-native';
 import DocumentScanner from 'react-native-document-scanner-plugin';
-import { Paths } from 'expo-file-system';
 import { PageFilter } from '@/types/document';
 import { notifySuccess, notifyError } from '@/lib/haptics';
 import { getScanSettings, getDocSettings } from '@/lib/storage';
@@ -39,7 +38,7 @@ export function ScanProvider({ children }: { children: ReactNode }) {
     const filter = input.defaultFilter ?? scan.defaultFilter;
     const count = input.pages?.length ?? 0;
     try {
-      const id = await saveScan({
+      const { id, pages } = await saveScan({
         pages: input.pages,
         pdfUri: input.pdfUri,
         name: autoName(new Date(), docSettings.namePrefix),
@@ -48,15 +47,10 @@ export function ScanProvider({ children }: { children: ReactNode }) {
       });
       setLastSaved(Date.now());
       notifySuccess();
-      if (input.pages?.length) {
-        const stored = Array.from(
-          { length: input.pages.length },
-          (_, i) => `${Paths.document.uri}scan-kit/${id}/page-${i}.jpg`,
-        );
-        indexDocText(id, stored).catch(() => {});
-      }
+      if (pages.length) indexDocText(id, pages).catch(() => {});
       return id;
     } catch (err) {
+      console.error('Save failed', err);
       notifyError();
       const msg = err instanceof Error ? err.message : 'Could not save the scan.';
       Alert.alert('Save failed', msg);

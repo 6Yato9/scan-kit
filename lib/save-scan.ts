@@ -13,14 +13,18 @@ export type SaveScanInput = {
   filters?: (PageFilter | 'original')[];
 };
 
+export type SaveScanResult = { id: string; pages: string[] };
+
 /**
- * Writes a scan to storage and returns the new document id.
+ * Writes a scan to storage and returns the new document id along with the
+ * stored page URIs (empty for a PDF import) — callers need the real URIs for
+ * things like OCR indexing rather than reconstructing the path rule themselves.
  *
  * Pages are copied sequentially so a failure names the offending page and peak
  * memory stays bounded — Promise.all would run every manipulator pass at once.
  * On any failure the partially-written directory is removed so a retry starts clean.
  */
-export async function saveScan(input: SaveScanInput): Promise<string> {
+export async function saveScan(input: SaveScanInput): Promise<SaveScanResult> {
   const { pages = [], pdfUri, name, quality, filters } = input;
   if (!pdfUri && pages.length === 0) {
     throw new Error('saveScan: nothing to save — no pages and no pdfUri');
@@ -35,7 +39,7 @@ export async function saveScan(input: SaveScanInput): Promise<string> {
         id, name, pages: [], pdfUri: storedUri, createdAt: now, updatedAt: now,
       };
       await saveDocument(doc);
-      return id;
+      return { id, pages: [] };
     }
 
     const savedPages: string[] = [];
@@ -58,7 +62,7 @@ export async function saveScan(input: SaveScanInput): Promise<string> {
       updatedAt: now,
     };
     await saveDocument(doc);
-    return id;
+    return { id, pages: savedPages };
   } catch (err) {
     try { deleteDocumentFiles(id); } catch { /* secondary failure — keep the original error */ }
     throw err;

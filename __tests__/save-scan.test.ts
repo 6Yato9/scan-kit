@@ -22,14 +22,15 @@ const { ocrAvailable, extractDocText } = require('../lib/ocr');
 
 beforeEach(() => jest.clearAllMocks());
 
-test('saves pages in order and returns the new document id', async () => {
-  const id = await saveScan({ pages: ['a.jpg', 'b.jpg'], name: 'Doc', quality: 0.9 });
-  expect(id).toBe('fixed-id');
-  const doc = (saveDocument as jest.Mock).mock.calls[0][0];
-  expect(doc.pages).toEqual([
+test('saves pages in order and returns the new document id and page uris', async () => {
+  const result = await saveScan({ pages: ['a.jpg', 'b.jpg'], name: 'Doc', quality: 0.9 });
+  expect(result.id).toBe('fixed-id');
+  expect(result.pages).toEqual([
     'file:///docs/fixed-id/page-0.jpg',
     'file:///docs/fixed-id/page-1.jpg',
   ]);
+  const doc = (saveDocument as jest.Mock).mock.calls[0][0];
+  expect(doc.pages).toEqual(result.pages);
   expect(doc.name).toBe('Doc');
 });
 
@@ -42,9 +43,10 @@ test('cleans up partial files when a page fails', async () => {
 });
 
 test('a pdf import stores the pdf and saves no pages', async () => {
-  const id = await saveScan({ pdfUri: 'tmp.pdf', name: 'Scanned PDF', quality: 0.9 });
+  const result = await saveScan({ pdfUri: 'tmp.pdf', name: 'Scanned PDF', quality: 0.9 });
   const doc = (saveDocument as jest.Mock).mock.calls[0][0];
-  expect(id).toBe('fixed-id');
+  expect(result.id).toBe('fixed-id');
+  expect(result.pages).toEqual([]);
   expect(doc.pages).toEqual([]);
   expect(doc.pdfUri).toBe('file:///docs/fixed-id/document.pdf');
 });
