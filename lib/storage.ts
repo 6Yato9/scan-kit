@@ -387,7 +387,7 @@ export function deleteFolder(name: string): Promise<void> {
   });
 }
 
-const DEFAULT_SCAN_SETTINGS: ScanSettings = { quality: 'high', autoCrop: true, defaultFilter: 'original' };
+const DEFAULT_SCAN_SETTINGS: ScanSettings = { quality: 'high', autoCrop: true, defaultFilter: 'enhanced' };
 
 export async function getScanSettings(): Promise<ScanSettings> {
   const raw = await AsyncStorage.getItem(SCAN_SETTINGS_KEY);

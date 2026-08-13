@@ -23,6 +23,7 @@ import DocumentScanner from 'react-native-document-scanner-plugin';
 import { getDocuments, updateDocument, deleteDocument, getScanSettings } from '@/lib/storage';
 import { appendPages, deleteSinglePage, reorderPages, deleteDocumentFiles, replacePage } from '@/lib/files';
 import { rotatePage } from '@/lib/image';
+import { bakePage } from '@/lib/bake';
 import { notifySuccess } from '@/lib/haptics';
 import { ocrAvailable, recognizeLines, extractDocText } from '@/lib/ocr';
 import { Document, PageAdjustment, PageFilter } from '@/types/document';
@@ -122,41 +123,56 @@ export default function ViewerScreen() {
     }
   }, [document, currentPage, saveDoc]);
 
+  // Refreshes `document` from storage after a successful bake so its new
+  // `updatedAt` busts the `?v=` image cache and the freshly-baked pixels
+  // actually become visible. Only swaps state if the doc we fetched still
+  // matches what's on screen (a nav-away/delete during the bake shouldn't
+  // resurrect it).
+  const refreshDocumentAfterBake = useCallback(async (docId: string) => {
+    const docs = await getDocuments();
+    const fresh = docs.find(d => d.id === docId);
+    if (fresh) setDocument(prev => (prev && prev.id === docId ? fresh : prev));
+  }, []);
+
   const handleFilter = useCallback(async (filter: PageFilter) => {
     if (!document) return;
-    const newFilters: PageFilter[] = [
-      ...(document.filters ?? document.pages.map(() => 'original' as PageFilter)),
-    ];
-    newFilters[currentPage] = filter;
-    const allOriginal = newFilters.every(f => f === 'original');
-    await saveDoc({
-      ...document,
-      filters: allOriginal ? undefined : newFilters,
-      updatedAt: Date.now(),
-    });
-  }, [document, currentPage, saveDoc]);
+    try {
+      // bakePage records the filter/adjustment metadata itself (setPageBaked)
+      // once the baked pixels are written, so this must NOT also write
+      // filters/adjustments via saveDoc — two writers would race.
+      await bakePage(document.id, currentPage, filter, document.adjustments?.[currentPage]);
+      await refreshDocumentAfterBake(document.id);
+    } catch (err) {
+      console.error('Bake failed', err);
+      Alert.alert('Filter failed', 'Could not apply this filter.');
+    }
+  }, [document, currentPage, refreshDocumentAfterBake]);
 
-  const adjustPersistTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingAdjustDoc = useRef<Document | null>(null);
+  const adjustBakeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingAdjustBake = useRef<{ docId: string; pageIndex: number; filter: PageFilter; adjustment: PageAdjustment } | null>(null);
 
-  // Flush any pending adjust write on unmount so the last 0-250 ms of slider
+  const runPendingAdjustBake = useCallback(() => {
+    const pending = pendingAdjustBake.current;
+    if (!pending) return;
+    pendingAdjustBake.current = null;
+    // Fire-and-forget: this fires from both a debounced timeout and an
+    // unmount cleanup, neither of which can await it.
+    bakePage(pending.docId, pending.pageIndex, pending.filter, pending.adjustment)
+      .then(() => refreshDocumentAfterBake(pending.docId))
+      .catch(err => console.error('bake pending adjustment', err));
+  }, [refreshDocumentAfterBake]);
+
+  // Flush any pending adjust bake on unmount so the last 0-250 ms of slider
   // movement isn't silently dropped.
   useEffect(() => {
     return () => {
-      if (adjustPersistTimer.current) {
-        clearTimeout(adjustPersistTimer.current);
-        adjustPersistTimer.current = null;
-        if (pendingAdjustDoc.current) {
-          // Fire-and-forget; can't await in cleanup. The lock in lib/storage
-          // serializes this with anything else in flight.
-          updateDocument(pendingAdjustDoc.current).catch(err =>
-            console.error('flush pending adjust', err),
-          );
-          pendingAdjustDoc.current = null;
-        }
+      if (adjustBakeTimer.current) {
+        clearTimeout(adjustBakeTimer.current);
+        adjustBakeTimer.current = null;
+        runPendingAdjustBake();
       }
     };
-  }, []);
+  }, [runPendingAdjustBake]);
 
   const handleAdjust = useCallback((adj: PageAdjustment) => {
     if (!document) return;
@@ -167,19 +183,24 @@ export default function ViewerScreen() {
     const next: Document = {
       ...document,
       adjustments: allDefault ? undefined : newAdj,
-      updatedAt: Date.now(),
     };
-    // Update visible state immediately so the slider feels responsive,
-    // but coalesce the AsyncStorage write to once every 250ms. Stash the
-    // latest pending doc in a ref so the unmount cleanup can flush it.
+    // Update visible state immediately so the slider feels responsive (it's a
+    // controlled component driven by this value), but coalesce the BAKE to
+    // once every 250ms — baking on every slider frame would be pathological.
+    // Stash the latest pending job in a ref so the unmount cleanup can flush it.
     setDocument(next);
-    pendingAdjustDoc.current = next;
-    if (adjustPersistTimer.current) clearTimeout(adjustPersistTimer.current);
-    adjustPersistTimer.current = setTimeout(() => {
-      pendingAdjustDoc.current = null;
-      updateDocument(next).catch(err => console.error('persist adjustments', err));
+    pendingAdjustBake.current = {
+      docId: document.id,
+      pageIndex: currentPage,
+      filter: document.filters?.[currentPage] ?? 'original',
+      adjustment: adj,
+    };
+    if (adjustBakeTimer.current) clearTimeout(adjustBakeTimer.current);
+    adjustBakeTimer.current = setTimeout(() => {
+      adjustBakeTimer.current = null;
+      runPendingAdjustBake();
     }, 250);
-  }, [document, currentPage]);
+  }, [document, currentPage, runPendingAdjustBake]);
 
   // Shared by the "last page deleted" confirmation below and by the rename
   // sheet's delete action — both end a document's life the same way.

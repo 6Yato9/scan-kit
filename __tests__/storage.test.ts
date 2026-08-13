@@ -491,7 +491,7 @@ describe('deleteFolder', () => {
 describe('getScanSettings', () => {
   it('returns defaults when nothing stored', async () => {
     const s = await storage.getScanSettings();
-    expect(s).toEqual({ quality: 'high', autoCrop: true, defaultFilter: 'original' });
+    expect(s).toEqual({ quality: 'high', autoCrop: true, defaultFilter: 'enhanced' });
   });
 
   it('returns stored value', async () => {

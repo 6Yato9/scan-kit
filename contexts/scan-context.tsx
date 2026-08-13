@@ -6,6 +6,7 @@ import { notifySuccess, notifyError } from '@/lib/haptics';
 import { getScanSettings, getDocSettings } from '@/lib/storage';
 import { saveScan, indexDocText } from '@/lib/save-scan';
 import { autoName } from '@/lib/auto-name';
+import { bakePage } from '@/lib/bake';
 
 type SaveInput = {
   pages?: string[];
@@ -48,6 +49,22 @@ export function ScanProvider({ children }: { children: ReactNode }) {
       setLastSaved(Date.now());
       notifySuccess();
       if (pages.length) indexDocText(id, pages).catch(() => {});
+      // Bake the default filter into each page's pixels, fire-and-forget so the
+      // caller isn't blocked on it. Sequential — the baker (a single off-screen
+      // WebView) handles one job at a time, and a large scan must not flood the
+      // queue. A page that fails to bake just keeps its raw pixels and no
+      // recorded filter, which is a consistent state, so per-page errors are
+      // swallowed and the loop continues.
+      (async () => {
+        for (let i = 0; i < pages.length; i++) {
+          if (filter === 'original') continue;
+          try {
+            await bakePage(id, i, filter, undefined);
+          } catch (err) {
+            console.error('Bake failed for new page', i, err);
+          }
+        }
+      })().catch(() => {});
       return id;
     } catch (err) {
       console.error('Save failed', err);
