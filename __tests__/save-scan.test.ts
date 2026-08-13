@@ -10,7 +10,7 @@ jest.mock('../lib/files', () => ({
 jest.mock('../lib/storage', () => ({ saveDocument: jest.fn(async () => {}) }));
 
 const { saveDocument } = require('../lib/storage');
-const { deleteDocumentFiles, copyPageWithQuality } = require('../lib/files');
+const { deleteDocumentFiles, copyPageWithQuality, copyPdfToStorage } = require('../lib/files');
 
 beforeEach(() => jest.clearAllMocks());
 
@@ -39,4 +39,18 @@ test('a pdf import stores the pdf and saves no pages', async () => {
   expect(id).toBe('fixed-id');
   expect(doc.pages).toEqual([]);
   expect(doc.pdfUri).toBe('file:///docs/fixed-id/document.pdf');
+});
+
+test('throws and never saves when there are no pages and no pdfUri', async () => {
+  await expect(saveScan({ pages: [], name: 'Doc', quality: 0.9 }))
+    .rejects.toThrow('nothing to save');
+  expect(saveDocument).not.toHaveBeenCalled();
+});
+
+test('cleans up when the pdf branch fails to persist', async () => {
+  (saveDocument as jest.Mock).mockRejectedValueOnce(new Error('write failed'));
+  await expect(saveScan({ pdfUri: 'tmp.pdf', name: 'Doc', quality: 0.9 }))
+    .rejects.toThrow('write failed');
+  expect(copyPdfToStorage).toHaveBeenCalled();
+  expect(deleteDocumentFiles).toHaveBeenCalledWith('fixed-id');
 });

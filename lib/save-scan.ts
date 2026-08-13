@@ -21,6 +21,9 @@ export type SaveScanInput = {
  */
 export async function saveScan(input: SaveScanInput): Promise<string> {
   const { pages = [], pdfUri, name, quality, filters } = input;
+  if (!pdfUri && pages.length === 0) {
+    throw new Error('saveScan: nothing to save — no pages and no pdfUri');
+  }
   const id = Crypto.randomUUID();
   const now = Date.now();
 
