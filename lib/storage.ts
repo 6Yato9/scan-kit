@@ -186,6 +186,27 @@ export function updateDocument(doc: Document): Promise<void> {
   });
 }
 
+/**
+ * Merge a partial update onto a document by id inside a SINGLE lock acquisition,
+ * so a concurrent write can't be lost to a stale read-modify-write. No-op if the
+ * document no longer exists (e.g. deleted while a background pass was running).
+ */
+export function patchDocument(id: string, patch: Partial<Document>): Promise<void> {
+  return withDocsLock(async () => {
+    await ensureMigrated();
+    const raw = await AsyncStorage.getItem(docKey(id));
+    if (raw == null) return; // deleted or never existed — don't resurrect
+    let current: Document;
+    try {
+      current = JSON.parse(raw) as Document;
+    } catch {
+      console.warn(`storage: corrupt doc ${id}, skipping patch`);
+      return;
+    }
+    await AsyncStorage.setItem(docKey(id), JSON.stringify({ ...current, ...patch }));
+  });
+}
+
 export function deleteDocument(id: string): Promise<void> {
   return withDocsLock(async () => {
     await ensureMigrated();

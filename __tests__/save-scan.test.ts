@@ -9,15 +9,14 @@ jest.mock('../lib/files', () => ({
 }));
 jest.mock('../lib/storage', () => ({
   saveDocument: jest.fn(async () => {}),
-  getDocuments: jest.fn(async () => []),
-  updateDocument: jest.fn(async () => {}),
+  patchDocument: jest.fn(async () => {}),
 }));
 jest.mock('../lib/ocr', () => ({
   ocrAvailable: jest.fn(() => true),
   extractDocText: jest.fn(async () => ''),
 }));
 
-const { saveDocument, getDocuments, updateDocument } = require('../lib/storage');
+const { saveDocument, patchDocument } = require('../lib/storage');
 const { deleteDocumentFiles, copyPageWithQuality, copyPdfToStorage } = require('../lib/files');
 const { ocrAvailable, extractDocText } = require('../lib/ocr');
 
@@ -65,32 +64,25 @@ test('cleans up when the pdf branch fails to persist', async () => {
 });
 
 describe('indexDocText', () => {
-  test('does not resurrect a document deleted during indexing', async () => {
+  test('merges the recognised text onto the current record via patchDocument', async () => {
     (extractDocText as jest.Mock).mockResolvedValueOnce('recognized text');
-    (getDocuments as jest.Mock).mockResolvedValueOnce([]); // document was deleted
 
     await indexDocText('fixed-id', ['file:///docs/fixed-id/page-0.jpg']);
 
-    expect(updateDocument).not.toHaveBeenCalled();
+    expect(patchDocument).toHaveBeenCalledTimes(1);
+    expect(patchDocument).toHaveBeenCalledWith('fixed-id', { ocrText: 'recognized text' });
   });
 
-  test('merges ocrText onto the current record, not a stale snapshot', async () => {
+  test('does not fall back to recreating the document when patchDocument no-ops for a deleted document', async () => {
     (extractDocText as jest.Mock).mockResolvedValueOnce('recognized text');
-    const currentDoc = {
-      id: 'fixed-id',
-      name: 'Renamed While Indexing',
-      pages: ['file:///docs/fixed-id/page-0.jpg'],
-      createdAt: 1,
-      updatedAt: 2,
-    };
-    (getDocuments as jest.Mock).mockResolvedValueOnce([currentDoc]);
+    // patchDocument itself guarantees this no-op (see storage.test.ts); here we
+    // only need indexDocText not to react to it by re-creating the document.
+    (patchDocument as jest.Mock).mockResolvedValueOnce(undefined);
 
     await indexDocText('fixed-id', ['file:///docs/fixed-id/page-0.jpg']);
 
-    expect(updateDocument).toHaveBeenCalledWith({
-      ...currentDoc,
-      ocrText: 'recognized text',
-    });
+    expect(patchDocument).toHaveBeenCalledWith('fixed-id', { ocrText: 'recognized text' });
+    expect(saveDocument).not.toHaveBeenCalled();
   });
 
   test('writes nothing when OCR is unavailable', async () => {
@@ -99,8 +91,7 @@ describe('indexDocText', () => {
     await indexDocText('fixed-id', ['file:///docs/fixed-id/page-0.jpg']);
 
     expect(extractDocText).not.toHaveBeenCalled();
-    expect(getDocuments).not.toHaveBeenCalled();
-    expect(updateDocument).not.toHaveBeenCalled();
+    expect(patchDocument).not.toHaveBeenCalled();
   });
 
   test('writes nothing when extractDocText returns an empty string', async () => {
@@ -108,7 +99,6 @@ describe('indexDocText', () => {
 
     await indexDocText('fixed-id', ['file:///docs/fixed-id/page-0.jpg']);
 
-    expect(getDocuments).not.toHaveBeenCalled();
-    expect(updateDocument).not.toHaveBeenCalled();
+    expect(patchDocument).not.toHaveBeenCalled();
   });
 });

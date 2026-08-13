@@ -69,6 +69,46 @@ test('updateDocument replaces matching document by id', async () => {
   expect(docs).toHaveLength(1);
 });
 
+describe('patchDocument', () => {
+  it('merges a partial update onto the current stored record', async () => {
+    await storage.saveDocument(doc);
+    await storage.patchDocument(doc.id, { ocrText: 'recognized text' });
+    const docs = await storage.getDocuments();
+    expect(docs[0]).toEqual({ ...doc, ocrText: 'recognized text' });
+  });
+
+  it('is a no-op for a missing id (does not resurrect a deleted document)', async () => {
+    await storage.patchDocument('does-not-exist', { ocrText: 'recognized text' });
+    expect(await storage.getDocuments()).toEqual([]);
+  });
+
+  it('merges onto the CURRENT record, so a concurrent rename is not clobbered', async () => {
+    await storage.saveDocument(doc);
+    // Simulate a rename that lands before the patch (e.g. during a slow OCR pass).
+    await storage.updateDocument({ ...doc, name: 'Renamed' });
+    await storage.patchDocument(doc.id, { ocrText: 'recognized text' });
+    const docs = await storage.getDocuments();
+    expect(docs[0].name).toBe('Renamed');
+    expect(docs[0].ocrText).toBe('recognized text');
+  });
+
+  it('with several documents stored, patches only the matching id', async () => {
+    const docA: Document = { ...doc, id: 'A', name: 'A' };
+    const docB: Document = { ...doc, id: 'B', name: 'B' };
+    const docC: Document = { ...doc, id: 'C', name: 'C' };
+    await storage.saveDocument(docA);
+    await storage.saveDocument(docB);
+    await storage.saveDocument(docC);
+
+    await storage.patchDocument('B', { ocrText: 'recognized text' });
+
+    const docs = await storage.getDocuments();
+    expect(docs.find(d => d.id === 'A')?.ocrText).toBeUndefined();
+    expect(docs.find(d => d.id === 'B')?.ocrText).toBe('recognized text');
+    expect(docs.find(d => d.id === 'C')?.ocrText).toBeUndefined();
+  });
+});
+
 test('deleteDocument removes document by id', async () => {
   await storage.saveDocument(doc);
   await storage.deleteDocument(doc.id);

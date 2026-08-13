@@ -1,7 +1,7 @@
 // lib/save-scan.ts
 import * as Crypto from 'expo-crypto';
 import { Document, PageFilter } from '../types/document';
-import { saveDocument, getDocuments, updateDocument } from './storage';
+import { saveDocument, patchDocument } from './storage';
 import { copyPageWithQuality, copyPdfToStorage, deleteDocumentFiles } from './files';
 import { ocrAvailable, extractDocText } from './ocr';
 
@@ -68,14 +68,15 @@ export async function saveScan(input: SaveScanInput): Promise<string> {
 /**
  * Fire-and-forget content index so search can match recognised text.
  *
- * Re-reads the document by id when OCR lands so we neither resurrect a document
- * the user deleted meanwhile nor clobber a rename or reorder made during the pass.
+ * OCR is slow and runs after the save already returned, so by the time it lands
+ * the document may have been deleted, renamed, or reordered. `patchDocument`
+ * merges `ocrText` onto whatever the CURRENT record is inside a single storage
+ * lock acquisition, so this can neither resurrect a deleted document nor clobber
+ * a concurrent edit with a stale read-modify-write.
  */
 export async function indexDocText(id: string, pages: string[]): Promise<void> {
   if (!ocrAvailable()) return;
   const text = await extractDocText(pages);
   if (!text) return;
-  const current = (await getDocuments()).find(d => d.id === id);
-  if (!current) return;
-  await updateDocument({ ...current, ocrText: text });
+  await patchDocument(id, { ocrText: text });
 }
