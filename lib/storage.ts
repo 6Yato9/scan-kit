@@ -11,7 +11,6 @@ const SORT_KEY = '@scan_kit_sort';
 const FOLDERS_KEY = '@scan_kit_folders';
 const SCAN_SETTINGS_KEY = '@scan_kit_scan_settings';
 const DOC_SETTINGS_KEY = '@scan_kit_doc_settings';
-const PENDING_KEY = '@scan_kit_pending';
 
 export type SortKey = 'dateAdded' | 'dateModified' | 'nameAZ';
 
@@ -354,38 +353,6 @@ export function saveThemePreference(p: ThemePreference): Promise<void> {
     _themePrefCache = p;
     await AsyncStorage.setItem(THEME_KEY, p);
   });
-}
-
-// ── Pending review state ────────────────────────────────────────────────────
-// Persisted so an in-progress review survives the JS side getting killed
-// while backgrounded (common on iOS). Not subject to the docs lock — it has
-// a single writer (the scan context's AppState listener).
-export type PendingState = {
-  pages: string[];          // file URIs (may be in cache)
-  pdfUri: string | null;
-  quality: number;
-  defaultFilter: PageFilter | 'original';
-  reviewVisible: boolean;
-};
-
-export async function getPendingState(): Promise<PendingState | null> {
-  const raw = await AsyncStorage.getItem(PENDING_KEY);
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as PendingState;
-  } catch {
-    console.warn('storage: corrupt pending state, resetting to null');
-    await AsyncStorage.removeItem(PENDING_KEY);
-    return null;
-  }
-}
-
-export async function setPendingState(s: PendingState): Promise<void> {
-  await AsyncStorage.setItem(PENDING_KEY, JSON.stringify(s));
-}
-
-export async function clearPendingState(): Promise<void> {
-  await AsyncStorage.removeItem(PENDING_KEY);
 }
 
 // ── First-run onboarding flag ────────────────────────────────────────────────
