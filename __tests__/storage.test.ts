@@ -5,6 +5,28 @@ jest.mock('@react-native-async-storage/async-storage', () =>
   require('@react-native-async-storage/async-storage/jest/async-storage-mock')
 );
 
+// pendingBakeMigrations() checks "already baked" via a page-N.orig.jpg File's
+// `.exists`. Lightweight File stand-in keyed by uri, mirroring the pattern in
+// __tests__/bake.test.ts / __tests__/files.test.ts — `mockOrigExists` lives
+// outside the factory so it survives jest.resetModules() in beforeEach below.
+const mockOrigExists: Record<string, boolean> = {};
+jest.mock('expo-file-system', () => {
+  class MockFile {
+    uri: string;
+    constructor(uri: string) { this.uri = uri; }
+    get exists() { return mockOrigExists[this.uri] ?? false; }
+  }
+  return { File: MockFile };
+});
+
+// Real lib/files.ts pulls in expo-image-manipulator, which isn't relevant to
+// storage.ts's tests — stub just the one function pendingBakeMigrations needs,
+// with a deterministic, self-consistent uri format.
+jest.mock('../lib/files', () => ({
+  originalUri: (docId: string, pageIndex: number) =>
+    `file:///documents/scan-kit/${docId}/page-${pageIndex}.orig.jpg`,
+}));
+
 // storage.ts keeps module-level state (the docs lock + the memoized migration
 // promise `_migrated`). Re-require the module fresh for each test so that state
 // — especially the one-time migration guard — is reset. jest.resetModules()
@@ -15,6 +37,10 @@ type Storage = typeof import('../lib/storage');
 type AS = typeof import('@react-native-async-storage/async-storage').default;
 let storage: Storage;
 let AsyncStorage: AS;
+
+function origUri(docId: string, pageIndex: number): string {
+  return `file:///documents/scan-kit/${docId}/page-${pageIndex}.orig.jpg`;
+}
 
 const doc: Document = {
   id: 'test-id',
@@ -30,6 +56,7 @@ beforeEach(() => {
   jest.resetModules();
   AsyncStorage = require('@react-native-async-storage/async-storage');
   storage = require('../lib/storage');
+  for (const k of Object.keys(mockOrigExists)) delete mockOrigExists[k];
 });
 
 test('getDocuments returns empty array when nothing stored', async () => {
@@ -194,6 +221,67 @@ describe('setPageBaked', () => {
   });
 });
 
+describe('pendingBakeMigrations', () => {
+  it('reports a page with a recorded filter that has not been baked yet', async () => {
+    await storage.saveDocument({
+      ...doc, id: 'pbm-1', pages: ['file:///p0.jpg'], filters: ['grayscale'],
+    });
+    expect(await storage.pendingBakeMigrations()).toEqual([
+      { docId: 'pbm-1', pageIndex: 0, filter: 'grayscale', adjustment: undefined },
+    ]);
+  });
+
+  it('reports a page with only a non-default adjustment (filter stays original)', async () => {
+    await storage.saveDocument({
+      ...doc,
+      id: 'pbm-adj',
+      pages: ['file:///p0.jpg'],
+      adjustments: [{ brightness: 15, contrast: 0, saturation: 0 }],
+    });
+    expect(await storage.pendingBakeMigrations()).toEqual([
+      { docId: 'pbm-adj', pageIndex: 0, filter: 'original', adjustment: { brightness: 15, contrast: 0, saturation: 0 } },
+    ]);
+  });
+
+  it('ignores an all-original document with no adjustments', async () => {
+    await storage.saveDocument({ ...doc, id: 'pbm-2', pages: ['file:///p0.jpg'] });
+    expect(await storage.pendingBakeMigrations()).toEqual([]);
+  });
+
+  it('ignores a page whose adjustment is present but all-zero', async () => {
+    await storage.saveDocument({
+      ...doc,
+      id: 'pbm-zero-adj',
+      pages: ['file:///p0.jpg'],
+      adjustments: [{ brightness: 0, contrast: 0, saturation: 0 }],
+    });
+    expect(await storage.pendingBakeMigrations()).toEqual([]);
+  });
+
+  it('skips a page whose .orig already exists (already baked)', async () => {
+    await storage.saveDocument({
+      ...doc, id: 'pbm-3', pages: ['file:///p0.jpg'], filters: ['bw'],
+    });
+    mockOrigExists[origUri('pbm-3', 0)] = true;
+    expect(await storage.pendingBakeMigrations()).toEqual([]);
+  });
+
+  it('survives a corrupt document and still reports the rest', async () => {
+    await storage.saveDocument({
+      ...doc, id: 'ok-doc', pages: ['file:///p0.jpg'], filters: ['grayscale'],
+    });
+    // Not corrupt JSON (getDocumentsUnlocked already guards against that) — a
+    // structurally malformed record that throws while pendingBakeMigrations
+    // walks its pages, simulating an old/foreign record shape.
+    await storage.saveDocument({
+      ...doc, id: 'bad-doc', pages: undefined as any, filters: ['grayscale'],
+    });
+    expect(await storage.pendingBakeMigrations()).toEqual([
+      { docId: 'ok-doc', pageIndex: 0, filter: 'grayscale', adjustment: undefined },
+    ]);
+  });
+});
+
 test('deleteDocument removes document by id', async () => {
   await storage.saveDocument(doc);
   await storage.deleteDocument(doc.id);
@@ -226,8 +314,8 @@ describe('migration from legacy blob', () => {
     expect(docs.map(d => d.id)).toEqual(['leg-1', 'leg-2']);
     expect(docs.find(d => d.id === 'leg-1')?.name).toBe('Legacy 1');
 
-    // Schema version bumped to "2".
-    expect(await AsyncStorage.getItem('@scan_kit_schema_version')).toBe('2');
+    // Schema version bumped to "3".
+    expect(await AsyncStorage.getItem('@scan_kit_schema_version')).toBe('3');
 
     // Legacy blob preserved untouched as a backup.
     const legacyRaw = await AsyncStorage.getItem('@scan_kit_documents');
@@ -241,13 +329,13 @@ describe('migration from legacy blob', () => {
 
   it('initialises an empty index on a fresh install (no legacy blob)', async () => {
     expect(await storage.getDocuments()).toEqual([]);
-    expect(await AsyncStorage.getItem('@scan_kit_schema_version')).toBe('2');
+    expect(await AsyncStorage.getItem('@scan_kit_schema_version')).toBe('3');
     expect(await AsyncStorage.getItem('@scan_kit_doc_index')).toBe('[]');
   });
 
-  it('does not re-migrate once schema version is "2"', async () => {
+  it('does not re-migrate once schema version is "3"', async () => {
     // Schema already current, but a stale legacy blob is present. It must be ignored.
-    await AsyncStorage.setItem('@scan_kit_schema_version', '2');
+    await AsyncStorage.setItem('@scan_kit_schema_version', '3');
     await AsyncStorage.setItem('@scan_kit_doc_index', JSON.stringify([]));
     await AsyncStorage.setItem(
       '@scan_kit_documents',

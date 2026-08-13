@@ -1,12 +1,19 @@
 // lib/storage.ts
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { File } from 'expo-file-system';
 import { Document, PageAdjustment, PageFilter } from '../types/document';
+import { originalUri } from './files';
 
 const KEY = '@scan_kit_documents'; // legacy single-blob key — kept as a read-only backup, never written after migration
 const DOC_INDEX_KEY = '@scan_kit_doc_index'; // JSON array of doc ids, newest-first
 const DOC_PREFIX = '@scan_kit_doc:'; // per-document key prefix: `${DOC_PREFIX}${id}`
 const SCHEMA_VERSION_KEY = '@scan_kit_schema_version';
-const CURRENT_SCHEMA_VERSION = '2';
+// v3: filters/adjustments are now baked into page pixels via a WebView canvas
+// instead of being applied at render time (RN's iOS filter style only honors
+// brightness/opacity — grayscale/contrast/saturate silently no-op there). See
+// pendingBakeMigrations below for the sweep that bakes anything a pre-v3 app
+// only ever recorded as metadata.
+const CURRENT_SCHEMA_VERSION = '3';
 const SORT_KEY = '@scan_kit_sort';
 const FOLDERS_KEY = '@scan_kit_folders';
 const SCAN_SETTINGS_KEY = '@scan_kit_scan_settings';
@@ -255,6 +262,59 @@ export function setPageBaked(
 
     await AsyncStorage.setItem(docKey(id), JSON.stringify({ ...current, ...patch }));
   });
+}
+
+function isDefaultAdjustment(adj: PageAdjustment | undefined): boolean {
+  return !adj || (adj.brightness === 0 && adj.contrast === 0 && adj.saturation === 0);
+}
+
+/**
+ * Sweeps every document for pages that have a non-`original` filter or a
+ * non-default adjustment RECORDED but whose pixels were never actually baked
+ * — i.e. a page saved by a pre-v3 app version, which only ever wrote the
+ * filter/adjustment as metadata and relied on render-time application (now
+ * removed; see lib/filters.ts). Returns one entry per page still needing a
+ * bake so a caller with a mounted WebView (see app/_layout.tsx) can drain
+ * them through bakePage.
+ *
+ * This can't bake directly: it runs during storage reads (via getDocuments)
+ * and must not block, and baking needs a mounted WebView this module doesn't
+ * have. "Already baked" is detected via the existence of `page-N.orig.jpg`
+ * (see lib/files.ts's ensureOriginal/bakePage) rather than any flag, so the
+ * sweep is naturally idempotent — re-running it after a partial drain only
+ * returns the pages still outstanding.
+ *
+ * Each document is swept inside its own try/catch, mirroring
+ * garbageCollectOrphans, so one malformed record can't abort the rest.
+ */
+export async function pendingBakeMigrations(): Promise<
+  { docId: string; pageIndex: number; filter: PageFilter; adjustment?: PageAdjustment }[]
+> {
+  const docs = await getDocuments();
+  const pending: { docId: string; pageIndex: number; filter: PageFilter; adjustment?: PageAdjustment }[] = [];
+
+  for (const doc of docs) {
+    try {
+      const filters = doc.filters;
+      const adjustments = doc.adjustments;
+      if (!filters && !adjustments) continue; // nothing but 'original'/defaults recorded
+
+      for (let i = 0; i < doc.pages.length; i++) {
+        const filter: PageFilter = filters?.[i] ?? 'original';
+        const adjustment = adjustments?.[i];
+        if (filter === 'original' && isDefaultAdjustment(adjustment)) continue;
+
+        const orig = new File(originalUri(doc.id, i));
+        if (orig.exists) continue; // already baked
+
+        pending.push({ docId: doc.id, pageIndex: i, filter, adjustment });
+      }
+    } catch (e) {
+      console.warn(`storage: pendingBakeMigrations skipping doc ${doc.id}`, e);
+    }
+  }
+
+  return pending;
 }
 
 export function deleteDocument(id: string): Promise<void> {

@@ -9,8 +9,9 @@ import { ToastProvider } from '@/components/toast';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { FilterBaker } from '@/components/filter-baker';
 import { LockGate } from '@/components/lock-gate';
+import { bakePage } from '@/lib/bake';
 import { garbageCollectOrphans } from '@/lib/files';
-import { getDocuments, getOnboarded, getOnboardedSync } from '@/lib/storage';
+import { getDocuments, getOnboarded, getOnboardedSync, pendingBakeMigrations } from '@/lib/storage';
 
 // First-run gate: after mount, read the onboarding flag and redirect to the
 // onboarding screen if it hasn't been completed. Kept separate from the tabs
@@ -117,6 +118,20 @@ export default function RootLayout() {
         .then(docs => garbageCollectOrphans(docs.map(d => d.id)))
         .catch(() => {});
     }, 2000);
+
+    // v3 migration: bake any filter/adjustment a pre-v3 app version only ever
+    // recorded as metadata (see pendingBakeMigrations). FilterBaker is mounted
+    // just below in ThemedStack, so its WebView is available by the time this
+    // runs. Jobs are drained sequentially — the baker handles one job at a
+    // time and a large library must not flood the queue — and a single page's
+    // failure (caught inside bakePage's rejection) doesn't stop the rest.
+    (async () => {
+      const jobs = await pendingBakeMigrations();
+      for (const job of jobs) {
+        await bakePage(job.docId, job.pageIndex, job.filter, job.adjustment).catch(() => {});
+      }
+    })().catch(() => {});
+
     return () => clearTimeout(t);
   }, []);
 
