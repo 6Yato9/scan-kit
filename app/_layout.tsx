@@ -7,6 +7,7 @@ import { ScanProvider } from '@/contexts/scan-context';
 import { ThemeProvider, useTheme } from '@/contexts/theme-context';
 import { ToastProvider } from '@/components/toast';
 import { ErrorBoundary } from '@/components/error-boundary';
+import { FilterBaker } from '@/components/filter-baker';
 import { LockGate } from '@/components/lock-gate';
 import { garbageCollectOrphans } from '@/lib/files';
 import { getDocuments, getOnboarded, getOnboardedSync } from '@/lib/storage';
@@ -47,6 +48,7 @@ function ThemedStack() {
     <>
     <StatusBar style={isDark ? 'light' : 'dark'} />
     <OnboardingGate />
+    <FilterBaker />
     <LockGate>
     <Stack
       screenOptions={{
