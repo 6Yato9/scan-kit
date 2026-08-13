@@ -1,4 +1,4 @@
-import { saveScan } from '../lib/save-scan';
+import { saveScan, indexDocText } from '../lib/save-scan';
 
 jest.mock('expo-crypto', () => ({ randomUUID: () => 'fixed-id' }));
 jest.mock('../lib/files', () => ({
@@ -7,10 +7,19 @@ jest.mock('../lib/files', () => ({
   copyPdfToStorage: jest.fn(() => 'file:///docs/fixed-id/document.pdf'),
   deleteDocumentFiles: jest.fn(),
 }));
-jest.mock('../lib/storage', () => ({ saveDocument: jest.fn(async () => {}) }));
+jest.mock('../lib/storage', () => ({
+  saveDocument: jest.fn(async () => {}),
+  getDocuments: jest.fn(async () => []),
+  updateDocument: jest.fn(async () => {}),
+}));
+jest.mock('../lib/ocr', () => ({
+  ocrAvailable: jest.fn(() => true),
+  extractDocText: jest.fn(async () => ''),
+}));
 
-const { saveDocument } = require('../lib/storage');
+const { saveDocument, getDocuments, updateDocument } = require('../lib/storage');
 const { deleteDocumentFiles, copyPageWithQuality, copyPdfToStorage } = require('../lib/files');
+const { ocrAvailable, extractDocText } = require('../lib/ocr');
 
 beforeEach(() => jest.clearAllMocks());
 
@@ -53,4 +62,53 @@ test('cleans up when the pdf branch fails to persist', async () => {
     .rejects.toThrow('write failed');
   expect(copyPdfToStorage).toHaveBeenCalled();
   expect(deleteDocumentFiles).toHaveBeenCalledWith('fixed-id');
+});
+
+describe('indexDocText', () => {
+  test('does not resurrect a document deleted during indexing', async () => {
+    (extractDocText as jest.Mock).mockResolvedValueOnce('recognized text');
+    (getDocuments as jest.Mock).mockResolvedValueOnce([]); // document was deleted
+
+    await indexDocText('fixed-id', ['file:///docs/fixed-id/page-0.jpg']);
+
+    expect(updateDocument).not.toHaveBeenCalled();
+  });
+
+  test('merges ocrText onto the current record, not a stale snapshot', async () => {
+    (extractDocText as jest.Mock).mockResolvedValueOnce('recognized text');
+    const currentDoc = {
+      id: 'fixed-id',
+      name: 'Renamed While Indexing',
+      pages: ['file:///docs/fixed-id/page-0.jpg'],
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    (getDocuments as jest.Mock).mockResolvedValueOnce([currentDoc]);
+
+    await indexDocText('fixed-id', ['file:///docs/fixed-id/page-0.jpg']);
+
+    expect(updateDocument).toHaveBeenCalledWith({
+      ...currentDoc,
+      ocrText: 'recognized text',
+    });
+  });
+
+  test('writes nothing when OCR is unavailable', async () => {
+    (ocrAvailable as jest.Mock).mockReturnValueOnce(false);
+
+    await indexDocText('fixed-id', ['file:///docs/fixed-id/page-0.jpg']);
+
+    expect(extractDocText).not.toHaveBeenCalled();
+    expect(getDocuments).not.toHaveBeenCalled();
+    expect(updateDocument).not.toHaveBeenCalled();
+  });
+
+  test('writes nothing when extractDocText returns an empty string', async () => {
+    (extractDocText as jest.Mock).mockResolvedValueOnce('');
+
+    await indexDocText('fixed-id', ['file:///docs/fixed-id/page-0.jpg']);
+
+    expect(getDocuments).not.toHaveBeenCalled();
+    expect(updateDocument).not.toHaveBeenCalled();
+  });
 });

@@ -1,8 +1,9 @@
 // lib/save-scan.ts
 import * as Crypto from 'expo-crypto';
 import { Document, PageFilter } from '../types/document';
-import { saveDocument } from './storage';
+import { saveDocument, getDocuments, updateDocument } from './storage';
 import { copyPageWithQuality, copyPdfToStorage, deleteDocumentFiles } from './files';
+import { ocrAvailable, extractDocText } from './ocr';
 
 export type SaveScanInput = {
   pages?: string[];
@@ -62,4 +63,19 @@ export async function saveScan(input: SaveScanInput): Promise<string> {
     try { deleteDocumentFiles(id); } catch { /* secondary failure — keep the original error */ }
     throw err;
   }
+}
+
+/**
+ * Fire-and-forget content index so search can match recognised text.
+ *
+ * Re-reads the document by id when OCR lands so we neither resurrect a document
+ * the user deleted meanwhile nor clobber a rename or reorder made during the pass.
+ */
+export async function indexDocText(id: string, pages: string[]): Promise<void> {
+  if (!ocrAvailable()) return;
+  const text = await extractDocText(pages);
+  if (!text) return;
+  const current = (await getDocuments()).find(d => d.id === id);
+  if (!current) return;
+  await updateDocument({ ...current, ocrText: text });
 }
