@@ -18,9 +18,10 @@ import { StatusBar } from 'expo-status-bar';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { WebView } from 'react-native-webview';
 import * as Sharing from 'expo-sharing';
+import { File } from 'expo-file-system';
 import DocumentScanner from 'react-native-document-scanner-plugin';
 import { getDocuments, updateDocument, deleteDocument, getScanSettings } from '@/lib/storage';
-import { appendPages, deleteSinglePage, reorderPages, deleteDocumentFiles } from '@/lib/files';
+import { appendPages, deleteSinglePage, reorderPages, deleteDocumentFiles, replacePage } from '@/lib/files';
 import { rotatePage } from '@/lib/image';
 import { combinedFilterRN } from '@/lib/filters';
 import { notifySuccess } from '@/lib/haptics';
@@ -30,6 +31,8 @@ import { ExportSheet } from '@/components/export-sheet';
 import { PageActionsSheet } from '@/components/page-actions-sheet';
 import { ThumbnailStrip } from '@/components/thumbnail-strip';
 import { ReorderModal } from '@/components/reorder-modal';
+import { RenameSheet } from '@/components/rename-sheet';
+import { CropModal } from '@/components/crop-modal';
 
 export default function ViewerScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -39,6 +42,8 @@ export default function ViewerScreen() {
   const [exportVisible, setExportVisible] = useState(false);
   const [actionsVisible, setActionsVisible] = useState(false);
   const [reorderVisible, setReorderVisible] = useState(false);
+  const [renameVisible, setRenameVisible] = useState(false);
+  const [cropVisible, setCropVisible] = useState(false);
   const [ocrResult, setOcrResult] = useState<string | null>(null);
   const [ocrRunning, setOcrRunning] = useState(false);
   const ocrIndexingRef = useRef(false);
@@ -89,6 +94,27 @@ export default function ViewerScreen() {
       Alert.alert('Rotate failed', 'Could not rotate this page.');
     } finally {
       rotatingRef.current = false;
+    }
+  }, [document, currentPage, saveDoc]);
+
+  const handleCropDone = useCallback(async (croppedUri: string) => {
+    if (!document) return;
+    try {
+      const stored = replacePage(croppedUri, document.id, currentPage);
+      // Clean up the manipulator temp file so it doesn't accumulate in cache,
+      // mirroring what rotatePage does for the rotate path.
+      try {
+        const tmp = new File(croppedUri);
+        if (tmp.exists) tmp.delete();
+      } catch {}
+      const pages = [...document.pages];
+      pages[currentPage] = stored;
+      await saveDoc({ ...document, pages, updatedAt: Date.now() });
+    } catch (err) {
+      console.error('Crop failed', err);
+      Alert.alert('Crop failed', 'Could not save the cropped page.');
+    } finally {
+      setCropVisible(false);
     }
   }, [document, currentPage, saveDoc]);
 
@@ -151,6 +177,14 @@ export default function ViewerScreen() {
     }, 250);
   }, [document, currentPage]);
 
+  // Shared by the "last page deleted" confirmation below and by the rename
+  // sheet's delete action — both end a document's life the same way.
+  const deleteDocAndExit = useCallback(async (docId: string) => {
+    await deleteDocument(docId);
+    deleteDocumentFiles(docId);
+    router.back();
+  }, [router]);
+
   const handleDeletePage = useCallback(async () => {
     if (!document) return;
     if (document.pages.length === 1) {
@@ -162,11 +196,7 @@ export default function ViewerScreen() {
           {
             text: 'Delete',
             style: 'destructive',
-            onPress: async () => {
-              await deleteDocument(document.id);
-              deleteDocumentFiles(document.id);
-              router.back();
-            },
+            onPress: () => deleteDocAndExit(document.id),
           },
         ]
       );
@@ -199,7 +229,7 @@ export default function ViewerScreen() {
     setCurrentPage(safePage);
     setActionsVisible(false);
     notifySuccess();
-  }, [document, currentPage, saveDoc, router]);
+  }, [document, currentPage, saveDoc, deleteDocAndExit]);
 
   const handleSharePage = useCallback(async () => {
     if (!document) return;
@@ -355,7 +385,14 @@ export default function ViewerScreen() {
               <Text style={styles.back}>Back</Text>
             </View>
           </Pressable>
-          <Text style={styles.title} numberOfLines={1}>{document.name}</Text>
+          <Pressable
+            style={{ flex: 1 }}
+            onPress={() => setRenameVisible(true)}
+            accessibilityRole="button"
+            accessibilityLabel={`Rename ${document.name}`}
+          >
+            <Text style={styles.title} numberOfLines={1}>{document.name}</Text>
+          </Pressable>
           <Pressable onPress={handleSharePdf} hitSlop={12}>
             <Text style={styles.exportBtn}>Share</Text>
           </Pressable>
@@ -364,6 +401,20 @@ export default function ViewerScreen() {
           source={{ uri: document.pdfUri }}
           style={styles.webView}
           originWhitelist={['file://*', 'blob:*']}
+        />
+
+        <RenameSheet
+          visible={renameVisible}
+          document={document}
+          onRename={async (doc, newName) => {
+            await saveDoc({ ...doc, name: newName, updatedAt: Date.now() });
+            setRenameVisible(false);
+          }}
+          onDelete={async doc => {
+            setRenameVisible(false);
+            await deleteDocAndExit(doc.id);
+          }}
+          onClose={() => setRenameVisible(false)}
         />
       </View>
     );
@@ -380,7 +431,14 @@ export default function ViewerScreen() {
             <Text style={styles.back}>Back</Text>
           </View>
         </Pressable>
-        <Text style={styles.title} numberOfLines={1}>{document.name}</Text>
+        <Pressable
+          style={{ flex: 1 }}
+          onPress={() => setRenameVisible(true)}
+          accessibilityRole="button"
+          accessibilityLabel={`Rename ${document.name}`}
+        >
+          <Text style={styles.title} numberOfLines={1}>{document.name}</Text>
+        </Pressable>
         <View style={styles.headerRight}>
           <Pressable
             onPress={handleOcr}
@@ -478,9 +536,33 @@ export default function ViewerScreen() {
         onFilter={handleFilter}
         onAdjust={handleAdjust}
         onAnnotate={handleAnnotate}
+        onCrop={() => { setActionsVisible(false); setCropVisible(true); }}
         onDelete={handleDeletePage}
         onShare={handleSharePage}
         onClose={() => setActionsVisible(false)}
+      />
+
+      {document.pages[currentPage] && (
+        <CropModal
+          visible={cropVisible}
+          uri={document.pages[currentPage]}
+          onCancel={() => setCropVisible(false)}
+          onDone={handleCropDone}
+        />
+      )}
+
+      <RenameSheet
+        visible={renameVisible}
+        document={document}
+        onRename={async (doc, newName) => {
+          await saveDoc({ ...doc, name: newName, updatedAt: Date.now() });
+          setRenameVisible(false);
+        }}
+        onDelete={async doc => {
+          setRenameVisible(false);
+          await deleteDocAndExit(doc.id);
+        }}
+        onClose={() => setRenameVisible(false)}
       />
 
       <ReorderModal

@@ -17,6 +17,7 @@ type Props = {
   onFilter: (filter: PageFilter) => void;
   onAdjust: (adj: PageAdjustment) => void;
   onAnnotate: () => void;
+  onCrop: () => void;
   onDelete: () => void;
   onShare: () => void;
   onClose: () => void;
@@ -42,6 +43,7 @@ export function PageActionsSheet({
   onFilter,
   onAdjust,
   onAnnotate,
+  onCrop,
   onDelete,
   onShare,
   onClose,
@@ -76,6 +78,10 @@ export function PageActionsSheet({
             <Pressable style={[styles.actionBtn, { backgroundColor: colors.actionBtnBg }]} onPress={() => rotate('cw')} accessibilityRole="button" accessibilityLabel="Rotate right">
               <MaterialCommunityIcons name="rotate-right" size={22} color={colors.text} />
               <Text allowFontScaling={false} style={[styles.actionLabel, { color: colors.subtext }]}>Rotate R</Text>
+            </Pressable>
+            <Pressable style={[styles.actionBtn, { backgroundColor: colors.actionBtnBg }]} onPress={onCrop} accessibilityRole="button" accessibilityLabel="Crop">
+              <Ionicons name="crop" size={22} color={colors.text} />
+              <Text allowFontScaling={false} style={[styles.actionLabel, { color: colors.subtext }]}>Crop</Text>
             </Pressable>
             <Pressable style={[styles.actionBtn, { backgroundColor: colors.actionBtnBg }]} onPress={() => { onClose(); onAnnotate(); }} accessibilityRole="button" accessibilityLabel="Annotate">
               <Ionicons name="create-outline" size={22} color={colors.text} />
