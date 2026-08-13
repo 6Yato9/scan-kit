@@ -11,7 +11,7 @@ import { useTheme } from '@/contexts/theme-context';
 import { getScanSettings } from '@/lib/storage';
 
 export default function BookScreen() {
-  const { openImport } = useScan();
+  const { saveAndOpen } = useScan();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
@@ -52,8 +52,8 @@ export default function BookScreen() {
         ),
       ]);
 
-      await openImport([leftResult.uri, rightResult.uri]);
-      router.back();
+      const id = await saveAndOpen({ pages: [leftResult.uri, rightResult.uri] });
+      if (id) router.replace({ pathname: '/viewer', params: { id } });
     } catch {
       Alert.alert('Scan failed', 'Could not process book scan. Please try again.');
     } finally {

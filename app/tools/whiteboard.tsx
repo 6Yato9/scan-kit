@@ -10,7 +10,7 @@ import { useTheme } from '@/contexts/theme-context';
 import { getScanSettings } from '@/lib/storage';
 
 export default function WhiteboardScreen() {
-  const { openImport } = useScan();
+  const { saveAndOpen } = useScan();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
@@ -28,8 +28,8 @@ export default function WhiteboardScreen() {
         letUserAdjustCrop: settings.autoCrop,
       } as any);
       if (!scannedImages?.length) return;
-      await openImport(scannedImages, 'enhanced');
-      router.back();
+      const id = await saveAndOpen({ pages: scannedImages, defaultFilter: 'enhanced' });
+      if (id) router.replace({ pathname: '/viewer', params: { id } });
     } catch {
       Alert.alert('Scan failed', 'Could not scan. Please try again.');
     } finally {

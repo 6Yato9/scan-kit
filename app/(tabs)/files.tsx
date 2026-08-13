@@ -77,7 +77,7 @@ export default function FilesScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const params = useLocalSearchParams<{ action?: string }>();
-  const { lastSaved, openImport, openPdfImport } = useScan();
+  const { lastSaved, saveAndOpen } = useScan();
   const { colors } = useTheme();
 
   const load = useCallback(async () => {
@@ -121,12 +121,13 @@ export default function FilesScreen() {
         quality: qualityMap[settings.quality],
       });
       if (result.canceled || !result.assets.length) return;
-      await openImport(result.assets.map(a => a.uri));
+      const id = await saveAndOpen({ pages: result.assets.map(a => a.uri) });
+      if (id) router.push({ pathname: '/viewer', params: { id } });
     } catch (err) {
       console.error('Import images failed', err);
       Alert.alert('Import Failed', 'Could not import images.');
     }
-  }, [openImport]);
+  }, [saveAndOpen, router]);
 
   const handleImportFiles = useCallback(async () => {
     try {
@@ -136,16 +137,15 @@ export default function FilesScreen() {
       });
       if (result.canceled || !result.assets.length) return;
       const asset = result.assets[0];
-      if (asset.mimeType === 'application/pdf') {
-        await openPdfImport(asset.uri);
-      } else {
-        await openImport([asset.uri]);
-      }
+      const id = asset.mimeType === 'application/pdf'
+        ? await saveAndOpen({ pdfUri: asset.uri })
+        : await saveAndOpen({ pages: [asset.uri] });
+      if (id) router.push({ pathname: '/viewer', params: { id } });
     } catch (err) {
       console.error('Import files failed', err);
       Alert.alert('Import Failed', 'Could not import file.');
     }
-  }, [openImport, openPdfImport]);
+  }, [saveAndOpen, router]);
 
   // Handle URL params from Tools tab shortcuts. Clear the param after firing so
   // it doesn't re-trigger every time the tab regains focus.

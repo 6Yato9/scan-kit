@@ -231,7 +231,14 @@ export default function HomeScreen() {
           ) : searchQuery.trim() ? (
             <EmptyState variant="no-search-results" query={searchQuery.trim()} />
           ) : (
-            <EmptyState variant="no-docs" actionLabel="Scan a document" onAction={triggerScan} />
+            <EmptyState
+              variant="no-docs"
+              actionLabel="Scan a document"
+              onAction={async () => {
+                const id = await triggerScan();
+                if (id) router.push({ pathname: '/viewer', params: { id } });
+              }}
+            />
           )
         }
         renderItem={({ item }) => (

@@ -38,6 +38,7 @@ function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
   const { width: screenWidth } = useWindowDimensions();
   const { isDark, colors } = useTheme();
   const { triggerScan } = useScan();
+  const router = useRouter();
 
   // Glass selector animation state
   const barWidthRef = useRef(0);
@@ -161,7 +162,11 @@ function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
           return (
             <Pressable
               key={route.key}
-              onPress={() => { tapMedium(); triggerScan(); }}
+              onPress={async () => {
+                tapMedium();
+                const id = await triggerScan();
+                if (id) router.push({ pathname: '/viewer', params: { id } });
+              }}
               style={styles.scanBtn}
               accessibilityLabel="Scan document"
             >
@@ -205,15 +210,6 @@ function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
 }
 
 function TabsInner() {
-  const router = useRouter();
-  const { reviewVisible } = useScan();
-
-  useEffect(() => {
-    if (reviewVisible) {
-      router.push('/review');
-    }
-  }, [reviewVisible, router]);
-
   return (
     <Tabs
       tabBar={(props) => <FloatingTabBar {...props} />}
