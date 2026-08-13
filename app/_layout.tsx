@@ -69,10 +69,6 @@ function ThemedStack() {
         options={{ presentation: 'fullScreenModal', headerShown: false }}
       />
       <Stack.Screen
-        name="review"
-        options={{ presentation: 'fullScreenModal', headerShown: false }}
-      />
-      <Stack.Screen
         name="annotate"
         options={{ presentation: 'fullScreenModal', headerShown: false }}
       />
