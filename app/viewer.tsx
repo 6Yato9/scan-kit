@@ -33,6 +33,7 @@ import { ThumbnailStrip } from '@/components/thumbnail-strip';
 import { ReorderModal } from '@/components/reorder-modal';
 import { RenameSheet } from '@/components/rename-sheet';
 import { CropModal } from '@/components/crop-modal';
+import { FilterBaker } from '@/components/filter-baker';
 
 export default function ViewerScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -449,6 +450,10 @@ export default function ViewerScreen() {
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <StatusBar style="light" />
+      {/* The viewer is a fullScreenModal in its own view controller, so the root
+          baker is buried underneath and iOS never loads it. Filter/adjust bakes
+          started here need a baker inside this modal. */}
+      <FilterBaker />
       <View style={styles.header}>
         <Pressable onPress={() => router.back()} hitSlop={12}>
           <View style={styles.backRow}>

@@ -1,54 +1,70 @@
 import { buildBakeHtml } from '../lib/bake-html';
 
-describe('buildBakeHtml', () => {
-  it('sets ctx.filter to the given css before drawImage', () => {
-    const html = buildBakeHtml('file:///tmp/page-0.jpg', 'grayscale(100%)');
-    const filterIdx = html.indexOf("ctx.filter = 'grayscale(100%)'");
-    const drawIdx = html.indexOf('drawImage');
-    expect(filterIdx).toBeGreaterThan(-1);
-    expect(drawIdx).toBeGreaterThan(-1);
-    expect(filterIdx).toBeLessThan(drawIdx);
-  });
+const SRC = 'file:///docs/d1/page-0.orig.jpg';
 
-  it('draws at natural pixel size, not display size', () => {
-    const html = buildBakeHtml('file:///tmp/page-0.jpg', 'none');
-    expect(html).toContain('naturalWidth');
-    expect(html).toContain('naturalHeight');
-  });
+/**
+ * Pulls the real pixel-transform out of the generated HTML and runs it in Node,
+ * so the maths is tested rather than the string that contains it.
+ */
+function runOps(ops: Record<string, number>[], rgb: [number, number, number]): number[] {
+  const html = buildBakeHtml(SRC, ops);
+  const body = html.slice(html.indexOf('var OPS ='), html.indexOf('var img ='));
+  // Uint8ClampedArray, exactly like canvas ImageData — integer + clamped, so the
+  // maths is exercised under the same rounding the browser applies.
+  const data = new Uint8ClampedArray([rgb[0], rgb[1], rgb[2], 255]);
+  // eslint-disable-next-line no-new-func
+  const fn = new Function(`${body}; apply(arguments[0]); return arguments[0];`);
+  return Array.from(fn(data) as number[]);
+}
 
-  it('loads the given fileSrc into a hidden crossorigin img', () => {
-    const html = buildBakeHtml('file:///tmp/page-0.jpg', 'none');
-    expect(html).toContain('src="file:///tmp/page-0.jpg"');
-    expect(html).toContain('crossorigin="anonymous"');
-  });
+test('embeds the ops and the source', () => {
+  const html = buildBakeHtml(SRC, [{ grayscale: 1 }]);
+  expect(html).toContain(SRC);
+  expect(html).toContain('var OPS = [{"grayscale":1}]');
+});
 
-  it('posts the canvas data URL via ReactNativeWebView.postMessage', () => {
-    const html = buildBakeHtml('file:///tmp/page-0.jpg', 'none');
-    expect(html).toContain("window.ReactNativeWebView.postMessage(canvas.toDataURL('image/jpeg', 0.92))");
-  });
+test('does not rely on ctx.filter, which is a silent no-op in this WebKit', () => {
+  const html = buildBakeHtml(SRC, [{ grayscale: 1 }]);
+  expect(html).not.toContain('ctx.filter');
+  expect(html).toContain('getImageData');
+  expect(html).toContain('putImageData');
+});
 
-  it('escapes a single quote in the css so it cannot break out of the JS string literal', () => {
-    const malicious = "'; window.ReactNativeWebView.postMessage('PWNED');//";
-    const html = buildBakeHtml('file:///tmp/page-0.jpg', malicious);
-    // The raw malicious payload must not appear verbatim inside a JS string
-    // literal context that would let it terminate early.
-    expect(html).not.toContain("ctx.filter = '';");
-    expect(html).not.toContain("PWNED');//");
-    // The quote must be escaped somehow (backslash-escaped).
-    expect(html).toMatch(/ctx\.filter = '\\'; window\.ReactNativeWebView\.postMessage\(\\'PWNED\\'\);\/\/'/);
-  });
+test('reports load failure instead of hanging', () => {
+  const html = buildBakeHtml(SRC, []);
+  expect(html).toContain('onerror');
+  expect(html).toContain('BAKE_ERROR');
+});
 
-  it('posts a BAKE_ERROR message on image load error', () => {
-    const html = buildBakeHtml('file:///tmp/page-0.jpg', 'none');
-    expect(html).toMatch(/img\.onerror\s*=/);
-    expect(html).toContain('BAKE_ERROR');
-  });
+test('grayscale(1) collapses a colour to its luminance', () => {
+  const [r, g, b] = runOps([{ grayscale: 1 }], [255, 0, 0]);
+  const lum = Math.round(0.2126 * 255);
+  expect(r).toBeCloseTo(lum, 0);
+  expect(r).toBe(g);
+  expect(g).toBe(b);
+});
 
-  it('has a try/catch around the draw so any thrown error posts BAKE_ERROR instead of hanging', () => {
-    const html = buildBakeHtml('file:///tmp/page-0.jpg', 'none');
-    expect(html).toContain('catch');
-    // BAKE_ERROR should appear at least twice: once for img.onerror, once for the catch block.
-    const occurrences = html.split('BAKE_ERROR').length - 1;
-    expect(occurrences).toBeGreaterThanOrEqual(2);
-  });
+test('grayscale(0) leaves pixels untouched', () => {
+  expect(runOps([{ grayscale: 0 }], [10, 200, 30]).slice(0, 3)).toEqual([10, 200, 30]);
+});
+
+test('brightness scales channels and clamps at 255', () => {
+  expect(runOps([{ brightness: 2 }], [100, 10, 0]).slice(0, 3)).toEqual([200, 20, 0]);
+  expect(runOps([{ brightness: 4 }], [100, 0, 0]).slice(0, 3)).toEqual([255, 0, 0]);
+});
+
+test('contrast pushes away from mid-grey and clamps at 0', () => {
+  expect(runOps([{ contrast: 2 }], [128, 138, 0]).slice(0, 3)).toEqual([128, 148, 0]);
+});
+
+test('ops compose in order — bw is grayscale then contrast', () => {
+  const out = runOps([{ grayscale: 1 }, { contrast: 2 }], [255, 0, 0]);
+  const lum = 0.2126 * 255;
+  const expected = Math.max(0, Math.min(255, (lum - 128) * 2 + 128));
+  expect(out[0]).toBeCloseTo(expected, 0);
+  expect(out[0]).toBe(out[1]);
+});
+
+test('an empty op list is a pass-through', () => {
+  expect(runOps([], [12, 34, 56]).slice(0, 3)).toEqual([12, 34, 56]);
 });

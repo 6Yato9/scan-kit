@@ -14,7 +14,7 @@ export type BakeJobInput = {
   docId: string;
   pageIndex: number;
   src: string;
-  css: string;
+  ops: Record<string, number>[];
 };
 
 export type BakeJob = BakeJobInput & { id: number };
@@ -72,4 +72,18 @@ export function failJob(id: number, reason: string): void {
 /** Number of jobs enqueued but not yet completed/failed (taken or not). */
 export function pendingCount(): number {
   return pending.size;
+}
+
+
+/**
+ * Returns a taken-but-unfinished job to the front of the queue.
+ *
+ * Used when the host component unmounts mid-bake (its screen was dismissed).
+ * The job is still in `pending`, but no WebView is left to report on it, so
+ * without re-queueing it the enqueuer waits forever. No-op for an unknown id.
+ */
+export function releaseJob(job: BakeJob): void {
+  if (!pending.has(job.id)) return;
+  queue.unshift(job);
+  notifier?.();
 }

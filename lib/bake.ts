@@ -14,7 +14,7 @@ import { writeAsStringAsync } from 'expo-file-system/legacy';
 import { PageAdjustment, PageFilter } from '../types/document';
 import { enqueueBake } from './bake-queue';
 import { ensureOriginal } from './files';
-import { combinedFilterCss } from './filters';
+import { combinedFilterRN } from './filters';
 import { setPageBaked } from './storage';
 
 const DATA_URL_PREFIX = /^data:image\/jpeg;base64,/;
@@ -26,8 +26,11 @@ export async function bakePage(
   adjustment: PageAdjustment | undefined,
 ): Promise<void> {
   const src = ensureOriginal(docId, pageIndex);
-  const css = combinedFilterCss(filter, adjustment);
-  const dataUrl = await enqueueBake({ docId, pageIndex, src, css });
+  // combinedFilterRN already yields the primitive list ([{grayscale:1},{contrast:2}]);
+  // the bake canvas applies those with explicit pixel maths, because ctx.filter is
+  // a silent no-op in this WebKit.
+  const ops = combinedFilterRN(filter, adjustment) ?? [];
+  const dataUrl = await enqueueBake({ docId, pageIndex, src, ops });
 
   const base64 = dataUrl.replace(DATA_URL_PREFIX, '');
   const dir = new Directory(Paths.document, 'scan-kit', docId);

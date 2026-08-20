@@ -64,7 +64,7 @@ test('bakes from .orig, writes the decoded bytes to the right page, and records 
     docId: 'doc1',
     pageIndex: 0,
     src: 'file:///documents/scan-kit/doc1/page-0.orig.jpg',
-    css: 'grayscale(100%)',
+    ops: [{ grayscale: 1 }],
   });
   expect(mockWriteAsStringAsync).toHaveBeenCalledWith(
     'file:///documents/scan-kit/doc1/page-0.jpg',
@@ -86,7 +86,7 @@ test('passes adjustments through to combinedFilterCss and setPageBaked', async (
   await bakePage('doc1', 0, 'enhanced', adjustment);
 
   expect(mockEnqueueBake).toHaveBeenCalledWith(
-    expect.objectContaining({ css: 'contrast(130%) saturate(130%) brightness(110%)' })
+    expect.objectContaining({ ops: [{ contrast: 1.3 }, { saturate: 1.3 }, { brightness: 1.1 }] })
   );
   expect(mockSetPageBaked).toHaveBeenCalledWith('doc1', 0, 'enhanced', adjustment);
 });
@@ -111,7 +111,7 @@ test('a failed write propagates and setPageBaked is never called', async () => {
   expect(mockSetPageBaked).not.toHaveBeenCalled();
 });
 
-test('filter "original" still bakes from .orig with css "none", restoring the unfiltered image', async () => {
+test('filter "original" still bakes from .orig with no ops, restoring the unfiltered image', async () => {
   mockEnsureOriginal.mockReturnValue('file:///documents/scan-kit/doc1/page-1.orig.jpg');
   mockEnqueueBake.mockResolvedValue('data:image/jpeg;base64,EEEE');
 
@@ -121,7 +121,7 @@ test('filter "original" still bakes from .orig with css "none", restoring the un
   expect(mockEnqueueBake).toHaveBeenCalledWith(
     expect.objectContaining({
       src: 'file:///documents/scan-kit/doc1/page-1.orig.jpg',
-      css: 'none',
+      ops: [],
     })
   );
   expect(mockWriteAsStringAsync).toHaveBeenCalledWith(

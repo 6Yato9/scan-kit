@@ -1,70 +1,88 @@
 // lib/bake-html.ts
-//
-// Pure HTML builder for baking a CSS filter into a JPEG's actual pixels via a
-// WebView + canvas, mirroring the one working pixel pipeline in this app
-// (see app/annotate.tsx: load into an <img>, draw to a canvas, read back
-// toDataURL). RN's iOS filter style only honors brightness/opacity — grayscale,
-// contrast and saturate are silently dropped — so those effects must be baked
-// into the JPEG bytes instead of applied at render time.
-//
-// This module returns HTML only; it does not touch the WebView or the queue
-// that feeds it (see lib/bake-queue.ts / a future WebView host component).
 
-// Escapes a string so it can be embedded inside a single-quoted JS string
-// literal without breaking out of it. Backslashes must be escaped first so a
-// css value ending in `\` doesn't eat the following escaped quote.
-function escapeJsSingleQuoted(s: string): string {
-  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-}
+/** A single filter primitive, e.g. `{ grayscale: 1 }` or `{ contrast: 1.3 }`. */
+export type BakeOp = Record<string, number>;
 
 /**
- * Builds HTML that loads `fileSrc` into a hidden <img>, draws it to an
- * offscreen canvas at natural pixel size with `css` applied as ctx.filter,
- * and posts the resulting JPEG data URL back via
- * window.ReactNativeWebView.postMessage. On image load failure, or on any
- * error while drawing, posts 'BAKE_ERROR:<reason>' instead of hanging.
+ * HTML that draws `fileSrc` to an offscreen canvas at its natural pixel size with
+ * `ops` applied, then posts the result back as a JPEG data URL.
+ *
+ * The transform is done with explicit per-pixel maths rather than the canvas
+ * `ctx.filter` property. `ctx.filter` is silently a no-op in the WebKit this app
+ * runs against — the canvas re-encodes the image unchanged, which looks exactly
+ * like a successful bake (file rewritten, metadata recorded) while the pixels are
+ * untouched. getImageData/putImageData has no such feature dependency.
+ *
+ * Ops are applied in order, matching how CSS filter chains compose.
+ *
+ * The host MUST render the WebView with allowFileAccess, allowFileAccessFromFileURLs
+ * and allowUniversalAccessFromFileURLs, or the canvas is tainted by the file:// image
+ * and toDataURL throws a SecurityError.
  */
-export function buildBakeHtml(fileSrc: string, css: string): string {
-  const safeCss = escapeJsSingleQuoted(css);
-
+export function buildBakeHtml(fileSrc: string, ops: BakeOp[]): string {
   return `<!DOCTYPE html>
 <html>
-<head>
-<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<style>
-* { margin:0; padding:0; }
-body { background:#000; }
-</style>
-</head>
-<body>
-<img id="src" crossorigin="anonymous" style="display:none;" src="${fileSrc}" />
+<head><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body style="margin:0;background:#000;">
+<img id="src" src="${fileSrc}" crossorigin="anonymous" style="display:none" />
 <script>
-var img = document.getElementById('src');
-
-img.onerror = function () {
-  window.ReactNativeWebView.postMessage('BAKE_ERROR:image failed to load');
-};
-
-function bake() {
-  try {
-    var natW = img.naturalWidth;
-    var natH = img.naturalHeight;
-    var canvas = document.createElement('canvas');
-    canvas.width = natW;
-    canvas.height = natH;
-    var ctx = canvas.getContext('2d');
-    ctx.filter = '${safeCss}';
-    ctx.drawImage(img, 0, 0, natW, natH);
-    window.ReactNativeWebView.postMessage(canvas.toDataURL('image/jpeg', 0.92));
-  } catch (err) {
-    window.ReactNativeWebView.postMessage('BAKE_ERROR:' + (err && err.message ? err.message : String(err)));
+var OPS = ${JSON.stringify(ops)};
+function post(msg) {
+  if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(msg);
+  else setTimeout(function () { post(msg); }, 30);
+}
+function clamp(v) { return v < 0 ? 0 : (v > 255 ? 255 : v); }
+function apply(d) {
+  for (var o = 0; o < OPS.length; o++) {
+    var op = OPS[o];
+    for (var key in op) {
+      var a = op[key];
+      for (var i = 0; i < d.length; i += 4) {
+        var r = d[i], g = d[i + 1], b = d[i + 2], lum;
+        if (key === 'grayscale') {
+          lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+          d[i] = clamp(r + (lum - r) * a);
+          d[i + 1] = clamp(g + (lum - g) * a);
+          d[i + 2] = clamp(b + (lum - b) * a);
+        } else if (key === 'saturate') {
+          lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+          d[i] = clamp(lum + (r - lum) * a);
+          d[i + 1] = clamp(lum + (g - lum) * a);
+          d[i + 2] = clamp(lum + (b - lum) * a);
+        } else if (key === 'contrast') {
+          d[i] = clamp((r - 128) * a + 128);
+          d[i + 1] = clamp((g - 128) * a + 128);
+          d[i + 2] = clamp((b - 128) * a + 128);
+        } else if (key === 'brightness') {
+          d[i] = clamp(r * a);
+          d[i + 1] = clamp(g * a);
+          d[i + 2] = clamp(b * a);
+        }
+      }
+    }
   }
 }
-
-img.onload = bake;
-if (img.complete && img.naturalWidth > 0) {
-  bake();
-}
+var img = document.getElementById('src');
+img.onerror = function () { post('BAKE_ERROR:load'); };
+img.onload = function () {
+  try {
+    var w = img.naturalWidth, h = img.naturalHeight;
+    if (!w || !h) { post('BAKE_ERROR:empty'); return; }
+    var c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    var ctx = c.getContext('2d');
+    ctx.drawImage(img, 0, 0, w, h);
+    if (OPS.length) {
+      var id = ctx.getImageData(0, 0, w, h);
+      apply(id.data);
+      ctx.putImageData(id, 0, 0);
+    }
+    post(c.toDataURL('image/jpeg', 0.92));
+  } catch (e) {
+    post('BAKE_ERROR:' + (e && e.message ? e.message : 'unknown'));
+  }
+};
+if (img.complete && img.naturalWidth) setTimeout(function () { img.onload(); }, 0);
 </script>
 </body>
 </html>`;

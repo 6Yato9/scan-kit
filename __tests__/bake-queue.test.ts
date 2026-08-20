@@ -11,9 +11,9 @@ beforeEach(() => {
 
 describe('enqueueBake / takeNextJob (FIFO)', () => {
   it('returns jobs in the order they were enqueued', () => {
-    bakeQueue.enqueueBake({ docId: 'd1', pageIndex: 0, src: 'file:///a.jpg', css: 'none' }).catch(() => {});
-    bakeQueue.enqueueBake({ docId: 'd1', pageIndex: 1, src: 'file:///b.jpg', css: 'none' }).catch(() => {});
-    bakeQueue.enqueueBake({ docId: 'd1', pageIndex: 2, src: 'file:///c.jpg', css: 'none' }).catch(() => {});
+    bakeQueue.enqueueBake({ docId: 'd1', pageIndex: 0, src: 'file:///a.jpg', ops: [] }).catch(() => {});
+    bakeQueue.enqueueBake({ docId: 'd1', pageIndex: 1, src: 'file:///b.jpg', ops: [] }).catch(() => {});
+    bakeQueue.enqueueBake({ docId: 'd1', pageIndex: 2, src: 'file:///c.jpg', ops: [] }).catch(() => {});
 
     const first = bakeQueue.takeNextJob();
     const second = bakeQueue.takeNextJob();
@@ -26,8 +26,8 @@ describe('enqueueBake / takeNextJob (FIFO)', () => {
   });
 
   it('assigns each job a unique, increasing id', () => {
-    bakeQueue.enqueueBake({ docId: 'd1', pageIndex: 0, src: 'a', css: 'none' }).catch(() => {});
-    bakeQueue.enqueueBake({ docId: 'd1', pageIndex: 1, src: 'b', css: 'none' }).catch(() => {});
+    bakeQueue.enqueueBake({ docId: 'd1', pageIndex: 0, src: 'a', ops: [] }).catch(() => {});
+    bakeQueue.enqueueBake({ docId: 'd1', pageIndex: 1, src: 'b', ops: [] }).catch(() => {});
     const a = bakeQueue.takeNextJob()!;
     const b = bakeQueue.takeNextJob()!;
     expect(a.id).not.toBe(b.id);
@@ -40,7 +40,7 @@ describe('enqueueBake / takeNextJob (FIFO)', () => {
 
 describe('completeJob', () => {
   it('resolves the enqueuer promise with the data URL', async () => {
-    const promise = bakeQueue.enqueueBake({ docId: 'd1', pageIndex: 0, src: 'a', css: 'none' });
+    const promise = bakeQueue.enqueueBake({ docId: 'd1', pageIndex: 0, src: 'a', ops: [] });
     const job = bakeQueue.takeNextJob()!;
 
     bakeQueue.completeJob(job.id, 'data:image/jpeg;base64,AAA');
@@ -55,7 +55,7 @@ describe('completeJob', () => {
 
 describe('failJob', () => {
   it('rejects the enqueuer promise with the reason', async () => {
-    const promise = bakeQueue.enqueueBake({ docId: 'd1', pageIndex: 0, src: 'a', css: 'none' });
+    const promise = bakeQueue.enqueueBake({ docId: 'd1', pageIndex: 0, src: 'a', ops: [] });
     const job = bakeQueue.takeNextJob()!;
 
     bakeQueue.failJob(job.id, 'boom');
@@ -72,8 +72,8 @@ describe('pendingCount', () => {
   it('increments on enqueue and decrements on complete/fail', async () => {
     expect(bakeQueue.pendingCount()).toBe(0);
 
-    const p1 = bakeQueue.enqueueBake({ docId: 'd1', pageIndex: 0, src: 'a', css: 'none' });
-    const p2 = bakeQueue.enqueueBake({ docId: 'd1', pageIndex: 1, src: 'b', css: 'none' });
+    const p1 = bakeQueue.enqueueBake({ docId: 'd1', pageIndex: 0, src: 'a', ops: [] });
+    const p2 = bakeQueue.enqueueBake({ docId: 'd1', pageIndex: 1, src: 'b', ops: [] });
     expect(bakeQueue.pendingCount()).toBe(2);
 
     const job1 = bakeQueue.takeNextJob()!;
@@ -97,8 +97,8 @@ describe('setBakeNotifier', () => {
     const notifier = jest.fn();
     bakeQueue.setBakeNotifier(notifier);
 
-    bakeQueue.enqueueBake({ docId: 'd1', pageIndex: 0, src: 'a', css: 'none' }).catch(() => {});
-    bakeQueue.enqueueBake({ docId: 'd1', pageIndex: 1, src: 'b', css: 'none' }).catch(() => {});
+    bakeQueue.enqueueBake({ docId: 'd1', pageIndex: 0, src: 'a', ops: [] }).catch(() => {});
+    bakeQueue.enqueueBake({ docId: 'd1', pageIndex: 1, src: 'b', ops: [] }).catch(() => {});
 
     expect(notifier).toHaveBeenCalledTimes(2);
   });
@@ -108,7 +108,7 @@ describe('setBakeNotifier', () => {
     bakeQueue.setBakeNotifier(notifier);
     bakeQueue.setBakeNotifier(null);
 
-    bakeQueue.enqueueBake({ docId: 'd1', pageIndex: 0, src: 'a', css: 'none' }).catch(() => {});
+    bakeQueue.enqueueBake({ docId: 'd1', pageIndex: 0, src: 'a', ops: [] }).catch(() => {});
 
     expect(notifier).not.toHaveBeenCalled();
   });
