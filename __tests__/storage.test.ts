@@ -545,3 +545,38 @@ describe('getDocSettings', () => {
     expect(await storage.getDocSettings()).toEqual(custom);
   });
 });
+
+describe('schema migration is version-aware', () => {
+  test('upgrading v2 → v3 does not erase an existing document index', async () => {
+    // A v2 install looks like this: per-doc keys plus a populated index, and no
+    // legacy blob. Treating that as "needs the v1→v2 migration" wiped the index
+    // and made every document unreachable.
+    await AsyncStorage.setItem('@scan_kit_schema_version', '2');
+    await AsyncStorage.setItem('@scan_kit_doc_index', JSON.stringify(['a', 'b']));
+    await AsyncStorage.setItem('@scan_kit_doc:a', JSON.stringify({ id: 'a', name: 'A', pages: [], createdAt: 1, updatedAt: 1 }));
+    await AsyncStorage.setItem('@scan_kit_doc:b', JSON.stringify({ id: 'b', name: 'B', pages: [], createdAt: 2, updatedAt: 2 }));
+
+    const docs = await storage.getDocuments();
+
+    expect(docs.map(d => d.id).sort()).toEqual(['a', 'b']);
+    expect(await AsyncStorage.getItem('@scan_kit_schema_version')).toBe('3');
+  });
+
+  test('a fresh install still gets an empty index', async () => {
+    await storage.getDocuments();
+
+    expect(await AsyncStorage.getItem('@scan_kit_doc_index')).toBe('[]');
+    expect(await AsyncStorage.getItem('@scan_kit_schema_version')).toBe('3');
+  });
+
+  test('a pre-v2 install still migrates its legacy blob', async () => {
+    await AsyncStorage.setItem('@scan_kit_documents', JSON.stringify([
+      { id: 'old', name: 'Old', pages: [], createdAt: 1, updatedAt: 1 },
+    ]));
+
+    const docs = await storage.getDocuments();
+
+    expect(docs.map(d => d.id)).toEqual(['old']);
+    expect(await AsyncStorage.getItem('@scan_kit_schema_version')).toBe('3');
+  });
+});

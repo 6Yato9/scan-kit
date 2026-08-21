@@ -94,26 +94,42 @@ function ensureMigrated(): Promise<void> {
         const version = await AsyncStorage.getItem(SCHEMA_VERSION_KEY);
         if (version === CURRENT_SCHEMA_VERSION) return;
 
-        const legacyRaw = await AsyncStorage.getItem(KEY);
-        let legacyDocs: Document[] = [];
-        if (legacyRaw != null) {
-          try {
-            const parsed = JSON.parse(legacyRaw);
-            if (Array.isArray(parsed)) legacyDocs = parsed;
-          } catch {
-            // Corrupt legacy blob — leave it untouched and start fresh below.
-            console.warn('storage: corrupt legacy documents blob during migration; starting with empty index');
+        // v1 → v2: fold the legacy single-blob store into per-doc keys + an index.
+        //
+        // This ONLY runs for an install that has no schema version at all. A v2+
+        // install already keeps its documents in per-doc keys with a populated
+        // index and has no legacy blob, so running this on it would fall through
+        // to writeIndex([]) and erase every document from the app — the data keys
+        // would survive but readIndex only self-heals corrupt JSON, not a valid
+        // empty array, so nothing would be reachable again.
+        if (version == null) {
+          const legacyRaw = await AsyncStorage.getItem(KEY);
+          let legacyDocs: Document[] = [];
+          if (legacyRaw != null) {
+            try {
+              const parsed = JSON.parse(legacyRaw);
+              if (Array.isArray(parsed)) legacyDocs = parsed;
+            } catch {
+              // Corrupt legacy blob — leave it untouched and start fresh below.
+              console.warn('storage: corrupt legacy documents blob during migration; starting with empty index');
+            }
+          }
+
+          if (legacyDocs.length > 0) {
+            const pairs: [string, string][] = legacyDocs.map(d => [docKey(d.id), JSON.stringify(d)]);
+            await AsyncStorage.multiSet(pairs);
+            await writeIndex(legacyDocs.map(d => d.id));
+          } else if ((await AsyncStorage.getItem(DOC_INDEX_KEY)) == null) {
+            // Fresh install: initialise an empty index. Never overwrite one that
+            // already exists.
+            await writeIndex([]);
           }
         }
 
-        if (legacyDocs.length > 0) {
-          const pairs: [string, string][] = legacyDocs.map(d => [docKey(d.id), JSON.stringify(d)]);
-          await AsyncStorage.multiSet(pairs);
-          await writeIndex(legacyDocs.map(d => d.id));
-        } else {
-          // Fresh install (or unrecoverable legacy blob): initialise empty index.
-          await writeIndex([]);
-        }
+        // v2 → v3: filters moved from render-time to baked-in pixels. Nothing to
+        // rewrite in storage — the per-page pixel work is reported by
+        // pendingBakeMigrations and performed by the app, so this step only
+        // records the new version.
 
         // NOTE: legacy KEY is intentionally NOT deleted — it stays as a backup.
         await AsyncStorage.setItem(SCHEMA_VERSION_KEY, CURRENT_SCHEMA_VERSION);
