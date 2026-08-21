@@ -2,6 +2,18 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+
+> **Status: implemented (2026-08-21).** All code tasks are done and committed on
+> `feat/seamless-scan-flow`. Verified on the iPhone 16 Pro Max simulator: rename
+> from the viewer header, Crop in the page-actions sheet, and the viewer opening a
+> document.
+>
+> **Not verified end-to-end:** the auto-save → viewer flow itself. It cannot be
+> driven here — the simulator has no camera for `DocumentScanner`, and the system
+> photo/document pickers run out-of-process so injected taps never reach them.
+> Documents were seeded directly into the app container instead. Needs a real
+> device (or a hand-driven picker) to confirm.
+
 **Goal:** Finishing a capture saves the document and opens it in the viewer, with zero app-level taps.
 
 **Architecture:** The review screen is deleted. `ScanContext` gains a `saveScan()` that writes pages, saves the document, and returns its id; every entry point calls it and then routes to `/viewer`. Rename and Crop move into the viewer so it becomes the single place documents are refined.

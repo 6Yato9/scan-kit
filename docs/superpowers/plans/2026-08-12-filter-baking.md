@@ -2,6 +2,24 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+
+> **Status: implemented (2026-08-21).** All code tasks are done and committed on
+> `feat/seamless-scan-flow`. Verified on device: a colour page bakes to correctly
+> luminance-weighted grey; `page-N.orig.jpg` is created and stays aligned through
+> rotate, crop, delete and reorder; the v2→v3 migration bakes previously-recorded
+> filters without losing documents; and the filter picker shows four genuinely
+> different previews.
+>
+> **Not verified:** Enhanced applied to a *new* scan (needs a camera), and the
+> "Enhancing…" progress pill — single bakes finish in about a second, faster than a
+> screenshot round-trip, and the startup migration completes while the app is still
+> on the splash screen.
+>
+> Two defects found only by running this, both fixed and both silent in the tests:
+> `ctx.filter` is a no-op in this WebKit (the canvas re-encoded unchanged), and a
+> baker mounted only at the root is buried under the viewer's `fullScreenModal`,
+> so iOS never loads its WebView at all.
+
 **Goal:** Make Grayscale, B&W and Enhanced actually change the image on iOS, and default new scans to Enhanced so they look like scans rather than photos.
 
 **Architecture:** React Native 0.81's iOS `filter` style supports only `brightness` and `opacity`, so filters are baked into the pixels instead of applied at render. A hidden WebView draws the page to a canvas with `ctx.filter` set and returns JPEG bytes — the same pipeline `app/annotate.tsx` already uses. `page-N.orig.jpg` preserves the unfiltered source so filter changes never compound JPEG loss. Once pixels are baked, `document.filters` becomes a record of what is already in the image, and every render/export site stops re-applying it.
