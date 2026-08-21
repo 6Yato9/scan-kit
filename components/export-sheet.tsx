@@ -153,6 +153,9 @@ export function ExportSheet({ visible, document, onClose }: Props) {
   }
 
   const pageCount = document.pages.length;
+  // Filters are baked into the page pixels, so every export already carries
+  // them — this only tells the user what they're getting, it does not describe
+  // work the export performs.
   const hasFilters = document.filters?.some(f => f !== 'original') || !!document.adjustments?.length;
   // Searchable PDF needs OCR and real image pages (not an imported pdfUri doc).
   const canSearchablePdf = ocrAvailable() && pageCount > 0 && !document.pdfUri;
@@ -178,7 +181,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
               <View style={styles.optionText}>
                 <Text style={[styles.optionTitle, { color: colors.text }]}>High Quality</Text>
                 <Text style={[styles.optionSub, { color: colors.faint }]}>
-                  Full resolution{hasFilters ? ' · filters applied' : ''}
+                  Full resolution{hasFilters ? ' · enhanced' : ''}
                 </Text>
               </View>
               <Text allowFontScaling={false} style={[styles.badge, { backgroundColor: colors.accentLight, color: colors.accent }]}>HD</Text>
@@ -225,7 +228,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
               <View style={styles.optionText}>
                 <Text style={[styles.optionTitle, { color: colors.text }]}>Print</Text>
                 <Text style={[styles.optionSub, { color: colors.faint }]}>
-                  Send to a printer{hasFilters ? ' · filters applied' : ''}
+                  Send to a printer{hasFilters ? ' · enhanced' : ''}
                 </Text>
               </View>
             </Pressable>

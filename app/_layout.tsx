@@ -58,7 +58,9 @@ function ThemedStack() {
         headerStyle: { backgroundColor: colors.card },
         headerTintColor: colors.text,
         headerTitleStyle: { color: colors.text, fontWeight: '600' },
-        headerBackTitle: '',           // hide "(tabs)" back label
+        // react-navigation 7 ignores headerBackTitle:'' and falls back to the
+        // route name, which surfaced the internal "(tabs)" label to users.
+        headerBackButtonDisplayMode: 'minimal',
         contentStyle: { backgroundColor: colors.bg },
       }}
     >

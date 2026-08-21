@@ -122,11 +122,13 @@ export default function MeScreen() {
   };
 
   return (
+    <View style={{ flex: 1, backgroundColor: colors.bg }}>
     <ScrollView
       style={[styles.container, { backgroundColor: colors.bg }]}
       contentContainerStyle={{ paddingBottom: insets.bottom + 110 }}
     >
       <View style={{ paddingTop: insets.top + 16 }} />
+      <Text style={[styles.screenTitle, { color: colors.text }]}>Settings</Text>
 
       <View style={[styles.section, { marginBottom: 12 }]}>
         <Text style={[styles.sectionLabel, { color: colors.muted }]}>APPEARANCE</Text>
@@ -184,10 +186,23 @@ export default function MeScreen() {
         onClose={() => setSortSheetVisible(false)}
       />
     </ScrollView>
+      {/* Opaque mask over the status bar. This screen scrolls its whole content,
+          including its title, so without it text passes under the clock and
+          battery — the section headers visibly collided with them mid-scroll. */}
+    <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: insets.top, backgroundColor: colors.bg }} pointerEvents="none" />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  // Matches the large title on Home / Files / Tools.
+  screenTitle: {
+    fontSize: 30,
+    fontWeight: '800',
+    letterSpacing: -0.5,
+    paddingHorizontal: 20,
+    marginBottom: 20,
+  },
   container: { flex: 1 },
   section: {
     marginHorizontal: 14,

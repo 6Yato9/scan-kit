@@ -235,6 +235,7 @@ export default function ToolsScreen() {
   ];
 
   return (
+    <View style={{ flex: 1, backgroundColor: colors.bg }}>
     <ScrollView
       style={[styles.container, { backgroundColor: colors.bg }]}
       contentContainerStyle={[
@@ -255,6 +256,11 @@ export default function ToolsScreen() {
         </View>
       ))}
     </ScrollView>
+      {/* Opaque mask over the status bar. This screen scrolls its whole content,
+          including its title, so without it text passes under the clock and
+          battery — the section headers visibly collided with them mid-scroll. */}
+    <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: insets.top, backgroundColor: colors.bg }} pointerEvents="none" />
+    </View>
   );
 }
 
