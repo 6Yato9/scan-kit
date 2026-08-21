@@ -1,6 +1,6 @@
 // lib/storage.ts
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { File } from 'expo-file-system';
+import { File, Paths } from 'expo-file-system';
 import { Document, PageAdjustment, PageFilter } from '../types/document';
 import { originalUri } from './files';
 
@@ -144,6 +144,40 @@ function ensureMigrated(): Promise<void> {
   return _migrated;
 }
 
+
+// ── Container-relative path healing ──────────────────────────────────────────
+// iOS does not guarantee the app's Documents container path is stable. It changes
+// on reinstall, on restore from backup, on device migration, and can change on
+// update — including between TestFlight builds. Documents persist absolute
+// file:// URIs, so once the container UUID changes every stored page points at a
+// directory that no longer exists: the document list still renders, but every page
+// is blank, while the JPEGs sit untouched on disk.
+//
+// Every path this app owns is derivable — <Documents>/scan-kit/<docId>/… — so any
+// stored URI is re-anchored to the CURRENT Documents directory on read. That heals
+// installs already broken by a past container change and makes future ones a
+// non-event. URIs outside scan-kit/ (an external file the user picked) are left alone.
+const SCAN_DIR = 'scan-kit/';
+
+function documentsRoot(): string {
+  const uri = Paths.document.uri;
+  return uri.endsWith('/') ? uri : uri + '/';
+}
+
+function reRootUri(uri: string): string {
+  const i = uri.indexOf(SCAN_DIR);
+  if (i === -1) return uri;
+  const rebuilt = documentsRoot() + uri.slice(i);
+  return rebuilt === uri ? uri : rebuilt;
+}
+
+/** Returns a document whose page/pdf URIs point at the current container. */
+function healDocPaths(doc: Document): Document {
+  const pages = doc.pages?.map(reRootUri) ?? doc.pages;
+  const pdfUri = doc.pdfUri ? reRootUri(doc.pdfUri) : doc.pdfUri;
+  return { ...doc, pages, pdfUri };
+}
+
 // ── Document CRUD (per-doc keys + id index) ──────────────────────────────────
 
 // Core read used by getDocuments and by other already-locked writers
@@ -167,7 +201,7 @@ async function getDocumentsUnlocked(): Promise<Document[]> {
       continue;
     }
     try {
-      docs.push(JSON.parse(value) as Document);
+      docs.push(healDocPaths(JSON.parse(value) as Document));
       survivors.push(index[i]);
     } catch {
       // Corrupt single doc — skip it but keep the rest of the read alive.

@@ -16,7 +16,7 @@ jest.mock('expo-file-system', () => {
     constructor(uri: string) { this.uri = uri; }
     get exists() { return mockOrigExists[this.uri] ?? false; }
   }
-  return { File: MockFile };
+  return { File: MockFile, Paths: { document: { uri: 'file:///CURRENT/Documents/' } } };
 });
 
 // Real lib/files.ts pulls in expo-image-manipulator, which isn't relevant to
@@ -578,5 +578,68 @@ describe('schema migration is version-aware', () => {
 
     expect(docs.map(d => d.id)).toEqual(['old']);
     expect(await AsyncStorage.getItem('@scan_kit_schema_version')).toBe('3');
+  });
+});
+
+describe('stored page paths survive a container change', () => {
+  // iOS does not guarantee the app container path is stable: it changes on
+  // reinstall, on restore from backup, on device migration, and can change on
+  // update. Absolute file:// URIs written under the old container then point at a
+  // directory that no longer exists — documents list fine but every page renders
+  // blank, which is precisely the "new TestFlight build broke my old photos" bug.
+
+  const OLD = 'file:///var/mobile/Containers/Data/Application/OLD-UUID/Documents/scan-kit';
+  const NEW = 'file:///CURRENT/Documents/scan-kit';
+
+  test('pages saved under a previous container are re-rooted on read', async () => {
+    await AsyncStorage.setItem('@scan_kit_schema_version', '3');
+    await AsyncStorage.setItem('@scan_kit_doc_index', JSON.stringify(['d1']));
+    await AsyncStorage.setItem('@scan_kit_doc:d1', JSON.stringify({
+      id: 'd1', name: 'Old Scan',
+      pages: [`${OLD}/d1/page-0.jpg`, `${OLD}/d1/page-1.jpg`],
+      createdAt: 1, updatedAt: 1,
+    }));
+
+    const doc = (await storage.getDocuments())[0];
+
+    expect(doc.pages).toEqual([`${NEW}/d1/page-0.jpg`, `${NEW}/d1/page-1.jpg`]);
+  });
+
+  test('an imported PDF is re-rooted too', async () => {
+    await AsyncStorage.setItem('@scan_kit_schema_version', '3');
+    await AsyncStorage.setItem('@scan_kit_doc_index', JSON.stringify(['d2']));
+    await AsyncStorage.setItem('@scan_kit_doc:d2', JSON.stringify({
+      id: 'd2', name: 'Old PDF', pages: [],
+      pdfUri: `${OLD}/d2/document.pdf`,
+      createdAt: 1, updatedAt: 1,
+    }));
+
+    const doc = (await storage.getDocuments())[0];
+
+    expect(doc.pdfUri).toBe(`${NEW}/d2/document.pdf`);
+  });
+
+  test('paths already under the current container are left alone', async () => {
+    await AsyncStorage.setItem('@scan_kit_schema_version', '3');
+    await AsyncStorage.setItem('@scan_kit_doc_index', JSON.stringify(['d3']));
+    await AsyncStorage.setItem('@scan_kit_doc:d3', JSON.stringify({
+      id: 'd3', name: 'Current', pages: [`${NEW}/d3/page-0.jpg`], createdAt: 1, updatedAt: 1,
+    }));
+
+    const doc = (await storage.getDocuments())[0];
+
+    expect(doc.pages).toEqual([`${NEW}/d3/page-0.jpg`]);
+  });
+
+  test('a uri with no scan-kit segment is not rewritten', async () => {
+    await AsyncStorage.setItem('@scan_kit_schema_version', '3');
+    await AsyncStorage.setItem('@scan_kit_doc_index', JSON.stringify(['d4']));
+    await AsyncStorage.setItem('@scan_kit_doc:d4', JSON.stringify({
+      id: 'd4', name: 'External', pages: ['file:///somewhere/else/photo.jpg'], createdAt: 1, updatedAt: 1,
+    }));
+
+    const doc = (await storage.getDocuments())[0];
+
+    expect(doc.pages).toEqual(['file:///somewhere/else/photo.jpg']);
   });
 });
