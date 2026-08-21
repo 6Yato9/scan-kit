@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { WebView } from 'react-native-webview';
-import { buildBakeHtml } from '@/lib/bake-html';
+import { buildBakeHtml, buildPreviewHtml } from '@/lib/bake-html';
 import { BakeJob, completeJob, failJob, releaseJob, setBakeNotifier, takeNextJob } from '@/lib/bake-queue';
 
 /**
@@ -60,7 +60,7 @@ export function FilterBaker() {
     const data = e.nativeEvent.data;
     if (data.startsWith('BAKE_ERROR:')) {
       failJob(current.id, data.slice('BAKE_ERROR:'.length));
-    } else if (data.startsWith('data:image')) {
+    } else if (data.startsWith('PREVIEWS:') || data.startsWith('data:image')) {
       completeJob(current.id, data);
     } else {
       failJob(current.id, 'unexpected message');
@@ -76,7 +76,12 @@ export function FilterBaker() {
   return (
     <View style={styles.host} pointerEvents="none">
       <WebView
-        source={{ html: buildBakeHtml(job.src, job.ops), baseUrl: 'file:///' }}
+        source={{
+          html: job.previews
+            ? buildPreviewHtml(job.src, job.previews, job.previewWidth ?? 120)
+            : buildBakeHtml(job.src, job.ops),
+          baseUrl: 'file:///',
+        }}
         style={styles.web}
         onMessage={handleMessage}
         originWhitelist={['*']}

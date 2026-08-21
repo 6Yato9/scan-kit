@@ -50,6 +50,12 @@ export function DocumentCard({ document, onPress, onLongPress, isSelected, isMul
 const styles = StyleSheet.create({
   card: {
     flex: 1,
+    // Caps a lone card at one column. FlatList lays each row out as a flex row,
+    // so with numColumns={2} a row holding fewer items than columns stretches
+    // them to fill it — one document rendered full-width and, at aspectRatio
+    // 0.75, filled the whole screen. Also fixes the last row of an odd-length
+    // grid, which stretched the same way.
+    maxWidth: '50%',
     margin: 6,
     borderRadius: 12,
     shadowColor: '#000',

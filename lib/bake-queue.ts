@@ -15,6 +15,13 @@ export type BakeJobInput = {
   pageIndex: number;
   src: string;
   ops: Record<string, number>[];
+  /**
+   * When set, this job renders one small preview per entry instead of baking the
+   * page, and resolves with 'PREVIEWS:' + a JSON array of data URLs. Lets the
+   * filter picker get all four tiles from a single WebView pass.
+   */
+  previews?: Record<string, number>[][];
+  previewWidth?: number;
 };
 
 export type BakeJob = BakeJobInput & { id: number };
@@ -44,6 +51,7 @@ export function enqueueBake(input: BakeJobInput): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     pending.set(id, { resolve, reject });
     queue.push(job);
+    emitActivity();
     notifier?.();
   });
 }
@@ -58,6 +66,7 @@ export function completeJob(id: number, dataUrl: string): void {
   const entry = pending.get(id);
   if (!entry) return;
   pending.delete(id);
+  emitActivity();
   entry.resolve(dataUrl);
 }
 
@@ -66,6 +75,7 @@ export function failJob(id: number, reason: string): void {
   const entry = pending.get(id);
   if (!entry) return;
   pending.delete(id);
+  emitActivity();
   entry.reject(new Error(reason));
 }
 
@@ -86,4 +96,23 @@ export function releaseJob(job: BakeJob): void {
   if (!pending.has(job.id)) return;
   queue.unshift(job);
   notifier?.();
+}
+
+// ── Activity tracking ────────────────────────────────────────────────────────
+// Baking is asynchronous and happens off-screen, so without this the user picks
+// a filter (or finishes a scan) and nothing appears to happen until the image
+// silently changes. Subscribers render a progress affordance from this.
+
+const activityListeners = new Set<(active: number) => void>();
+
+/** Subscribe to changes in the active bake count. Returns an unsubscribe fn. */
+export function subscribeBakeActivity(fn: (active: number) => void): () => void {
+  activityListeners.add(fn);
+  fn(pendingCount());
+  return () => { activityListeners.delete(fn); };
+}
+
+function emitActivity(): void {
+  const n = pendingCount();
+  activityListeners.forEach(fn => fn(n));
 }

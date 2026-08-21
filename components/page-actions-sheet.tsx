@@ -1,16 +1,18 @@
 // components/page-actions-sheet.tsx
 import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { useState } from 'react';
+import { useState, useEffect } from "react";
 import { BottomSheet } from '@/components/bottom-sheet';
 import { PageFilter, PageAdjustment } from '@/types/document';
-import { combinedFilterRN } from '@/lib/filters';
+import { bakePreviews, PREVIEW_FILTERS } from '@/lib/bake';
 import { SimpleSlider } from '@/components/simple-slider';
 import { useTheme } from '@/contexts/theme-context';
 
 type Props = {
   visible: boolean;
   uri: string;
+  docId: string;
+  pageIndex: number;
   filter: PageFilter;
   adjustment?: PageAdjustment;
   onRotate: (direction: 'cw' | 'ccw') => Promise<void>;
@@ -37,6 +39,8 @@ type Tab = 'filter' | 'adjust';
 export function PageActionsSheet({
   visible,
   uri,
+  docId,
+  pageIndex,
   filter,
   adjustment,
   onRotate,
@@ -51,6 +55,20 @@ export function PageActionsSheet({
   const { colors } = useTheme();
   const [rotating, setRotating] = useState(false);
   const [tab, setTab] = useState<Tab>('filter');
+  const [previews, setPreviews] = useState<string[] | null>(null);
+
+  // Real previews: each tile is the page re-rendered through that filter. RN's
+  // `filter` style cannot do this on iOS (it honours only brightness/opacity),
+  // so all four tiles used to look identical. One WebView pass renders them all.
+  useEffect(() => {
+    if (!visible || tab !== 'filter') return;
+    let cancelled = false;
+    setPreviews(null);
+    bakePreviews(docId, pageIndex)
+      .then(urls => { if (!cancelled) setPreviews(urls); })
+      .catch(() => { if (!cancelled) setPreviews(null); });
+    return () => { cancelled = true; };
+  }, [visible, tab, docId, pageIndex]);
 
   async function rotate(direction: 'cw' | 'ccw') {
     setRotating(true);
@@ -118,17 +136,8 @@ export function PageActionsSheet({
       {/* Tab content */}
       {tab === 'filter' ? (
         <View style={styles.filterRow}>
-          {FILTERS.map(({ key, label }) => {
-            // These tiles preview what each filter WOULD look like if applied —
-            // they render the CURRENT (already-baked) page pixels with an
-            // RN `filter` style layered on top, not the stored page itself.
-            // combinedFilterRN is otherwise retired as a render path (filters
-            // are now baked into JPEG pixels; see lib/bake.ts), but it's kept
-            // for exactly this: on iOS, RN's filter style only honors
-            // brightness/opacity, so these previews will NOT visibly differ
-            // for grayscale/bw/enhanced until the preview itself is baked
-            // client-side too (follow-on work).
-            const fs = combinedFilterRN(key, adjustment);
+          {FILTERS.map(({ key, label }, i) => {
+            const previewUri = previews?.[PREVIEW_FILTERS.indexOf(key)] ?? uri;
             return (
               <Pressable
                 key={key}
@@ -136,8 +145,8 @@ export function PageActionsSheet({
                 onPress={() => onFilter(key)}
               >
                 <Image
-                  source={{ uri }}
-                  style={[styles.filterPreview, { backgroundColor: colors.placeholder }, fs ? ({ filter: fs } as any) : undefined]}
+                  source={{ uri: previewUri }}
+                  style={[styles.filterPreview, { backgroundColor: colors.placeholder }]}
                   resizeMode="cover"
                 />
                 <Text allowFontScaling={false} style={[styles.filterLabel, { color: filter === key ? colors.accent : colors.muted }, filter === key && styles.filterLabelActive]}>

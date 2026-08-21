@@ -34,6 +34,7 @@ import { ReorderModal } from '@/components/reorder-modal';
 import { RenameSheet } from '@/components/rename-sheet';
 import { CropModal } from '@/components/crop-modal';
 import { FilterBaker } from '@/components/filter-baker';
+import { BakeIndicator } from '@/components/bake-indicator';
 
 export default function ViewerScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -454,6 +455,7 @@ export default function ViewerScreen() {
           baker is buried underneath and iOS never loads it. Filter/adjust bakes
           started here need a baker inside this modal. */}
       <FilterBaker />
+      <BakeIndicator top={insets.top + 52} />
       <View style={styles.header}>
         <Pressable onPress={() => router.back()} hitSlop={12}>
           <View style={styles.backRow}>
@@ -559,6 +561,8 @@ export default function ViewerScreen() {
       <PageActionsSheet
         visible={actionsVisible}
         uri={document.pages[currentPage]}
+        docId={document.id}
+        pageIndex={currentPage}
         filter={document.filters?.[currentPage] ?? 'original'}
         adjustment={document.adjustments?.[currentPage]}
         onRotate={handleRotate}

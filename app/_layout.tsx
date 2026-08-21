@@ -8,6 +8,7 @@ import { ThemeProvider, useTheme } from '@/contexts/theme-context';
 import { ToastProvider } from '@/components/toast';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { FilterBaker } from '@/components/filter-baker';
+import { BakeIndicator } from '@/components/bake-indicator';
 import { LockGate } from '@/components/lock-gate';
 import { bakePage } from '@/lib/bake';
 import { garbageCollectOrphans } from '@/lib/files';
@@ -50,6 +51,7 @@ function ThemedStack() {
     <StatusBar style={isDark ? 'light' : 'dark'} />
     <OnboardingGate />
     <FilterBaker />
+    <BakeIndicator top={60} />
     <LockGate>
     <Stack
       screenOptions={{

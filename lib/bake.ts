@@ -39,3 +39,39 @@ export async function bakePage(
 
   await setPageBaked(docId, pageIndex, filter, adjustment);
 }
+
+/** Filters offered by the picker, in display order. */
+export const PREVIEW_FILTERS: PageFilter[] = ['original', 'grayscale', 'bw', 'enhanced'];
+
+// Previews derive from page-N.orig.jpg, which only changes when the page's
+// geometry does — not when a filter is applied — so they are cached per page and
+// invalidated by the caller when the page itself changes.
+const previewCache = new Map<string, string[]>();
+
+export function previewCacheKey(docId: string, pageIndex: number): string {
+  return `${docId}:${pageIndex}`;
+}
+
+export function invalidatePreviews(docId: string, pageIndex: number): void {
+  previewCache.delete(previewCacheKey(docId, pageIndex));
+}
+
+/**
+ * Data URLs for one small preview per entry in PREVIEW_FILTERS, in that order.
+ *
+ * The picker has to show what each filter WOULD do; on iOS it cannot use the RN
+ * `filter` style for that, because it silently does nothing. All four are rendered
+ * in a single WebView pass and cached, so opening the sheet costs one round-trip.
+ */
+export async function bakePreviews(docId: string, pageIndex: number): Promise<string[]> {
+  const key = previewCacheKey(docId, pageIndex);
+  const hit = previewCache.get(key);
+  if (hit) return hit;
+
+  const src = ensureOriginal(docId, pageIndex);
+  const opsList = PREVIEW_FILTERS.map(f => combinedFilterRN(f, undefined) ?? []);
+  const reply = await enqueueBake({ docId, pageIndex, src, ops: [], previews: opsList, previewWidth: 120 });
+  const urls = JSON.parse(reply.replace(/^PREVIEWS:/, '')) as string[];
+  previewCache.set(key, urls);
+  return urls;
+}
