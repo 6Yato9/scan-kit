@@ -1,15 +1,11 @@
 // lib/filters.ts
+//
+// Filters are baked into page pixels (see lib/bake.ts), so this module produces
+// only the primitive list the bake canvas applies. The CSS builders that used to
+// live here were removed once nothing rendered filters at display or export time:
+// re-introducing a CSS filter anywhere downstream would double-apply it on top of
+// pixels that already carry it.
 import { PageAdjustment, PageFilter } from '../types/document';
-
-/** Returns a CSS filter string for use in PDF HTML <img> tags. */
-export function filterCss(filter?: PageFilter): string {
-  switch (filter) {
-    case 'grayscale': return 'grayscale(100%)';
-    case 'bw':        return 'grayscale(100%) contrast(200%)';
-    case 'enhanced':  return 'contrast(130%) saturate(130%)';
-    default:          return 'none';
-  }
-}
 
 // Coerce any non-finite value (NaN / Infinity / null / undefined) to 0 so a
 // corrupt stored doc can't produce `brightness(NaN)` and blank out the image.
@@ -55,23 +51,4 @@ function adjRNParts(adj?: PageAdjustment): RNFilter[] {
 export function combinedFilterRN(filter?: PageFilter, adj?: PageAdjustment): RNFilter[] | undefined {
   const parts = [...filterRNParts(filter), ...adjRNParts(adj)];
   return parts.length ? parts : undefined;
-}
-
-function adjCss(adj?: PageAdjustment): string {
-  if (!adj) return '';
-  const b = safe(adj.brightness), c = safe(adj.contrast), s = safe(adj.saturation);
-  const parts: string[] = [];
-  if (b !== 0) parts.push(`brightness(${100 + b}%)`);
-  if (c !== 0) parts.push(`contrast(${100 + c}%)`);
-  if (s !== 0) parts.push(`saturate(${100 + s}%)`);
-  return parts.join(' ');
-}
-
-/** Combined filter + per-page adjustments CSS for PDF/HTML rendering. */
-export function combinedFilterCss(filter?: PageFilter, adj?: PageAdjustment): string {
-  const f = filterCss(filter);
-  const a = adjCss(adj);
-  const fVal = f === 'none' ? '' : f;
-  const combined = [fVal, a].filter(Boolean).join(' ');
-  return combined || 'none';
 }

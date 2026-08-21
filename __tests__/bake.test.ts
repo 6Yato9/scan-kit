@@ -79,7 +79,7 @@ test('bakes from .orig, writes the decoded bytes to the right page, and records 
   expect(writeOrder).toBeLessThan(recordOrder);
 });
 
-test('passes adjustments through to combinedFilterCss and setPageBaked', async () => {
+test('passes adjustments through to the bake ops and setPageBaked', async () => {
   mockEnqueueBake.mockResolvedValue('data:image/jpeg;base64,CCCC');
   const adjustment = { brightness: 10, contrast: 0, saturation: 0 };
 

@@ -1,4 +1,4 @@
-import { combinedFilterRN, filterCss } from '../lib/filters';
+import { combinedFilterRN } from '../lib/filters';
 
 describe('combinedFilterRN (React Native filter array)', () => {
   it('returns undefined for original', () => {
@@ -23,23 +23,5 @@ describe('combinedFilterRN (React Native filter array)', () => {
   it('ignores non-finite adjustment values', () => {
     expect(combinedFilterRN('original', { brightness: NaN, contrast: 0, saturation: 0 } as any))
       .toBeUndefined();
-  });
-});
-
-describe('filterCss', () => {
-  it('returns none for original', () => {
-    expect(filterCss('original')).toBe('none');
-  });
-  it('returns none when undefined', () => {
-    expect(filterCss(undefined)).toBe('none');
-  });
-  it('returns grayscale(100%) for grayscale', () => {
-    expect(filterCss('grayscale')).toBe('grayscale(100%)');
-  });
-  it('returns grayscale + contrast for bw', () => {
-    expect(filterCss('bw')).toBe('grayscale(100%) contrast(200%)');
-  });
-  it('returns contrast + saturate for enhanced', () => {
-    expect(filterCss('enhanced')).toBe('contrast(130%) saturate(130%)');
   });
 });
