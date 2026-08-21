@@ -57,6 +57,19 @@ export function invalidatePreviews(docId: string, pageIndex: number): void {
 }
 
 /**
+ * Drops every cached preview for a document.
+ *
+ * Deleting or reordering pages renames the page files, so previews cached under
+ * an index now describe a different page. Clearing per-page would miss that —
+ * the whole document's cache has to go.
+ */
+export function invalidateDocPreviews(docId: string): void {
+  for (const key of [...previewCache.keys()]) {
+    if (key.startsWith(`${docId}:`)) previewCache.delete(key);
+  }
+}
+
+/**
  * Data URLs for one small preview per entry in PREVIEW_FILTERS, in that order.
  *
  * The picker has to show what each filter WOULD do; on iOS it cannot use the RN

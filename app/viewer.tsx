@@ -22,8 +22,8 @@ import { File } from 'expo-file-system';
 import DocumentScanner from 'react-native-document-scanner-plugin';
 import { getDocuments, updateDocument, deleteDocument, getScanSettings } from '@/lib/storage';
 import { appendPages, deleteSinglePage, reorderPages, deleteDocumentFiles, replacePage } from '@/lib/files';
-import { rotatePage } from '@/lib/image';
-import { bakePage } from '@/lib/bake';
+import { rotatePage, mirrorGeometryToOriginal } from '@/lib/image';
+import { bakePage, invalidatePreviews, invalidateDocPreviews } from '@/lib/bake';
 import { notifySuccess } from '@/lib/haptics';
 import { ocrAvailable, recognizeLines, extractDocText } from '@/lib/ocr';
 import { Document, PageAdjustment, PageFilter } from '@/types/document';
@@ -88,6 +88,7 @@ export default function ViewerScreen() {
       // viewer may have applied to the Image URI).
       const sourceUri = document.pages[currentPage].split('?')[0];
       const newUri = await rotatePage(sourceUri, direction, document.id, currentPage);
+      invalidatePreviews(document.id, currentPage);
       const newPages = [...document.pages];
       newPages[currentPage] = newUri;
       await saveDoc({ ...document, pages: newPages, updatedAt: Date.now() });
@@ -99,7 +100,10 @@ export default function ViewerScreen() {
     }
   }, [document, currentPage, saveDoc]);
 
-  const handleCropDone = useCallback(async (croppedUri: string) => {
+  const handleCropDone = useCallback(async (
+    croppedUri: string,
+    rect: { originX: number; originY: number; width: number; height: number },
+  ) => {
     if (!document) return;
     try {
       const stored = replacePage(croppedUri, document.id, currentPage);
@@ -114,6 +118,12 @@ export default function ViewerScreen() {
           if (tmp.exists) tmp.delete();
         } catch {}
       }
+      // Apply the identical crop to the unfiltered shadow. The rect is in natural
+      // image pixels and .orig has the same dimensions, so the two stay the same
+      // shape — otherwise the next filter change re-derives from the uncropped
+      // original and silently undoes this crop.
+      await mirrorGeometryToOriginal(document.id, currentPage, [{ crop: rect }]);
+      invalidatePreviews(document.id, currentPage);
       const pages = [...document.pages];
       pages[currentPage] = stored;
       await saveDoc({ ...document, pages, updatedAt: Date.now() });
@@ -231,6 +241,8 @@ export default function ViewerScreen() {
     }
     try {
       deleteSinglePage(document.id, currentPage, document.pages.length);
+
+      invalidateDocPreviews(document.id);
     } catch (err) {
       console.error('deleteSinglePage failed', err);
       Alert.alert('Delete failed', 'Could not delete this page. Please try again.');
@@ -306,6 +318,8 @@ export default function ViewerScreen() {
   const handleReorder = useCallback(async (newOrderIndices: number[]) => {
     if (!document) return;
     const newUris = reorderPages(document.id, newOrderIndices);
+
+    invalidateDocPreviews(document.id);
     const defaultAdj = { brightness: 0, contrast: 0, saturation: 0 };
     const oldFilters = document.filters ?? document.pages.map(() => 'original' as PageFilter);
     const oldAdj = document.adjustments ?? document.pages.map(() => ({ ...defaultAdj }));

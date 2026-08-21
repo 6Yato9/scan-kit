@@ -76,51 +76,63 @@ export function deleteSinglePage(
   totalPages: number
 ): void {
   const dir = new Directory(Paths.document, 'scan-kit', docId);
-  const tmpName = (i: number) => `page-${i}.shifting.jpg`;
-  const cleanupTmps = () => {
-    for (let i = pageIndex + 1; i < totalPages; i++) {
-      const t = new File(dir, tmpName(i));
-      if (t.exists) {
-        try { t.delete(); } catch {}
+
+  // Runs the shift for one file family. Called for the pages themselves and
+  // again for their page-N.orig.jpg shadows, which must move in lockstep: the
+  // .orig is the unfiltered source every filter bake re-derives from, so if it
+  // stays behind after a delete, page N's next bake silently swaps in the image
+  // that used to be at N+1.
+  const shift = (suffix: string) => {
+    const name = (i: number) => `page-${i}${suffix}.jpg`;
+    const tmpName = (i: number) => `page-${i}${suffix}.shifting.jpg`;
+    const cleanupTmps = () => {
+      for (let i = pageIndex + 1; i < totalPages; i++) {
+        const t = new File(dir, tmpName(i));
+        if (t.exists) {
+          try { t.delete(); } catch {}
+        }
       }
+    };
+
+    try {
+      // Phase 1: copy each shifted source to a tmp name keyed to its destination.
+      for (let i = pageIndex + 1; i < totalPages; i++) {
+        const src = new File(dir, name(i));
+        if (!src.exists) continue; // tolerate gaps (and pages with no .orig yet)
+        const tmp = new File(dir, tmpName(i));
+        if (tmp.exists) tmp.delete();
+        src.copy(tmp);
+      }
+
+      // Phase 2: delete the target, delete the old src files, promote tmps.
+      const target = new File(dir, name(pageIndex));
+      if (target.exists) target.delete();
+
+      for (let i = pageIndex + 1; i < totalPages; i++) {
+        const src = new File(dir, name(i));
+        if (src.exists) {
+          try { src.delete(); } catch {}
+        }
+      }
+
+      for (let i = pageIndex + 1; i < totalPages; i++) {
+        const tmp = new File(dir, tmpName(i));
+        if (!tmp.exists) continue;
+        const dest = new File(dir, name(i - 1));
+        if (dest.exists) {
+          try { dest.delete(); } catch {}
+        }
+        tmp.copy(dest);
+        try { tmp.delete(); } catch {}
+      }
+    } catch (err) {
+      cleanupTmps();
+      throw err;
     }
   };
 
-  try {
-    // Phase 1: copy each shifted source to a tmp name keyed to its destination.
-    for (let i = pageIndex + 1; i < totalPages; i++) {
-      const src = new File(dir, `page-${i}.jpg`);
-      if (!src.exists) continue; // tolerate gaps
-      const tmp = new File(dir, tmpName(i));
-      if (tmp.exists) tmp.delete();
-      src.copy(tmp);
-    }
-
-    // Phase 2: delete the target, delete the old src files, promote tmps.
-    const target = new File(dir, `page-${pageIndex}.jpg`);
-    if (target.exists) target.delete();
-
-    for (let i = pageIndex + 1; i < totalPages; i++) {
-      const src = new File(dir, `page-${i}.jpg`);
-      if (src.exists) {
-        try { src.delete(); } catch {}
-      }
-    }
-
-    for (let i = pageIndex + 1; i < totalPages; i++) {
-      const tmp = new File(dir, tmpName(i));
-      if (!tmp.exists) continue;
-      const dest = new File(dir, `page-${i - 1}.jpg`);
-      if (dest.exists) {
-        try { dest.delete(); } catch {}
-      }
-      tmp.copy(dest);
-      try { tmp.delete(); } catch {}
-    }
-  } catch (err) {
-    cleanupTmps();
-    throw err;
-  }
+  shift('');
+  shift('.orig');
 }
 
 /**
@@ -132,44 +144,58 @@ export function reorderPages(docId: string, newOrderIndices: number[]): string[]
   const dir = new Directory(Paths.document, 'scan-kit', docId);
   const n = newOrderIndices.length;
 
-  const cleanupTemps = () => {
-    for (let i = 0; i < n; i++) {
-      const tmp = new File(dir, `page-tmp-${i}.jpg`);
-      if (tmp.exists) {
-        try { tmp.delete(); } catch {}
+  // Reorders one file family. Run for the pages and again for their .orig
+  // shadows so a reorder can't leave page N paired with another page's
+  // unfiltered source — the next bake would swap in the wrong image entirely.
+  // `required` is false for .orig: a page that has never been filtered has none.
+  const reorder = (suffix: string, required: boolean) => {
+    const name = (i: number) => `page-${i}${suffix}.jpg`;
+    const tmpName = (i: number) => `page-tmp-${i}${suffix}.jpg`;
+    const cleanupTemps = () => {
+      for (let i = 0; i < n; i++) {
+        const tmp = new File(dir, tmpName(i));
+        if (tmp.exists) {
+          try { tmp.delete(); } catch {}
+        }
       }
+    };
+
+    try {
+      // Step 1: copy originals to temp names. Bail early if a required source is missing.
+      for (let i = 0; i < n; i++) {
+        const src = new File(dir, name(newOrderIndices[i]));
+        if (!src.exists) {
+          if (!required) continue;
+          cleanupTemps();
+          throw new Error(`reorderPages: source ${name(newOrderIndices[i])} missing`);
+        }
+        const tmp = new File(dir, tmpName(i));
+        if (tmp.exists) tmp.delete();
+        src.copy(tmp);
+      }
+      // Step 2: delete old files
+      for (let i = 0; i < n; i++) {
+        const old = new File(dir, name(i));
+        if (old.exists) old.delete();
+      }
+      // Step 3: move temp to final
+      for (let i = 0; i < n; i++) {
+        const tmp = new File(dir, tmpName(i));
+        if (!tmp.exists) continue;
+        const dest = new File(dir, name(i));
+        tmp.copy(dest);
+        tmp.delete();
+      }
+    } catch (err) {
+      cleanupTemps();
+      throw err;
     }
   };
 
-  try {
-    // Step 1: copy originals to temp names. Bail early if any source is missing.
-    for (let i = 0; i < n; i++) {
-      const src = new File(dir, `page-${newOrderIndices[i]}.jpg`);
-      if (!src.exists) {
-        cleanupTemps();
-        throw new Error(`reorderPages: source page-${newOrderIndices[i]}.jpg missing`);
-      }
-      const tmp = new File(dir, `page-tmp-${i}.jpg`);
-      if (tmp.exists) tmp.delete();
-      src.copy(tmp);
-    }
-    // Step 2: delete old files
-    for (let i = 0; i < n; i++) {
-      const old = new File(dir, `page-${i}.jpg`);
-      if (old.exists) old.delete();
-    }
-    // Step 3: move temp to final
-    for (let i = 0; i < n; i++) {
-      const tmp = new File(dir, `page-tmp-${i}.jpg`);
-      const dest = new File(dir, `page-${i}.jpg`);
-      tmp.copy(dest);
-      tmp.delete();
-    }
-    return Array.from({ length: n }, (_, i) => new File(dir, `page-${i}.jpg`).uri);
-  } catch (err) {
-    cleanupTemps();
-    throw err;
-  }
+  reorder('', true);
+  reorder('.orig', false);
+
+  return Array.from({ length: n }, (_, i) => new File(dir, `page-${i}.jpg`).uri);
 }
 
 /** Copies all page files from sourceId to a new destId directory. */
@@ -180,10 +206,16 @@ export function copyDocumentFiles(
 ): string[] {
   const destDir = new Directory(Paths.document, 'scan-kit', destId);
   destDir.create({ intermediates: true, idempotent: true });
+  const srcDir = new Directory(Paths.document, 'scan-kit', sourceId);
   return pages.map((_, i) => {
-    const src = new File(new Directory(Paths.document, 'scan-kit', sourceId), `page-${i}.jpg`);
+    const src = new File(srcDir, `page-${i}.jpg`);
     const dest = new File(destDir, `page-${i}.jpg`);
     src.copy(dest);
+    // Carry the .orig shadow across too. Without it the duplicate has no
+    // pristine source, so its first filter change would bake on top of pixels
+    // that already have a filter in them.
+    const srcOrig = new File(srcDir, `page-${i}.orig.jpg`);
+    if (srcOrig.exists) srcOrig.copy(new File(destDir, `page-${i}.orig.jpg`));
     return dest.uri;
   });
 }

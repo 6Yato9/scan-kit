@@ -21,7 +21,12 @@ type Props = {
   visible: boolean;
   uri: string;
   onCancel: () => void;
-  onDone: (croppedUri: string) => void;
+  /**
+   * `rect` is in natural image pixels. The page's page-N.orig.jpg shadow has the
+   * same dimensions (it differs only in colour), so the caller can apply the very
+   * same crop to it and keep the two in the same shape.
+   */
+  onDone: (croppedUri: string, rect: { originX: number; originY: number; width: number; height: number }) => void;
 };
 
 type Rect = { x: number; y: number; w: number; h: number };
@@ -131,7 +136,7 @@ export function CropModal({ visible, uri, onCancel, onDone }: Props) {
         [{ crop: { originX, originY, width, height } }],
         { compress: 0.9, format: SaveFormat.JPEG },
       );
-      onDone(result.uri);
+      onDone(result.uri, { originX, originY, width, height });
     } catch {
       // Leave the modal open so the user can retry.
     } finally {

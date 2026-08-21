@@ -1,7 +1,19 @@
 const mockFileInstances: Record<string, any> = {};
 const mockDirInstances: Record<string, any> = {};
-const mockCopy = jest.fn();
-const mockDelete = jest.fn();
+// Content-tracking copy/delete. These stay jest.fn spies (existing tests assert
+// on call counts), but they now also move bytes, so a test can prove that the
+// RIGHT file landed at the right index — which is the whole point of the .orig
+// shadow: if it drifts from its page, the next filter bake re-derives from the
+// wrong image.
+const fileContents: Record<string, string> = {};
+const mockCopy = jest.fn(function (this: any, dest: any) {
+  fileContents[dest.uri] = fileContents[this.uri];
+  dest.exists = true;
+});
+const mockDelete = jest.fn(function (this: any) {
+  delete fileContents[this.uri];
+  this.exists = false;
+});
 
 jest.mock('expo-image-manipulator', () => ({
   manipulateAsync: jest.fn().mockResolvedValue({ uri: 'file:///tmp/compressed.jpg' }),
@@ -56,6 +68,15 @@ import { deleteSinglePage, appendPages, reorderPages, copyDocumentFiles } from '
 import { copyPageWithQuality, copyPdfToStorage } from '../lib/files';
 import { originalUri, ensureOriginal, garbageCollectOrphans } from '../lib/files';
 import { manipulateAsync } from 'expo-image-manipulator';
+
+// The mock caches File/Directory instances by uri and `delete` now clears
+// `exists`, so state would otherwise leak between tests. Reset the caches and
+// the content store before each one.
+beforeEach(() => {
+  for (const k of Object.keys(mockFileInstances)) delete mockFileInstances[k];
+  for (const k of Object.keys(mockDirInstances)) delete mockDirInstances[k];
+  for (const k of Object.keys(fileContents)) delete fileContents[k];
+});
 // Same mocked classes lib/files.ts uses (see the expo-file-system mock above),
 // so tests can construct the exact File/Directory instances the production
 // code will look up by uri. Cast to `any`: the real expo-file-system .d.ts
@@ -100,6 +121,10 @@ describe('copyDocumentFiles', () => {
 
   it('copies each page file and returns destination URIs', () => {
     const pages = ['file:///docs/scan-kit/src/page-0.jpg', 'file:///docs/scan-kit/src/page-1.jpg'];
+    // A document that was never filtered has no .orig shadows to carry across.
+    for (const i of [0, 1]) {
+      (new RawFile(new RawDirectory('file:///documents', 'scan-kit', 'src'), `page-${i}.orig.jpg`) as any).exists = false;
+    }
     const uris = copyDocumentFiles('src', 'dest', pages);
     expect(mockCopy).toHaveBeenCalledTimes(2);
     expect(uris).toHaveLength(2);
@@ -192,5 +217,75 @@ describe('garbageCollectOrphans and .orig.jpg', () => {
     expect(mockDelete.mock.instances).not.toContain(origFile);
     expect(mockDelete.mock.instances).toContain(staleTemp);
     expect(deletedCount).toBe(1);
+  });
+});
+
+function pageFileFor(docId: string, i: number, orig = false) {
+  return new RawFile(new RawDirectory('file:///documents', 'scan-kit', docId), `page-${i}${orig ? '.orig' : ''}.jpg`) as any;
+}
+function seedPage(docId: string, i: number, content: string) {
+  const f: any = pageFileFor(docId, i);
+  f.exists = true;
+  fileContents[f.uri] = content;
+}
+function seedOrig(docId: string, i: number, content: string) {
+  const f: any = pageFileFor(docId, i, true);
+  f.exists = true;
+  fileContents[f.uri] = content;
+}
+const readPage = (docId: string, i: number) => fileContents[pageFileFor(docId, i).uri];
+const readOrig = (docId: string, i: number) => fileContents[pageFileFor(docId, i, true).uri];
+const existsOrig = (docId: string, i: number) => (pageFileFor(docId, i, true) as any).exists;
+
+describe('.orig shadows stay aligned with their pages', () => {
+  // page-N.orig.jpg is the unfiltered source every filter bake re-derives from.
+  // It must track its page through every file operation: if it drifts, the next
+  // bake silently swaps in the wrong image or discards a rotate/crop.
+
+  test('deleteSinglePage shifts .orig files alongside their pages', () => {
+    seedPage('doc-1', 0, 'A'); seedOrig('doc-1', 0, 'A-orig');
+    seedPage('doc-1', 1, 'B'); seedOrig('doc-1', 1, 'B-orig');
+    seedPage('doc-1', 2, 'C'); seedOrig('doc-1', 2, 'C-orig');
+
+    deleteSinglePage('doc-1', 0, 3);
+
+    expect(readPage('doc-1', 0)).toBe('B');
+    expect(readOrig('doc-1', 0)).toBe('B-orig');
+    expect(readPage('doc-1', 1)).toBe('C');
+    expect(readOrig('doc-1', 1)).toBe('C-orig');
+    expect(existsOrig('doc-1', 2)).toBe(false);
+  });
+
+  test('reorderPages reorders .orig files alongside their pages', () => {
+    seedPage('doc-2', 0, 'A'); seedOrig('doc-2', 0, 'A-orig');
+    seedPage('doc-2', 1, 'B'); seedOrig('doc-2', 1, 'B-orig');
+
+    reorderPages('doc-2', [1, 0]);
+
+    expect(readPage('doc-2', 0)).toBe('B');
+    expect(readOrig('doc-2', 0)).toBe('B-orig');
+    expect(readPage('doc-2', 1)).toBe('A');
+    expect(readOrig('doc-2', 1)).toBe('A-orig');
+  });
+
+  test('a page without an .orig is still handled', () => {
+    seedPage('doc-3', 0, 'A');
+    seedPage('doc-3', 1, 'B'); seedOrig('doc-3', 1, 'B-orig');
+
+    deleteSinglePage('doc-3', 0, 2);
+
+    expect(readPage('doc-3', 0)).toBe('B');
+    expect(readOrig('doc-3', 0)).toBe('B-orig');
+  });
+
+  test('copyDocumentFiles carries .orig into the duplicate', () => {
+    seedPage('src-1', 0, 'A'); seedOrig('src-1', 0, 'A-orig');
+
+    copyDocumentFiles('src-1', 'dst-1', ['p0']);
+
+    expect(readPage('dst-1', 0)).toBe('A');
+    // Without this the duplicate has no pristine source, so its first filter
+    // change would bake on top of already-filtered pixels.
+    expect(readOrig('dst-1', 0)).toBe('A-orig');
   });
 });
