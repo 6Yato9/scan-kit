@@ -420,23 +420,34 @@ export default function ViewerScreen() {
             render black glyphs on this near-black background in light mode. */}
         <StatusBar style="light" />
         <View style={styles.header}>
-          <Pressable onPress={() => router.back()} hitSlop={12}>
-            <View style={styles.backRow}>
-              <Ionicons name="chevron-back" size={24} color="#fff" />
-              <Text style={styles.back}>Back</Text>
-            </View>
+          <Pressable
+            onPress={() => router.back()}
+            hitSlop={12}
+            style={styles.backBtn}
+            accessibilityRole="button"
+            accessibilityLabel="Back"
+          >
+            <Ionicons name="chevron-back" size={26} color="#fff" />
           </Pressable>
           <Pressable
-            style={{ flex: 1 }}
+            style={styles.titlePress}
             onPress={() => setRenameVisible(true)}
             accessibilityRole="button"
             accessibilityLabel={`Rename ${document.name}`}
           >
             <Text style={styles.title} numberOfLines={1}>{document.name}</Text>
           </Pressable>
-          <Pressable onPress={handleSharePdf} hitSlop={12}>
-            <Text style={styles.exportBtn}>Share</Text>
-          </Pressable>
+          <View style={styles.headerRight}>
+            <Pressable
+              onPress={handleSharePdf}
+              hitSlop={12}
+              style={styles.headerBtn}
+              accessibilityRole="button"
+              accessibilityLabel="Share PDF"
+            >
+              <Ionicons name="share-outline" size={22} color="#fff" />
+            </Pressable>
+          </View>
         </View>
         <WebView
           source={{ uri: document.pdfUri }}
@@ -471,14 +482,17 @@ export default function ViewerScreen() {
       <FilterBaker />
       <BakeIndicator top={insets.top + 52} />
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()} hitSlop={12}>
-          <View style={styles.backRow}>
-            <Ionicons name="chevron-back" size={24} color="#fff" />
-            <Text style={styles.back}>Back</Text>
-          </View>
+        <Pressable
+          onPress={() => router.back()}
+          hitSlop={12}
+          style={styles.backBtn}
+          accessibilityRole="button"
+          accessibilityLabel="Back"
+        >
+          <Ionicons name="chevron-back" size={26} color="#fff" />
         </Pressable>
         <Pressable
-          style={{ flex: 1 }}
+          style={styles.titlePress}
           onPress={() => setRenameVisible(true)}
           accessibilityRole="button"
           accessibilityLabel={`Rename ${document.name}`}
@@ -519,10 +533,11 @@ export default function ViewerScreen() {
           <Pressable
             onPress={() => setExportVisible(true)}
             hitSlop={12}
+            style={styles.headerBtn}
             accessibilityRole="button"
             accessibilityLabel="Export document"
           >
-            <Text style={styles.exportBtn}>Export</Text>
+            <Ionicons name="share-outline" size={22} color="#fff" />
           </Pressable>
         </View>
       </View>
@@ -650,12 +665,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
   },
-  backRow: { flexDirection: 'row', alignItems: 'center' },
-  back: { fontSize: 16, color: '#fff', fontWeight: '400' },
-  title: { flex: 1, fontSize: 15, color: '#ccc', fontWeight: '600', textAlign: 'center', marginHorizontal: 8 },
-  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  headerBtn: { paddingHorizontal: 6 },
-  exportBtn: { fontSize: 15, color: '#4ec6e0', fontWeight: '600' },
+  backBtn: { paddingRight: 4, marginLeft: -4 },
+  // Left-aligned rather than centred. A centred title can't work here: the
+  // chevron weighs ~30pt and the action group ~150pt, so "centred in the space
+  // between them" is not the screen's centre, and centring on the screen leaves
+  // a name this long overlapping the icons. Filling the gap avoids both.
+  titlePress: { flex: 1, marginRight: 8 },
+  title: { fontSize: 17, color: '#fff', fontWeight: '600' },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  headerBtn: { paddingHorizontal: 8, paddingVertical: 4 },
   page: {
     flex: 1,
     alignItems: 'center',
