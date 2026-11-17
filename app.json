@@ -65,7 +65,10 @@
         {
           "faceIDPermission": "Unlock Scan Kit with Face ID."
         }
-      ]
+      ],
+      "expo-font",
+      "expo-web-browser",
+      "./plugins/with-pod-deployment-target"
     ],
     "experiments": {
       "typedRoutes": true,
