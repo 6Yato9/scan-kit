@@ -15,7 +15,7 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/theme-context';
 import { useScan } from '@/contexts/scan-context';
@@ -100,13 +100,22 @@ export function ToolScreen({
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
+  // Opened on a specific document from the viewer, a tool is presented as a
+  // full-screen modal (see toolOptions in app/_layout.tsx), so it closes with
+  // an x rather than going back with a chevron.
+  const { docId } = useLocalSearchParams<{ docId?: string }>();
 
   return (
     <KeyboardAvoidingView
       style={[styles.screen, { backgroundColor: colors.bg }]}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <ScreenHeader title={title} onBack={() => router.back()} right={right} />
+      <ScreenHeader
+        title={title}
+        onBack={() => router.back()}
+        backIcon={docId ? 'close' : 'back'}
+        right={right}
+      />
       {scroll ? (
         <ScrollView
           style={styles.flex}
