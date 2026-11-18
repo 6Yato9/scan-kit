@@ -31,7 +31,8 @@ export type ScanSettings = {
 
 export type DocSettings = {
   namePrefix: string;
-  pdfPageSize: 'A4' | 'Letter';
+  /** 'Auto' sizes PDF pages to match the scans (see lib/pdf.ts autoPaperSize). */
+  pdfPageSize: 'Auto' | 'A4' | 'Letter';
   pdfQuality: 'standard' | 'high';
 };
 
@@ -735,7 +736,8 @@ export function deleteFolder(name: string): Promise<void> {
   });
 }
 
-const DEFAULT_SCAN_SETTINGS: ScanSettings = { quality: 'high', autoCrop: true, defaultFilter: 'enhanced' };
+// 'medium' is shown as "High" in Scan settings: sharp text at about half the size of "Best".
+const DEFAULT_SCAN_SETTINGS: ScanSettings = { quality: 'medium', autoCrop: true, defaultFilter: 'enhanced' };
 
 export async function getScanSettings(): Promise<ScanSettings> {
   const raw = await AsyncStorage.getItem(SCAN_SETTINGS_KEY);
@@ -753,7 +755,7 @@ export async function saveScanSettings(s: ScanSettings): Promise<void> {
   await AsyncStorage.setItem(SCAN_SETTINGS_KEY, JSON.stringify(s));
 }
 
-const DEFAULT_DOC_SETTINGS: DocSettings = { namePrefix: 'Scan', pdfPageSize: 'A4', pdfQuality: 'standard' };
+const DEFAULT_DOC_SETTINGS: DocSettings = { namePrefix: 'Scan', pdfPageSize: 'Auto', pdfQuality: 'standard' };
 
 export async function getDocSettings(): Promise<DocSettings> {
   const raw = await AsyncStorage.getItem(DOC_SETTINGS_KEY);

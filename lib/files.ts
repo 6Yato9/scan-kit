@@ -26,6 +26,21 @@ function stage(src: File, side: File, how: 'copy' | 'move' = 'copy'): void {
   else src.copy(side);
 }
 
+// Pages are stored by position, so "page 3" after a reorder or delete is a
+// different page. Anything that remembers a page by its index across user
+// actions (retake Undo) checks this counter, bumped by every operation here
+// that moves pages, to tell whether the index still means the same page.
+const layoutGenerations = new Map<string, number>();
+
+/** Changes whenever pages of `docId` are reordered or deleted (this session). */
+export function pageLayoutGeneration(docId: string): number {
+  return layoutGenerations.get(docId) ?? 0;
+}
+
+function bumpLayout(docId: string): void {
+  layoutGenerations.set(docId, pageLayoutGeneration(docId) + 1);
+}
+
 export function deleteDocumentFiles(docId: string): void {
   const dir = new Directory(Paths.document, 'scan-kit', docId);
   if (dir.exists) {
@@ -73,6 +88,46 @@ export function shadowOf(pageUri: string): string | null {
   const clean = stripQuery(pageUri);
   if (!/\/page-\d+\.jpg$/.test(clean)) return null;
   return clean.replace(/\.jpg$/, '.orig.jpg');
+}
+
+/**
+ * Puts a saved copy of a page (and its `.orig` shadow, when the copy has one)
+ * back over page `pageIndex` of `docId` — Undo for a retake.
+ *
+ * Rename-only like replacePage: the copy must exist (it lives in Caches, which
+ * iOS may purge) or nothing is touched, and both files are copied out before
+ * anything stored changes, so a failed copy (disk full) leaves the page as it
+ * is. The shadow is staged in Caches rather than beside the page, so the
+ * startup sweep can't promote it next to the wrong page. The page's current
+ * shadow is removed before the page is swapped: an interruption can leave the
+ * page without a shadow (harmless), never paired with another image's.
+ */
+export function restorePageWithShadow(srcUri: string, docId: string, pageIndex: number): string {
+  const src = new File(stripQuery(srcUri));
+  if (!src.exists) throw new Error('restorePageWithShadow: saved copy is gone');
+  const shadowUri = shadowOf(srcUri);
+  const srcOrig = shadowUri ? new File(shadowUri) : null;
+  const dir = new Directory(Paths.document, 'scan-kit', docId);
+  const dest = new File(dir, `page-${pageIndex}.jpg`);
+  const destOrig = new File(dir, `page-${pageIndex}.orig.jpg`);
+  const pageSide = new File(dir, `page-${pageIndex}.new.jpg`);
+  const origSide = srcOrig && srcOrig.exists ? new File(Paths.cache, `restore-${Date.now()}.orig.jpg`) : null;
+
+  if (origSide) stage(srcOrig!, origSide);
+  try {
+    stage(src, pageSide);
+  } catch (err) {
+    if (origSide) {
+      try { origSide.delete(); } catch {}
+    }
+    throw err;
+  }
+
+  if (destOrig.exists) destOrig.delete();
+  swapIn(pageSide, dest);
+  // A rename within the app's container: needs no free space.
+  if (origSide) origSide.move(destOrig);
+  return dest.uri;
 }
 
 /**
@@ -132,6 +187,7 @@ export function deleteSinglePage(
   pageIndex: number,
   totalPages: number
 ): void {
+  bumpLayout(docId);
   const dir = new Directory(Paths.document, 'scan-kit', docId);
 
   // Runs the shift for one file family. Called for the pages themselves and
@@ -175,6 +231,7 @@ export const REORDER_COMMIT_MARKER = 'reorder.commit';
  * The startup sweep tells the two apart by the marker (see recoverInterrupted).
  */
 export function reorderPages(docId: string, newOrderIndices: number[]): string[] {
+  if (newOrderIndices.some((from, to) => from !== to)) bumpLayout(docId);
   const dir = new Directory(Paths.document, 'scan-kit', docId);
   const n = newOrderIndices.length;
   // `required` is false for .orig: a page that has never been filtered has none.

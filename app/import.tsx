@@ -19,6 +19,7 @@ import { useImportDocuments } from '@/components/use-import';
 import { PrimaryButton } from '@/components/primary-button';
 import { LockScreen, useAppLocked } from '@/components/lock-gate';
 import { displayNameOf, documentNameFor, importKindOf } from '@/lib/incoming-file';
+import { abandonSystemUI } from '@/lib/system-ui';
 import { Spacing, Type } from '@/lib/theme';
 
 type Status = { state: 'working' } | { state: 'failed'; title: string; body: string };
@@ -67,6 +68,10 @@ export default function ImportScreen() {
 
   useEffect(() => {
     mounted.current = true;
+    // Presenting this screen closed any camera or picker that was open
+    // ("Open in Scan Kit" while scanning). Their promises never settle on their
+    // own; settle them as cancelled so the screens that opened them recover.
+    abandonSystemUI();
     return () => { mounted.current = false; };
   }, []);
 

@@ -19,11 +19,23 @@
 //   - Screens that can appear above /lock while locked (app/import.tsx)
 //     render <LockScreen /> themselves and hold any navigation until unlock.
 //   - System UI shown over the top screen when the app goes to the background
-//     (share sheet, print dialog, action sheet, photo picker) is dismissed by
-//     native-stack before it presents /lock, so it never stays above the lock.
+//     (share sheet, print dialog, action sheet) is dismissed by native-stack
+//     before it presents /lock, so it never stays above the lock.
 //     A React Native Alert is the exception: it has its own window above the
 //     app and can't be closed from JS. Its buttons do nothing while locked
 //     (lib/alert-guard.ts), so it can't be used to act without unlocking.
+//   - A system PICKER (document camera, photo picker, Files) must not be
+//     closed that way: its promise would never settle and the screen that
+//     opened it would stay busy, and the user would lose the capture session.
+//     While one is open (lib/system-ui.ts) the lock is drawn in a
+//     FullWindowOverlay instead — a view added to the window above everything,
+//     presented controllers included — so nothing is presented or dismissed.
+//     After unlocking the user is back in the camera or picker where they were.
+//
+// App-switcher privacy: when the app goes 'inactive' (app switcher, Control
+// Center, a call) with App Lock on, a plain cover is drawn in the same kind of
+// overlay so the snapshot iOS takes doesn't show a document. It never prompts
+// for Face ID and disappears as soon as the app is active again.
 //
 // Behaviour:
 //   - Locks on a cold start and whenever the app goes to the BACKGROUND. It
@@ -41,12 +53,15 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import { AppState, AppStateStatus, StyleSheet, Text, View } from 'react-native';
 import { usePathname, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { FullWindowOverlay } from 'react-native-screens';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';
-import { authenticate, biometricKind, BiometricKind } from '@/lib/biometrics';
+import { authenticate, biometricKind, BiometricKind, isAuthenticating } from '@/lib/biometrics';
 import { getAppLockEnabled, subscribeAppLock } from '@/lib/storage';
 import { installAlertGuard } from '@/lib/alert-guard';
+import { isSystemUIOpen } from '@/lib/system-ui';
+import { BrandMark } from '@/components/brand-mark';
 import { Spacing, Type } from '@/lib/theme';
 
 const LOCK_ROUTE = '/lock';
@@ -110,6 +125,16 @@ export function LockScreen() {
   );
 }
 
+/** What the app-switcher snapshot shows while App Lock is on: no document, no prompt. */
+function PrivacyCover() {
+  const { colors } = useTheme();
+  return (
+    <View style={[styles.privacy, { backgroundColor: colors.bg }]} accessibilityElementsHidden>
+      <BrandMark size={72} />
+    </View>
+  );
+}
+
 export function LockGate({ children }: { children: React.ReactNode }) {
   const { colors } = useTheme();
   const router = useRouter();
@@ -123,6 +148,16 @@ export function LockGate({ children }: { children: React.ReactNode }) {
     setLockedState(next);
   }, []);
   const [kind, setKind] = useState<BiometricKind>('passcode');
+  // Locked while a system picker was open: the lock is drawn in a
+  // FullWindowOverlay over the picker instead of the /lock route.
+  const [overPicker, setOverPickerState] = useState(false);
+  const overPickerRef = useRef(false);
+  const setOverPicker = useCallback((next: boolean) => {
+    overPickerRef.current = next;
+    setOverPickerState(next);
+  }, []);
+  // App switcher / Control Center: hide the content without locking.
+  const [privacy, setPrivacy] = useState(false);
   // The /lock route is on screen: it takes the touches, not the overlay below.
   const routeShown = pathname === LOCK_ROUTE;
 
@@ -137,7 +172,8 @@ export function LockGate({ children }: { children: React.ReactNode }) {
   // The /lock route sees `locked` turn false and dismisses itself.
   const unlock = useCallback(() => {
     setLocked(false);
-  }, [setLocked]);
+    setOverPicker(false);
+  }, [setLocked, setOverPicker]);
 
   const tryUnlock = useCallback(async () => {
     if (authingRef.current) return;
@@ -186,24 +222,43 @@ export function LockGate({ children }: { children: React.ReactNode }) {
     const sub = AppState.addEventListener('change', (next: AppStateStatus) => {
       const prev = appStateRef.current;
       appStateRef.current = next;
+      if (next === 'inactive') {
+        // Snapshot cover only; an already-locked app is covered by the lock,
+        // and our own Face ID sheet (turning App Lock off) makes the app
+        // inactive without leaving it.
+        if (!lockedRef.current && !isAuthenticating()) setPrivacy(true);
+      } else if (next === 'active') {
+        setPrivacy(false);
+      }
       if (next === 'background') {
         setLocked(true);
-        // Push even when another /lock is lower in the stack (covered by an
-        // import): each one pops itself once it is on top and unlocked.
-        if (pathnameRef.current !== LOCK_ROUTE) router.push(LOCK_ROUTE);
+        if (overPickerRef.current || isSystemUIOpen()) {
+          // A camera or picker is open: cover it, don't close it (see header).
+          setOverPicker(true);
+        } else if (pathnameRef.current !== LOCK_ROUTE) {
+          // Push even when another /lock is lower in the stack (covered by an
+          // import): each one pops itself once it is on top and unlocked.
+          router.push(LOCK_ROUTE);
+        }
       } else if (next === 'active' && prev === 'background' && lockedRef.current) {
         // Safety net: if the route was presented while a system sheet (print,
         // share) was being torn down, native-stack can drop it again. Cover the
         // app before prompting. A spare /lock is harmless: each one dismisses
-        // itself once unlocked.
-        if (pathnameRef.current !== LOCK_ROUTE && pathnameRef.current !== IMPORT_ROUTE) router.push(LOCK_ROUTE);
+        // itself once unlocked. Not over a picker: the overlay covers it.
+        if (
+          !overPickerRef.current &&
+          pathnameRef.current !== LOCK_ROUTE &&
+          pathnameRef.current !== IMPORT_ROUTE
+        ) {
+          router.push(LOCK_ROUTE);
+        }
         // Only after a real background trip: the Face ID sheet itself makes the
         // app go inactive → active, and re-prompting then would loop.
         tryUnlock();
       }
     });
     return () => sub.remove();
-  }, [enabled, tryUnlock, router, setLocked]);
+  }, [enabled, tryUnlock, router, setLocked, setOverPicker]);
 
   const isLocked = enabled === true && locked;
   const value: LockState = { locked: isLocked, kind, tryUnlock };
@@ -219,6 +274,14 @@ export function LockGate({ children }: { children: React.ReactNode }) {
             <LockScreen />
           </View>
         )}
+        {/* Above everything in the window, presented pickers included. The
+            privacy cover stays through the trip to the background, until the
+            /lock route it hides has been presented and the app is active. */}
+        {enabled === true && ((isLocked && overPicker) || privacy) && (
+          <FullWindowOverlay>
+            {isLocked && overPicker ? <LockScreen /> : <PrivacyCover />}
+          </FullWindowOverlay>
+        )}
       </View>
     </LockContext.Provider>
   );
@@ -227,6 +290,7 @@ export function LockGate({ children }: { children: React.ReactNode }) {
 const styles = StyleSheet.create({
   root: { flex: 1 },
   lockScreen: { flex: 1 },
+  privacy: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   lockBody: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: Spacing.xxxl },
   iconCircle: { width: 88, height: 88, borderRadius: 44, alignItems: 'center', justifyContent: 'center', marginBottom: Spacing.xxl },
   title: { textAlign: 'center', marginBottom: Spacing.sm },

@@ -33,6 +33,15 @@ jest.mock('../lib/files', () => ({
   copyDocumentFiles: jest.fn(() => []),
   copyPdfToStorage: jest.fn(() => 'file:///docs/scan-kit/new-id/document.pdf'),
   reorderPages: (id: string, order: number[]) => mockReorderPages(id, order),
+  copyPageWithShadow: (src: string, destId: string, i: number) => {
+    const to = `file:///docs/scan-kit/${destId}/page-${i}.jpg`;
+    if (!(src in mockFiles)) throw new Error('no such page file');
+    mockFiles[to] = mockFiles[src];
+    return to;
+  },
+  deleteDocumentFiles: (id: string) => {
+    for (const k of Object.keys(mockFiles)) if (k.includes(`/${id}/`)) delete mockFiles[k];
+  },
 }));
 const mockEdits: any[] = [];
 jest.mock('../lib/bake', () => ({
@@ -40,7 +49,8 @@ jest.mock('../lib/bake', () => ({
   runPageEdit: (id: string, edit: any, fn: () => unknown) => { mockEdits.push([id, edit]); return Promise.resolve().then(fn); },
 }));
 
-import { combinePageMeta, copyPagesWithOriginals, mergeInto, mergeIntoNew, reorderDocumentPages } from '../lib/doc-ops';
+import { combinePageMeta, copyPagesWithOriginals, extractPages, mergeInto, mergeIntoNew, reorderDocumentPages } from '../lib/doc-ops';
+import { withDocLock } from '../lib/bake';
 import { Document } from '../types/document';
 
 const dir = (id: string) => `file:///docs/scan-kit/${id}`;
@@ -134,4 +144,55 @@ test('mergeIntoNew creates one document with every page in order', async () => {
   expect(merged.pages).toHaveLength(3);
   expect(mockFiles[`${dir('new-id')}/page-2.jpg`]).toBe('b-1');
   expect(mockSaved).toHaveLength(1);
+});
+
+describe('extractPages (critique L3)', () => {
+  test('copies the chosen pages with the labels STORED now, not the caller\'s stale copy', async () => {
+    const stale = doc('src', 3, { filters: ['original', 'original', 'original'] });
+    // A bake finished after the tool loaded the document: page 2 is now B&W.
+    mockStored.src = { ...stale, filters: ['original', 'original', 'bw'] };
+    const created = await extractPages(stale, [2, 0]);
+    expect(created.pages).toEqual(['file:///docs/scan-kit/new-id/page-0.jpg', 'file:///docs/scan-kit/new-id/page-1.jpg']);
+    expect(mockFiles['file:///docs/scan-kit/new-id/page-1.jpg']).toBe('src-2');
+    expect(created.filters).toEqual(['original', 'bw']);
+    expect(created.name).toBe('src (pages 1, 3)');
+    expect(mockSaved).toEqual([created]);
+  });
+
+  test('waits for a bake holding the document lock before copying', async () => {
+    const src = doc('src', 2);
+    mockStored.src = { ...src };
+    const order: string[] = [];
+    let release!: () => void;
+    const bake = withDocLock('src', () => new Promise<void>(r => { release = r; })).then(() => {
+      order.push('bake written');
+      mockStored.src = { ...src, filters: ['enhanced', 'original'] };
+    });
+    const extracting = extractPages(src, [0]).then(d => { order.push('extracted'); return d; });
+    await Promise.resolve();
+    release();
+    // The bake's write runs in its own lock turn; mimic it landing before the
+    // extract re-reads by awaiting the bake first.
+    await bake;
+    const created = await extracting;
+    expect(order).toEqual(['bake written', 'extracted']);
+    expect(created.filters).toEqual(['enhanced']);
+  });
+
+  test('refuses, leaving nothing behind, when the page count changed meanwhile', async () => {
+    const stale = doc('src', 3);
+    mockStored.src = { ...stale, pages: stale.pages.slice(0, 2) };
+    await expect(extractPages(stale, [2])).rejects.toThrow('changed');
+    expect(mockSaved).toEqual([]);
+    expect(Object.keys(mockFiles).some(k => k.includes('/new-id/'))).toBe(false);
+  });
+
+  test('a failed copy removes the partial new document', async () => {
+    const src = doc('src', 2);
+    mockStored.src = { ...src };
+    delete mockFiles[src.pages[1]];
+    await expect(extractPages(src, [0, 1])).rejects.toThrow();
+    expect(Object.keys(mockFiles).some(k => k.includes('/new-id/'))).toBe(false);
+    expect(mockSaved).toEqual([]);
+  });
 });

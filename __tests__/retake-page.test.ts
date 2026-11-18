@@ -24,6 +24,7 @@ jest.mock('expo-file-system', () => {
 const root = 'file:///docs/scan-kit';
 const pageUri = (doc: string, i: number) => `${root}/${doc}/page-${i}.jpg`;
 const origUri = (doc: string, i: number) => `${root}/${doc}/page-${i}.orig.jpg`;
+let mockLayout = 0;
 const mockDeleteTemps = jest.fn((uris: string[]) => uris.forEach(u => mockFs.delete(u)));
 
 jest.mock('../lib/files', () => ({
@@ -46,6 +47,15 @@ jest.mock('../lib/files', () => ({
     if (mockFs.has(shadow)) mockFs.set(origUri(doc, i), mockFs.get(shadow)!);
     return pageUri(doc, i);
   }),
+  restorePageWithShadow: jest.fn((src: string, doc: string, i: number) => {
+    if (!mockFs.has(src)) throw new Error('saved copy is gone');
+    mockFs.set(pageUri(doc, i), mockFs.get(src)!);
+    mockFs.delete(origUri(doc, i));
+    const shadow = src.replace(/\.jpg$/, '.orig.jpg');
+    if (mockFs.has(shadow)) mockFs.set(origUri(doc, i), mockFs.get(shadow)!);
+    return pageUri(doc, i);
+  }),
+  pageLayoutGeneration: () => mockLayout,
   deleteDisposableTemps: (uris: string[]) => mockDeleteTemps(uris),
   isScannerOutput: (uri: string) => /DOCUMENT_SCAN_/.test(uri),
 }));
@@ -67,8 +77,12 @@ jest.mock('../lib/storage', () => ({
   updateDocument: (d: any) => mockUpdate(d),
 }));
 const mockEdits: unknown[] = [];
+let mockPending = new Map<number, unknown>();
+const mockBakePage = jest.fn(async (..._args: unknown[]) => true);
 jest.mock('../lib/bake', () => ({
   runPageEdit: (_id: string, edit: unknown, fn: () => unknown) => { mockEdits.push(edit); return Promise.resolve().then(fn); },
+  pendingBakesFor: () => mockPending,
+  bakePage: (...args: unknown[]) => mockBakePage(...args),
 }));
 const mockAutoCrop = jest.fn(async (uri: string) => {
   const out = uri.replace('photo', 'cropped');
@@ -77,7 +91,7 @@ const mockAutoCrop = jest.fn(async (uri: string) => {
 });
 jest.mock('../lib/document-detect', () => ({ autoCropDocument: (uri: string) => mockAutoCrop(uri) }));
 
-import { retakePage, undoRetake } from '../lib/retake-page';
+import { RetakeError, retakePage, undoRetake } from '../lib/retake-page';
 
 const SCAN = 'file:///tmp/DOCUMENT_SCAN_0_new.jpg';
 const PHOTO = 'file:///Caches/ImagePicker/photo-1.jpg';
@@ -85,6 +99,8 @@ const PHOTO = 'file:///Caches/ImagePicker/photo-1.jpg';
 beforeEach(() => {
   jest.clearAllMocks();
   mockFs.clear();
+  mockLayout = 0;
+  mockPending = new Map();
   mockEdits.length = 0;
   for (let i = 0; i < 3; i++) mockFs.set(pageUri('d1', i), `page${i}-enhanced`);
   mockFs.set(origUri('d1', 1), 'page1-raw');
@@ -162,6 +178,7 @@ test('undo puts the old pixels, shadow, filter and adjustment back', async () =>
     stash: expect.any(String),
     filter: 'enhanced',
     adjustment: { brightness: 20, contrast: 0, saturation: 0 },
+    layout: 0,
   });
   const restored = await undoRetake('d1', 1, undo!);
   expect(mockFs.get(pageUri('d1', 1))).toBe('page1-enhanced');
@@ -175,4 +192,38 @@ test('works on a document with no per-page metadata yet', async () => {
   const { doc } = await retakePage('d1', 0, SCAN, 0.9);
   expect(doc.filters).toBeUndefined();
   expect(doc.adjustments).toBeUndefined();
+});
+
+test('undo is refused once the pages have been reordered or deleted (critique M1)', async () => {
+  const { undo } = await retakePage('d1', 1, SCAN, 0.9);
+  mockUpdate.mockClear();
+  mockLayout++; // a reorder: index 1 is now another page
+  const err = await undoRetake('d1', 1, undo!).catch(e => e);
+  expect(err).toBeInstanceOf(RetakeError);
+  expect(err.kind).toBe('pages-moved');
+  expect(mockFs.get(pageUri('d1', 1))).toBe('NEWSCAN@q0.9');
+  expect(mockUpdate).not.toHaveBeenCalled();
+});
+
+test('undo is refused, touching nothing, when the saved copy is gone (critique M2)', async () => {
+  const { undo } = await retakePage('d1', 1, SCAN, 0.9);
+  mockUpdate.mockClear();
+  mockFs.delete(undo!.stash); // iOS purged Caches, or a later delete replaced the stash
+  const err = await undoRetake('d1', 1, undo!).catch(e => e);
+  expect(err).toBeInstanceOf(RetakeError);
+  expect(err.kind).toBe('expired');
+  expect(mockFs.get(pageUri('d1', 1))).toBe('NEWSCAN@q0.9');
+  expect(mockUpdate).not.toHaveBeenCalled();
+});
+
+test('a filter bake already running for the page is superseded by "original" (critique L2)', async () => {
+  mockPending = new Map([[1, { filter: 'bw', adjustment: undefined }]]);
+  await retakePage('d1', 1, SCAN, 0.9);
+  expect(mockBakePage).toHaveBeenCalledWith('d1', 1, 'original', undefined);
+});
+
+test('no extra bake when nothing was running for the page', async () => {
+  mockPending = new Map([[2, { filter: 'bw', adjustment: undefined }]]);
+  await retakePage('d1', 1, SCAN, 0.9);
+  expect(mockBakePage).not.toHaveBeenCalled();
 });

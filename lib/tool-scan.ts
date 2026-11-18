@@ -8,6 +8,7 @@ import { File } from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import { getScanSettings } from './storage';
 import { autoCropDocuments } from './document-detect';
+import { withSystemUI } from './system-ui';
 
 const SCAN_QUALITY = { low: 50, medium: 75, high: 90 } as const;
 
@@ -30,7 +31,11 @@ export async function scanWithCamera(): Promise<string[] | null> {
   const settings = await getScanSettings();
   let images: string[] | undefined;
   try {
-    const res = await DocumentScanner.scanDocument({ croppedImageQuality: SCAN_QUALITY[settings.quality] });
+    // Tracked so the app lock doesn't present over the camera (lib/system-ui).
+    const res = await withSystemUI(
+      () => DocumentScanner.scanDocument({ croppedImageQuality: SCAN_QUALITY[settings.quality] }),
+      () => ({ scannedImages: [] as string[] }),
+    );
     images = res.scannedImages;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err ?? '');
@@ -78,11 +83,14 @@ export function deleteTempFiles(uris: (string | null | undefined)[]): void {
  * through unchanged). The picker's own copies are removed once replaced.
  */
 export async function pickPhotos(multiple = true, options: { autoCrop?: boolean } = {}): Promise<string[] | null> {
-  const res = await ImagePicker.launchImageLibraryAsync({
-    mediaTypes: ['images'],
-    allowsMultipleSelection: multiple,
-    quality: 1,
-  });
+  const res = await withSystemUI(
+    () => ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsMultipleSelection: multiple,
+      quality: 1,
+    }),
+    (): ImagePicker.ImagePickerResult => ({ canceled: true, assets: null }),
+  );
   if (res.canceled || !res.assets.length) return null;
   const picked = res.assets.map(a => a.uri);
   if (options.autoCrop === false) return picked;

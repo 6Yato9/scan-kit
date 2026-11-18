@@ -85,6 +85,7 @@ export async function canAuthenticate(): Promise<boolean> {
  */
 export async function authenticate(promptMessage: string): Promise<AuthResult> {
   if (!(await canAuthenticate())) return 'unavailable';
+  prompting++;
   try {
     const res = await LocalAuthentication.authenticateAsync({
       promptMessage,
@@ -94,5 +95,17 @@ export async function authenticate(promptMessage: string): Promise<AuthResult> {
     return classifyAuthResult(res as { success: boolean; error?: string });
   } catch {
     return 'unavailable';
+  } finally {
+    prompting--;
   }
+}
+
+let prompting = 0;
+
+/**
+ * True while our own Face ID / passcode sheet is up. It makes the app
+ * 'inactive', which the app-switcher privacy cover must not react to.
+ */
+export function isAuthenticating(): boolean {
+  return prompting > 0;
 }

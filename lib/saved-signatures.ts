@@ -92,17 +92,44 @@ function writeIndex(index: SavedSignatureEntry[]): void {
   f.write(JSON.stringify(index));
 }
 
-/** The saved signatures, newest first. Entries whose PNG is gone are skipped. */
+/** The saved signatures, newest first. Entries whose PNG is gone (or empty) are skipped. */
 export async function listSavedSignatures(): Promise<SavedSignature[]> {
   return readIndex()
     .map(e => ({ ...e, uri: fileFor(e.id).uri }))
-    .filter(e => fileFor(e.id).exists);
+    .filter(e => {
+      const f = fileFor(e.id);
+      return f.exists && f.size > 0;
+    });
 }
 
 /** A saved signature as the Signature the Sign tool places (a PNG data URI). */
 export async function loadSavedSignature(saved: SavedSignatureEntry): Promise<Signature> {
   const base64 = await fileFor(saved.id).base64();
   return { dataUri: `${PNG_PREFIX}${base64}`, width: saved.width, height: saved.height };
+}
+
+/**
+ * Writes a signature's PNG unless a complete one is already stored. Written to
+ * a side file and renamed into place, so a failed write never leaves an empty
+ * PNG under the id — which would be skipped as "already saved" on every later
+ * attempt and place nothing when used. An empty file left by an older version
+ * is rewritten.
+ */
+function writePng(id: string, base64: string): void {
+  const png = fileFor(id);
+  if (png.exists && png.size > 0) return;
+  const side = new File(dir(), `${id}.png.new`);
+  try {
+    if (side.exists) side.delete();
+    side.create();
+    side.write(base64, { encoding: 'base64' });
+    if (!(side.size > 0)) throw new Error('signature PNG came out empty');
+    if (png.exists) png.delete();
+    side.move(png);
+  } catch (err) {
+    try { if (side.exists) side.delete(); } catch {}
+    throw err;
+  }
 }
 
 /**
@@ -116,11 +143,7 @@ export async function rememberSignature(sig: Signature, now: number = Date.now()
     const id = signatureId(sig.dataUri);
     const d = dir();
     d.create({ intermediates: true, idempotent: true });
-    const png = fileFor(id);
-    if (!png.exists) {
-      png.create();
-      png.write(sig.dataUri.slice(PNG_PREFIX.length), { encoding: 'base64' });
-    }
+    writePng(id, sig.dataUri.slice(PNG_PREFIX.length));
     const { index, dropped } = addToIndex(readIndex(), { id, width: sig.width, height: sig.height, savedAt: now });
     writeIndex(index);
     for (const e of dropped) {

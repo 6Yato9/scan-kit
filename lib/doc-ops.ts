@@ -1,6 +1,6 @@
 // lib/doc-ops.ts
 // Whole-document operations shared by Home, Files and the tools: duplicate,
-// merge and reorder.
+// merge, reorder and extract.
 //
 // Merging copies each page's `.orig` shadow alongside it. Without it the next
 // launch's bake migration re-applies the recorded filter on top of pixels that
@@ -8,9 +8,9 @@
 import * as Crypto from 'expo-crypto';
 import { Directory, File, Paths } from 'expo-file-system';
 import { Document, PageAdjustment, PageFilter } from '../types/document';
-import { copyDocumentFiles, copyPdfToStorage, reorderPages } from './files';
+import { copyDocumentFiles, copyPageWithShadow, copyPdfToStorage, deleteDocumentFiles, reorderPages } from './files';
 import { getDocument, patchDocument, saveDocument } from './storage';
-import { remapForReorder, runPageEdit } from './bake';
+import { remapForReorder, runPageEdit, withDocLock } from './bake';
 
 const DEFAULT_ADJ: PageAdjustment = { brightness: 0, contrast: 0, saturation: 0 };
 
@@ -156,4 +156,48 @@ export async function mergeIntoNew(docs: Document[], name: string): Promise<Docu
   };
   await saveDocument(newDoc);
   return newDoc;
+}
+
+/**
+ * Copies pages `indices` of `source` into a new document (Extract pages) and
+ * returns it. The source is left untouched.
+ *
+ * Runs under the source's document lock and copies from the STORED record, not
+ * the caller's copy: a filter bake writes a page's pixels and its label under
+ * that lock, so a bake finishing mid-extract can't give a copy new pixels with
+ * the old label. Throws, leaving nothing behind, if the source is gone or its
+ * page count changed (the chosen indices would mean other pages).
+ */
+export async function extractPages(source: Document, indices: number[]): Promise<Document> {
+  const sorted = [...new Set(indices)].sort((a, b) => a - b);
+  const newId = Crypto.randomUUID();
+  return withDocLock(source.id, async () => {
+    const fresh = await getDocument(source.id);
+    if (!fresh || fresh.pages.length !== source.pages.length) throw new Error('extractPages: document changed');
+    if (!sorted.length || sorted[0] < 0 || sorted[sorted.length - 1] >= fresh.pages.length) {
+      throw new Error('extractPages: no such page');
+    }
+    try {
+      const pages = sorted.map((src, dest) => copyPageWithShadow(fresh.pages[src], newId, dest));
+      const filters: PageFilter[] = sorted.map(i => fresh.filters?.[i] ?? 'original');
+      const adjustments: PageAdjustment[] = sorted.map(i => fresh.adjustments?.[i] ?? { ...DEFAULT_ADJ });
+      const now = Date.now();
+      const label = `${sorted.length === 1 ? 'page' : 'pages'} ${sorted.map(i => i + 1).join(', ')}`;
+      const doc: Document = {
+        id: newId,
+        name: `${fresh.name} (${label})`.slice(0, 120),
+        pages,
+        filters: filters.every(f => f === 'original') ? undefined : filters,
+        adjustments: adjustments.every(a => !a.brightness && !a.contrast && !a.saturation) ? undefined : adjustments,
+        folder: fresh.folder,
+        createdAt: now,
+        updatedAt: now,
+      };
+      await saveDocument(doc);
+      return doc;
+    } catch (err) {
+      try { deleteDocumentFiles(newId); } catch {}
+      throw err;
+    }
+  });
 }

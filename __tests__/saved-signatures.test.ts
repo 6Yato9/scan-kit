@@ -10,6 +10,13 @@ jest.mock('expo-file-system', () => {
     textSync() { return mockFs.get(this.uri) ?? ''; }
     async base64() { return (mockFs.get(this.uri) ?? '').replace(/^b64:/, ''); }
     delete() { mockFs.delete(this.uri); }
+    get size() { return (mockFs.get(this.uri) ?? '').length; }
+    move(dest: MockFile) {
+      if (mockFs.has(dest.uri)) throw new Error('destination exists');
+      mockFs.set(dest.uri, mockFs.get(this.uri)!);
+      mockFs.delete(this.uri);
+      this.uri = dest.uri;
+    }
   }
   class MockDirectory {
     uri: string;
@@ -92,4 +99,35 @@ test('forget removes the entry and its file', async () => {
   await forgetSignature(saved.id);
   expect(await listSavedSignatures()).toEqual([]);
   expect([...mockFs.keys()].some(k => k.endsWith('.png'))).toBe(false);
+});
+
+describe('a failed PNG write (L1)', () => {
+  const realSet = Map.prototype.set;
+  afterEach(() => { mockFs.set = realSet; });
+
+  test('leaves no empty PNG behind, and the next save writes it', async () => {
+    // The base64 write fails (disk full): every write of base64 content throws.
+    mockFs.set = function (this: Map<string, string>, k: string, v: string) {
+      if (v.startsWith('b64:')) throw new Error('disk full');
+      return realSet.call(this, k, v);
+    } as typeof mockFs.set;
+    await rememberSignature(sig('AAA'));
+    expect([...mockFs.keys()].some(k => k.includes('.png'))).toBe(false);
+    expect(await listSavedSignatures()).toEqual([]);
+
+    mockFs.set = realSet;
+    await rememberSignature(sig('AAA'));
+    const [saved] = await listSavedSignatures();
+    expect(await loadSavedSignature(saved)).toEqual(sig('AAA'));
+  });
+
+  test('an empty PNG left by an older version is rewritten', async () => {
+    const id = signatureId(sig('AAA').dataUri);
+    mockFs.set(`file:///docs/signatures/${id}.png`, '');
+    mockFs.set('file:///docs/signatures/index.json', JSON.stringify([{ id, width: 300, height: 100, savedAt: 1 }]));
+    expect(await listSavedSignatures()).toEqual([]);
+    await rememberSignature(sig('AAA'), 2);
+    const [saved] = await listSavedSignatures();
+    expect(await loadSavedSignature(saved)).toEqual(sig('AAA'));
+  });
 });

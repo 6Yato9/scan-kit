@@ -10,9 +10,16 @@
 // first filter bake must take its original from them, not from the old photo.
 import { Directory, File, Paths } from 'expo-file-system';
 import { Document, PageAdjustment, PageFilter } from '../types/document';
-import { copyPageWithQuality, copyPageWithShadow, deleteDisposableTemps, isScannerOutput, replacePage } from './files';
+import {
+  copyPageWithQuality,
+  deleteDisposableTemps,
+  isScannerOutput,
+  pageLayoutGeneration,
+  replacePage,
+  restorePageWithShadow,
+} from './files';
 import { getDocument, updateDocument } from './storage';
-import { runPageEdit } from './bake';
+import { bakePage, pendingBakesFor, runPageEdit } from './bake';
 import { autoCropDocument } from './document-detect';
 import { stashPage } from './page-undo';
 
@@ -21,12 +28,22 @@ const DEFAULT_ADJ: PageAdjustment = { brightness: 0, contrast: 0, saturation: 0 
 const STAGING_ID = '.retake-staging';
 
 /** What Undo needs to put the replaced page back exactly as it was. */
-export type RetakeUndo = { stash: string; filter: PageFilter; adjustment: PageAdjustment };
+export type RetakeUndo = {
+  stash: string;
+  filter: PageFilter;
+  adjustment: PageAdjustment;
+  /**
+   * The document's page layout when the page was replaced (files.ts
+   * pageLayoutGeneration). After a reorder or delete the index points at a
+   * different page, which Undo must not overwrite.
+   */
+  layout: number;
+};
 
 export type RetakeResult = { doc: Document; undo: RetakeUndo | null };
 
 export class RetakeError extends Error {
-  constructor(readonly kind: 'missing-page', message: string) {
+  constructor(readonly kind: 'missing-page' | 'pages-moved' | 'expired', message: string) {
     super(message);
     this.name = 'RetakeError';
   }
@@ -59,7 +76,7 @@ export async function retakePage(
   const input = crop ? (await autoCropDocument(uri, quality)).uri : uri;
 
   try {
-    return await runPageEdit(docId, { pages: [index] }, async () => {
+    const result = await runPageEdit(docId, { pages: [index] }, async () => {
       const current = await getDocument(docId);
       if (!current) throw new Error('document missing');
       const n = current.pages.length;
@@ -74,6 +91,7 @@ export async function retakePage(
           stash: stashPage(docId, index),
           filter: current.filters?.[index] ?? 'original',
           adjustment: current.adjustments?.[index] ?? { ...DEFAULT_ADJ },
+          layout: pageLayoutGeneration(docId),
         };
       } catch (err) {
         console.warn('Retake undo stash failed', err);
@@ -101,6 +119,8 @@ export async function retakePage(
       if (!(await updateDocument(doc))) throw new Error('document missing');
       return { doc, undo };
     });
+    supersedeStaleBake(docId, index);
+    return result;
   } finally {
     deleteDisposableTemps([uri, input]);
     try {
@@ -111,16 +131,37 @@ export async function retakePage(
 }
 
 /**
+ * A filter bake that was already running for the page when it was replaced
+ * would follow the page and bake its OLD filter into the new photo (the edit
+ * only makes it start over from the new pixels). The new page is 'original'
+ * until the caller bakes the default filter, so a bake of 'original' takes the
+ * stale one's place; the caller's own bake, if any, supersedes it in turn.
+ */
+function supersedeStaleBake(docId: string, index: number): void {
+  if (!pendingBakesFor(docId).has(index)) return;
+  bakePage(docId, index, 'original', undefined).catch(err => console.warn('Retake: superseding bake failed', err));
+}
+
+/**
  * Undo for retakePage: puts the stashed page (and its shadow) back at `index`
- * with the filter and adjustments it had.
+ * with the filter and adjustments it had. Refuses (RetakeError) when the pages
+ * have been reordered or deleted since — `index` would now be another page —
+ * or when the saved copy is gone (replaced by a later delete or retake, or
+ * purged with the cache). Nothing is changed then.
  */
 export async function undoRetake(docId: string, index: number, undo: RetakeUndo): Promise<Document> {
   return runPageEdit(docId, { pages: [index] }, async () => {
+    if (pageLayoutGeneration(docId) !== undo.layout) {
+      throw new RetakeError('pages-moved', 'The pages have been moved or deleted since, so the replaced page can’t be put back.');
+    }
     const current = await getDocument(docId);
     if (!current) throw new Error('document missing');
     const n = current.pages.length;
     if (index >= n) throw new RetakeError('missing-page', 'That page no longer exists.');
-    const pageUri = copyPageWithShadow(undo.stash, docId, index);
+    if (!new File(undo.stash.split('?')[0]).exists) {
+      throw new RetakeError('expired', 'The replaced page is no longer available to put back.');
+    }
+    const pageUri = restorePageWithShadow(undo.stash, docId, index);
     const pages = [...current.pages];
     pages[index] = pageUri;
     const filters = setAt<PageFilter>(current.filters, n, index, undo.filter, () => 'original');

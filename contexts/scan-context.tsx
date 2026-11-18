@@ -7,6 +7,7 @@ import { getScanSettings, getDocSettings } from '@/lib/storage';
 import { saveScan, indexDocText } from '@/lib/save-scan';
 import { autoName } from '@/lib/auto-name';
 import { bakePages } from '@/lib/bake';
+import { withSystemUI } from '@/lib/system-ui';
 import { useTheme } from '@/contexts/theme-context';
 import { Radius, Spacing, Type } from '@/lib/theme';
 
@@ -94,9 +95,13 @@ export function ScanProvider({ children }: { children: ReactNode }) {
       const settings = await getScanSettings();
       // VisionKit always shows its own review/crop step; the plugin has no
       // option to turn that on or off.
-      const { scannedImages } = await DocumentScanner.scanDocument({
-        croppedImageQuality: SCAN_QUALITY_MAP[settings.quality],
-      });
+      // Tracked so the app lock covers the camera instead of presenting over
+      // it, which would close it and leave this promise (and scanningRef)
+      // hanging; see lib/system-ui.
+      const { scannedImages } = await withSystemUI(
+        () => DocumentScanner.scanDocument({ croppedImageQuality: SCAN_QUALITY_MAP[settings.quality] }),
+        () => ({ scannedImages: [] as string[] }),
+      );
       if (!scannedImages?.length) return null;
       return await saveAndOpen({ pages: scannedImages });
     } catch (err) {

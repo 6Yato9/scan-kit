@@ -13,6 +13,7 @@ import { autoCropDocuments } from '@/lib/document-detect';
 import { useScan } from '@/contexts/scan-context';
 import { documentNameFor, importKindOf, type ImportKind } from '@/lib/incoming-file';
 import { patchDocument } from '@/lib/storage';
+import { withSystemUI } from '@/lib/system-ui';
 
 export { importKindOf } from '@/lib/incoming-file';
 export type { ImportKind } from '@/lib/incoming-file';
@@ -50,13 +51,17 @@ export function useImportDocuments() {
     if (busy.current) return;
     busy.current = true;
     try {
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsMultipleSelection: true,
-        orderedSelection: true,
-        // Compressed once, at the user's scan quality, when stored.
-        quality: 1,
-      });
+      // Tracked so the app lock doesn't present over the picker (lib/system-ui).
+      const result = await withSystemUI(
+        () => ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ['images'],
+          allowsMultipleSelection: true,
+          orderedSelection: true,
+          // Compressed once, at the user's scan quality, when stored.
+          quality: 1,
+        }),
+        (): ImagePicker.ImagePickerResult => ({ canceled: true, assets: null }),
+      );
       if (result.canceled || !result.assets.length) return;
       open(await saveFiles(result.assets.map(a => a.uri), 'image'));
     } catch (err) {
@@ -71,10 +76,13 @@ export function useImportDocuments() {
     if (busy.current) return;
     busy.current = true;
     try {
-      const result = await DocumentPicker.getDocumentAsync({
-        type: ['application/pdf', 'image/*'],
-        copyToCacheDirectory: true,
-      });
+      const result = await withSystemUI(
+        () => DocumentPicker.getDocumentAsync({
+          type: ['application/pdf', 'image/*'],
+          copyToCacheDirectory: true,
+        }),
+        (): DocumentPicker.DocumentPickerResult => ({ canceled: true, assets: null }),
+      );
       if (result.canceled || !result.assets.length) return;
       const asset = result.assets[0];
       const kind = importKindOf(asset.name || asset.uri, asset.mimeType) ?? 'image';

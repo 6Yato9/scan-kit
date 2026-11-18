@@ -10,7 +10,7 @@ jest.mock('expo-local-authentication', () => ({
 }));
 const mockLA = jest.requireMock('expo-local-authentication') as Record<string, jest.Mock>;
 
-import { authenticate, biometricKind, classifyAuthResult } from '../lib/biometrics';
+import { authenticate, biometricKind, classifyAuthResult, isAuthenticating } from '../lib/biometrics';
 
 beforeEach(() => {
   jest.resetAllMocks();
@@ -66,4 +66,16 @@ describe('biometricKind', () => {
     mockLA.isEnrolledAsync.mockResolvedValue(false);
     expect(await biometricKind()).toBe('passcode');
   });
+});
+
+test('isAuthenticating is true only while our own prompt is up (privacy cover ignores it)', async () => {
+  let finish!: (v: { success: boolean }) => void;
+  mockLA.authenticateAsync.mockReturnValue(new Promise(r => { finish = r; }));
+  expect(isAuthenticating()).toBe(false);
+  const pending = authenticate('x');
+  await new Promise(r => setTimeout(r, 0));
+  expect(isAuthenticating()).toBe(true);
+  finish({ success: true });
+  expect(await pending).toBe('success');
+  expect(isAuthenticating()).toBe(false);
 });

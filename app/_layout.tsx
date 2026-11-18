@@ -16,6 +16,14 @@ import { statusBarStyleFor } from '@/lib/status-bar-style';
 import { garbageCollectOrphans } from '@/lib/files';
 import { documentIdsForCleanup, getOnboarded, getOnboardedSync, pendingBakeMigrations } from '@/lib/storage';
 
+// The tabs are the root of the stack even when the app is cold-started on
+// another route. "Open in Scan Kit" launches straight into /import, which then
+// becomes the viewer: without an anchor the stack would hold only that screen,
+// and closing the viewer (router.back()) would have nowhere to go.
+export const unstable_settings = {
+  anchor: '(tabs)',
+};
+
 // First-run gate: after mount, read the onboarding flag and redirect to the
 // onboarding screen if it hasn't been completed. Kept separate from the tabs
 // review effect. Doesn't block render — a brief flash of tabs is acceptable.

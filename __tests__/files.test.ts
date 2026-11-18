@@ -109,6 +109,8 @@ import {
   isDisposableTemp,
   deleteDisposableTemps,
   sweepTempLeftovers,
+  restorePageWithShadow,
+  pageLayoutGeneration,
 } from '../lib/files';
 import { cappedSize, MAX_PAGE_EDGE } from '../lib/image-size';
 import { manipulateAsync } from 'expo-image-manipulator';
@@ -649,5 +651,79 @@ describe('temp files (critique #10)', () => {
     expect(sweepTempLeftovers(now)).toBe(1);
     expect(oldStash.delete).toHaveBeenCalled();
     expect(liveStash.delete).not.toHaveBeenCalled();
+  });
+});
+
+describe('restorePageWithShadow (retake Undo) never deletes before it has a copy', () => {
+  beforeEach(() => jest.clearAllMocks());
+  const stash = (page: string, orig?: string) => {
+    const p: any = new MockFile('file:///Library/Caches/page-undo/7/page-0.jpg');
+    p.exists = true;
+    fileContents[p.uri] = page;
+    const o: any = new MockFile('file:///Library/Caches/page-undo/7/page-0.orig.jpg');
+    o.exists = orig !== undefined;
+    if (orig !== undefined) fileContents[o.uri] = orig;
+    return p.uri as string;
+  };
+  const leftovers = (docId: string) =>
+    Object.keys(fileContents).filter(u => u.startsWith(`${DOCS}/${docId}/`) && /\.new\.jpg$/.test(u));
+
+  test('puts the saved page and its shadow back, leaving no side files', () => {
+    seedFile('u1', 'page-1.jpg', 'RETAKEN');
+    seedFile('u1', 'page-1.orig.jpg', 'RETAKEN-orig');
+    const uri = stash('OLD', 'OLD-orig');
+    restorePageWithShadow(`${uri}?v=3`, 'u1', 1);
+    expect(read('u1', 'page-1.jpg')).toBe('OLD');
+    expect(read('u1', 'page-1.orig.jpg')).toBe('OLD-orig');
+    expect(leftovers('u1')).toEqual([]);
+  });
+
+  test('a saved page without a shadow drops the current shadow', () => {
+    seedFile('u2', 'page-0.jpg', 'RETAKEN');
+    seedFile('u2', 'page-0.orig.jpg', 'RETAKEN-orig');
+    restorePageWithShadow(stash('OLD'), 'u2', 0);
+    expect(read('u2', 'page-0.jpg')).toBe('OLD');
+    expect(read('u2', 'page-0.orig.jpg')).toBeUndefined();
+  });
+
+  test('a purged saved copy throws and touches nothing (critique M2)', () => {
+    seedFile('u3', 'page-0.jpg', 'RETAKEN');
+    seedFile('u3', 'page-0.orig.jpg', 'RETAKEN-orig');
+    const uri = stash('OLD', 'OLD-orig');
+    (new MockFile(uri) as any).exists = false;
+    delete fileContents[uri];
+    expect(() => restorePageWithShadow(uri, 'u3', 0)).toThrow('gone');
+    expect(read('u3', 'page-0.jpg')).toBe('RETAKEN');
+    expect(read('u3', 'page-0.orig.jpg')).toBe('RETAKEN-orig');
+    expect(mockDelete).not.toHaveBeenCalled();
+  });
+
+  test('a failed copy (disk full) leaves the page and its shadow as they were', () => {
+    seedFile('u4', 'page-0.jpg', 'RETAKEN');
+    seedFile('u4', 'page-0.orig.jpg', 'RETAKEN-orig');
+    const uri = stash('OLD', 'OLD-orig');
+    mockCopy
+      .mockImplementationOnce(function (this: any, dest: any) { fileContents[dest.uri] = fileContents[this.uri]; dest.exists = true; })
+      .mockImplementationOnce(() => { throw new Error('ENOSPC'); });
+    expect(() => restorePageWithShadow(uri, 'u4', 0)).toThrow('ENOSPC');
+    expect(read('u4', 'page-0.jpg')).toBe('RETAKEN');
+    expect(read('u4', 'page-0.orig.jpg')).toBe('RETAKEN-orig');
+  });
+});
+
+describe('pageLayoutGeneration (guards index-based Undo, critique M1)', () => {
+  test('changes when pages are reordered or deleted, not for a no-op reorder', () => {
+    seedPage('lg', 0, 'A');
+    seedPage('lg', 1, 'B');
+    seedPage('lg', 2, 'C');
+    const g0 = pageLayoutGeneration('lg');
+    reorderPages('lg', [0, 1, 2]);
+    expect(pageLayoutGeneration('lg')).toBe(g0);
+    reorderPages('lg', [1, 0, 2]);
+    const g1 = pageLayoutGeneration('lg');
+    expect(g1).not.toBe(g0);
+    deleteSinglePage('lg', 2, 3);
+    expect(pageLayoutGeneration('lg')).not.toBe(g1);
+    expect(pageLayoutGeneration('other-doc')).toBe(0);
   });
 });

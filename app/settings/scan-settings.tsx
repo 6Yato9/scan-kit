@@ -13,7 +13,7 @@ type Quality = ScanSettings['quality'];
 const QUALITY_OPTIONS: { label: string; value: Quality; desc: string }[] = [
   { label: 'Standard', value: 'low', desc: 'Smallest files, about 0.5 MB a page' },
   { label: 'High', value: 'medium', desc: 'About 1 MB a page' },
-  { label: 'Best', value: 'high', desc: 'Sharpest text, about 2 MB a page' },
+  { label: 'Best', value: 'high', desc: 'Sharpest text, about 1.5 MB a page' },
 ];
 
 // Same names and the same order as the viewer's filter tiles.

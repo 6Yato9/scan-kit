@@ -521,7 +521,7 @@ describe('deleteFolder', () => {
 describe('getScanSettings', () => {
   it('returns defaults when nothing stored', async () => {
     const s = await storage.getScanSettings();
-    expect(s).toEqual({ quality: 'high', autoCrop: true, defaultFilter: 'enhanced' });
+    expect(s).toEqual({ quality: 'medium', autoCrop: true, defaultFilter: 'enhanced' });
   });
 
   it('returns stored value', async () => {
@@ -566,7 +566,7 @@ describe('app lock flag', () => {
 describe('getDocSettings', () => {
   it('returns defaults when nothing stored', async () => {
     const s = await storage.getDocSettings();
-    expect(s).toEqual({ namePrefix: 'Scan', pdfPageSize: 'A4', pdfQuality: 'standard' });
+    expect(s).toEqual({ namePrefix: 'Scan', pdfPageSize: 'Auto', pdfQuality: 'standard' });
   });
 
   it('returns stored value', async () => {
