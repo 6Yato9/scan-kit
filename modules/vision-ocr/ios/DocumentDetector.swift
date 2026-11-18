@@ -103,11 +103,14 @@ enum DocumentDetector {
     return Quad(topLeft: m(q.topLeft), topRight: m(q.topRight), bottomRight: m(q.bottomRight), bottomLeft: m(q.bottomLeft))
   }
 
-  /// Reject outlines that are tiny or that are essentially the whole frame
-  /// (nothing to crop — keep the original untouched).
+  /// Reject outlines that cover under 30% of the photo or essentially all of
+  /// it. A photo of a page is mostly page; a smaller outline is almost always
+  /// something *on* the page (a boxed total, a table, a photo), and cropping to
+  /// it would throw the rest of the page away. Keeping the original is the safe
+  /// failure — the user can still crop by hand.
   private static func plausible(_ r: VNRectangleObservation) -> Bool {
     let a = area(r)
-    return a >= 0.15 && a <= 0.97
+    return a >= 0.30 && a <= 0.97
   }
 
 
