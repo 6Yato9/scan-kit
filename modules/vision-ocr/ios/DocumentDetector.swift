@@ -51,15 +51,19 @@ enum DocumentDetector {
 
   private static func detect(_ cg: CGImage) throws -> Quad? {
     let handler = VNImageRequestHandler(cgImage: cg, options: [:])
+    var candidates: [VNRectangleObservation] = []
 
-    // Each detector is optional: document segmentation needs the Neural Engine
-    // and fails outright on simulators and some older devices, which must not
-    // stop the rectangle fallback from running.
+    // Run both detectors and keep the plausible outline covering the most of
+    // the frame. Document segmentation is the better detector on a device, but
+    // without the Neural Engine (simulators, some older devices) it can return
+    // a confident outline of just part of the page — e.g. a strip around a
+    // boxed total — while rectangle detection finds the whole sheet. The page
+    // is the dominant object in a photo of a page, so larger wins.
     let segmentation = VNDetectDocumentSegmentationRequest()
     do {
       try handler.perform([segmentation])
       if let r = segmentation.results?.first, r.confidence >= 0.6, plausible(r) {
-        return Quad(topLeft: r.topLeft, topRight: r.topRight, bottomRight: r.bottomRight, bottomLeft: r.bottomLeft)
+        candidates.append(r)
       }
     } catch {
       NSLog("[DocumentDetector] segmentation unavailable: %@", error.localizedDescription)
@@ -68,18 +72,28 @@ enum DocumentDetector {
     let rects = VNDetectRectanglesRequest()
     rects.minimumConfidence = 0.6
     rects.minimumSize = 0.3
-    rects.maximumObservations = 1
+    rects.maximumObservations = 3
     rects.quadratureTolerance = 30
     rects.minimumAspectRatio = 0.3
     do {
       try handler.perform([rects])
-      if let r = rects.results?.first, plausible(r) {
-        return Quad(topLeft: r.topLeft, topRight: r.topRight, bottomRight: r.bottomRight, bottomLeft: r.bottomLeft)
-      }
+      candidates.append(contentsOf: (rects.results ?? []).filter(plausible))
     } catch {
       NSLog("[DocumentDetector] rectangle detection failed: %@", error.localizedDescription)
     }
-    return nil
+
+    guard let best = candidates.max(by: { area($0) < area($1) }) else { return nil }
+    return Quad(topLeft: best.topLeft, topRight: best.topRight, bottomRight: best.bottomRight, bottomLeft: best.bottomLeft)
+  }
+
+  private static func area(_ r: VNRectangleObservation) -> CGFloat {
+    let pts = [r.topLeft, r.topRight, r.bottomRight, r.bottomLeft]
+    var a: CGFloat = 0
+    for i in 0..<4 {
+      let p = pts[i], q = pts[(i + 1) % 4]
+      a += p.x * q.y - q.x * p.y
+    }
+    return abs(a) / 2
   }
 
   private static func inset(_ q: Quad, by f: CGFloat) -> Quad {
@@ -92,16 +106,10 @@ enum DocumentDetector {
   /// Reject outlines that are tiny or that are essentially the whole frame
   /// (nothing to crop — keep the original untouched).
   private static func plausible(_ r: VNRectangleObservation) -> Bool {
-    let pts = [r.topLeft, r.topRight, r.bottomRight, r.bottomLeft]
-    // Shoelace area in normalised units.
-    var area: CGFloat = 0
-    for i in 0..<4 {
-      let a = pts[i], b = pts[(i + 1) % 4]
-      area += a.x * b.y - b.x * a.y
-    }
-    area = abs(area) / 2
-    return area >= 0.15 && area <= 0.97
+    let a = area(r)
+    return a >= 0.15 && a <= 0.97
   }
+
 
   private static let ciContext = CIContext(options: [.cacheIntermediates: false])
 
