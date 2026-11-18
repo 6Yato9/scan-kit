@@ -47,6 +47,15 @@ import {
 import { addPagesToDocument, finishAddedPages } from '@/lib/add-pages';
 import { RetakeError, retakePage, undoRetake, type RetakeUndo } from '@/lib/retake-page';
 import { duplicateDocument } from '@/lib/doc-ops';
+import {
+  canConvertPdf,
+  convertPdfToPages,
+  discardConvertUndo,
+  PdfConvertError,
+  undoPdfConversion,
+  type ConvertProgress,
+  type ConvertUndo,
+} from '@/lib/convert-pdf';
 import { indexDocText } from '@/lib/save-scan';
 import { alertScanError, deleteTempFiles, pickPhotos, scanWithCamera, ToolScanError } from '@/lib/tool-scan';
 import { withSystemUI } from '@/lib/system-ui';
@@ -82,7 +91,7 @@ import { FilterBaker } from '@/components/filter-baker';
 import { BakeIndicator } from '@/components/bake-indicator';
 import { BottomSheet, SheetHeader } from '@/components/bottom-sheet';
 import { PrimaryButton } from '@/components/primary-button';
-import { HeaderIconButton, ScreenHeader } from '@/components/screen-header';
+import { HeaderIconButton, HeaderTextButton, ScreenHeader } from '@/components/screen-header';
 import { LockScreen, useAppLocked } from '@/components/lock-gate';
 
 const DEFAULT_ADJ: PageAdjustment = { brightness: 0, contrast: 0, saturation: 0 };
@@ -145,6 +154,10 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
   const [folders, setFolders] = useState<string[]>([]);
   const [ocr, setOcr] = useState<OcrState | null>(null);
   const [copied, setCopied] = useState(false);
+  // "Convert to pages" on an imported PDF: null when idle.
+  const [converting, setConverting] = useState<ConvertProgress | null>(null);
+  // This PDF can't be converted (locked or damaged): stop offering the banner.
+  const [convertRefused, setConvertRefused] = useState(false);
   const ocrIndexingRef = useRef(false);
   const flatListRef = useRef<FlatList>(null);
   const insets = useSafeAreaInsets();
@@ -837,6 +850,75 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
     }
   }, [document]);
 
+  // ── Convert an imported PDF to pages ──────────────────────────────────────
+
+  const convertingRef = useRef(false);
+  // The original PDF kept for Undo; dropped when a newer one replaces it or
+  // the viewer closes (the startup sweep removes any left behind).
+  const convertUndoRef = useRef<ConvertUndo | null>(null);
+  useEffect(() => () => discardConvertUndo(convertUndoRef.current), []);
+
+  const handleUndoConvert = useCallback(async (undo: ConvertUndo) => {
+    if (convertingRef.current) return;
+    convertingRef.current = true;
+    try {
+      const restored = await undoPdfConversion(undo);
+      if (convertUndoRef.current === undo) convertUndoRef.current = null;
+      setEditTab(null);
+      setOcr(null);
+      setDocument(restored);
+      bumpLastSaved();
+    } catch (err) {
+      console.error('Undo convert failed', err);
+      notifyError();
+      Alert.alert('Couldn’t restore the PDF', 'The pages are kept, and you can still export them as a PDF.');
+    } finally {
+      convertingRef.current = false;
+    }
+  }, [bumpLastSaved]);
+
+  const handleConvertPdf = useCallback(async () => {
+    const doc = docRef.current;
+    if (!doc?.pdfUri || convertingRef.current) return;
+    convertingRef.current = true;
+    setConverting({ stage: 'rendering' });
+    try {
+      const { doc: next, pageCount: n, undo } = await convertPdfToPages(doc.id, { onProgress: setConverting });
+      discardConvertUndo(convertUndoRef.current);
+      convertUndoRef.current = undo;
+      setCurrentPage(0);
+      setDocument(withPendingChoices(next));
+      bumpLastSaved();
+      notifySuccess();
+      toast.show(
+        `Converted to ${n} ${n === 1 ? 'page' : 'pages'}`,
+        undo ? { action: { label: 'Undo', onPress: () => { handleUndoConvert(undo); } } } : undefined,
+      );
+    } catch (err) {
+      const kind = err instanceof PdfConvertError ? err.kind : 'failed';
+      if (kind === 'missing') {
+        setStatus('missing');
+        return;
+      }
+      notifyError();
+      if (kind === 'locked' || kind === 'unreadable') setConvertRefused(true);
+      else console.error('Convert to pages failed', err);
+      if (kind === 'locked') {
+        Alert.alert(
+          'This PDF is password protected',
+          'Scan Kit can’t convert a locked PDF. Remove its password in the app it came from, then import it again.',
+        );
+      } else if (kind === 'unreadable') {
+        Alert.alert('Couldn’t read this PDF', 'The file may be damaged. Try importing it again.');
+      } else {
+        Alert.alert('Couldn’t convert the PDF', 'Your PDF is unchanged. Check that there’s free space, then try again.');
+      }
+    } finally {
+      convertingRef.current = false;
+      setConverting(null);
+    }
+  }, [withPendingChoices, bumpLastSaved, toast, handleUndoConvert]);
+
   const annotateNavRef = useRef(false);
   const handleAnnotate = useCallback(() => {
     const doc = docRef.current;
@@ -1016,8 +1098,12 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
           ? [{ key: 'extract', icon: 'cut-outline' as const, label: 'Extract', onPress: () => openTool('/tools/extract') }]
           : []),
       ];
+  const convertAvailable = !!document.pdfUri && canConvertPdf();
   const moreGroups: MoreAction[][] = document.pdfUri
     ? [
+        convertAvailable
+          ? [{ key: 'convert', icon: 'images-outline', label: 'Convert to pages', onPress: handleConvertPdf }]
+          : [],
         [
           { key: 'rename', icon: 'rename', label: 'Rename', onPress: () => setRenameVisible(true) },
           { key: 'move', icon: 'folder-outline', label: 'Move to folder', detail: document.folder, onPress: openMove },
@@ -1091,11 +1177,50 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
           left={titleButton}
           right={
             <>
-              {moreButton}
-              <HeaderIconButton icon="share-outline" label="Share PDF" color={colors.chromeText} onPress={handleSharePdf} />
+              {converting ? (
+                <HeaderIconButton icon="ellipsis-horizontal" label="More actions" color={colors.chromeText} disabled onPress={() => {}} />
+              ) : moreButton}
+              <HeaderIconButton
+                icon="share-outline"
+                label="Share PDF"
+                color={colors.chromeText}
+                disabled={!!converting}
+                onPress={handleSharePdf}
+              />
             </>
           }
         />
+        {convertAvailable && !convertRefused && (
+          <View
+            style={[styles.convertBanner, { backgroundColor: colors.chromeRaised }]}
+            accessibilityLiveRegion="polite"
+          >
+            {converting ? (
+              <ActivityIndicator color={colors.chromeText} style={styles.convertIcon} />
+            ) : (
+              <Ionicons name="images-outline" size={22} color={colors.chromeAccent} style={styles.convertIcon} />
+            )}
+            <View style={styles.convertText}>
+              <Text style={[Type.subhead, styles.convertTitle, { color: colors.chromeText }]} numberOfLines={1}>
+                {converting ? 'Converting to pages…' : 'Convert to pages'}
+              </Text>
+              <Text style={[Type.footnote, { color: colors.chromeMuted }]} numberOfLines={2}>
+                {converting
+                  ? converting.stage === 'saving'
+                    ? `Saving page ${converting.done} of ${converting.total}`
+                    : 'Reading the PDF'
+                  : 'Edit, sign, apply filters and mark up each page.'}
+              </Text>
+            </View>
+            <HeaderTextButton
+              title="Convert"
+              emphasis
+              color={colors.chromeAccent}
+              disabled={!!converting}
+              onPress={handleConvertPdf}
+            />
+          </View>
+        )}
         <WebView
           source={{ uri: document.pdfUri }}
           style={[styles.webView, { backgroundColor: colors.chrome }]}
@@ -1349,6 +1474,20 @@ const styles = StyleSheet.create({
   },
   counterText: { fontWeight: '600', fontVariant: ['tabular-nums'] },
   webView: { flex: 1 },
+  convertBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: Spacing.gutter,
+    marginBottom: Spacing.sm,
+    paddingLeft: Spacing.md,
+    paddingRight: Spacing.xs,
+    paddingVertical: Spacing.sm,
+    borderRadius: Radius.md,
+    gap: Spacing.md,
+  },
+  convertIcon: { width: 24 },
+  convertText: { flex: 1, minWidth: 0, gap: 1 },
+  convertTitle: { fontWeight: '600' },
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: Spacing.sm, padding: Spacing.xxl },
   centeredText: { textAlign: 'center' },
   missingBtn: { alignSelf: 'stretch', marginTop: Spacing.lg },

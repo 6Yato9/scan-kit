@@ -608,7 +608,8 @@ export function deleteDisposableTemps(uris: (string | null | undefined)[]): void
 // Folders whose contents are only ever stepping stones for this app.
 // page-undo holds the copy of a deleted page that the viewer's Undo restores
 // (lib/page-undo.ts); one older than the grace period can no longer be used.
-const TEMP_DIRS = ['ImagePicker', 'ImageManipulator', 'DocumentPicker', 'exports', 'Print', 'page-undo'];
+// pdf-convert: PDF page renders and the PDF an Undo of "Convert to pages" puts back (lib/convert-pdf.ts).
+const TEMP_DIRS = ['ImagePicker', 'ImageManipulator', 'DocumentPicker', 'exports', 'Print', 'page-undo', 'pdf-convert'];
 
 /**
  * Removes temp files older than SWEEP_GRACE_MS that earlier sessions left
