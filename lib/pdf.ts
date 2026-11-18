@@ -1,41 +1,83 @@
 // lib/pdf.ts
+// Page images -> PDF via expo-print (WKWebView print renderer).
+//
+// Layout: every page image becomes one "sheet" that is exactly one sheet of
+// paper (A4 or Letter). The image is scaled to fit inside it (contain,
+// centred), so a page can never spill onto a second sheet.
+//
+// Units matter here. WebKit's print renderer lays the document out wider than
+// the paper (its minimum shrink factor is 1.25: an A4 page is ~744 CSS px wide)
+// and then scales it down, while `vw` stays tied to the 595 px web view — so
+// `100vw` only covers 80% of the paper (verified on device). Everything is
+// therefore sized in percentages of the body width (= the paper width at print
+// time): the sheet uses the padding-top aspect-ratio trick and its children are
+// absolutely positioned in %. Font sizes use `--pt` (one PDF point), which is
+// `100cqw / paperWidth` where container units exist and 1.25 px otherwise.
+//
+// Memory: pages are downscaled / re-encoded one at a time before being inlined
+// as base64 (expo-print loads HTML with the app bundle as base URL, so file://
+// images in Documents can't be referenced). Unbounded full-resolution pages
+// can get the WebKit content process killed, after which expo-print never
+// settles — so rendering is also raced against a timeout.
 import * as Print from 'expo-print';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as ImageManipulator from 'expo-image-manipulator';
 import { Image } from 'react-native';
 import { recognizeLines, OcrLine } from './ocr';
 
-type PageSize = 'A4' | 'Letter';
+export type PageSize = 'A4' | 'Letter';
+export type PdfQuality = 'high' | 'standard' | 'small';
 
-// Paper sizes in points (1 inch = 72 points). expo-print's `width`/`height`
-// options control the actual PDF page geometry — the CSS @page rule is only
-// a hint that mobile renderers often ignore.
-const PAPER_DIMENSIONS: Record<PageSize, { width: number; height: number }> = {
-  A4:     { width: 595, height: 842 },
+/** Paper sizes in PostScript points (1 in = 72 pt). */
+export const PAPER_SIZES_PT: Record<PageSize, { width: number; height: number }> = {
+  A4: { width: 595, height: 842 },
   Letter: { width: 612, height: 792 },
 };
 
-/** Render the document HTML to a PDF file via expo-print at the given paper size. */
-async function printHtmlToPdf(html: string, pageSize: PageSize): Promise<string> {
-  const dims = PAPER_DIMENSIONS[pageSize];
-  const { uri } = await Print.printToFileAsync({
-    html,
-    width: dims.width,
-    height: dims.height,
-    margins: { left: 0, right: 0, top: 0, bottom: 0 },
-  } as any);
-  return uri;
+/** Longest image edge (px) and JPEG quality per preset. `reencode: false` keeps smaller originals untouched. */
+const QUALITY: Record<PdfQuality, { maxEdge: number; compress: number; reencode: boolean }> = {
+  high: { maxEdge: 2400, compress: 0.85, reencode: false },
+  standard: { maxEdge: 1800, compress: 0.72, reencode: true },
+  small: { maxEdge: 1300, compress: 0.55, reencode: true },
+};
+
+export type PdfProgressPhase = 'preparing' | 'reading-text' | 'rendering';
+
+export type GeneratePdfOptions = {
+  /** Paper size. Default 'A4'. Callers normally pass the user's Document settings value. */
+  pageSize?: PageSize;
+  /** Image downscale / compression preset. Default 'high'. */
+  quality?: PdfQuality;
+  /** Add an invisible OCR text layer so the PDF is searchable/selectable. */
+  searchable?: boolean;
+  /**
+   * Extra HTML drawn over each page image (signatures, watermarks, stamps).
+   * The returned markup is placed in a container that exactly covers the page
+   * image (`position:absolute`), so position children with percentages. For
+   * absolute sizes use the `--pt` CSS variable (one PDF point), e.g.
+   * `font-size: calc(14 * var(--pt))`. `pageSizePt` is that container's size
+   * in points. Escape any user text with `escapeHtml`.
+   */
+  overlayHtml?: (pageIndex: number, pageSizePt: { width: number; height: number }) => string;
+  onProgress?: (done: number, total: number, phase: PdfProgressPhase) => void;
+  /** Abort between pages and stop waiting for the renderer. Rejects with PdfCancelledError. */
+  signal?: AbortSignal;
+  /** Give up waiting for the renderer after this long. Default 30 s + 3 s per page. */
+  timeoutMs?: number;
+};
+
+export class PdfError extends Error {
+  constructor(message: string, readonly kind: 'read' | 'render' | 'timeout' | 'empty') {
+    super(message);
+    this.name = 'PdfError';
+  }
 }
 
-/** Strip any `?v=` cache-bust suffix the viewer applies before reading a file. */
-function cleanUri(uri: string): string {
-  return uri.split('?')[0];
-}
-
-/** Promisified Image.getSize — resolves natural pixel dimensions. */
-function getImageSize(uri: string): Promise<{ width: number; height: number }> {
-  return new Promise((resolve, reject) => {
-    Image.getSize(uri, (width, height) => resolve({ width, height }), reject);
-  });
+export class PdfCancelledError extends Error {
+  constructor() {
+    super('PDF export cancelled');
+    this.name = 'PdfCancelledError';
+  }
 }
 
 const HTML_ESCAPES: Record<string, string> = {
@@ -46,113 +88,342 @@ const HTML_ESCAPES: Record<string, string> = {
   "'": '&#39;',
 };
 
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, ch => HTML_ESCAPES[ch]);
+/** Escape text for use in HTML element content or a quoted attribute. */
+export function escapeHtml(s: string): string {
+  return String(s).replace(/[&<>"']/g, ch => HTML_ESCAPES[ch]);
+}
+
+/** Strip any `?v=` cache-bust suffix the viewer applies before reading a file. */
+function cleanUri(uri: string): string {
+  return uri.split('?')[0];
+}
+
+/** Promisified Image.getSize — natural pixel dimensions, or null. */
+function getImageSize(uri: string): Promise<{ width: number; height: number } | null> {
+  return new Promise(resolve => {
+    try {
+      Image.getSize(
+        uri,
+        (width, height) => resolve(width > 0 && height > 0 ? { width, height } : null),
+        () => resolve(null),
+      );
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+/** Round to 4 decimals so the HTML stays compact and deterministic. */
+function r4(n: number): number {
+  return Math.round(n * 10000) / 10000;
 }
 
 /**
- * Renders pages to a PDF at the given paper size.
+ * Fit an image of `img` aspect inside a sheet of `paper` aspect (contain).
+ * Returns the image box as fractions (0..1) of the sheet's width/height.
+ */
+export function fitContain(
+  img: { width: number; height: number },
+  paper: { width: number; height: number },
+): { left: number; top: number; width: number; height: number } {
+  const imgRatio = img.width / img.height;
+  const paperRatio = paper.width / paper.height;
+  if (imgRatio >= paperRatio) {
+    // Wider than the paper: full width, letterboxed top/bottom.
+    const h = paperRatio / imgRatio;
+    return { left: 0, top: (1 - h) / 2, width: 1, height: h };
+  }
+  const w = imgRatio / paperRatio;
+  return { left: (1 - w) / 2, top: 0, width: w, height: 1 };
+}
+
+/** Cap the long edge for big documents so the inlined HTML stays a sane size. */
+function maxEdgeFor(quality: PdfQuality, pageCount: number): number {
+  const base = QUALITY[quality].maxEdge;
+  if (pageCount > 40) return Math.min(base, 1500);
+  if (pageCount > 20) return Math.min(base, 2000);
+  return base;
+}
+
+type PreparedImage = { b64: string; mime: string; width: number; height: number };
+
+/** Read one page, downscaling / re-encoding it first when the preset asks for it. */
+async function prepareImage(uri: string, quality: PdfQuality, maxEdge: number): Promise<PreparedImage> {
+  const preset = QUALITY[quality];
+  const natural = await getImageSize(uri);
+  const tooBig = !natural || Math.max(natural.width, natural.height) > maxEdge;
+
+  if (preset.reencode || tooBig) {
+    const actions: ImageManipulator.Action[] = [];
+    if (natural && tooBig) {
+      actions.push({
+        resize: natural.width >= natural.height ? { width: maxEdge } : { height: maxEdge },
+      });
+    }
+    const out = await ImageManipulator.manipulateAsync(uri, actions, {
+      compress: preset.compress,
+      format: ImageManipulator.SaveFormat.JPEG,
+      base64: true,
+    });
+    // manipulateAsync also writes a file to the cache; we only need the base64.
+    FileSystem.deleteAsync(out.uri, { idempotent: true }).catch(() => {});
+    if (!natural && Math.max(out.width, out.height) > maxEdge) {
+      // Size was unknown up front — do the resize now that we know it.
+      return prepareImageResized(uri, out.width, out.height, preset.compress, maxEdge);
+    }
+    return { b64: out.base64 ?? '', mime: 'image/jpeg', width: out.width, height: out.height };
+  }
+
+  const b64 = await FileSystem.readAsStringAsync(uri, { encoding: 'base64' });
+  const mime = uri.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
+  return { b64, mime, width: natural.width, height: natural.height };
+}
+
+async function prepareImageResized(
+  uri: string,
+  width: number,
+  height: number,
+  compress: number,
+  maxEdge: number,
+): Promise<PreparedImage> {
+  const out = await ImageManipulator.manipulateAsync(
+    uri,
+    [{ resize: width >= height ? { width: maxEdge } : { height: maxEdge } }],
+    { compress, format: ImageManipulator.SaveFormat.JPEG, base64: true },
+  );
+  FileSystem.deleteAsync(out.uri, { idempotent: true }).catch(() => {});
+  return { b64: out.base64 ?? '', mime: 'image/jpeg', width: out.width, height: out.height };
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (signal?.aborted) throw new PdfCancelledError();
+}
+
+/** Resolve/reject `work`, or reject on abort or timeout — whichever happens first. */
+function guard<T>(work: Promise<T>, signal: AbortSignal | undefined, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let finished = false;
+    const finish = (fn: () => void) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      try {
+        signal?.removeEventListener?.('abort', onAbort);
+      } catch {
+        // ignore
+      }
+      fn();
+    };
+    const onAbort = () => finish(() => reject(new PdfCancelledError()));
+    const timer = setTimeout(
+      () => finish(() => reject(new PdfError('Rendering the PDF took too long.', 'timeout'))),
+      timeoutMs,
+    );
+    try {
+      signal?.addEventListener?.('abort', onAbort);
+    } catch {
+      // ignore
+    }
+    work.then(
+      v => finish(() => resolve(v)),
+      e => finish(() => reject(e)),
+    );
+  });
+}
+
+function ocrSpans(lines: OcrLine[], img: { width: number; height: number }, boxHeightPt: number): string {
+  return lines
+    .filter(l => l.text.trim().length > 0)
+    .map(l => {
+      const left = (l.left / img.width) * 100;
+      const top = (l.top / img.height) * 100;
+      const width = (l.width / img.width) * 100;
+      const height = (l.height / img.height) * 100;
+      const linePt = (l.height / img.height) * boxHeightPt;
+      return (
+        `<span class="t" style="left:${r4(left)}%;top:${r4(top)}%;width:${r4(width)}%;` +
+        `height:${r4(height)}%;font-size:calc(${r4(linePt * 0.85)} * var(--pt));` +
+        `line-height:calc(${r4(linePt)} * var(--pt))">` +
+        `${escapeHtml(l.text)}</span>`
+      );
+    })
+    .join('');
+}
+
+/** Build the full HTML document for the given (already prepared) sheets. Exported for tests. */
+export function buildPdfHtml(sheets: string[], pageSize: PageSize): string {
+  const paper = PAPER_SIZES_PT[pageSize];
+  // Sheet height as a % of its width (padding-top trick). Shave a hair off so
+  // rounding in the print renderer can never push a sheet past the page
+  // boundary and create a blank extra page.
+  const sheetHeightPct = r4((paper.height / paper.width) * 100 - 0.15);
+  const css =
+    `@page{size:${paper.width}pt ${paper.height}pt;margin:0}` +
+    `*{-webkit-print-color-adjust:exact;print-color-adjust:exact}` +
+    `html,body{margin:0;padding:0;background:#fff}` +
+    `.s{position:relative;width:100%;height:0;padding-top:${sheetHeightPct}%;overflow:hidden;` +
+    `page-break-inside:avoid;break-inside:avoid;--pt:1.25px}` +
+    `@supports (width:1cqw){.s{container-type:inline-size;--pt:calc(100cqw / ${paper.width})}}` +
+    `.s+.s{page-break-before:always;break-before:page}` +
+    `.b{position:absolute;overflow:hidden}` +
+    `.b>img{position:absolute;left:0;top:0;width:100%;height:100%;display:block}` +
+    `.o{position:absolute;left:0;top:0;right:0;bottom:0}` +
+    `.t{position:absolute;color:transparent;white-space:pre;overflow:hidden;font-family:Helvetica,Arial,sans-serif;` +
+    `transform-origin:0 0}`;
+  // OCR boxes and the font's natural width never match exactly; stretch each
+  // text run to its box so nothing is clipped and selections line up. Runs in
+  // the renderer's web view before it prints.
+  const fitScript = sheets.some(sh => sh.includes('class="t"'))
+    ? `<script>(function(){var t=document.querySelectorAll('.t');for(var i=0;i<t.length;i++){` +
+      `var e=t[i],box=e.clientWidth,nat=e.scrollWidth;if(box>0&&nat>box){e.style.overflow='visible';` +
+      `e.style.transform='scaleX('+(box/nat)+')';}}})();</script>`
+    : '';
+  return (
+    `<!DOCTYPE html><html><head><meta charset="utf-8">` +
+    `<meta name="viewport" content="width=device-width,initial-scale=1">` +
+    `<style>${css}</style></head><body>${sheets.join('')}${fitScript}</body></html>`
+  );
+}
+
+/**
+ * Render page images to a PDF file in the app cache and return its file:// URI.
  *
- * Takes no filter/adjustment arguments on purpose: filters are baked into the
- * stored pixels (see lib/bake.ts), so re-applying them here would double-filter
- * the output.
+ * Filters are already baked into the stored pixels (see lib/bake.ts), so no
+ * filter is applied here — that would double-filter the output.
+ *
+ * The second argument may also be a bare page size for older callers:
+ * `generatePdf(pages, 'Letter')`.
  */
 export async function generatePdf(
   pages: string[],
-  pageSize: PageSize = 'A4',
+  options: GeneratePdfOptions | PageSize = {},
 ): Promise<string> {
-  // Read each page sequentially to keep peak JS heap bounded. A 50-page doc at
-  // 90% JPEG quality can easily push ~200MB through Promise.all otherwise.
-  const imgTags: string[] = [];
+  const opts: GeneratePdfOptions = typeof options === 'string' ? { pageSize: options } : options;
+  const pageSize = opts.pageSize ?? 'A4';
+  const quality = opts.quality ?? 'high';
+  const { signal, onProgress } = opts;
+  if (pages.length === 0) throw new PdfError('There are no pages to export.', 'empty');
+
+  const paper = PAPER_SIZES_PT[pageSize];
+  const maxEdge = maxEdgeFor(quality, pages.length);
+  const sheets: string[] = [];
+
   for (let i = 0; i < pages.length; i++) {
-    const uri = pages[i];
-    const mime = uri.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
-    let b64: string;
+    throwIfAborted(signal);
+    onProgress?.(i, pages.length, 'preparing');
+    const uri = cleanUri(pages[i]);
+
+    let img: PreparedImage;
     try {
-      b64 = await FileSystem.readAsStringAsync(uri, { encoding: 'base64' });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new Error(`generatePdf: failed to read page ${i} (${uri}): ${msg}`);
+      img = await prepareImage(uri, quality, maxEdge);
+    } catch {
+      throw new PdfError(`Couldn’t read page ${i + 1}.`, 'read');
     }
-    imgTags.push(
-      `<img src="data:${mime};base64,${b64}" style="width:100%;display:block;page-break-after:always;" />`,
+    if (!img.b64) throw new PdfError(`Couldn’t read page ${i + 1}.`, 'read');
+    throwIfAborted(signal);
+
+    const box = fitContain(img, paper);
+    const boxPt = { width: r4(box.width * paper.width), height: r4(box.height * paper.height) };
+
+    let text = '';
+    if (opts.searchable) {
+      onProgress?.(i, pages.length, 'reading-text');
+      try {
+        const { lines } = await recognizeLines(uri);
+        // OCR coordinates are in the original image's pixels; map via the
+        // original size (same aspect ratio as the downscaled copy).
+        const original = (await getImageSize(uri)) ?? img;
+        text = ocrSpans(lines, original, boxPt.height);
+      } catch {
+        // A page without a text layer is still a valid page.
+      }
+    }
+
+    let overlay = '';
+    if (opts.overlayHtml) {
+      overlay = `<div class="o">${opts.overlayHtml(i, boxPt)}</div>`;
+    }
+
+    sheets.push(
+      `<div class="s"><div class="b" style="left:${r4(box.left * 100)}%;top:${r4(box.top * 100)}%;` +
+        `width:${r4(box.width * 100)}%;height:${r4(box.height * 100)}%">` +
+        `<img src="data:${img.mime};base64,${img.b64}">${text}${overlay}</div></div>`,
     );
   }
 
-  const sizeCss = pageSize === 'Letter' ? 'letter' : 'A4';
-  const html = `<html><head><style>@page { size: ${sizeCss}; margin: 0; }</style></head><body style="margin:0;padding:0;">${imgTags.join('')}</body></html>`;
-  return printHtmlToPdf(html, pageSize);
+  throwIfAborted(signal);
+  onProgress?.(pages.length, pages.length, 'rendering');
+  const html = buildPdfHtml(sheets, pageSize);
+  sheets.length = 0; // let the per-page strings go before the native call
+
+  const render = Print.printToFileAsync({
+    html,
+    width: paper.width,
+    height: paper.height,
+    margins: { left: 0, right: 0, top: 0, bottom: 0 },
+  }).then(r => r.uri);
+  render.catch(() => {}); // a late failure after timeout/cancel must not be unhandled
+
+  let uri: string;
+  try {
+    uri = await guard(render, signal, opts.timeoutMs ?? 30_000 + 3_000 * pages.length);
+  } catch (err) {
+    if (err instanceof PdfCancelledError || err instanceof PdfError) throw err;
+    throw new PdfError('Couldn’t create the PDF.', 'render');
+  }
+  return uri;
 }
 
 /**
- * Searchable PDF: same image rendering as generatePdf, but with an invisible,
- * absolutely-positioned text layer behind each word so the output is
- * selectable/searchable in any PDF reader.
- *
- * Coordinates use a vw-normalized system: each page wrapper is `width:100vw`, so
- * `s = 100 / imgW` converts an image pixel offset into vw. This keeps the text
- * layer aligned with the image at ANY paper size, since both the image and the
- * spans scale with the page width.
+ * Searchable PDF: same layout as `generatePdf` plus an invisible OCR text layer.
+ * Kept for older callers; prefer `generatePdf(pages, { searchable: true })`.
  */
 export async function generateSearchablePdf(
   pages: string[],
   pageSize: PageSize = 'A4',
   onProgress?: (done: number, total: number) => void,
 ): Promise<string> {
-  const pageHtml: string[] = [];
-  for (let i = 0; i < pages.length; i++) {
-    const uri = pages[i];
-    const clean = cleanUri(uri);
-    const mime = clean.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
+  return generatePdf(pages, {
+    pageSize,
+    searchable: true,
+    onProgress: (done, total, phase) => {
+      if (phase === 'reading-text') onProgress?.(done + 1, total);
+    },
+  });
+}
 
-    let b64: string;
-    try {
-      b64 = await FileSystem.readAsStringAsync(clean, { encoding: 'base64' });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new Error(`generateSearchablePdf: failed to read page ${i} (${clean}): ${msg}`);
-    }
-
-    // Natural pixel dimensions drive the vw scale factor. Fall back to a
-    // 1:1-ish guess if getSize fails so a single bad page can't abort export.
-    // Only the width matters: `s` converts image pixels to vw, and the wrapper
-    // height follows the image's own aspect ratio via `height:auto`.
-    let imgW = 1000;
-    try {
-      const size = await getImageSize(clean);
-      if (size.width > 0 && size.height > 0) {
-        imgW = size.width;
-      }
-    } catch {
-      // keep fallback dims
-    }
-
-    const { lines } = await recognizeLines(uri);
-    onProgress?.(i + 1, pages.length);
-
-    const s = 100 / imgW; // vw per image pixel
-    const spans = lines
-      .filter((l: OcrLine) => l.text.trim().length > 0)
-      .map((l: OcrLine) => {
-        const left = l.left * s;
-        const top = l.top * s;
-        const width = l.width * s;
-        const height = l.height * s;
-        const fontSize = height * 0.85;
-        return `<span style="position:absolute; left:${left}vw; top:${top}vw; width:${width}vw; height:${height}vw; font-size:${fontSize}vw; line-height:${height}vw; color:transparent; white-space:pre; overflow:hidden;">${escapeHtml(l.text)}</span>`;
-      })
-      .join('');
-
-    // wrapperHeight in vw keeps the wrapper exactly as tall as the scaled image.
-    pageHtml.push(
-      `<div style="position:relative; width:100vw; page-break-after:always; overflow:hidden;">` +
-        `<img src="data:${mime};base64,${b64}" style="width:100vw; height:auto; display:block;" />` +
-        spans +
-      `</div>`,
-    );
-  }
-
-  const sizeCss = pageSize === 'Letter' ? 'letter' : 'A4';
-  const html = `<html><head><style>@page { size: ${sizeCss}; margin: 0; }</style></head><body style="margin:0;padding:0;">${pageHtml.join('')}</body></html>`;
-  return printHtmlToPdf(html, pageSize);
+/**
+ * A one-page printer test sheet at the given paper size: a frame 10 mm inside
+ * the paper edge, corner marks and a grey ramp, so the user can check
+ * alignment, margins and tone. Returns a PDF file URI.
+ */
+export async function generateTestPagePdf(pageSize: PageSize = 'A4'): Promise<string> {
+  const paper = PAPER_SIZES_PT[pageSize];
+  const label = pageSize === 'Letter' ? 'US Letter, 8.5 × 11 in' : 'A4, 210 × 297 mm';
+  const mm = 72 / 25.4; // points per millimetre
+  // Same sheet model as page exports: % of the paper, sizes in var(--pt).
+  const insetX = r4(((10 * mm) / paper.width) * 100);
+  const insetY = r4(((10 * mm) / paper.height) * 100);
+  const pt = (n: number) => `calc(${r4(n)} * var(--pt))`;
+  const ramp = [0, 20, 40, 60, 80, 100]
+    .map(p => `<div style="flex:1;height:${pt(14 * mm)};background:hsl(0,0%,${100 - p}%);border:${pt(0.5)} solid #000"></div>`)
+    .join('');
+  const body =
+    `<div class="s"><div class="b" style="left:${insetX}%;top:${insetY}%;right:${insetX}%;bottom:${insetY}%;` +
+    `border:${pt(1)} solid #111;padding:${pt(12 * mm)};box-sizing:border-box;` +
+    `font-family:-apple-system,Helvetica,Arial,sans-serif;color:#111">` +
+    `<div style="font-size:${pt(26)};font-weight:700;margin-bottom:${pt(10)}">Scan Kit test page</div>` +
+    `<div style="font-size:${pt(11)};line-height:1.5;color:#444">` +
+    `<p style="margin:0 0 ${pt(8)}">Paper size: ${escapeHtml(label)}</p>` +
+    `<p style="margin:0 0 ${pt(8)}">The black frame should sit 10 mm inside every edge of the paper. ` +
+    `If part of it is missing, your printer can’t print that close to the edge.</p>` +
+    `<p style="margin:0">The six squares below should step evenly from white to black.</p></div>` +
+    `<div style="display:flex;gap:${pt(4)};margin-top:${pt(18)}">${ramp}</div></div></div>`;
+  const { uri } = await Print.printToFileAsync({
+    html: buildPdfHtml([body], pageSize),
+    width: paper.width,
+    height: paper.height,
+    margins: { left: 0, right: 0, top: 0, bottom: 0 },
+  });
+  return uri;
 }

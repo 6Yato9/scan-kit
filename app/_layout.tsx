@@ -91,7 +91,7 @@ function ThemedStack() {
       />
       <Stack.Screen
         name="settings/printer"
-        options={{ title: 'My Printer', presentation: 'card' }}
+        options={{ title: 'Printing', presentation: 'card' }}
       />
       <Stack.Screen
         name="settings/about"

@@ -1,19 +1,37 @@
 // components/export-sheet.tsx
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
-import { useState } from 'react';
-import * as Sharing from 'expo-sharing';
-import * as Print from 'expo-print';
+// Export / share / print a document.
+//
+// The native share sheet and print dialog are presented ON TOP of this sheet
+// (presenting over an open RN Modal works; presenting while it is dismissing
+// does not), so there is no close-then-share timing race. Nothing here ever
+// waits on the share sheet: `shareFile` returns as soon as the sheet is up, so
+// the UI can't get stuck if expo-sharing never settles. Work in progress shows a
+// progress state with Cancel, and closing the sheet cancels it too.
+import { Alert, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import * as FileSystem from 'expo-file-system/legacy';
-import { File, Paths } from 'expo-file-system';
-import * as ImageManipulator from 'expo-image-manipulator';
-import { SaveFormat } from 'expo-image-manipulator';
+import { File } from 'expo-file-system';
 import JSZip from 'jszip';
-import { generatePdf, generateSearchablePdf } from '@/lib/pdf';
+import { generatePdf, PageSize, PdfCancelledError, PdfError, PdfQuality, PdfProgressPhase } from '@/lib/pdf';
+import {
+  cleanFileUri,
+  clearExportCache,
+  exportFileName,
+  makeExportDir,
+  placeExportFile,
+  printFile,
+  shareFile,
+  ShareError,
+} from '@/lib/share';
 import { ocrAvailable } from '@/lib/ocr';
-import { BottomSheet } from '@/components/bottom-sheet';
+import { BottomSheet, SheetGroup, SheetHeader, SheetRow } from '@/components/bottom-sheet';
+import { SectionLabel } from '@/components/section-label';
+import { PrimaryButton } from '@/components/primary-button';
+import { useToast } from '@/components/toast';
 import { Document } from '@/types/document';
 import { useTheme } from '@/contexts/theme-context';
 import { getDocSettings } from '@/lib/storage';
+import { Radius, Spacing, Type } from '@/lib/theme';
 
 type Props = {
   visible: boolean;
@@ -21,218 +39,286 @@ type Props = {
   onClose: () => void;
 };
 
+type Action = 'pdf' | 'searchable' | 'small' | 'images' | 'print';
+
+type Busy = { title: string; label: string; progress: number };
+
+type BuiltFile = { uri: string; mimeType: string; UTI: string };
+
+class CancelledError extends Error {}
+
+const PDF_FILE = { mimeType: 'application/pdf', UTI: 'com.adobe.pdf' };
+
+function pdfPhaseLabel(phase: PdfProgressPhase, done: number, total: number): string {
+  if (phase === 'rendering') return 'Finishing up';
+  const n = Math.min(done + 1, total);
+  if (phase === 'reading-text') return `Recognizing text on page ${n} of ${total}`;
+  return total === 1 ? 'Preparing page' : `Preparing page ${n} of ${total}`;
+}
+
+/** A specific, human message for anything that went wrong. Never shows raw errors. */
+function errorMessage(err: unknown, action: Action): { title: string; body: string } {
+  const title = action === 'print' ? 'Couldn’t print' : 'Couldn’t export';
+  if (err instanceof ShareError) return { title, body: err.message };
+  if (err instanceof PdfError) {
+    if (err.kind === 'read') return { title, body: `${err.message} Try again, or remove that page from the document.` };
+    if (err.kind === 'timeout') {
+      return { title, body: 'This document took too long to process. Try “Smaller PDF”, or split it into fewer pages.' };
+    }
+    if (err.kind === 'empty') return { title, body: 'This document has no pages to export.' };
+    return { title, body: 'Something went wrong while creating the PDF. Try again.' };
+  }
+  if (action === 'images') return { title, body: 'Couldn’t prepare the images. Check that your device has free space and try again.' };
+  return { title, body: 'Something went wrong. Try again.' };
+}
+
 export function ExportSheet({ visible, document, onClose }: Props) {
   const { colors } = useTheme();
-  const [loading, setLoading] = useState(false);
-  const [loadingLabel, setLoadingLabel] = useState('');
+  const toast = useToast();
+  const [busy, setBusy] = useState<Busy | null>(null);
+  const [pageSize, setPageSize] = useState<PageSize>('A4');
+  const [quality, setQuality] = useState<PdfQuality>('standard');
+  const abortRef = useRef<AbortController | null>(null);
+  // Bumped on every open/close so a late share-sheet callback can't close a
+  // sheet the user has since reopened.
+  const sessionRef = useRef(0);
 
-  async function handleExportPdf(quality: 'medium' | 'high') {
-    setLoadingLabel('Generating PDF…');
-    setLoading(true);
-    try {
-      const settings = await getDocSettings();
-      let pages = document.pages;
-
-      // Honor the user's PDF quality preference: 'standard' is medium, 'high' keeps full res.
-      // The explicit "Medium" button always recompresses regardless of the setting.
-      const compressFactor = quality === 'medium'
-        ? 0.55
-        : settings.pdfQuality === 'standard' ? 0.75 : 1;
-
-      if (compressFactor < 1) {
-        // Recompress pages sequentially to keep peak memory bounded.
-        const recompressed: string[] = [];
-        for (let i = 0; i < document.pages.length; i++) {
-          setLoadingLabel(`Optimising image ${i + 1}/${document.pages.length}…`);
-          const r = await ImageManipulator.manipulateAsync(document.pages[i], [], {
-            compress: compressFactor,
-            format: SaveFormat.JPEG,
-          });
-          recompressed.push(r.uri);
-        }
-        pages = recompressed;
-      }
-
-      setLoadingLabel('Building PDF…');
-      const uri = await generatePdf(pages, settings.pdfPageSize);
-      await Sharing.shareAsync(uri, {
-        mimeType: 'application/pdf',
-        dialogTitle: document.name,
-        UTI: 'com.adobe.pdf',
-      });
-      onClose();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Could not generate PDF.';
-      // Surface the error but keep the sheet open so the user can retry.
-      Alert.alert('Export failed', msg);
-    } finally {
-      setLoading(false);
-      setLoadingLabel('');
+  useEffect(() => {
+    sessionRef.current += 1;
+    if (!visible) {
+      abortRef.current?.abort();
+      abortRef.current = null;
+      setBusy(null);
+      return;
     }
-  }
+    let cancelled = false;
+    getDocSettings()
+      .then(s => {
+        if (cancelled) return;
+        setPageSize(s.pdfPageSize);
+        setQuality(s.pdfQuality === 'high' ? 'high' : 'standard');
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [visible]);
 
-  async function handleExportSearchablePdf() {
-    setLoadingLabel('Building PDF…');
-    setLoading(true);
-    try {
-      const settings = await getDocSettings();
-      const uri = await generateSearchablePdf(
-        document.pages,
-        settings.pdfPageSize,
-        (done, total) => setLoadingLabel(`Reading text ${done}/${total}…`),
-      );
-      await Sharing.shareAsync(uri, {
-        mimeType: 'application/pdf',
-        dialogTitle: document.name,
-        UTI: 'com.adobe.pdf',
-      });
-      onClose();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Could not generate searchable PDF.';
-      // Surface the error but keep the sheet open so the user can retry.
-      Alert.alert('Export failed', msg);
-    } finally {
-      setLoading(false);
-      setLoadingLabel('');
-    }
-  }
+  useEffect(() => () => abortRef.current?.abort(), []);
 
-  async function handleExportZip() {
-    setLoading(true);
-    setLoadingLabel('Building ZIP…');
-    try {
-      const zip = new JSZip();
-      for (let i = 0; i < document.pages.length; i++) {
-        const b64 = await FileSystem.readAsStringAsync(document.pages[i], {
-          encoding: 'base64',
-        });
-        zip.file(`page_${String(i + 1).padStart(2, '0')}.jpg`, b64, { base64: true });
-      }
-      const zipB64 = await zip.generateAsync({ type: 'base64', compression: 'DEFLATE' });
-      const safeName = document.name.replace(/[^a-z0-9]/gi, '_').slice(0, 40) || 'document';
-      // Include doc id so different docs that sanitise to the same name don't collide.
-      const tempUri = `${Paths.cache.uri}${safeName}_${document.id.slice(0, 8)}.zip`;
-      await FileSystem.writeAsStringAsync(tempUri, zipB64, { encoding: 'base64' });
-      try {
-        await Sharing.shareAsync(tempUri, {
-          mimeType: 'application/zip',
-          dialogTitle: document.name,
-          UTI: 'public.zip-archive',
-        });
-      } finally {
-        try { new File(tempUri).delete(); } catch {}
-      }
-      onClose();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Could not build ZIP.';
-      Alert.alert('Export failed', msg);
-    } finally {
-      setLoading(false);
-      setLoadingLabel('');
-    }
-  }
-
-  async function handlePrint() {
-    setLoading(true);
-    setLoadingLabel('Sending to printer…');
-    try {
-      const imgTags = document.pages
-        .map(uri => `<img src="${uri}" style="width:100%;display:block;page-break-after:always;" />`)
-        .join('');
-      const html = `<html><body style="margin:0;padding:0;">${imgTags}</body></html>`;
-      await Print.printAsync({ html });
-      onClose();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Could not print.';
-      // User-cancelled iOS print dialogs throw — only alert if it looks like a real failure.
-      if (!/cancel/i.test(msg)) Alert.alert('Print failed', msg);
-    } finally {
-      setLoading(false);
-      setLoadingLabel('');
-    }
-  }
-
+  const isPdfDoc = !!document.pdfUri;
   const pageCount = document.pages.length;
-  // Filters are baked into the page pixels, so every export already carries
-  // them — this only tells the user what they're getting, it does not describe
-  // work the export performs.
-  const hasFilters = document.filters?.some(f => f !== 'original') || !!document.adjustments?.length;
-  // Searchable PDF needs OCR and real image pages (not an imported pdfUri doc).
-  const canSearchablePdf = ocrAvailable() && pageCount > 0 && !document.pdfUri;
+  const canSearchable = !isPdfDoc && pageCount > 0 && ocrAvailable();
+
+  const cancelWork = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setBusy(null);
+  }, []);
+
+  const handleClose = useCallback(() => {
+    cancelWork();
+    onClose();
+  }, [cancelWork, onClose]);
+
+  async function buildPdf(q: PdfQuality, searchable: boolean, signal: AbortSignal, title: string): Promise<string> {
+    // Read settings fresh so a change made a moment ago is honoured.
+    const settings = await getDocSettings().catch(() => null);
+    const size = settings?.pdfPageSize ?? pageSize;
+    setBusy({ title, label: 'Preparing', progress: 0 });
+    return generatePdf(document.pages, {
+      pageSize: size,
+      quality: q,
+      searchable,
+      signal,
+      onProgress: (done, total, phase) => {
+        if (signal.aborted) return;
+        // Reserve the last 15% of the bar for the native render step.
+        const progress = phase === 'rendering' ? 0.9 : (done / total) * 0.85 + (phase === 'reading-text' ? 0.4 / total : 0);
+        setBusy({ title, label: pdfPhaseLabel(phase, done, total), progress });
+      },
+    });
+  }
+
+  async function buildImages(signal: AbortSignal, dir: string): Promise<BuiltFile> {
+    const title = pageCount === 1 ? 'Preparing image' : 'Preparing images';
+    if (pageCount === 1) {
+      setBusy({ title, label: 'Preparing image', progress: 0.5 });
+      const uri = await placeExportFile(document.pages[0], dir, exportFileName(document.name, 'jpg'), 'copy');
+      return { uri, mimeType: 'image/jpeg', UTI: 'public.jpeg' };
+    }
+    // JPEGs don't compress further, so STORE them: far less CPU, and bytes are
+    // added as binary instead of base64 strings to keep peak memory down.
+    const zip = new JSZip();
+    for (let i = 0; i < pageCount; i++) {
+      if (signal.aborted) throw new CancelledError();
+      setBusy({ title, label: `Adding page ${i + 1} of ${pageCount}`, progress: (i / pageCount) * 0.8 });
+      const bytes = await new File(cleanFileUri(document.pages[i])).bytes();
+      zip.file(`Page ${String(i + 1).padStart(2, '0')}.jpg`, bytes, { binary: true });
+    }
+    if (signal.aborted) throw new CancelledError();
+    setBusy({ title, label: 'Creating ZIP file', progress: 0.9 });
+    const data = await zip.generateAsync({ type: 'uint8array', compression: 'STORE' });
+    if (signal.aborted) throw new CancelledError();
+    const uri = `${dir}${encodeURIComponent(exportFileName(document.name, 'zip'))}`;
+    const out = new File(uri);
+    out.create({ overwrite: true });
+    out.write(data);
+    return { uri, mimeType: 'application/zip', UTI: 'public.zip-archive' };
+  }
+
+  const runningRef = useRef(false);
+
+  async function run(action: Action) {
+    if (busy || runningRef.current) return;
+    runningRef.current = true;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const { signal } = controller;
+    const session = sessionRef.current;
+    const check = () => {
+      if (signal.aborted) throw new CancelledError();
+    };
+
+    try {
+      await clearExportCache();
+      check();
+
+      if (action === 'print') {
+        let uri: string;
+        if (isPdfDoc) {
+          uri = document.pdfUri!;
+        } else {
+          const raw = await buildPdf('high', false, signal, 'Preparing to print');
+          check();
+          // Named after the document so the print job isn't called "<uuid>.pdf".
+          uri = await placeExportFile(raw, await makeExportDir(), exportFileName(document.name, 'pdf'), 'move');
+        }
+        check();
+        setBusy(null);
+        const outcome = await printFile(uri);
+        if (outcome === 'printed' && sessionRef.current === session) {
+          toast.show('Sent to printer');
+          onClose();
+        }
+        return;
+      }
+
+      const dir = await makeExportDir();
+      let file: BuiltFile;
+      if (isPdfDoc) {
+        setBusy({ title: 'Preparing PDF', label: 'Preparing PDF', progress: 0.5 });
+        const uri = await placeExportFile(document.pdfUri!, dir, exportFileName(document.name, 'pdf'), 'copy');
+        file = { uri, ...PDF_FILE };
+      } else if (action === 'images') {
+        file = await buildImages(signal, dir);
+      } else {
+        const q: PdfQuality = action === 'small' ? 'small' : quality;
+        const title = action === 'searchable' ? 'Creating searchable PDF' : 'Creating PDF';
+        const raw = await buildPdf(q, action === 'searchable', signal, title);
+        check();
+        const uri = await placeExportFile(raw, dir, exportFileName(document.name, 'pdf'), 'move');
+        file = { uri, ...PDF_FILE };
+      }
+      check();
+      setBusy(null);
+
+      await shareFile(file.uri, {
+        mimeType: file.mimeType,
+        UTI: file.UTI,
+        dialogTitle: document.name,
+        // Close once the share sheet is done, unless the user has moved on.
+        onFinish: () => {
+          if (sessionRef.current === session) onClose();
+        },
+      });
+    } catch (err) {
+      if (err instanceof CancelledError || err instanceof PdfCancelledError || signal.aborted) return;
+      if (sessionRef.current !== session) return;
+      const { title, body } = errorMessage(err, action);
+      Alert.alert(title, body);
+    } finally {
+      runningRef.current = false;
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+        setBusy(null);
+      }
+    }
+  }
+
+  const paperLabel = pageSize === 'Letter' ? 'US Letter' : 'A4';
+  const pagesLabel = `${pageCount} ${pageCount === 1 ? 'page' : 'pages'}`;
 
   return (
-    <BottomSheet visible={visible} onClose={loading ? undefined : onClose}>
-      <Text style={[styles.heading, { color: colors.text }]}>Export</Text>
+    <BottomSheet visible={visible} onClose={handleClose} variant="grouped">
+      <SheetHeader title="Export" subtitle={document.name} />
 
-      {loading ? (
-        <View style={styles.loadingArea}>
-          <ActivityIndicator size="large" color={colors.accent} />
-          <Text style={[styles.loadingLabel, { color: colors.muted }]}>{loadingLabel}</Text>
-        </View>
+      {busy ? (
+        <SheetGroup>
+          <View style={styles.busy} accessibilityLiveRegion="polite">
+            <Text style={[Type.headline, { color: colors.text }]}>{busy.title}</Text>
+            <View style={[styles.track, { backgroundColor: colors.secondary }]}>
+              <View
+                style={[
+                  styles.fill,
+                  {
+                    backgroundColor: colors.accentFill,
+                    width: `${Math.round(Math.max(0.04, Math.min(1, busy.progress)) * 100)}%`,
+                  },
+                ]}
+              />
+            </View>
+            <Text style={[Type.footnote, { color: colors.muted }]}>{busy.label}</Text>
+            <PrimaryButton title="Cancel" variant="secondary" onPress={cancelWork} style={styles.cancelBtn} />
+          </View>
+        </SheetGroup>
       ) : (
         <>
-          {/* PDF section */}
-          <Text style={[styles.groupLabel, { color: colors.muted }]}>PDF</Text>
-          <View style={[styles.group, { backgroundColor: colors.card }]}>
-            <Pressable
-              style={[styles.option, { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }]}
-              onPress={() => handleExportPdf('high')}
-            >
-              <View style={styles.optionText}>
-                <Text style={[styles.optionTitle, { color: colors.text }]}>High Quality</Text>
-                <Text style={[styles.optionSub, { color: colors.faint }]}>
-                  Full resolution{hasFilters ? ' · enhanced' : ''}
-                </Text>
-              </View>
-              <Text allowFontScaling={false} style={[styles.badge, { backgroundColor: colors.accentLight, color: colors.accent }]}>HD</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.option, canSearchablePdf && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }]}
-              onPress={() => handleExportPdf('medium')}
-            >
-              <View style={styles.optionText}>
-                <Text style={[styles.optionTitle, { color: colors.text }]}>Medium Quality</Text>
-                <Text style={[styles.optionSub, { color: colors.faint }]}>Smaller file size</Text>
-              </View>
-              <Text allowFontScaling={false} style={[styles.badge, { backgroundColor: colors.secondary, color: colors.muted }]}>SD</Text>
-            </Pressable>
-            {canSearchablePdf && (
-              <Pressable
-                style={styles.option}
-                onPress={handleExportSearchablePdf}
-              >
-                <View style={styles.optionText}>
-                  <Text style={[styles.optionTitle, { color: colors.text }]}>Searchable PDF</Text>
-                  <Text style={[styles.optionSub, { color: colors.faint }]}>Selectable text layer · OCR</Text>
-                </View>
-                <Text allowFontScaling={false} style={[styles.badge, { backgroundColor: colors.accentLight, color: colors.accent }]}>OCR</Text>
-              </Pressable>
+          <SectionLabel style={styles.label}>Share as</SectionLabel>
+          <SheetGroup>
+            {isPdfDoc ? (
+              <SheetRow icon="document-text-outline" label="PDF" detail="The original PDF file" onPress={() => run('pdf')} last />
+            ) : (
+              <>
+                <SheetRow
+                  icon="document-text-outline"
+                  label="PDF"
+                  detail={`${pagesLabel}, ${paperLabel}`}
+                  onPress={() => run('pdf')}
+                />
+                {canSearchable && (
+                  <SheetRow
+                    icon="search-outline"
+                    label="Searchable PDF"
+                    detail="Text can be selected, copied and searched"
+                    onPress={() => run('searchable')}
+                  />
+                )}
+                <SheetRow
+                  icon="contract-outline"
+                  label="Smaller PDF"
+                  detail="Lower resolution, good for email"
+                  onPress={() => run('small')}
+                />
+                <SheetRow
+                  icon="images-outline"
+                  label={pageCount === 1 ? 'JPEG image' : 'JPEG images'}
+                  detail={pageCount === 1 ? 'The page as a photo' : `${pageCount} images in a ZIP file`}
+                  onPress={() => run('images')}
+                  last
+                />
+              </>
             )}
-          </View>
-
-          {/* ZIP section */}
-          <Text style={[styles.groupLabel, { color: colors.muted }]}>IMAGES</Text>
-          <View style={[styles.group, { backgroundColor: colors.card }]}>
-            <Pressable
-              style={[styles.option, { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }]}
-              onPress={handleExportZip}
-            >
-              <View style={styles.optionText}>
-                <Text style={[styles.optionTitle, { color: colors.text }]}>Export as ZIP</Text>
-                <Text style={[styles.optionSub, { color: colors.faint }]}>
-                  {pageCount} JPEG{pageCount !== 1 ? 's' : ''} bundled in a zip file
-                </Text>
-              </View>
-            </Pressable>
-            <Pressable style={styles.option} onPress={handlePrint}>
-              <View style={styles.optionText}>
-                <Text style={[styles.optionTitle, { color: colors.text }]}>Print</Text>
-                <Text style={[styles.optionSub, { color: colors.faint }]}>
-                  Send to a printer{hasFilters ? ' · enhanced' : ''}
-                </Text>
-              </View>
-            </Pressable>
-          </View>
+          </SheetGroup>
+          <SheetGroup>
+            <SheetRow
+              icon="print-outline"
+              label="Print"
+              detail={isPdfDoc ? 'Send to an AirPrint printer' : `Send to an AirPrint printer, ${paperLabel}`}
+              onPress={() => run('print')}
+              last
+            />
+          </SheetGroup>
         </>
       )}
     </BottomSheet>
@@ -240,37 +326,9 @@ export function ExportSheet({ visible, document, onClose }: Props) {
 }
 
 const styles = StyleSheet.create({
-  heading: { fontSize: 18, fontWeight: '700', marginBottom: 16 },
-  loadingArea: { alignItems: 'center', paddingVertical: 32, gap: 12 },
-  loadingLabel: { fontSize: 14 },
-  groupLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.8,
-    marginBottom: 8,
-    marginTop: 4,
-  },
-  group: {
-    borderRadius: 14,
-    overflow: 'hidden',
-    marginBottom: 14,
-  },
-  option: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    gap: 12,
-  },
-  optionText: { flex: 1 },
-  optionTitle: { fontSize: 16, fontWeight: '600' },
-  optionSub: { fontSize: 13, marginTop: 2 },
-  badge: {
-    fontSize: 10,
-    fontWeight: '800',
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    borderRadius: 6,
-    overflow: 'hidden',
-  },
+  label: { marginTop: Spacing.xs },
+  busy: { padding: Spacing.lg, gap: Spacing.md },
+  track: { height: 6, borderRadius: Radius.pill, overflow: 'hidden' },
+  fill: { height: 6, borderRadius: Radius.pill },
+  cancelBtn: { marginTop: Spacing.xs },
 });
