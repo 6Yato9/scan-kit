@@ -12,7 +12,29 @@
       "supportsTablet": true,
       "infoPlist": {
         "NSCameraUsageDescription": "Scan Kit needs camera access to scan documents.",
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "CFBundleDocumentTypes": [
+          {
+            "CFBundleTypeName": "PDF document",
+            "CFBundleTypeRole": "Viewer",
+            "LSHandlerRank": "Alternate",
+            "LSItemContentTypes": [
+              "com.adobe.pdf"
+            ]
+          },
+          {
+            "CFBundleTypeName": "Image",
+            "CFBundleTypeRole": "Viewer",
+            "LSHandlerRank": "Alternate",
+            "LSItemContentTypes": [
+              "public.jpeg",
+              "public.png",
+              "public.heic",
+              "public.image"
+            ]
+          }
+        ],
+        "LSSupportsOpeningDocumentsInPlace": false
       },
       "bundleIdentifier": "com.6yato9.scan-kit"
     },
@@ -68,7 +90,15 @@
       ],
       "expo-font",
       "expo-web-browser",
-      "./plugins/with-pod-deployment-target"
+      "./plugins/with-pod-deployment-target",
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Scan Kit uses your photo library to import photos of documents.",
+          "savePhotosPermission": "Scan Kit saves exported pages to your photo library.",
+          "isAccessMediaLocationEnabled": false
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

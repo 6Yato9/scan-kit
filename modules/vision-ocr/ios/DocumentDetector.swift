@@ -1,4 +1,5 @@
 import CoreImage
+import ImageIO
 import UIKit
 import Vision
 
@@ -16,8 +17,10 @@ enum DocumentDetector {
   /// Returns the path of the corrected JPEG, or nil when no confident document
   /// outline was found (the caller then keeps the original photo).
   static func detectAndCorrect(path: String, outputPath: String, quality: Double) throws -> String? {
-    guard let uiImage = UIImage(contentsOfFile: path), let upright = normalised(uiImage),
-          let cg = upright.cgImage else {
+    // Decode at most 4096 px on the long edge with EXIF orientation applied:
+    // a 48 MP photo decoded at full size costs ~200 MB per buffer, and pages
+    // larger than this exceed what the filter pipeline can process anyway.
+    guard let cg = uprightThumbnail(path: path, maxPixel: 4096) else {
       throw NSError(domain: "DocumentDetector", code: 1,
                     userInfo: [NSLocalizedDescriptionKey: "Could not read image"])
     }
@@ -38,8 +41,7 @@ enum DocumentDetector {
     filter.setValue(p(quad.bottomLeft), forKey: "inputBottomLeft")
     guard let out = filter.outputImage else { return nil }
 
-    let context = CIContext(options: nil)
-    guard let rendered = context.createCGImage(out, from: out.extent.integral),
+    guard let rendered = ciContext.createCGImage(out, from: out.extent.integral),
           let data = UIImage(cgImage: rendered).jpegData(compressionQuality: CGFloat(quality)) else {
       return nil
     }
@@ -101,13 +103,18 @@ enum DocumentDetector {
     return area >= 0.15 && area <= 0.97
   }
 
-  /// Bake EXIF orientation into the pixels so Vision and Core Image agree.
-  private static func normalised(_ image: UIImage) -> UIImage? {
-    if image.imageOrientation == .up { return image }
-    let format = UIGraphicsImageRendererFormat()
-    format.scale = 1
-    return UIGraphicsImageRenderer(size: image.size, format: format).image { _ in
-      image.draw(in: CGRect(origin: .zero, size: image.size))
-    }
+  private static let ciContext = CIContext(options: [.cacheIntermediates: false])
+
+  /// Decode an upright (EXIF-applied), size-capped bitmap so Vision and Core
+  /// Image agree on orientation and memory stays bounded.
+  private static func uprightThumbnail(path: String, maxPixel: Int) -> CGImage? {
+    guard let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil) else { return nil }
+    let opts: [CFString: Any] = [
+      kCGImageSourceCreateThumbnailFromImageAlways: true,
+      kCGImageSourceCreateThumbnailWithTransform: true,
+      kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+      kCGImageSourceShouldCacheImmediately: true,
+    ]
+    return CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary)
   }
 }

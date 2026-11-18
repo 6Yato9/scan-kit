@@ -98,29 +98,46 @@ public class VisionOcrModule: Module {
     let handler = VNImageRequestHandler(cgImage: cgImage, orientation: orientation, options: [:])
     try handler.perform([request])
 
-    // Vision returns observations roughly in reading order already; sort
-    // top-to-bottom, then left-to-right, so the joined text reads naturally.
-    let observations = (request.results ?? []).sorted { a, b in
-      let dy = b.boundingBox.midY - a.boundingBox.midY
-      if abs(dy) > min(a.boundingBox.height, b.boundingBox.height) * 0.5 {
-        return dy < 0  // larger midY = higher on the page (origin bottom-left)
+    // Reading order: group observations into visual rows (boxes that overlap
+    // vertically by at least half the smaller height), rows top to bottom,
+    // cells left to right. A plain sort on midY interleaves table columns
+    // whenever the page is even slightly skewed.
+    let all = (request.results ?? []).filter { $0.topCandidates(1).first != nil }
+    let byTop = all.sorted { $0.boundingBox.maxY > $1.boundingBox.maxY }
+    var rows: [[VNRecognizedTextObservation]] = []
+    for obs in byTop {
+      let b = obs.boundingBox
+      if let i = rows.firstIndex(where: { row in
+        row.contains { other in
+          let o = other.boundingBox
+          let overlap = min(b.maxY, o.maxY) - max(b.minY, o.minY)
+          return overlap >= min(b.height, o.height) * 0.5
+        }
+      }) {
+        rows[i].append(obs)
+      } else {
+        rows.append([obs])
       }
-      return a.boundingBox.minX < b.boundingBox.minX
     }
 
     var lines: [[String: Any]] = []
     var texts: [String] = []
-    for observation in observations {
-      guard let candidate = observation.topCandidates(1).first else { continue }
-      let box = observation.boundingBox  // normalised, origin bottom-left
-      lines.append([
-        "text": candidate.string,
-        "left": Double(box.minX * width),
-        "top": Double((1 - box.maxY) * height),
-        "width": Double(box.width * width),
-        "height": Double(box.height * height),
-      ])
-      texts.append(candidate.string)
+    for row in rows {
+      let cells = row.sorted { $0.boundingBox.minX < $1.boundingBox.minX }
+      var rowText: [String] = []
+      for observation in cells {
+        guard let candidate = observation.topCandidates(1).first else { continue }
+        let box = observation.boundingBox  // normalised, origin bottom-left
+        lines.append([
+          "text": candidate.string,
+          "left": Double(box.minX * width),
+          "top": Double((1 - box.maxY) * height),
+          "width": Double(box.width * width),
+          "height": Double(box.height * height),
+        ])
+        rowText.append(candidate.string)
+      }
+      texts.append(rowText.joined(separator: "  "))
     }
 
     return ["text": texts.joined(separator: "\n"), "lines": lines]
