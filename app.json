@@ -34,7 +34,8 @@
             ]
           }
         ],
-        "LSSupportsOpeningDocumentsInPlace": false
+        "LSSupportsOpeningDocumentsInPlace": true,
+        "UIFileSharingEnabled": true
       },
       "bundleIdentifier": "com.6yato9.scan-kit"
     },

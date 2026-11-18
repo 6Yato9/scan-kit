@@ -15,9 +15,17 @@ import { bakePage } from '@/lib/bake';
 import { reassertCalls, statusBarStyleFor } from '@/lib/status-bar-style';
 import { subscribeSystemUI } from '@/lib/system-ui';
 import { garbageCollectOrphans, sweepConvertLeftovers } from '@/lib/files';
+import { ensureStorageLayout } from '@/lib/storage-layout';
 import { clearLegacyOcrCache } from '@/lib/ocr-cache';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
 import { documentFileRefsForCleanup, documentIdsForCleanup, getOnboarded, getOnboardedSync, pendingBakeMigrations, withDocumentFileRefs } from '@/lib/storage';
+
+// The app's files moved out of Documents (which the Files app shows) into
+// Library/Application Support. The move runs once, synchronously, before the
+// first screen renders — anything asking for a path would also run it first
+// (lib/storage-layout.ts). On failure everything stays where it was and is
+// used from there.
+ensureStorageLayout();
 
 // The tabs are the root of the stack even when the app is cold-started on
 // another route. "Open in Scan Kit" launches straight into /import, which then

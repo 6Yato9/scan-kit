@@ -21,7 +21,16 @@ jest.mock('expo-file-system', () => {
     get size() { return (mockBytes[this.uri] ?? '').length; }
     get md5() { return this.uri in mockBytes ? `md5:${mockBytes[this.uri]}` : null; }
   }
-  return { File: MockFile, Paths: { document: { uri: 'file:///CURRENT/Documents/' } } };
+  // lib/storage-layout.ts only builds folder URIs here: there is no Caches
+  // path, so it keeps the Documents layout and moves nothing.
+  class MockDirectory {
+    uri: string;
+    constructor(...parts: any[]) {
+      this.uri = parts.map(p => (typeof p === 'string' ? p : p.uri)).map((p, i) => (i ? p : p.replace(/\/+$/, ''))).join('/') + '/';
+    }
+    get exists() { return false; }
+  }
+  return { File: MockFile, Directory: MockDirectory, Paths: { document: { uri: 'file:///CURRENT/Documents/' } } };
 });
 
 // Real lib/files.ts pulls in expo-image-manipulator, which isn't relevant to

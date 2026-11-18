@@ -2,12 +2,14 @@
 //
 // The Sign tool remembers the last two signatures used, so signing the next
 // document is one tap instead of redrawing. Each is a PNG (dark ink on a
-// transparent background, already trimmed) in Documents/signatures/, listed
+// transparent background, already trimmed) in the app's private storage
+// (Library/Application Support/signatures/, see lib/storage-layout.ts), listed
 // newest first in a small JSON index next to them.
 //
-// Kept outside Documents/scan-kit/ on purpose: the orphan sweep deletes any
+// Kept outside the scan-kit/ folder on purpose: the orphan sweep deletes any
 // folder there that isn't a document.
-import { Directory, File, Paths } from 'expo-file-system';
+import { Directory, File } from 'expo-file-system';
+import { signaturesDir } from './storage-layout';
 import type { Signature } from './stamp';
 
 export const MAX_SAVED_SIGNATURES = 2;
@@ -22,12 +24,11 @@ export type SavedSignatureEntry = {
 
 export type SavedSignature = SavedSignatureEntry & { uri: string };
 
-const DIR = 'signatures';
 const INDEX = 'index.json';
 const PNG_PREFIX = 'data:image/png;base64,';
 
 function dir(): Directory {
-  return new Directory(Paths.document, DIR);
+  return signaturesDir();
 }
 
 function fileFor(id: string): File {

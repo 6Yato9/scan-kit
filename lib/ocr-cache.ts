@@ -27,6 +27,7 @@
 // memory only. Earlier builds kept every entry in Caches/ocr-lines, where it
 // outlived the document; clearLegacyOcrCache() deletes that folder.
 import { Directory, File, Paths } from 'expo-file-system';
+import { docDir } from './storage-layout';
 
 export type CachedOcr = {
   text: string;
@@ -182,7 +183,7 @@ function prune(docDir: string, docId: string): void {
 }
 
 function docDirFor(docId: string): string {
-  return new Directory(Paths.document, 'scan-kit', docId).uri.replace(/\/+$/, '');
+  return docDir(docId).uri.replace(/\/+$/, '');
 }
 
 /**

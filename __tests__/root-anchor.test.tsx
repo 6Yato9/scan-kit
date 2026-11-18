@@ -15,6 +15,7 @@ jest.mock('@/components/bake-indicator', () => ({ BakeIndicator: () => null }));
 jest.mock('@/components/lock-gate', () => ({ LockGate: ({ children }: any) => children }));
 jest.mock('@/lib/bake', () => ({ bakePage: jest.fn() }));
 jest.mock('@/lib/files', () => ({ garbageCollectOrphans: jest.fn() }));
+jest.mock('@/lib/storage-layout', () => ({ ensureStorageLayout: jest.fn() }));
 jest.mock('@/lib/storage', () => ({}));
 
 import { unstable_settings } from '../app/_layout';

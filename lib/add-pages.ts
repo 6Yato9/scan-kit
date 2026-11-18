@@ -4,7 +4,8 @@
 // same pipeline a new scan goes through: auto-crop for library photos, the
 // user's scan quality, their default filter (baked, then recorded), and a
 // refreshed text index.
-import { Directory, File, Paths } from 'expo-file-system';
+import { File } from 'expo-file-system';
+import { docDir } from './storage-layout';
 import { Document, PageAdjustment, PageFilter } from '../types/document';
 import { copyPageWithQuality, deleteDisposableTemps, isScannerOutput } from './files';
 import { getDocument, updateDocumentWith } from './storage';
@@ -55,7 +56,7 @@ export async function addPagesToDocument(
     const current = await getDocument(docId);
     if (!current) throw new Error('document missing');
     const start = current.pages.length;
-    const dir = new Directory(Paths.document, 'scan-kit', docId);
+    const dir = docDir(docId);
     const stored: string[] = [];
     try {
       for (let i = 0; i < inputs.length; i++) {

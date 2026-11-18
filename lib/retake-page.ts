@@ -8,7 +8,8 @@
 // The old page is stashed first (lib/page-undo), so the viewer can offer Undo,
 // and its `.orig` shadow is removed: the new pixels are unfiltered, so the
 // first filter bake must take its original from them, not from the old photo.
-import { Directory, File, Paths } from 'expo-file-system';
+import { File } from 'expo-file-system';
+import { docDir } from './storage-layout';
 import { Document, PageAdjustment, PageFilter } from '../types/document';
 import {
   copyPageWithQuality,
@@ -100,7 +101,7 @@ export async function retakePage(
       // Shadow first: if the app dies between the two steps the old page is
       // left without a shadow (harmless), never the new page paired with the
       // old photo's shadow (a later filter change would bring the old page back).
-      const dir = new Directory(Paths.document, 'scan-kit', docId);
+      const dir = docDir(docId);
       const shadow = new File(dir, `page-${index}.orig.jpg`);
       if (shadow.exists) shadow.delete();
       const pageUri = replacePage(staged, docId, index);
@@ -124,7 +125,7 @@ export async function retakePage(
   } finally {
     deleteDisposableTemps([uri, input]);
     try {
-      const staging = new Directory(Paths.document, 'scan-kit', STAGING_ID);
+      const staging = docDir(STAGING_ID);
       if (staging.exists) staging.delete();
     } catch {}
   }

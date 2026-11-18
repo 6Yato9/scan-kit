@@ -18,6 +18,7 @@
 // stash in Caches (not deleted) so the conversion can be undone; the startup
 // sweep removes stashes nobody used (lib/files.ts TEMP_DIRS).
 import { Directory, File, Paths } from 'expo-file-system';
+import { docDir } from './storage-layout';
 import { VisionOcr } from '../modules/vision-ocr/src';
 import { Document, PageFilter } from '../types/document';
 import { copyPageWithQuality } from './files';
@@ -92,7 +93,7 @@ function deleteQuietly(item: File | Directory): void {
  * discards. Then drops the text cached for them.
  */
 function removePageFiles(docId: string, count: number): void {
-  const dir = new Directory(Paths.document, 'scan-kit', docId);
+  const dir = docDir(docId);
   for (let i = 0; i < count; i++) {
     deleteQuietly(new File(dir, `page-${i}.jpg`));
     deleteQuietly(new File(dir, `page-${i}.orig.jpg`));
@@ -134,7 +135,7 @@ export async function convertPdfToPages(docId: string, options: ConvertOptions =
       if (!current) throw new PdfConvertError('missing', 'document missing');
       // Converted meanwhile (a second tap, another screen): nothing to do twice.
       if (!current.pdfUri) throw new PdfConvertError('failed', 'already converted');
-      const dir = new Directory(Paths.document, 'scan-kit', docId);
+      const dir = docDir(docId);
       const stored: string[] = [];
       try {
         for (let i = 0; i < rendered.length; i++) {
@@ -210,7 +211,7 @@ export async function undoPdfConversion(undo: ConvertUndo): Promise<Document> {
     if (!current) throw new PdfConvertError('missing', 'document missing');
     if (current.pdfUri) throw new PdfConvertError('failed', 'already a PDF');
     const dest = new File(undo.pdfUri);
-    const dir = new Directory(Paths.document, 'scan-kit', docId);
+    const dir = docDir(docId);
     dir.create({ intermediates: true, idempotent: true });
     deleteQuietly(dest);
     stash.copy(dest);

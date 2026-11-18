@@ -1,8 +1,9 @@
 // lib/storage.ts
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { File, Paths } from 'expo-file-system';
+import { File } from 'expo-file-system';
 import { Document, PageAdjustment, PageFilter } from '../types/document';
 import { deleteDocumentFiles, originalUri } from './files';
+import { rebaseStoredUri } from './storage-layout';
 
 const KEY = '@scan_kit_documents'; // legacy single-blob key — kept as a read-only backup, never written after migration
 const DOC_INDEX_KEY = '@scan_kit_doc_index'; // JSON array of doc ids, newest-first
@@ -157,35 +158,22 @@ function ensureMigrated(): Promise<void> {
 
 
 // ── Container-relative path healing ──────────────────────────────────────────
-// iOS does not guarantee the app's Documents container path is stable. It changes
-// on reinstall, on restore from backup, on device migration, and can change on
-// update — including between TestFlight builds. Documents persist absolute
-// file:// URIs, so once the container UUID changes every stored page points at a
-// directory that no longer exists: the document list still renders, but every page
-// is blank, while the JPEGs sit untouched on disk.
-//
-// Every path this app owns is derivable — <Documents>/scan-kit/<docId>/… — so any
-// stored URI is re-anchored to the CURRENT Documents directory on read. That heals
-// installs already broken by a past container change and makes future ones a
-// non-event. URIs outside scan-kit/ (an external file the user picked) are left alone.
-const SCAN_DIR = 'scan-kit/';
+// Stored records hold absolute file:// URIs, and those go stale two ways:
+//  - iOS does not guarantee the app's container path is stable. It changes on
+//    reinstall, on restore from backup, on device migration, and can change on
+//    update — including between TestFlight builds;
+//  - the app's files moved from Documents/ to Library/Application Support/
+//    (lib/storage-layout.ts) so the Files app never shows them.
+// Every path this app owns is derivable — <root>/scan-kit/<docId>/… — so every
+// stored URI is re-anchored to where the file is NOW on every read
+// (rebaseStoredUri), and every write stores the re-anchored form, so an old
+// record is rewritten on its next save. URIs outside scan-kit/ (an external
+// file the user picked) are left alone.
 
-function documentsRoot(): string {
-  const uri = Paths.document.uri;
-  return uri.endsWith('/') ? uri : uri + '/';
-}
-
-function reRootUri(uri: string): string {
-  const i = uri.indexOf(SCAN_DIR);
-  if (i === -1) return uri;
-  const rebuilt = documentsRoot() + uri.slice(i);
-  return rebuilt === uri ? uri : rebuilt;
-}
-
-/** Returns a document whose page/pdf URIs point at the current container. */
-function healDocPaths(doc: Document): Document {
-  const pages = doc.pages?.map(reRootUri) ?? doc.pages;
-  const pdfUri = doc.pdfUri ? reRootUri(doc.pdfUri) : doc.pdfUri;
+/** Returns a document whose page/pdf URIs point at the current location. */
+export function healDocPaths(doc: Document): Document {
+  const pages = Array.isArray(doc.pages) ? doc.pages.map(rebaseStoredUri) : doc.pages;
+  const pdfUri = doc.pdfUri ? rebaseStoredUri(doc.pdfUri) : doc.pdfUri;
   return { ...doc, pages, pdfUri };
 }
 
@@ -289,7 +277,7 @@ export function commitPendingDocument(id: string, patch: Partial<Document> = {})
     const raw = await AsyncStorage.getItem(docKey(id));
     if (raw == null) return false;
     try {
-      await AsyncStorage.setItem(docKey(id), JSON.stringify({ ...(JSON.parse(raw) as Document), ...patch, id }));
+      await AsyncStorage.setItem(docKey(id), JSON.stringify(healDocPaths({ ...(JSON.parse(raw) as Document), ...patch, id })));
     } catch {
       return false;
     }
@@ -330,7 +318,7 @@ export function getDocument(id: string): Promise<Document | null> {
 export function saveDocument(doc: Document): Promise<void> {
   return withDocsLock(async () => {
     await ensureMigrated();
-    await AsyncStorage.setItem(docKey(doc.id), JSON.stringify(doc));
+    await AsyncStorage.setItem(docKey(doc.id), JSON.stringify(healDocPaths(doc)));
     const index = await readIndex();
     // Prepend, dedupe (keep at front if it was already present).
     await writeIndex([doc.id, ...index.filter(id => id !== doc.id)]);
@@ -347,7 +335,7 @@ export function updateDocument(doc: Document): Promise<boolean> {
   return withDocsLock(async () => {
     await ensureMigrated();
     if ((await AsyncStorage.getItem(docKey(doc.id))) == null) return false;
-    await AsyncStorage.setItem(docKey(doc.id), JSON.stringify(doc));
+    await AsyncStorage.setItem(docKey(doc.id), JSON.stringify(healDocPaths(doc)));
     const index = await readIndex();
     // Ensure the id is present (append if somehow missing) without reordering.
     if (!index.includes(doc.id)) await writeIndex([...index, doc.id]);
@@ -408,9 +396,11 @@ export function updateDocumentWith(
       console.warn(`storage: corrupt doc ${id}, skipping patch`);
       return false;
     }
-    const patch = fn(healDocPaths(current));
+    const healed = healDocPaths(current);
+    const patch = fn(healed);
     if (!patch) return false;
-    await AsyncStorage.setItem(docKey(id), JSON.stringify({ ...current, ...patch }));
+    // The healed paths are written back, so the record no longer depends on healing.
+    await AsyncStorage.setItem(docKey(id), JSON.stringify(healDocPaths({ ...healed, ...patch })));
     return true;
   }).then(written => {
     if (written) notifyDocumentChanged(id);
@@ -545,7 +535,7 @@ export function trashDocuments(ids: string[]): Promise<number> {
       try {
         const doc = JSON.parse(raw) as Document;
         if (doc.trashedAt != null) continue;
-        changed.push([key, JSON.stringify({ ...doc, trashedAt: now })]);
+        changed.push([key, JSON.stringify(healDocPaths({ ...doc, trashedAt: now }))]);
       } catch {
         console.warn(`storage: corrupt doc ${key}, not trashed`);
       }
@@ -573,7 +563,7 @@ export function restoreDocuments(ids: string[]): Promise<number> {
         if (trashedAt == null) continue;
         // Folder renames and deletions already reached it while it was in the
         // trash (they update every record), so it returns to the right place.
-        changed.push([key, JSON.stringify(doc)]);
+        changed.push([key, JSON.stringify(healDocPaths(doc))]);
       } catch {
         console.warn(`storage: corrupt doc ${key}, not restored`);
       }
@@ -720,7 +710,7 @@ export function setPageBaked(
       patch.adjustments = newAdjustments;
     }
 
-    await AsyncStorage.setItem(docKey(id), JSON.stringify({ ...current, ...patch }));
+    await AsyncStorage.setItem(docKey(id), JSON.stringify(healDocPaths({ ...current, ...patch })));
   });
 }
 

@@ -6,6 +6,7 @@
 // while they run; the startup sweep (garbageCollectOrphans) finishes or undoes
 // an interrupted one from those files instead of deleting them.
 import { Directory, File, Paths } from 'expo-file-system';
+import { docDir, isAppDataUri, scanRoots, storageLayout, SCAN_DIR_NAME, SIGNATURES_DIR_NAME } from './storage-layout';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { cappedSize, getImageSize } from './image-size';
 import { forgetDocumentOcr, pruneDocumentOcr } from './ocr-cache';
@@ -49,7 +50,7 @@ function bumpLayout(docId: string): void {
  */
 export function deleteDocumentFiles(docId: string): void {
   forgetDocumentOcr(docId);
-  const dir = new Directory(Paths.document, 'scan-kit', docId);
+  const dir = docDir(docId);
   if (dir.exists) {
     dir.delete();
   }
@@ -61,7 +62,7 @@ export function deleteDocumentFiles(docId: string): void {
  * page untouched), then renamed over the page. `newUri` is left in place.
  */
 export function replacePage(newUri: string, docId: string, pageIndex: number): string {
-  const dir = new Directory(Paths.document, 'scan-kit', docId);
+  const dir = docDir(docId);
   const dest = new File(dir, `page-${pageIndex}.jpg`);
   stage(new File(stripQuery(newUri)), new File(dir, `page-${pageIndex}.new.jpg`));
   swapIn(new File(dir, `page-${pageIndex}.new.jpg`), dest);
@@ -74,7 +75,7 @@ export function replacePage(newUri: string, docId: string, pageIndex: number): s
  * when a shadow was replaced.
  */
 export function replaceOriginal(newUri: string, docId: string, pageIndex: number): boolean {
-  const dir = new Directory(Paths.document, 'scan-kit', docId);
+  const dir = docDir(docId);
   const dest = new File(dir, `page-${pageIndex}.orig.jpg`);
   if (!dest.exists) return false;
   stage(new File(stripQuery(newUri)), new File(dir, `page-${pageIndex}.orig.new.jpg`));
@@ -114,7 +115,7 @@ export function restorePageWithShadow(srcUri: string, docId: string, pageIndex: 
   if (!src.exists) throw new Error('restorePageWithShadow: saved copy is gone');
   const shadowUri = shadowOf(srcUri);
   const srcOrig = shadowUri ? new File(shadowUri) : null;
-  const dir = new Directory(Paths.document, 'scan-kit', docId);
+  const dir = docDir(docId);
   const dest = new File(dir, `page-${pageIndex}.jpg`);
   const destOrig = new File(dir, `page-${pageIndex}.orig.jpg`);
   const pageSide = new File(dir, `page-${pageIndex}.new.jpg`);
@@ -158,7 +159,7 @@ export function restorePageWithShadow(srcUri: string, docId: string, pageIndex: 
  * image the next time a filter is baked.
  */
 export function copyPageWithShadow(srcUri: string, destDocId: string, destIndex: number): string {
-  const dir = new Directory(Paths.document, 'scan-kit', destDocId);
+  const dir = docDir(destDocId);
   dir.create({ intermediates: true, idempotent: true });
   const dest = new File(dir, `page-${destIndex}.jpg`);
   const destOrig = new File(dir, `page-${destIndex}.orig.jpg`);
@@ -202,7 +203,7 @@ export function deleteSinglePage(
   totalPages: number
 ): void {
   bumpLayout(docId);
-  const dir = new Directory(Paths.document, 'scan-kit', docId);
+  const dir = docDir(docId);
 
   // Runs the shift for one file family. Called for the pages themselves and
   // again for their page-N.orig.jpg shadows, which must move in lockstep: the
@@ -248,7 +249,7 @@ export const REORDER_COMMIT_MARKER = 'reorder.commit';
  */
 export function reorderPages(docId: string, newOrderIndices: number[]): string[] {
   if (newOrderIndices.some((from, to) => from !== to)) bumpLayout(docId);
-  const dir = new Directory(Paths.document, 'scan-kit', docId);
+  const dir = docDir(docId);
   const n = newOrderIndices.length;
   // `required` is false for .orig: a page that has never been filtered has none.
   const families: { suffix: string; required: boolean }[] = [
@@ -307,9 +308,9 @@ export function copyDocumentFiles(
   destId: string,
   pages: string[]
 ): string[] {
-  const destDir = new Directory(Paths.document, 'scan-kit', destId);
+  const destDir = docDir(destId);
   destDir.create({ intermediates: true, idempotent: true });
-  const srcDir = new Directory(Paths.document, 'scan-kit', sourceId);
+  const srcDir = docDir(sourceId);
   return pages.map((_, i) => {
     const src = new File(srcDir, `page-${i}.jpg`);
     const dest = new File(destDir, `page-${i}.jpg`);
@@ -337,7 +338,7 @@ export async function copyPageWithQuality(
   pageIndex: number,
   quality: number
 ): Promise<string> {
-  const dir = new Directory(Paths.document, 'scan-kit', docId);
+  const dir = docDir(docId);
   dir.create({ intermediates: true, idempotent: true });
   const dest = new File(dir, `page-${pageIndex}.jpg`);
   const srcUri = stripQuery(tempUri);
@@ -360,7 +361,7 @@ export async function copyPageWithQuality(
 
 /** Returns the file:// URI of a page's pristine, pre-filter source copy. */
 export function originalUri(docId: string, pageIndex: number): string {
-  const dir = new Directory(Paths.document, 'scan-kit', docId);
+  const dir = docDir(docId);
   return new File(dir, `page-${pageIndex}.orig.jpg`).uri;
 }
 
@@ -372,7 +373,7 @@ export function originalUri(docId: string, pageIndex: number): string {
  * to Original is always possible. Returns the `.orig` URI either way.
  */
 export function ensureOriginal(docId: string, pageIndex: number): string {
-  const dir = new Directory(Paths.document, 'scan-kit', docId);
+  const dir = docDir(docId);
   const orig = new File(dir, `page-${pageIndex}.orig.jpg`);
   if (!orig.exists) {
     // Copied under a `.part` name and renamed into place, so a crash mid-copy
@@ -390,23 +391,23 @@ export function ensureOriginal(docId: string, pageIndex: number): string {
  * JPEG if the app died mid-write.
  */
 export function pageSideUri(docId: string, pageIndex: number): string {
-  return new File(new Directory(Paths.document, 'scan-kit', docId), `page-${pageIndex}.new.jpg`).uri;
+  return new File(docDir(docId), `page-${pageIndex}.new.jpg`).uri;
 }
 
 /** Renames the fully written side file (pageSideUri) over the page. */
 export function promotePageSide(docId: string, pageIndex: number): void {
-  const dir = new Directory(Paths.document, 'scan-kit', docId);
+  const dir = docDir(docId);
   swapIn(new File(dir, `page-${pageIndex}.new.jpg`), new File(dir, `page-${pageIndex}.jpg`));
 }
 
 /** Where a direct write of a page's `.orig` shadow goes first (see promoteOriginalSide). */
 export function originalSideUri(docId: string, pageIndex: number): string {
-  return new File(new Directory(Paths.document, 'scan-kit', docId), `page-${pageIndex}.orig.new.jpg`).uri;
+  return new File(docDir(docId), `page-${pageIndex}.orig.new.jpg`).uri;
 }
 
 /** Renames the fully written shadow side file (originalSideUri) over the page's `.orig`. */
 export function promoteOriginalSide(docId: string, pageIndex: number): void {
-  const dir = new Directory(Paths.document, 'scan-kit', docId);
+  const dir = docDir(docId);
   swapIn(new File(dir, `page-${pageIndex}.orig.new.jpg`), new File(dir, `page-${pageIndex}.orig.jpg`));
 }
 
@@ -529,31 +530,44 @@ export async function garbageCollectOrphans(validDocIds: string[], now: number =
   // not that the user has no documents (deleting a document already removes
   // its folder). Sweeping against it would delete the whole library.
   if (valid.size === 0) return handled;
-  let children: (Directory | File)[];
-  try {
-    const root = new Directory(Paths.document, 'scan-kit');
-    if (!root.exists) return handled;
-    children = root.list();
-  } catch {
-    return handled;
-  }
-
-  for (const child of children) {
+  // While the move out of Documents is only part done (lib/storage-layout.ts
+  // 'split'), a document can have files in both roots: interrupted operations
+  // are finished in each, but nothing is deleted as an orphan until the move
+  // has completed and there is one root again.
+  const layout = storageLayout();
+  const mayDelete = layout.state !== 'split';
+  for (const root of scanRoots()) {
+    let children: (Directory | File)[];
     try {
-      if (!(child instanceof Directory)) continue;
-      if (valid.has(baseName(child.uri))) {
-        handled += recoverInterrupted(child, now);
-      } else if (isSettled(child, now)) {
-        // Orphan directory: its doc record is gone. Remove it entirely.
-        child.delete();
-        forgetDocumentOcr(baseName(child.uri));
-        handled++;
-      }
-    } catch {}
+      if (!root.exists) continue;
+      children = root.list();
+    } catch {
+      continue;
+    }
+    for (const child of children) {
+      try {
+        if (!(child instanceof Directory)) continue;
+        const name = baseName(child.uri);
+        if (valid.has(name)) {
+          handled += recoverInterrupted(child, now);
+        } else if (mayDelete && !PROTECTED_DIR_NAMES.has(name) && isSettled(child, now)) {
+          // Orphan directory: its doc record is gone. Remove it entirely.
+          child.delete();
+          forgetDocumentOcr(name);
+          handled++;
+        }
+      } catch {}
+    }
   }
 
   return handled;
 }
+
+/**
+ * Never orphans, whatever is in the record list: a root folder that a faulty
+ * move nested inside another root would otherwise look like one document.
+ */
+const PROTECTED_DIR_NAMES = new Set([SCAN_DIR_NAME, SIGNATURES_DIR_NAME]);
 
 // ── Files a record no longer references ─────────────────────────────────────
 
@@ -578,7 +592,7 @@ function recordSettled(rec: DocFileRefs, now: number): boolean {
 /** One document's stray Convert-to-pages files (see sweepConvertLeftovers). Synchronous. */
 function removeConvertLeftovers(rec: DocFileRefs, now: number): number {
   if (!recordSettled(rec, now)) return 0;
-  const dir = new Directory(Paths.document, 'scan-kit', rec.id);
+  const dir = docDir(rec.id);
   if (!dir.exists) return 0;
   const referenced = new Set(
     [...rec.pages, rec.pdfUri].filter((u): u is string => !!u).map(u => baseName(stripQuery(u))),
@@ -653,6 +667,9 @@ function containerRoot(): string {
   return docs.slice(0, docs.lastIndexOf('/') + 1);
 }
 
+/** A "Keep a copy in Files" PDF being written (lib/files-copy.ts writeCopy); hidden in Files. */
+const FILES_COPY_TEMP = /^\.[0-9a-z]+-copy\.pdf$/;
+
 /** The document scanner writes its pages straight into Documents/. */
 const SCANNER_OUTPUT = /^DOCUMENT_SCAN_\d+_[^/]*\.jpe?g$/i;
 
@@ -660,14 +677,15 @@ const SCANNER_OUTPUT = /^DOCUMENT_SCAN_\d+_[^/]*\.jpe?g$/i;
  * True for files the app created only as a stepping stone and may delete once
  * their content is stored: anything in Caches/ or tmp/ (pickers, the image
  * manipulator, auto-crop output), and the document scanner's output in the
- * Documents root. Never a stored page (Documents/scan-kit/…).
+ * Documents root. Never a stored page or anything else in the app's storage (lib/storage-layout.ts).
  */
 export function isDisposableTemp(uri: string | null | undefined): boolean {
   if (!uri) return false;
   const clean = stripQuery(uri);
   if (!clean.startsWith('file://')) return false;
-  if (clean.includes('/scan-kit/')) return false;
   try {
+    // Never a stored page or anything else in the app's own storage.
+    if (isAppDataUri(clean)) return false;
     const cache = Paths.cache.uri.replace(/\/*$/, '/');
     if (clean.startsWith(cache)) return true;
     const root = containerRoot();
@@ -786,6 +804,15 @@ function sweepInbox(now: number): number {
     if (Object.keys(next).length > 0) seenFile.write(JSON.stringify(next));
     else if (seenFile.exists) seenFile.delete();
   } catch {}
+  // Documents is visible in the Files app ("Keep a copy in Files"): an empty
+  // Inbox left by iOS would show there as a stray folder. iOS makes it again
+  // when it next hands the app a file.
+  if (Object.keys(next).length === 0) {
+    try {
+      const dir = new Directory(Paths.document, 'Inbox');
+      if (dir.exists && dir.list().length === 0) dir.delete();
+    } catch {}
+  }
   return removed;
 }
 
@@ -818,7 +845,7 @@ export function sweepTempLeftovers(now: number = Date.now()): number {
       } catch {}
     }
   };
-  sweep(new Directory(Paths.document), name => SCANNER_OUTPUT.test(name));
+  sweep(new Directory(Paths.document), name => SCANNER_OUTPUT.test(name) || FILES_COPY_TEMP.test(name));
   for (const name of TEMP_DIRS) {
     sweep(new Directory(Paths.cache, name), () => true, name === 'incoming' ? isStagedSettled : isSettled);
   }
@@ -834,7 +861,7 @@ export function sweepTempLeftovers(now: number = Date.now()): number {
  * Returns the stored file:// URI.
  */
 export function copyPdfToStorage(tempUri: string, docId: string): string {
-  const dir = new Directory(Paths.document, 'scan-kit', docId);
+  const dir = docDir(docId);
   dir.create({ intermediates: true, idempotent: true });
   const dest = new File(dir, 'document.pdf');
   const src = new File(tempUri);

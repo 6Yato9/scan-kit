@@ -4,7 +4,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { Alert, InteractionManager, ScrollView, StyleSheet, View } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Directory, File, Paths } from 'expo-file-system';
+import { Directory, File } from 'expo-file-system';
+import { scanRoots, signaturesDir } from '@/lib/storage-layout';
 import { SegmentedControl, SettingsGroup, SettingsRow } from '@/components/settings-list';
 import { getAppLockEnabled, getDocuments, setAppLockEnabled, TRASH_RETENTION_DAYS } from '@/lib/storage';
 import { MultiShareSheet } from '@/components/multi-share-sheet';
@@ -12,7 +13,7 @@ import { useToast } from '@/components/toast';
 import type { Document } from '@/types/document';
 import { authenticate, biometricKind, BiometricKind, canAuthenticate } from '@/lib/biometrics';
 import { tapLight } from '@/lib/haptics';
-import { FILES_COPY_AVAILABLE, getFilesCopyEnabled, removeFilesCopies, setFilesCopyEnabled } from '@/lib/files-copy';
+import { filesCopyAvailable, getFilesCopyEnabled, removeFilesCopies, setFilesCopyEnabled } from '@/lib/files-copy';
 import { useTheme } from '@/contexts/theme-context';
 import { LargeTitle } from '@/components/screen-header';
 import { SectionLabel } from '@/components/section-label';
@@ -116,8 +117,10 @@ export default function SettingsScreen() {
     const task = InteractionManager.runAfterInteractions(() => {
       let text = 'Unavailable';
       try {
-        const root = new Directory(Paths.document, 'scan-kit');
-        text = formatBytes(root.exists ? dirSize(root) : 0);
+        // Every document folder (both places while the move out of Documents
+        // is part done, lib/storage-layout.ts) plus the saved signatures.
+        const total = [...scanRoots(), signaturesDir()].reduce((sum, d) => sum + (d.exists ? dirSize(d) : 0), 0);
+        text = formatBytes(total);
       } catch {}
       if (!cancelled) setStorageUsed(text);
     });
@@ -205,7 +208,7 @@ export default function SettingsScreen() {
               accessory={{ type: 'chevron' }}
               onPress={openExportAll}
             />
-            {FILES_COPY_AVAILABLE && <SettingsRow
+            {filesCopyAvailable() && <SettingsRow
               icon="copy-outline"
               label="Keep a copy in Files"
               description={

@@ -6,7 +6,8 @@
 // launch's bake migration re-applies the recorded filter on top of pixels that
 // already carry it, and "Original" can no longer be restored for those pages.
 import * as Crypto from 'expo-crypto';
-import { Directory, File, Paths } from 'expo-file-system';
+import { File } from 'expo-file-system';
+import { docDir } from './storage-layout';
 import { Document, PageAdjustment, PageFilter } from '../types/document';
 import { copyDocumentFiles, copyPageWithShadow, copyPdfToStorage, deleteDocumentFiles, reorderPages } from './files';
 import { getDocument, patchDocument, saveDocument } from './storage';
@@ -14,10 +15,6 @@ import { remapForReorder, runPageEdit, withDocLock } from './bake';
 import { indexDocText } from './save-scan';
 
 const DEFAULT_ADJ: PageAdjustment = { brightness: 0, contrast: 0, saturation: 0 };
-
-function docDir(id: string): Directory {
-  return new Directory(Paths.document, 'scan-kit', id);
-}
 
 /**
  * Copies `source`'s pages (and their `.orig` shadows) into `destId`'s folder

@@ -7,6 +7,7 @@
 // can't insert the page twice. Stashes nobody used are removed by the startup
 // sweep (lib/files.ts TEMP_DIRS).
 import { Directory, File, Paths } from 'expo-file-system';
+import { docDir } from './storage-layout';
 import { copyPageWithShadow, reorderPages } from './files';
 
 const STASH = 'page-undo';
@@ -37,7 +38,7 @@ export function stashPage(docId: string, index: number): string {
   }
   const dir = new Directory(Paths.cache, STASH, String(Date.now()));
   dir.create({ intermediates: true, idempotent: true });
-  const srcDir = new Directory(Paths.document, 'scan-kit', docId);
+  const srcDir = docDir(docId);
   // Named page-0 so copyPageWithShadow finds the .orig next to it.
   const page = new File(dir, 'page-0.jpg');
   new File(srcDir, `page-${index}.jpg`).copy(page);

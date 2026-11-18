@@ -1,0 +1,611 @@
+// __tests__/storage-layout.test.ts
+//
+// The move of the app's files out of Documents (lib/storage-layout.ts) and the
+// healing of stored URIs that follows it (lib/storage.ts healDocPaths). The
+// owner's rule: an update must never lose or break a user's photos. These
+// tests run the real code against an in-memory file system whose move/rename
+// semantics match expo-file-system on iOS (Directory.move nests into an
+// existing destination; File.move refuses an existing one), with injectable
+// failures.
+
+type Node = { type: 'dir' } | { type: 'file'; content: string; mtime: number };
+
+const mockFs = new Map<string, Node>();
+/** Keys (no trailing slash) whose move throws, to simulate a failed rename. */
+const mockFailMoves = new Set<string>();
+const mockState: { container: string; moves: number; docs?: string; cache?: string } = {
+  container: 'file:///var/mobile/Containers/Data/Application/C1',
+  moves: 0,
+};
+
+jest.mock('expo-file-system', () => {
+  const strip = (u: string) => u.replace(/\/+$/, '');
+  const enc = (seg: string) => seg.split('/').map(s => s.replace(/ /g, '%20')).join('/');
+  const join = (parts: any[]) => {
+    const [first, ...rest] = parts;
+    const base = strip(typeof first === 'string' ? first : first.uri);
+    return [base, ...rest.map(p => enc(strip(String(p))))].join('/');
+  };
+  const parentOf = (key: string) => key.slice(0, key.lastIndexOf('/'));
+  const nameOf = (key: string) => decodeURIComponent(key.slice(key.lastIndexOf('/') + 1));
+  const isUnder = (k: string, root: string) => k === root || k.startsWith(`${root}/`);
+
+  function moveTree(from: string, to: string) {
+    if (mockFailMoves.has(from)) throw new Error(`EPERM rename ${from}`);
+    if (mockFs.has(to)) throw new Error(`EEXIST ${to}`);
+    if (mockFs.get(parentOf(to))?.type !== 'dir') throw new Error(`ENOENT parent of ${to}`);
+    mockState.moves++;
+    const entries = [...mockFs.entries()].filter(([k]) => isUnder(k, from));
+    for (const [k] of entries) mockFs.delete(k);
+    for (const [k, v] of entries) mockFs.set(to + k.slice(from.length), v);
+  }
+
+  class MockDirectory {
+    key: string;
+    constructor(...parts: any[]) { this.key = strip(join(parts)); }
+    get uri() { return `${this.key}/`; }
+    get name() { return nameOf(this.key); }
+    get exists() { return mockFs.get(this.key)?.type === 'dir'; }
+    create(opts: { intermediates?: boolean; idempotent?: boolean } = {}) {
+      if (this.exists) { if (opts.idempotent) return; throw new Error('exists'); }
+      if (mockFs.has(this.key)) throw new Error('a file is in the way');
+      const missing: string[] = [];
+      let k = this.key;
+      while (k.includes('/') && !mockFs.has(k) && k !== 'file://') { missing.push(k); k = parentOf(k); }
+      if (missing.length > 1 && !opts.intermediates) throw new Error('parent missing');
+      for (const m of missing) mockFs.set(m, { type: 'dir' });
+    }
+    list() {
+      if (!this.exists) throw new Error('ENOENT');
+      const out: any[] = [];
+      for (const [k, v] of mockFs) {
+        if (parentOf(k) !== this.key) continue;
+        out.push(v.type === 'dir' ? new MockDirectory(k) : new MockFile(k));
+      }
+      return out;
+    }
+    move(dest: any) {
+      if (!this.exists) throw new Error('ENOENT');
+      const target = dest instanceof MockDirectory && dest.exists ? `${dest.key}/${encodeURIComponent(this.name)}` : dest.key;
+      moveTree(this.key, target);
+      this.key = target;
+    }
+    delete() {
+      if (!this.exists) throw new Error('ENOENT');
+      for (const k of [...mockFs.keys()]) if (isUnder(k, this.key)) mockFs.delete(k);
+    }
+    info() { return { exists: this.exists, modificationTime: 1 }; }
+  }
+
+  class MockFile {
+    key: string;
+    constructor(...parts: any[]) { this.key = strip(join(parts)); }
+    get uri() { return this.key; }
+    get name() { return nameOf(this.key); }
+    get exists() { return mockFs.get(this.key)?.type === 'file'; }
+    get size() { const n = mockFs.get(this.key); return n?.type === 'file' ? n.content.length : 0; }
+    textSync() { const n = mockFs.get(this.key); if (n?.type !== 'file') throw new Error('ENOENT'); return n.content; }
+    create() {
+      if (mockFs.get(parentOf(this.key))?.type !== 'dir') throw new Error('parent missing');
+      mockFs.set(this.key, { type: 'file', content: '', mtime: 1 });
+    }
+    write(content: string) {
+      if (mockFs.get(parentOf(this.key))?.type !== 'dir') throw new Error('parent missing');
+      mockFs.set(this.key, { type: 'file', content, mtime: 1 });
+    }
+    move(dest: any) {
+      if (!this.exists) throw new Error('ENOENT');
+      const target = dest instanceof MockDirectory ? `${dest.key}/${encodeURIComponent(this.name)}` : dest.key;
+      moveTree(this.key, target);
+      this.key = target;
+    }
+    copy(dest: any) {
+      const n = mockFs.get(this.key);
+      if (n?.type !== 'file') throw new Error('ENOENT');
+      mockFs.set(dest.key, { ...n });
+    }
+    delete() { if (!this.exists) throw new Error('ENOENT'); mockFs.delete(this.key); }
+    info() { return { exists: this.exists, modificationTime: 1 }; }
+  }
+
+  return {
+    File: MockFile,
+    Directory: MockDirectory,
+    Paths: {
+      get document() { return new MockDirectory(mockState.docs ?? `${mockState.container}/Documents`); },
+      get cache() { return new MockDirectory(mockState.cache ?? `${mockState.container}/Library/Caches`); },
+    },
+  };
+});
+
+jest.mock('@react-native-async-storage/async-storage', () =>
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock')
+);
+// storage.ts only needs these two from files.ts; the real one pulls in native modules.
+jest.mock('../lib/files', () => ({
+  originalUri: (docId: string, i: number) => `file:///x/scan-kit/${docId}/page-${i}.orig.jpg`,
+  deleteDocumentFiles: jest.fn(),
+}));
+
+type Layout = typeof import('../lib/storage-layout');
+let L: Layout;
+
+const C1 = 'file:///var/mobile/Containers/Data/Application/C1';
+const C0 = 'file:///var/mobile/Containers/Data/Application/C0-OLD';
+const DOCS = `${C1}/Documents`;
+const SUPPORT = `${C1}/Library/Application%20Support`;
+
+function dir(key: string) { mockFs.set(key, { type: 'dir' }); }
+function put(key: string, content: string) {
+  // make parents
+  const parts = key.split('/');
+  for (let i = 4; i < parts.length; i++) {
+    const k = parts.slice(0, i).join('/');
+    if (!mockFs.has(k)) mockFs.set(k, { type: 'dir' });
+  }
+  mockFs.set(key, { type: 'file', content, mtime: 1 });
+}
+function files(prefix: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of mockFs) if (v.type === 'file' && k.startsWith(`${prefix}/`)) out[k.slice(prefix.length + 1)] = v.content;
+  return out;
+}
+function under(prefix: string): string[] {
+  return [...mockFs.keys()].filter(k => k.startsWith(`${prefix}/`)).map(k => k.slice(prefix.length + 1)).sort();
+}
+
+/** A library as builds up to round 9 left it, plus iOS's own Library folders. */
+function seedOldLayout() {
+  dir(C1);
+  dir(DOCS);
+  dir(`${C1}/Library`);
+  dir(`${C1}/Library/Caches`);
+  dir(SUPPORT); // AsyncStorage lives here already
+  put(`${SUPPORT}/com.example/RCTAsyncLocalStorage_V1/manifest.json`, '{}');
+  put(`${DOCS}/scan-kit/doc-a/page-0.jpg`, 'A0');
+  put(`${DOCS}/scan-kit/doc-a/page-0.orig.jpg`, 'A0-orig');
+  put(`${DOCS}/scan-kit/doc-a/page-1.jpg`, 'A1');
+  put(`${DOCS}/scan-kit/doc-a/ocr/123-456.json`, '{"text":"hi"}');
+  put(`${DOCS}/scan-kit/doc-pdf/document.pdf`, '%PDF');
+  put(`${DOCS}/scan-kit/doc-trash/page-0.jpg`, 'T0');
+  put(`${DOCS}/signatures/index.json`, '[{"id":"sig-00000001"}]');
+  put(`${DOCS}/signatures/sig-00000001.png`, 'PNG');
+  put(`${DOCS}/harness-log.txt`, 'log');
+  put(`${DOCS}/documents/merged-1/page_0.jpg`, 'M0'); // April 2026 Merge tool
+  put(`${DOCS}/Inbox/Lease.pdf`, 'inbox');
+  put(`${DOCS}/DOCUMENT_SCAN_0_123.jpg`, 'scanner');
+}
+
+beforeEach(() => {
+  jest.resetModules();
+  mockFs.clear();
+  mockFailMoves.clear();
+  mockState.container = C1;
+  mockState.moves = 0;
+  delete mockState.docs;
+  delete mockState.cache;
+  L = require('../lib/storage-layout');
+});
+
+describe('moving the app data out of Documents', () => {
+  test('an upgrade moves every page, shadow, OCR file and signature byte for byte', () => {
+    seedOldLayout();
+    const before = { scan: files(`${DOCS}/scan-kit`), sigs: files(`${DOCS}/signatures`) };
+
+    const r = L.migrateStorageLayout(1000);
+
+    expect(r.state).toBe('app-support');
+    expect(r.errors).toEqual([]);
+    expect(files(`${SUPPORT}/scan-kit`)).toEqual(before.scan);
+    expect(files(`${SUPPORT}/signatures`)).toEqual(before.sigs);
+    expect(L.scanRoot().uri).toBe(`${SUPPORT}/scan-kit/`);
+    expect(L.signaturesDir().uri).toBe(`${SUPPORT}/signatures/`);
+    // AsyncStorage's folder is untouched.
+    expect(files(`${SUPPORT}/com.example`)).toEqual({ 'RCTAsyncLocalStorage_V1/manifest.json': '{}' });
+  });
+
+  test('nothing internal stays visible in Documents', () => {
+    seedOldLayout();
+    L.migrateStorageLayout(1000);
+
+    // Only iOS's Inbox and the scanner's transient output (both swept by lib/files.ts).
+    expect(under(DOCS)).toEqual(['DOCUMENT_SCAN_0_123.jpg', 'Inbox', 'Inbox/Lease.pdf']);
+    expect(files(`${SUPPORT}/legacy-documents`)).toEqual({
+      'harness-log.txt': 'log',
+      'documents/merged-1/page_0.jpg': 'M0',
+    });
+  });
+
+  test('it is done with renames, never by copying and deleting', () => {
+    seedOldLayout();
+    L.migrateStorageLayout(1000);
+    // scan-kit, signatures, harness-log.txt, documents/ — one rename each.
+    expect(mockState.moves).toBe(4);
+  });
+
+  test('completion is recorded, and a second launch does nothing', () => {
+    seedOldLayout();
+    L.migrateStorageLayout(1000);
+    const marker = JSON.parse(files(SUPPORT)['storage-layout.json']);
+    expect(marker).toMatchObject({ version: 2, strays: 'done', migratedAt: 1000 });
+    const snapshot = new Map(mockFs);
+
+    jest.resetModules();
+    L = require('../lib/storage-layout');
+    const r = L.migrateStorageLayout(2000);
+
+    expect(r.state).toBe('app-support');
+    expect(r.actions).toEqual([]);
+    expect(new Map(mockFs)).toEqual(snapshot);
+  });
+
+  test('a fresh install uses Application Support straight away', () => {
+    dir(C1); dir(DOCS); dir(`${C1}/Library`); dir(`${C1}/Library/Caches`);
+    const r = L.migrateStorageLayout(1000);
+    expect(r.state).toBe('app-support');
+    expect(L.docDir('new-doc').uri).toBe(`${SUPPORT}/scan-kit/new-doc/`);
+    expect(under(DOCS)).toEqual([]);
+  });
+
+  test('the folders are found lazily: the first path asked for runs the move', () => {
+    seedOldLayout();
+    const d = L.docDir('doc-a');
+    expect(d.uri).toBe(`${SUPPORT}/scan-kit/doc-a/`);
+    expect(d.exists).toBe(true);
+  });
+
+  test('a destination that already exists is never nested into (no scan-kit/scan-kit)', () => {
+    seedOldLayout();
+    dir(`${SUPPORT}/scan-kit`); // e.g. made by an earlier partial run
+    L.migrateStorageLayout(1000);
+    expect(mockFs.has(`${SUPPORT}/scan-kit/scan-kit`)).toBe(false);
+    expect(files(`${SUPPORT}/scan-kit`)['doc-a/page-0.jpg']).toBe('A0');
+  });
+
+  test('Android / unknown containers keep the Documents layout and move nothing', () => {
+    const A = 'file:///data/user/0/com.sixyato9.scankit';
+    mockState.docs = `${A}/files`;
+    mockState.cache = `${A}/cache`;
+    put(`${A}/files/scan-kit/doc-a/page-0.jpg`, 'A0');
+    dir(`${A}/cache`);
+
+    const r = L.migrateStorageLayout(1000);
+
+    expect(r.state).toBe('documents');
+    expect(mockState.moves).toBe(0);
+    expect(L.docDir('doc-a').uri).toBe(`${A}/files/scan-kit/doc-a/`);
+    expect(L.rebaseStoredUri(`${A}/files/scan-kit/doc-a/page-0.jpg`)).toBe(`${A}/files/scan-kit/doc-a/page-0.jpg`);
+  });
+
+  test('Documents and Caches from different containers: nothing is moved', () => {
+    seedOldLayout();
+    mockState.cache = `${C0}/Library/Caches`;
+    const r = L.migrateStorageLayout(1000);
+    expect(r.state).toBe('documents');
+    expect(mockState.moves).toBe(0);
+  });
+});
+
+describe('when the move fails', () => {
+  test('a failed rename leaves everything where it was and the app keeps using it', () => {
+    seedOldLayout();
+    const before = files(`${DOCS}/scan-kit`);
+    mockFailMoves.add(`${DOCS}/scan-kit`);
+
+    const r = L.migrateStorageLayout(1000);
+
+    expect(r.state).toBe('documents');
+    expect(files(`${DOCS}/scan-kit`)).toEqual(before);
+    expect(L.docDir('doc-a').uri).toBe(`${DOCS}/scan-kit/doc-a/`);
+    expect(L.scanRoot().uri).toBe(`${DOCS}/scan-kit/`);
+    // Not recorded as complete.
+    expect(JSON.parse(files(SUPPORT)['storage-layout.json']).migratedAt).toBeUndefined();
+  });
+
+  test('the next launch tries again and completes', () => {
+    seedOldLayout();
+    const before = files(`${DOCS}/scan-kit`);
+    mockFailMoves.add(`${DOCS}/scan-kit`);
+    L.migrateStorageLayout(1000);
+
+    mockFailMoves.clear();
+    jest.resetModules();
+    L = require('../lib/storage-layout');
+    const r = L.migrateStorageLayout(2000);
+
+    expect(r.state).toBe('app-support');
+    expect(files(`${SUPPORT}/scan-kit`)).toEqual(before);
+    expect(mockFs.has(`${DOCS}/scan-kit`)).toBe(false);
+  });
+
+  test('a crash between the two folders is finished on the next launch', () => {
+    seedOldLayout();
+    // Launch 1 moved scan-kit and died before signatures.
+    mockFailMoves.add(`${DOCS}/signatures`);
+    L.migrateStorageLayout(1000);
+    expect(L.signaturesDir().uri).toBe(`${DOCS}/signatures/`); // still used from Documents
+    mockFailMoves.clear();
+
+    jest.resetModules();
+    L = require('../lib/storage-layout');
+    const r = L.migrateStorageLayout(2000);
+
+    expect(r.state).toBe('app-support');
+    expect(files(`${SUPPORT}/signatures`)).toEqual({ 'index.json': '[{"id":"sig-00000001"}]', 'sig-00000001.png': 'PNG' });
+    expect(JSON.parse(files(SUPPORT)['storage-layout.json']).migratedAt).toBe(2000);
+  });
+
+  test('both roots present: the contents are merged, and nothing is overwritten or lost', () => {
+    seedOldLayout();
+    // An older build ran after a newer one and re-created Documents/scan-kit;
+    // the new root already holds doc-a with a newer page-0.
+    put(`${SUPPORT}/scan-kit/doc-a/page-0.jpg`, 'A0-new');
+    put(`${SUPPORT}/scan-kit/doc-new/page-0.jpg`, 'N0');
+
+    const r = L.migrateStorageLayout(1000);
+
+    expect(r.state).toBe('app-support');
+    const now = files(`${SUPPORT}/scan-kit`);
+    expect(now['doc-a/page-0.jpg']).toBe('A0-new'); // the new root's copy is kept in place
+    expect(now['doc-a/page-0.orig.jpg']).toBe('A0-orig'); // missing ones are merged in
+    expect(now['doc-a/page-1.jpg']).toBe('A1');
+    expect(now['doc-pdf/document.pdf']).toBe('%PDF');
+    expect(now['doc-new/page-0.jpg']).toBe('N0');
+    // The other page-0 is kept aside, not deleted.
+    expect(files(`${SUPPORT}/scan-kit-recovered/1000/scan-kit/doc-a`)).toEqual({ 'page-0.jpg': 'A0' });
+    expect(mockFs.has(`${DOCS}/scan-kit`)).toBe(false);
+  });
+
+  test('a merge cut short leaves a split layout that still finds every document', () => {
+    seedOldLayout();
+    dir(`${SUPPORT}/scan-kit`);
+    put(`${SUPPORT}/scan-kit/doc-new/page-0.jpg`, 'N0');
+    mockFailMoves.add(`${DOCS}/scan-kit/doc-pdf`);
+
+    const r = L.migrateStorageLayout(1000);
+
+    expect(r.state).toBe('split');
+    expect(L.docDir('doc-a').uri).toBe(`${SUPPORT}/scan-kit/doc-a/`);
+    expect(L.docDir('doc-pdf').uri).toBe(`${DOCS}/scan-kit/doc-pdf/`); // still where it was
+    expect(L.docDir('brand-new').uri).toBe(`${SUPPORT}/scan-kit/brand-new/`);
+    expect(L.scanRoots().map(d => d.uri)).toEqual([`${SUPPORT}/scan-kit/`, `${DOCS}/scan-kit/`]);
+    expect(files(`${DOCS}/scan-kit`)).toEqual({ 'doc-pdf/document.pdf': '%PDF' });
+
+    mockFailMoves.clear();
+    jest.resetModules();
+    L = require('../lib/storage-layout');
+    expect(L.migrateStorageLayout(2000).state).toBe('app-support');
+    expect(files(`${SUPPORT}/scan-kit`)['doc-pdf/document.pdf']).toBe('%PDF');
+  });
+});
+
+describe('the one-time pass over the Documents root', () => {
+  test('never runs again once done: a file the user later puts there stays', () => {
+    seedOldLayout();
+    L.migrateStorageLayout(1000);
+    put(`${DOCS}/My notes.pdf`, 'user');
+
+    jest.resetModules();
+    L = require('../lib/storage-layout');
+    L.migrateStorageLayout(2000);
+
+    expect(files(DOCS)['My notes.pdf']).toBe('user');
+  });
+
+  test('one interrupted half way is finished on the next launch', () => {
+    seedOldLayout();
+    mockFailMoves.add(`${DOCS}/harness-log.txt`);
+    L.migrateStorageLayout(1000);
+    expect(JSON.parse(files(SUPPORT)['storage-layout.json']).strays).toBe('pending');
+    mockFailMoves.clear();
+
+    jest.resetModules();
+    L = require('../lib/storage-layout');
+    L.migrateStorageLayout(2000);
+
+    expect(under(DOCS)).toEqual(['DOCUMENT_SCAN_0_123.jpg', 'Inbox', 'Inbox/Lease.pdf']);
+    expect(JSON.parse(files(SUPPORT)['storage-layout.json']).strays).toBe('done');
+  });
+});
+
+describe('stored URIs heal to wherever the file is now', () => {
+  beforeEach(() => {
+    seedOldLayout();
+  });
+
+  test('old container + old root', () => {
+    L.migrateStorageLayout(1000);
+    expect(L.rebaseStoredUri(`${C0}/Documents/scan-kit/doc-a/page-0.jpg`)).toBe(`${SUPPORT}/scan-kit/doc-a/page-0.jpg`);
+  });
+
+  test('current container + old root', () => {
+    L.migrateStorageLayout(1000);
+    expect(L.rebaseStoredUri(`${DOCS}/scan-kit/doc-a/page-0.orig.jpg`)).toBe(`${SUPPORT}/scan-kit/doc-a/page-0.orig.jpg`);
+  });
+
+  test('old container + new root, and new root unchanged', () => {
+    L.migrateStorageLayout(1000);
+    expect(L.rebaseStoredUri(`${C0}/Library/Application%20Support/scan-kit/doc-pdf/document.pdf`)).toBe(`${SUPPORT}/scan-kit/doc-pdf/document.pdf`);
+    expect(L.rebaseStoredUri(`${SUPPORT}/scan-kit/doc-a/page-1.jpg`)).toBe(`${SUPPORT}/scan-kit/doc-a/page-1.jpg`);
+  });
+
+  test('both roots present (partial migration): each document maps to where its folder is', () => {
+    dir(`${SUPPORT}/scan-kit`);
+    mockFailMoves.add(`${DOCS}/scan-kit/doc-pdf`);
+    L.migrateStorageLayout(1000);
+    expect(L.storageLayout().state).toBe('split');
+    expect(L.rebaseStoredUri(`${C0}/Documents/scan-kit/doc-a/page-0.jpg`)).toBe(`${SUPPORT}/scan-kit/doc-a/page-0.jpg`);
+    expect(L.rebaseStoredUri(`${SUPPORT}/scan-kit/doc-pdf/document.pdf`)).toBe(`${DOCS}/scan-kit/doc-pdf/document.pdf`);
+    expect(L.rebaseStoredUri(`${C0}/Documents/scan-kit/doc-pdf/document.pdf`)).toBe(`${DOCS}/scan-kit/doc-pdf/document.pdf`);
+  });
+
+  test('a failed move keeps URIs on the old root', () => {
+    mockFailMoves.add(`${DOCS}/scan-kit`);
+    L.migrateStorageLayout(1000);
+    expect(L.rebaseStoredUri(`${C0}/Documents/scan-kit/doc-a/page-0.jpg`)).toBe(`${DOCS}/scan-kit/doc-a/page-0.jpg`);
+  });
+
+  test('pages of documents merged by the April 2026 build follow the leftovers pass', () => {
+    L.migrateStorageLayout(1000);
+    expect(L.rebaseStoredUri(`${C0}/Documents/documents/merged-1/page_0.jpg`)).toBe(`${SUPPORT}/legacy-documents/documents/merged-1/page_0.jpg`);
+  });
+
+  test('anything the app does not own is left alone', () => {
+    L.migrateStorageLayout(1000);
+    for (const u of ['file:///somewhere/else/photo.jpg', `${DOCS}/Inbox/Lease.pdf`, 'ph://ABC', `${DOCS}/Receipt.pdf`]) {
+      expect(L.rebaseStoredUri(u)).toBe(u);
+    }
+  });
+
+  test('a ?v= cache-bust suffix survives', () => {
+    L.migrateStorageLayout(1000);
+    expect(L.rebaseStoredUri(`${DOCS}/scan-kit/doc-a/page-0.jpg?v=3`)).toBe(`${SUPPORT}/scan-kit/doc-a/page-0.jpg?v=3`);
+  });
+});
+
+describe('records in storage', () => {
+  type Storage = typeof import('../lib/storage');
+  let storage: Storage;
+  let AsyncStorage: typeof import('@react-native-async-storage/async-storage').default;
+
+  async function seedRecords() {
+    await AsyncStorage.setItem('@scan_kit_schema_version', '3');
+    await AsyncStorage.setItem('@scan_kit_doc_index', JSON.stringify(['doc-a', 'doc-pdf', 'doc-trash']));
+    await AsyncStorage.setItem('@scan_kit_doc:doc-a', JSON.stringify({
+      id: 'doc-a', name: 'Lease', createdAt: 1, updatedAt: 1,
+      pages: [`${C0}/Documents/scan-kit/doc-a/page-0.jpg`, `${DOCS}/scan-kit/doc-a/page-1.jpg`],
+      filters: ['bw', 'original'],
+    }));
+    await AsyncStorage.setItem('@scan_kit_doc:doc-pdf', JSON.stringify({
+      id: 'doc-pdf', name: 'Invoice', createdAt: 2, updatedAt: 2, pages: [],
+      pdfUri: `${C0}/Documents/scan-kit/doc-pdf/document.pdf`,
+    }));
+    await AsyncStorage.setItem('@scan_kit_doc:doc-trash', JSON.stringify({
+      id: 'doc-trash', name: 'Receipt', createdAt: 3, updatedAt: 3, trashedAt: Date.now(),
+      pages: [`${DOCS}/scan-kit/doc-trash/page-0.jpg`],
+    }));
+  }
+
+  beforeEach(async () => {
+    seedOldLayout();
+    jest.resetModules();
+    L = require('../lib/storage-layout');
+    AsyncStorage = require('@react-native-async-storage/async-storage');
+    storage = require('../lib/storage');
+    await seedRecords();
+  });
+
+  const exists = (uri: string) => mockFs.get(uri.replace(/\/+$/, ''))?.type === 'file';
+
+  test('every page and PDF of every record (trash included) opens after the move', async () => {
+    const live = await storage.getDocuments();
+    const trashed = await storage.getTrashedDocuments();
+    const all = [...live, ...trashed];
+    expect(all.map(d => d.id).sort()).toEqual(['doc-a', 'doc-pdf', 'doc-trash']);
+    for (const d of all) {
+      for (const p of d.pages) expect(exists(p)).toBe(true);
+      if (d.pdfUri) expect(exists(d.pdfUri)).toBe(true);
+    }
+    expect(live.find(d => d.id === 'doc-a')!.pages[0]).toBe(`${SUPPORT}/scan-kit/doc-a/page-0.jpg`);
+  });
+
+  test('the healed paths are written back on the next save', async () => {
+    await storage.patchDocument('doc-a', { name: 'Lease 2026' });
+    const raw = JSON.parse((await AsyncStorage.getItem('@scan_kit_doc:doc-a'))!);
+    expect(raw.pages).toEqual([`${SUPPORT}/scan-kit/doc-a/page-0.jpg`, `${SUPPORT}/scan-kit/doc-a/page-1.jpg`]);
+    expect(raw.filters).toEqual(['bw', 'original']);
+    expect(raw.name).toBe('Lease 2026');
+  });
+
+  test('a restored document comes back with working paths', async () => {
+    expect(await storage.restoreDocuments(['doc-trash'])).toBe(1);
+    const raw = JSON.parse((await AsyncStorage.getItem('@scan_kit_doc:doc-trash'))!);
+    expect(raw.pages).toEqual([`${SUPPORT}/scan-kit/doc-trash/page-0.jpg`]);
+    expect(exists(raw.pages[0])).toBe(true);
+  });
+
+  test('after a failed move the records keep pointing at Documents, where the files still are', async () => {
+    jest.resetModules();
+    mockFs.clear();
+    seedOldLayout();
+    mockFailMoves.add(`${DOCS}/scan-kit`);
+    L = require('../lib/storage-layout');
+    AsyncStorage = require('@react-native-async-storage/async-storage');
+    storage = require('../lib/storage');
+    await seedRecords();
+
+    const docs = await storage.getDocuments();
+    for (const d of docs) {
+      for (const p of d.pages) expect(exists(p)).toBe(true);
+      if (d.pdfUri) expect(exists(d.pdfUri)).toBe(true);
+    }
+  });
+});
+
+describe('the startup sweep after the move', () => {
+  jest.mock('expo-image-manipulator', () => ({ manipulateAsync: jest.fn(), SaveFormat: { JPEG: 'jpeg' } }));
+  const NOW = 10 ** 13; // every mock file is "settled" (mtime 1)
+
+  function realFiles(): typeof import('../lib/files') {
+    return jest.requireActual('../lib/files');
+  }
+
+  test('never deletes a root, the signatures, the recovered or legacy folders, or a valid document', async () => {
+    seedOldLayout();
+    put(`${SUPPORT}/scan-kit/doc-a/page-0.jpg`, 'A0-new'); // forces a kept-aside conflict
+    L.migrateStorageLayout(1000);
+    put(`${SUPPORT}/scan-kit/orphan/page-0.jpg`, 'O');
+    dir(`${SUPPORT}/scan-kit/scan-kit`); // a faulty nesting must never be swept as a "document"
+    const files = realFiles();
+
+    await files.garbageCollectOrphans(['doc-a', 'doc-pdf', 'doc-trash'], NOW);
+
+    expect(mockFs.has(`${SUPPORT}/scan-kit/orphan`)).toBe(false); // a real orphan still goes
+    expect(mockFs.has(`${SUPPORT}/scan-kit/scan-kit`)).toBe(true);
+    for (const k of ['doc-a/page-0.jpg', 'doc-a/page-0.orig.jpg', 'doc-pdf/document.pdf', 'doc-trash/page-0.jpg']) {
+      expect(mockFs.has(`${SUPPORT}/scan-kit/${k}`)).toBe(true);
+    }
+    expect(mockFs.has(`${SUPPORT}/signatures/sig-00000001.png`)).toBe(true);
+    expect(mockFs.has(`${SUPPORT}/scan-kit-recovered/1000/scan-kit/doc-a/page-0.jpg`)).toBe(true);
+    expect(mockFs.has(`${SUPPORT}/legacy-documents/harness-log.txt`)).toBe(true);
+  });
+
+  test('while the move is part done, nothing is deleted as an orphan in either root', async () => {
+    seedOldLayout();
+    dir(`${SUPPORT}/scan-kit`);
+    put(`${SUPPORT}/scan-kit/orphan-new/page-0.jpg`, 'O1');
+    put(`${DOCS}/scan-kit/orphan-old/page-0.jpg`, 'O2');
+    mockFailMoves.add(`${DOCS}/scan-kit/doc-pdf`);
+    mockFailMoves.add(`${DOCS}/scan-kit/orphan-old`);
+    L.migrateStorageLayout(1000);
+    expect(L.storageLayout().state).toBe('split');
+    // An interrupted rotate in the document still in Documents is finished there.
+    put(`${DOCS}/scan-kit/doc-pdf/page-0.new.jpg`, 'side');
+
+    await realFiles().garbageCollectOrphans(['doc-a', 'doc-pdf', 'doc-trash'], NOW);
+
+    expect(files(`${SUPPORT}/scan-kit/orphan-new`)).toEqual({ 'page-0.jpg': 'O1' });
+    expect(files(`${DOCS}/scan-kit/orphan-old`)).toEqual({ 'page-0.jpg': 'O2' });
+    expect(files(`${DOCS}/scan-kit/doc-pdf`)).toEqual({ 'document.pdf': '%PDF', 'page-0.jpg': 'side' });
+  });
+
+  test('a stored page is never a disposable temp, in either root', () => {
+    seedOldLayout();
+    L.migrateStorageLayout(1000);
+    const files = realFiles();
+    expect(files.isDisposableTemp(`${SUPPORT}/scan-kit/doc-a/page-0.jpg`)).toBe(false);
+    expect(files.isDisposableTemp(`${SUPPORT}/signatures/sig-00000001.png`)).toBe(false);
+    expect(files.isDisposableTemp(`${DOCS}/scan-kit/doc-a/page-0.jpg`)).toBe(false);
+    expect(files.isDisposableTemp(`${C1}/Library/Caches/ImagePicker/x.jpg`)).toBe(true);
+    expect(files.isDisposableTemp(`${DOCS}/DOCUMENT_SCAN_0_123.jpg`)).toBe(true);
+  });
+
+  test('an empty Inbox is removed so Files shows nothing but the copies', () => {
+    seedOldLayout();
+    L.migrateStorageLayout(1000);
+    mockFs.delete(`${DOCS}/Inbox/Lease.pdf`);
+    realFiles().sweepTempLeftovers(NOW);
+    expect(mockFs.has(`${DOCS}/Inbox`)).toBe(false);
+    expect(under(DOCS)).toEqual([]); // the scanner's settled leftover went too
+  });
+});

@@ -1,24 +1,37 @@
 // lib/files-copy.ts
 // "Keep a copy in Files" (Settings › Storage): an automatic backup with no
-// account. Every document is kept as a searchable PDF in the app's Documents
-// folder, which the Files app shows under On My iPhone › Scan Kit (with
-// UIFileSharingEnabled and LSSupportsOpeningDocumentsInPlace in Info.plist),
+// account. Every document is kept as a searchable PDF at the top of the app's
+// Documents folder, which the Files app shows as On My iPhone › Scan Kit
+// (UIFileSharingEnabled and LSSupportsOpeningDocumentsInPlace in Info.plist),
 // and from there it is included in device backups and can be moved to iCloud
 // Drive or a computer. A copy is rewritten when its document changes and
 // removed when the document is deleted.
+//
+// Documents holds nothing else of the app's: pages, signatures and recognised
+// text live in Library/Application Support (lib/storage-layout.ts). The only
+// other things iOS or the scanner can put there are transient — Inbox (iOS's
+// copies for "Open in", removed once imported, the folder itself once empty)
+// and the document scanner's DOCUMENT_SCAN_*.jpg output (removed once saved,
+// swept at startup otherwise); see lib/files.ts sweepTempLeftovers.
 //
 // The work is a reconcile pass (planFilesCopy), not a hook in every writer:
 // it compares the live documents with what it wrote last time (a manifest),
 // so it catches every kind of change wherever it was made. Passes are
 // requested by the Home tab (focus, saves, background edits, returning to the
 // app) and are debounced and serial; a request during a pass runs one more.
+//
+// Only files this feature wrote (the manifest) are ever replaced or removed:
+// a file the user put in the folder under a name a copy wants is left alone,
+// and that document's copy waits until the name is free.
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native';
 import { Directory, File, Paths } from 'expo-file-system';
 import { getDocSettings, getDocuments } from './storage';
 import { generatePdf } from './pdf';
 import { ocrAvailable } from './ocr';
 import { exportFileName } from './share';
 import { planFilesCopy, type CopyManifest } from './files-copy-plan';
+import { storageLayout } from './storage-layout';
 
 const ENABLED_KEY = '@scan_kit_files_copy';
 const MANIFEST_KEY = '@scan_kit_files_copy_manifest';
@@ -29,15 +42,28 @@ function copyDir(): Directory {
 }
 
 /**
- * Off until the app's internal data moves out of Documents. Exposing Documents
- * to the Files app (UIFileSharingEnabled) would also expose every internal
- * page image, signature and OCR text — outside App Lock. When the migration to
- * Library/Application Support lands, flip this and set the Info.plist keys.
+ * Built in. The Info.plist keys that make Documents visible in Files are set
+ * (app.json), and the app's own data lives in Application Support.
  */
-export const FILES_COPY_AVAILABLE = false;
+export const FILES_COPY_AVAILABLE = true;
+
+/**
+ * Whether to offer the feature on this device now: iOS only (the Files app),
+ * and only once the app's data has fully moved out of Documents — while any of
+ * it is still there (a move that failed this launch is retried on the next)
+ * the folder isn't one to send the user to.
+ */
+export function filesCopyAvailable(): boolean {
+  if (!FILES_COPY_AVAILABLE || Platform.OS !== 'ios') return false;
+  try {
+    return storageLayout().state === 'app-support';
+  } catch {
+    return false;
+  }
+}
 
 export async function getFilesCopyEnabled(): Promise<boolean> {
-  if (!FILES_COPY_AVAILABLE) return false;
+  if (!filesCopyAvailable()) return false;
   try {
     return (await AsyncStorage.getItem(ENABLED_KEY)) === '1';
   } catch {
@@ -112,6 +138,9 @@ async function syncOnce(): Promise<void> {
   const manifest = await readManifest();
   const plan = planFilesCopy(docs, manifest, n => exportFileName(n, 'pdf'));
   if (!plan.remove.length && !plan.write.length && !plan.forget.length) return;
+  // Names this feature wrote (before forgetting any): the only existing files
+  // a copy may replace — including a name a deleted document's copy frees.
+  const owned = new Set(Object.values(manifest).map(e => e.name.toLowerCase()));
 
   for (const name of plan.remove) deleteCopy(name);
   for (const id of plan.forget) delete manifest[id];
@@ -122,7 +151,7 @@ async function syncOnce(): Promise<void> {
     if (gen !== generation) return; // turned off meanwhile
     const doc = byId.get(w.id);
     if (!doc) continue;
-    const ok = await writeCopy(doc, w.name);
+    const ok = await writeCopy(doc, w.name, owned);
     if (gen !== generation) {
       // Turned off while this one was being made: don't leave it behind.
       if (ok) deleteCopy(w.name);
@@ -130,6 +159,7 @@ async function syncOnce(): Promise<void> {
     }
     if (!ok) continue; // tried again on the next pass
     manifest[w.id] = { name: w.name, stamp: w.stamp };
+    owned.add(w.name.toLowerCase());
     await writeManifest(manifest);
   }
 }
@@ -138,9 +168,19 @@ async function syncOnce(): Promise<void> {
 async function writeCopy(
   doc: { pages: string[]; pdfUri?: string },
   name: string,
+  owned: Set<string>,
 ): Promise<boolean> {
+  // Someone else's file (the user's own, dropped into the folder in Files)
+  // already has this name: never replace it.
+  if (!owned.has(name.toLowerCase())) {
+    try {
+      if (new File(copyDir(), name).exists) return false;
+    } catch {
+      return false;
+    }
+  }
   // A dot name: hidden in Files while it is being written.
-  const temp = new File(copyDir(), `.${Date.now().toString(36)}-copy.pdf`);
+  const temp = new File(copyDir(), `.${Date.now().toString(36)}-copy.pdf`); // swept if left behind (lib/files.ts)
   try {
     if (doc.pdfUri) {
       new File(doc.pdfUri.split('?')[0]).copy(temp);

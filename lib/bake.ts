@@ -25,7 +25,7 @@
 // The final write + metadata record happen under the same lock, so an edit can
 // never interleave with them. A newer bake for the same page supersedes an
 // older one, so the user's latest choice always wins.
-import { Directory, Paths } from 'expo-file-system';
+import { docDir } from './storage-layout';
 import { writeAsStringAsync } from 'expo-file-system/legacy';
 import { PageAdjustment, PageFilter } from '../types/document';
 import { BakeCancelled, cancelJob, EnqueueOptions, enqueueBake, enqueueBakeWithId } from './bake-queue';
@@ -292,7 +292,7 @@ export async function bakePage(
       const outcome = await withDocLock(docId, async (): Promise<'done' | 'retry' | 'dropped'> => {
         if (ticket.superseded || ticket.pageIndex < 0) return 'dropped';
         if (ticket.gen !== gen) return 'retry';
-        const dir = new Directory(Paths.document, 'scan-kit', docId);
+        const dir = docDir(docId);
         if (!dir.exists) return 'dropped'; // document deleted mid-bake
         // Written beside the page and renamed over it, so a crash mid-write
         // can't leave a truncated page (the startup sweep finishes the rename).

@@ -31,6 +31,7 @@
 // beside the page and renamed over it (a crash can't leave a truncated page),
 // and any in-flight filter bake for the page is redone from the new shadow.
 import { Directory, File, Paths } from 'expo-file-system';
+import { docDir } from './storage-layout';
 import { writeAsStringAsync } from 'expo-file-system/legacy';
 import type { Document, PageAdjustment, PageFilter } from '../types/document';
 import { bakePage, runPageEdit, waitForPendingBakes, withDocLock } from './bake';
@@ -157,7 +158,7 @@ function stashPages(doc: Document, indices: number[]): StampUndo {
   // Undo) is never touched.
   const dir = new Directory(Paths.cache, STASH_ROOT, `${Date.now()}-${++stashSeq}`);
   dir.create({ intermediates: true, idempotent: true });
-  const srcDir = new Directory(Paths.document, 'scan-kit', doc.id);
+  const srcDir = docDir(doc.id);
   const pages = indices.map(index => {
     const sub = new Directory(dir, String(index));
     sub.create({ intermediates: true, idempotent: true });

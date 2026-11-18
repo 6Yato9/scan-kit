@@ -1,5 +1,6 @@
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
-import { Directory, File, Paths } from 'expo-file-system';
+import { File } from 'expo-file-system';
+import { docDir } from './storage-layout';
 import { replaceOriginal, replacePage } from './files';
 import { cappedSize, getImageSize } from './image-size';
 
@@ -32,7 +33,7 @@ export async function rotatePage(
   // the file at the canonical doc location already contains the rotated bytes.
   if (resultPath === inputPath) {
     await mirrorGeometryToOriginal(docId, pageIndex, [{ rotate: degrees }]);
-    const dir = new Directory(Paths.document, 'scan-kit', docId);
+    const dir = docDir(docId);
     return new File(dir, `page-${pageIndex}.jpg`).uri;
   }
 
@@ -65,7 +66,7 @@ export async function mirrorGeometryToOriginal(
   actions: Parameters<typeof manipulateAsync>[1],
 ): Promise<void> {
   try {
-    const dir = new Directory(Paths.document, 'scan-kit', docId);
+    const dir = docDir(docId);
     const orig = new File(dir, `page-${pageIndex}.orig.jpg`);
     if (!orig.exists) return;
 
@@ -85,7 +86,7 @@ export async function mirrorGeometryToOriginal(
 
 /** Canonical file:// URI of page `pageIndex` of `docId` (pages are stored by position). */
 export function pageFileUri(docId: string, pageIndex: number): string {
-  const dir = new Directory(Paths.document, 'scan-kit', docId);
+  const dir = docDir(docId);
   return new File(dir, `page-${pageIndex}.jpg`).uri;
 }
 
@@ -127,7 +128,7 @@ export async function cropPage(
  */
 export async function capStoredPageSize(docId: string, pageIndex: number): Promise<boolean> {
   try {
-    const dir = new Directory(Paths.document, 'scan-kit', docId);
+    const dir = docDir(docId);
     const page = new File(dir, `page-${pageIndex}.jpg`);
     const orig = new File(dir, `page-${pageIndex}.orig.jpg`);
     const source = orig.exists ? orig : page;
