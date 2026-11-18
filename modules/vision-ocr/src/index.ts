@@ -12,6 +12,8 @@ type VisionOcrNative = {
   protectPdf?: (inputUri: string, outputUri: string, password: string) => Promise<string>;
   /** Present only in dev clients built after PDF page rendering was added. */
   renderPdfPages?: (inputUri: string, outputDirUri: string, maxEdge: number) => Promise<string[]>;
+  /** Present only in dev clients built after PDF merging was added. */
+  mergePdfs?: (inputUris: string[], outputUri: string) => Promise<string>;
 };
 
 /** null on Android, on web, and in a dev client built before this module existed. */

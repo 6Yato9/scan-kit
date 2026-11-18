@@ -52,6 +52,19 @@ public class VisionOcrModule: Module {
       }
     }
 
+    /// Concatenate PDFs in order; each page keeps its own size and text layer.
+    AsyncFunction("mergePdfs") { (inputUris: [String], outputUri: String, promise: Promise) in
+      DispatchQueue.global(qos: .userInitiated).async {
+        do {
+          func path(_ u: String) -> String { URL(string: u).flatMap { $0.isFileURL ? $0.path : nil } ?? u }
+          try PdfMerger.merge(inputPaths: inputUris.map(path), outputPath: path(outputUri))
+          promise.resolve(URL(fileURLWithPath: path(outputUri)).absoluteString)
+        } catch {
+          promise.reject("ERR_PDF_MERGE", error.localizedDescription)
+        }
+      }
+    }
+
     /// Detect a document in a photo and return a perspective-corrected copy.
     /// Resolves to { uri, detected }. When nothing confident is found, resolves
     /// with the input uri and detected: false.
