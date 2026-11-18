@@ -7,7 +7,7 @@
 // Choosing happens in a sheet, not in an inline list: the screen shows one
 // compact "Document" row, so a tool's preview and options stay above the fold
 // however many documents there are.
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams } from 'expo-router';
@@ -52,6 +52,7 @@ export function ToolDocPicker({
   disabled = false,
   onPick,
   note,
+  autoOpen = false,
 }: {
   docs: Document[];
   doc: Document | null;
@@ -61,9 +62,24 @@ export function ToolDocPicker({
   onPick: (doc: Document) => void;
   /** One line under the list in the sheet, e.g. which documents are listed. */
   note?: string;
+  /**
+   * Opened from the Tools tab with nothing chosen: open the sheet by itself
+   * once the screen is in, so the tool starts from choosing a document.
+   */
+  autoOpen?: boolean;
 }) {
   const { colors } = useTheme();
   const [open, setOpen] = useState(false);
+  const autoOpened = useRef(false);
+  useEffect(() => {
+    if (!autoOpen || autoOpened.current || fixed || doc || docs.length === 0) return;
+    // After the screen's push animation: a sheet presented mid-push is dropped.
+    const t = setTimeout(() => {
+      autoOpened.current = true;
+      setOpen(true);
+    }, 400);
+    return () => clearTimeout(t);
+  }, [autoOpen, fixed, doc, docs.length]);
   const tappable = !fixed && !disabled;
 
   const body = doc ? (

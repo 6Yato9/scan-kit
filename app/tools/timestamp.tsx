@@ -1,10 +1,9 @@
 // app/tools/timestamp.tsx
-// Print the scan date (or today's date) in a corner of every page and save
-// the result as a new PDF.
-import { useState } from 'react';
+// Print the scan date (or today's date) in a corner of every page of the
+// document itself (drawn into the pages, so they stay searchable and
+// re-filterable; the viewer offers Undo — lib/page-stamp.ts), or of a copy.
+import { useEffect, useState } from 'react';
 import { Alert, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
-import * as Crypto from 'expo-crypto';
-import { useRouter } from 'expo-router';
 import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
 import {
@@ -20,21 +19,17 @@ import {
 } from '@/components/tool-ui';
 import { ToolDocPicker, useToolDoc } from '@/components/tool-doc';
 import { FilterBaker } from '@/components/filter-baker';
-import { generatePdf } from '@/lib/pdf';
-import { copyPdfToStorage, deleteDocumentFiles } from '@/lib/files';
-import { deleteQuietly } from '@/lib/share';
-import { getDocSettings, saveDocument } from '@/lib/storage';
+import { usePageStamper, useStampFinish } from '@/components/page-stamper';
+import { copyName, PDF_NOT_LISTED_NOTE, stampCopy, stampPages, StampError, targetPages } from '@/lib/page-stamp';
 import { notifyError, notifySuccess } from '@/lib/haptics';
 import {
   CORNER_INSET,
   TIMESTAMP_FONT_FRACTION,
   formatStamp,
-  timestampOverlay,
   type Corner,
   type TimestampFormat,
 } from '@/lib/stamp';
 import { Ink, Spacing } from '@/lib/theme';
-import { navigateWhenUnlocked } from '@/lib/nav-guard';
 
 type When = 'scanned' | 'now';
 
@@ -46,7 +41,6 @@ const CORNERS: { value: Corner; label: string }[] = [
 ];
 
 export default function TimestampScreen() {
-  const router = useRouter();
   const { width: screenW } = useWindowDimensions();
   const { docs, loaded } = useToolDocuments();
   const [when, setWhen] = useState<When>('scanned');
@@ -57,42 +51,47 @@ export default function TimestampScreen() {
 
   // Never a default: stamping the wrong document is worse than one more tap.
   const { doc, setDocId, fixed, fromViewer } = useToolDoc(docs);
+  const stamper = usePageStamper();
+  const finish = useStampFinish(fromViewer);
+  // From the Tools tab with a single document: there is nothing to choose.
+  useEffect(() => {
+    if (loaded && !fixed && !doc && docs.length === 1) setDocId(docs[0].id);
+  }, [loaded, fixed, doc, docs, setDocId]);
   const aspect = useImageAspect(doc?.pages[0]);
   const stamp = formatStamp(when === 'scanned' && doc ? doc.createdAt : now, format);
 
-  const apply = async () => {
+  /** Stamps every page of the document itself (Undo in the viewer), or of a copy. */
+  const apply = async (mode: 'in-place' | 'copy') => {
     if (!doc || progress) return;
-    const id = Crypto.randomUUID();
-    let temp: string | null = null;
     const text = formatStamp(when === 'scanned' ? doc.createdAt : Date.now(), format);
-    setProgress({ current: 0, total: doc.pages.length });
+    const spec = { kind: 'timestamp' as const, text, corner };
+    const render = (pageUri: string, origUri: string | null) => stamper.stamp(pageUri, origUri, spec);
+    const pages = targetPages(doc.pages.length, 0, true);
+    const onProgress = (done: number, total: number) => setProgress({ current: done, total });
+    setProgress({ current: 0, total: pages.length });
     try {
-      const { pdfPageSize } = await getDocSettings();
-      temp = await generatePdf(doc.pages, {
-        pageSize: pdfPageSize,
-        overlayHtml: (_i, size) => timestampOverlay(text, corner, size.width),
-        onProgress: done => setProgress({ current: done, total: doc.pages.length }),
-      });
-      const stored = copyPdfToStorage(temp, id);
-      const ts = Date.now();
-      await saveDocument({
-        id,
-        name: `${doc.name} (timestamped)`,
-        pages: [],
-        pdfUri: stored,
-        folder: doc.folder,
-        createdAt: ts,
-        updatedAt: ts,
-      });
-      notifySuccess();
-      // The viewer shows the toast: it covers the app-wide toast host.
-      navigateWhenUnlocked(() => router.replace({ pathname: '/viewer', params: { id, notice: 'Timestamped copy saved. The original is unchanged.' } }));
-    } catch {
-      try { deleteDocumentFiles(id); } catch {}
+      if (mode === 'copy') {
+        const copy = await stampCopy(doc, copyName(doc.name, 'timestamped'), pages, render, onProgress);
+        notifySuccess();
+        finish({ docId: copy.id, message: 'Timestamped copy saved. The original is unchanged.', openCopy: true });
+      } else {
+        const { undo } = await stampPages(doc.id, pages, render, { onProgress });
+        notifySuccess();
+        finish({
+          docId: doc.id,
+          message: pages.length > 1 ? `Timestamp added to ${pages.length} pages` : 'Timestamp added',
+          undo,
+          undoneMessage: 'Timestamp removed',
+        });
+      }
+    } catch (err) {
       notifyError();
-      Alert.alert('Couldn’t add the timestamp', 'The PDF couldn’t be created. Try again, or try with fewer pages.');
+      if (!(err instanceof StampError)) console.error('Timestamp failed', err);
+      Alert.alert(
+        'Couldn’t add the timestamp',
+        err instanceof StampError ? err.message : 'Your document is unchanged. Try again.',
+      );
     } finally {
-      deleteQuietly(temp);
       setProgress(null);
     }
   };
@@ -117,18 +116,30 @@ export default function TimestampScreen() {
         <>
           {progress ? (
             <ToolProgress
-              label={`Stamping page ${Math.min(progress.current + 1, progress.total)} of ${progress.total}…`}
+              label={progress.total > 1 ? `Stamping page ${Math.min(progress.current + 1, progress.total)} of ${progress.total}…` : 'Stamping…'}
               current={progress.current}
               total={progress.total}
             />
           ) : null}
-          <PrimaryButton title={doc ? 'Save timestamped copy' : 'Choose a document'} onPress={apply} disabled={!doc} loading={!!progress} />
+          <PrimaryButton title="Add timestamp" onPress={() => apply('in-place')} disabled={!doc} loading={!!progress} />
+          {doc && !progress ? (
+            <PrimaryButton title="Save as a copy" variant="secondary" onPress={() => apply('copy')} style={styles.secondary} />
+          ) : null}
         </>
       }
     >
       {/* Presented over the viewer: a baker underneath would never run (see FilterBaker). */}
       {fromViewer ? <FilterBaker /> : null}
-      <ToolDocPicker docs={docs} doc={doc} fixed={fixed} disabled={!!progress} onPick={d => setDocId(d.id)} />
+      {stamper.host}
+      <ToolDocPicker
+        docs={docs}
+        doc={doc}
+        fixed={fixed}
+        disabled={!!progress}
+        onPick={d => setDocId(d.id)}
+        autoOpen={loaded && !fromViewer}
+        note={PDF_NOT_LISTED_NOTE}
+      />
 
       {/* Live preview: the first page (a sample page until one is chosen) with
           the stamp where the PDF will get it. */}
@@ -183,11 +194,12 @@ export default function TimestampScreen() {
       <SectionLabel>Position</SectionLabel>
       <OptionList options={CORNERS} value={corner} onChange={setCorner} />
 
-      <ToolNote>A new PDF is saved with the date on every page. The original document is kept.</ToolNote>
+      <ToolNote>The date becomes part of every page, and you can undo it right after. To keep this document as it is, save a timestamped copy instead.</ToolNote>
     </ToolScreen>
   );
 }
 
 const styles = StyleSheet.create({
   previewWrap: { marginTop: Spacing.lg },
+  secondary: { marginTop: Spacing.sm },
 });

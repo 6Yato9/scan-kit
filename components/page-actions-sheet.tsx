@@ -7,8 +7,17 @@
 // while you adjust it (a sheet used to cover half the page). Being inline also
 // means nothing native has to wait for it to dismiss before Crop, Mark up or
 // a share sheet can open.
+//
+// The panel is taller than the toolbar and strip it replaces, so the page has
+// to get smaller. That happens as one eased motion, never a jump: the panel
+// mounts at exactly the height of what it replaces and grows from there, and
+// Done shrinks it back to that height before the toolbar returns, so the page
+// grows back just as smoothly. (A Reanimated height: it updates the layout
+// every frame, so the page above resizes with it. LayoutAnimation is not
+// enabled on iOS with the new architecture.)
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Image, LayoutChangeEvent, Pressable, StyleSheet, Text, View } from 'react-native';
+import Animated, { Easing, ReduceMotion, runOnJS, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { PageFilter, PageAdjustment } from '@/types/document';
 import { bakePreviews, PREVIEW_FILTERS } from '@/lib/bake';
 import { PREVIEW_ASPECT } from '@/lib/bake-html';
@@ -46,6 +55,26 @@ const isDefault = (a: PageAdjustment) => a.brightness === 0 && a.contrast === 0 
 
 /** Fixed content height so switching tabs never makes the page above jump. */
 const CONTENT_H = 150;
+
+/**
+ * Height of the viewer's toolbar (components/viewer-toolbar.tsx: 8 + 56 + 4 and
+ * a hairline) plus its thumbnail strip (components/thumbnail-strip.tsx: 12 +
+ * 64pt thumbnails + 4 + 13pt numbers, then the home-indicator padding): the
+ * height the panel opens from, so the page starts exactly where it was.
+ */
+export function replacedBarsHeight(bottomInset: number): number {
+  const toolbar = Spacing.sm + HIT + 12 + Spacing.xs + StyleSheet.hairlineWidth;
+  const strip = Spacing.md + 64 + Spacing.xs + 13 + Math.max(Spacing.sm, bottomInset - Spacing.md);
+  return toolbar + strip;
+}
+
+/** The panel's full height: top row, fixed content, home-indicator padding. */
+export function panelHeight(bottomInset: number): number {
+  return Spacing.sm + HIT + Spacing.sm + CONTENT_H + bottomInset + Spacing.sm;
+}
+
+/** One eased resize of the page above, opening and on Done. Reduce Motion: instant. */
+const PANEL_MOTION = { duration: 260, easing: Easing.bezier(0.25, 0.1, 0.25, 1), reduceMotion: ReduceMotion.System };
 
 /**
  * Filter tiles show the top of the page's content (title and first lines)
@@ -106,6 +135,26 @@ export function PageEditPanel({
   const [previews, setPreviews] = useState<string[] | null>(null);
   const [tileW, setTileW] = useState(0);
   const [aspect, setAspect] = useState(1.3);
+  // Mounted at the height of the bars it replaces, then grown, so the page
+  // above shrinks smoothly instead of jumping.
+  const closedH = replacedBarsHeight(bottomInset);
+  const height = useSharedValue(closedH);
+  const [closing, setClosing] = useState(false);
+  useEffect(() => {
+    height.value = withTiming(panelHeight(bottomInset), PANEL_MOTION);
+    // Opening runs once; a changed inset (rotation) re-targets the height.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bottomInset]);
+  const heightStyle = useAnimatedStyle(() => ({ height: height.value }));
+  // Done: back down to the bars' height first, then the toolbar and strip
+  // take its place at the same height and the page is full size again.
+  const done = () => {
+    if (closing) return;
+    setClosing(true);
+    height.value = withTiming(closedH, PANEL_MOTION, finished => {
+      if (finished) runOnJS(onDone)();
+    });
+  };
 
   // Real previews: each tile is the page rendered through that filter (RN's
   // `filter` style can't do this on iOS). One WebView pass renders all four.
@@ -152,7 +201,13 @@ export function PageEditPanel({
       : { label: 'Reset', a11y: 'Reset adjustments', onPress: () => { onAdjust(DEFAULT_ADJ); onAdjustCommit(); }, disabled: isDefault(adj) };
 
   return (
-    <View style={[styles.panel, { backgroundColor: colors.chromeRaised, paddingBottom: bottomInset + Spacing.sm }]}>
+    <Animated.View
+      style={[
+        styles.panel,
+        { backgroundColor: colors.chromeRaised, paddingBottom: bottomInset + Spacing.sm },
+        heightStyle,
+      ]}
+    >
       <View style={styles.topRow}>
         <View style={styles.side}>
           {secondary && (
@@ -204,7 +259,7 @@ export function PageEditPanel({
 
         <View style={[styles.side, styles.sideRight]}>
           <Pressable
-            onPress={onDone}
+            onPress={done}
             hitSlop={8}
             style={({ pressed }) => [styles.textBtn, pressed && { opacity: 0.6 }]}
             accessibilityRole="button"
@@ -306,12 +361,14 @@ export function PageEditPanel({
           </View>
         )}
       </View>
-    </View>
+    </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
   panel: {
+    // Clips the content while the height animates.
+    overflow: 'hidden',
     paddingTop: Spacing.sm,
     paddingHorizontal: Spacing.gutter,
   },

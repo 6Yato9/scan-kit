@@ -7,7 +7,7 @@
 // (the search button here opens Files' search with the keyboard up), and scan
 // modes such as ID card, Book and Whiteboard are in Tools.
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -28,6 +28,16 @@ type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
 const RECENT_LIMIT = 6;
 
+/**
+ * Folder card width when folders scroll (three or more): two whole cards and
+ * about a third of the next, so the row visibly continues. Two or fewer fill
+ * the row instead (flex), ending on the same edge as every card below.
+ */
+function folderCardWidth(screenW: number): number {
+  const visible = screenW - Spacing.gutter; // the row bleeds off the right edge
+  return Math.floor((visible - Spacing.sm * 2) / 2.35);
+}
+
 export default function HomeScreen() {
   const [documents, setDocuments] = useState<Document[]>([]);
   const [folders, setFolders] = useState<string[]>([]);
@@ -36,6 +46,7 @@ export default function HomeScreen() {
   const router = useRouter();
   const { lastSaved } = useScan();
   const { colors } = useTheme();
+  const { width: screenW } = useWindowDimensions();
   const actions = useDocumentActions({ documents, setDocuments, folders, setFolders });
   const { importImages, importFile } = useImportDocuments();
 
@@ -75,34 +86,46 @@ export default function HomeScreen() {
     </View>
   );
 
+  const folderCard = (f: string, fill: boolean) => {
+    const n = folderCounts.get(f) ?? 0;
+    return (
+      <Pressable
+        key={f}
+        onPress={() => openFolder(f)}
+        style={({ pressed }) => [
+          styles.folder,
+          fill ? styles.folderFill : { width: folderCardWidth(screenW) },
+          { backgroundColor: colors.card },
+          pressed && { opacity: 0.7 },
+        ]}
+        accessibilityRole="button"
+        accessibilityLabel={`Folder ${f}, ${n} ${n === 1 ? 'document' : 'documents'}`}
+      >
+        <Ionicons name="folder-outline" size={22} color={colors.accent} />
+        <View style={styles.folderText}>
+          <Text style={[Type.subhead, { color: colors.text, fontWeight: '600' }]} numberOfLines={1}>{f}</Text>
+          <Text style={[Type.caption, { color: colors.muted }]}>{n === 0 ? 'Empty' : `${n} ${n === 1 ? 'document' : 'documents'}`}</Text>
+        </View>
+      </Pressable>
+    );
+  };
+
+  // Two or fewer fill the row edge to edge; more scroll, with the next card peeking in.
   const folderShortcuts = folders.length > 0 ? (
     <View>
       <SectionLabel style={styles.sectionLabel}>Folders</SectionLabel>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.edgeScroll}
-        contentContainerStyle={styles.folderRow}
-      >
-        {folders.map(f => {
-          const n = folderCounts.get(f) ?? 0;
-          return (
-            <Pressable
-              key={f}
-              onPress={() => openFolder(f)}
-              style={({ pressed }) => [styles.folder, { backgroundColor: colors.card }, pressed && { opacity: 0.7 }]}
-              accessibilityRole="button"
-              accessibilityLabel={`Folder ${f}, ${n} ${n === 1 ? 'document' : 'documents'}`}
-            >
-              <Ionicons name="folder-outline" size={22} color={colors.accent} />
-              <View style={styles.folderText}>
-                <Text style={[Type.subhead, { color: colors.text, fontWeight: '600' }]} numberOfLines={1}>{f}</Text>
-                <Text style={[Type.caption, { color: colors.muted }]}>{n === 0 ? 'Empty' : `${n} ${n === 1 ? 'document' : 'documents'}`}</Text>
-              </View>
-            </Pressable>
-          );
-        })}
-      </ScrollView>
+      {folders.length <= 2 ? (
+        <View style={styles.folderGrid}>{folders.map(f => folderCard(f, true))}</View>
+      ) : (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.edgeScroll}
+          contentContainerStyle={styles.folderRow}
+        >
+          {folders.map(f => folderCard(f, false))}
+        </ScrollView>
+      )}
     </View>
   ) : null;
 
@@ -236,8 +259,9 @@ const styles = StyleSheet.create({
   // Bleeds to the screen edges so folders scroll out from under the gutter.
   edgeScroll: { marginHorizontal: -Spacing.gutter },
   folderRow: { paddingHorizontal: Spacing.gutter, gap: Spacing.sm },
+  folderGrid: { flexDirection: 'row', gap: Spacing.sm },
+  folderFill: { flex: 1, minWidth: 0 },
   folder: {
-    width: 168,
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.md,

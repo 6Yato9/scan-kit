@@ -33,8 +33,9 @@ jest.mock('expo-file-system', () => {
 });
 
 const mockReplace = jest.fn();
+const mockIncoming = { uri: 'file:///app/Documents/Inbox/Cafe%20receipt.jpg' };
 jest.mock('expo-router', () => ({
-  useLocalSearchParams: () => ({ uri: 'file:///app/Documents/Inbox/Cafe%20receipt.jpg' }),
+  useLocalSearchParams: () => ({ uri: mockIncoming.uri }),
   useRouter: () => ({ replace: mockReplace }),
   Stack: { Screen: () => null },
 }));
@@ -50,6 +51,8 @@ jest.mock('@/components/primary-button', () => {
 });
 jest.mock('@expo/vector-icons', () => ({ Ionicons: () => null }));
 jest.mock('@/lib/system-ui', () => ({ abandonSystemUI: jest.fn() }));
+const mockIndexPdfText = jest.fn(async (..._a: unknown[]) => 'indexed');
+jest.mock('@/lib/pdf-text', () => ({ indexPdfText: (...a: unknown[]) => mockIndexPdfText(...a) }));
 
 import ImportScreen from '../app/import';
 
@@ -64,6 +67,8 @@ beforeEach(() => {
   mockFs[INBOX] = true;
   mockReplace.mockClear();
   mockSaveFiles.mockReset();
+  mockIndexPdfText.mockClear();
+  mockIncoming.uri = INBOX;
   jest.spyOn(console, 'error').mockImplementation(() => {});
 });
 
@@ -111,4 +116,22 @@ test('a successful import removes the staged copy and opens the viewer', async (
   expect(strayInCacheRoot()).toEqual([]);
   expect(mockReplace).toHaveBeenCalledWith({ pathname: '/viewer', params: { id: 'doc-2' } });
   expect(screen.queryByText('Try again')).toBeNull();
+});
+
+test('an imported image is not read as a PDF', async () => {
+  mockSaveFiles.mockResolvedValueOnce('doc-3');
+  render(<ImportScreen />);
+  await flush();
+  expect(mockIndexPdfText).not.toHaveBeenCalled();
+});
+
+test('an imported PDF has its own text read into the search index', async () => {
+  const PDF_INBOX = 'file:///app/Documents/Inbox/Agreement.pdf';
+  mockFs[PDF_INBOX] = true;
+  mockIncoming.uri = PDF_INBOX;
+  mockSaveFiles.mockResolvedValueOnce('doc-4');
+  render(<ImportScreen />);
+  await flush();
+  expect(mockSaveFiles).toHaveBeenCalledWith([expect.any(String)], 'pdf', expect.any(String));
+  expect(mockIndexPdfText).toHaveBeenCalledWith('doc-4');
 });

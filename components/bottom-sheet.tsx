@@ -252,8 +252,9 @@ export function SheetRow({
       style={({ pressed }) => [styles.row, pressed && { backgroundColor: colors.separator }, disabled && { opacity: 0.4 }]}
     >
       {icon ? (
-        <View style={styles.rowIcon}>
-          <AppIcon name={icon} size={22} color={destructive ? colors.danger : colors.accent} />
+        // The same tinted 30pt tile as SettingsRow: one list-icon style app-wide.
+        <View style={[styles.rowIcon, { backgroundColor: destructive ? colors.dangerBg : colors.accentLight }]}>
+          <AppIcon name={icon} size={18} color={destructive ? colors.danger : colors.accent} />
         </View>
       ) : null}
       <View style={[styles.rowBody, !last && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }]}>
@@ -286,7 +287,7 @@ const styles = StyleSheet.create({
   headerSub: { marginTop: 2 },
   group: { borderRadius: Radius.md, overflow: 'hidden', marginBottom: Spacing.md },
   row: { flexDirection: 'row', alignItems: 'center', minHeight: HIT + 6, paddingLeft: Spacing.lg },
-  rowIcon: { width: 28, marginRight: Spacing.md },
+  rowIcon: { width: 30, height: 30, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginRight: Spacing.md },
   rowBody: { flex: 1, flexDirection: 'row', alignItems: 'center', alignSelf: 'stretch', paddingRight: Spacing.lg, gap: Spacing.sm },
   rowText: { flex: 1, justifyContent: 'center', paddingVertical: Spacing.md },
   rowDetail: { marginTop: 1, lineHeight: 18 },

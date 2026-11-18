@@ -16,7 +16,8 @@ import { reassertCalls, statusBarStyleFor } from '@/lib/status-bar-style';
 import { subscribeSystemUI } from '@/lib/system-ui';
 import { garbageCollectOrphans, sweepConvertLeftovers } from '@/lib/files';
 import { clearLegacyOcrCache } from '@/lib/ocr-cache';
-import { documentFileRefsForCleanup, documentIdsForCleanup, getOnboarded, getOnboardedSync, pendingBakeMigrations } from '@/lib/storage';
+import { navigateWhenUnlocked } from '@/lib/nav-guard';
+import { documentFileRefsForCleanup, documentIdsForCleanup, getOnboarded, getOnboardedSync, pendingBakeMigrations, withDocumentFileRefs } from '@/lib/storage';
 
 // The tabs are the root of the stack even when the app is cold-started on
 // another route. "Open in Scan Kit" launches straight into /import, which then
@@ -61,7 +62,10 @@ function OnboardingGate() {
       pathname !== '/onboarding' &&
       !ONBOARDING_DEFERRED.includes(pathname)
     ) {
-      router.replace('/onboarding');
+      // `onboarded` arrives after an await: held while the app is locked.
+      return navigateWhenUnlocked(() => {
+        if (getOnboardedSync() !== true) router.replace('/onboarding');
+      });
     }
   }, [onboarded, pathname, router]);
 
@@ -231,7 +235,7 @@ export default function RootLayout() {
         // Then files a record no longer references, left by an interrupted
         // "Convert to pages" or its Undo (lib/files.ts sweepConvertLeftovers).
         .then(() => documentFileRefsForCleanup())
-        .then(records => (records ? sweepConvertLeftovers(records) : 0))
+        .then(records => (records ? sweepConvertLeftovers(records, withDocumentFileRefs) : 0))
         .catch(() => {});
     }, 2000);
 

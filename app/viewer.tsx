@@ -57,6 +57,9 @@ import {
   type ConvertUndo,
 } from '@/lib/convert-pdf';
 import { indexDocText } from '@/lib/save-scan';
+import { indexPdfText, needsPdfText } from '@/lib/pdf-text';
+import { PdfUnlockError, pdfUnlockAvailable, unlockStoredPdf } from '@/lib/pdf-unlock';
+import { subscribeViewerNotices, takeViewerNotice } from '@/lib/viewer-notice';
 import { alertScanError, deleteTempFiles, pickPhotos, scanWithCamera, ToolScanError } from '@/lib/tool-scan';
 import { withSystemUI } from '@/lib/system-ui';
 import { insertAt, restoreStashedPage, stashPage } from '@/lib/page-undo';
@@ -88,6 +91,7 @@ import { RenameSheet } from '@/components/rename-sheet';
 import { MoveFolderSheet } from '@/components/move-folder-sheet';
 import { CropModal, CropRect } from '@/components/crop-modal';
 import { FilterBaker } from '@/components/filter-baker';
+import { EmptyState } from '@/components/empty-state';
 import { BakeIndicator } from '@/components/bake-indicator';
 import { PdfConvertBanner, useConvertBannerDismissed } from '@/components/pdf-convert-banner';
 import { PdfDocumentView } from '@/modules/vision-ocr/src/PdfDocumentView';
@@ -164,6 +168,9 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
   // page count, or why the PDF can't be shown.
   const [pdfPage, setPdfPage] = useState<{ page: number; count: number } | null>(null);
   const [pdfError, setPdfError] = useState<'locked' | 'unreadable' | null>(null);
+  // Bumped after a locked PDF is unlocked: the PDF view loads the new file.
+  const [pdfReload, setPdfReload] = useState(0);
+  const [unlocking, setUnlocking] = useState(false);
   const [bannerDismissed, dismissBanner] = useConvertBannerDismissed(id);
   const ocrIndexingRef = useRef(false);
   const flatListRef = useRef<FlatList>(null);
@@ -232,6 +239,37 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
     shownNotice.current = notice;
     toast.show(notice);
   }, [notice, status, toast]);
+
+  // A tool that changed this document in place (Sign, Watermark, Timestamp)
+  // leaves its message, often with Undo, for whichever viewer shows the
+  // document next (lib/viewer-notice). Taken only while this screen is on top,
+  // so it isn't spent under the tool's own modal.
+  useFocusEffect(
+    useCallback(() => {
+      if (status !== 'ready') return;
+      const show = () => {
+        const n = takeViewerNotice(id);
+        if (!n) return;
+        const count = docRef.current?.pages.length ?? 0;
+        if (n.page != null && n.page >= 0 && n.page < count) {
+          const target = n.page;
+          setCurrentPage(target);
+          // After the pager has laid out the (possibly reloaded) pages.
+          requestAnimationFrame(() => flatListRef.current?.scrollToIndex({ index: target, animated: false }));
+        }
+        toast.show(n.message, n.action ? { action: n.action } : undefined);
+      };
+      show();
+      return subscribeViewerNotices(show);
+    }, [id, status, toast]),
+  );
+
+  // Imported PDFs: read their embedded text into the search index the first
+  // time they are shown without one (lib/pdf-text; image-only PDFs have none).
+  const pdfIndexTarget = document && needsPdfText(document) ? document.id : null;
+  useEffect(() => {
+    if (pdfIndexTarget) indexPdfText(pdfIndexTarget).catch(() => {});
+  }, [pdfIndexTarget]);
 
   // Background writes to this document (OCR indexing renames a new scan from
   // its first line of text) must show up without leaving the screen.
@@ -894,6 +932,56 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
     }
   }, [bumpLastSaved]);
 
+  // ── Locked PDFs ────────────────────────────────────────────────────────────
+
+  const unlockingRef = useRef(false);
+  /** Asks for the PDF's password; the unlocked copy replaces the stored PDF (lib/pdf-unlock). */
+  const handleUnlockPdf = useCallback((retry = false) => {
+    const doc = docRef.current;
+    if (!doc?.pdfUri || unlockingRef.current) return;
+    const unlockWith = async (password: string) => {
+      if (unlockingRef.current) return;
+      unlockingRef.current = true;
+      setUnlocking(true);
+      try {
+        await unlockStoredPdf(doc.id, password);
+        setPdfError(null);
+        setConvertRefused(false);
+        setPdfPage(null);
+        setPdfReload(n => n + 1);
+        await reload();
+        notifySuccess();
+        toast.show('PDF unlocked');
+      } catch (err) {
+        const kind = err instanceof PdfUnlockError ? err.kind : 'failed';
+        notifyError();
+        if (kind === 'wrong-password') {
+          Alert.alert('That password isn’t right', 'Check it and try again. Passwords are case-sensitive.', [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Try again', onPress: () => handleUnlockPdf(true) },
+          ]);
+        } else if (kind === 'missing') {
+          reload().catch(() => {});
+        } else {
+          console.error('Unlock PDF failed', err);
+          Alert.alert('Couldn’t unlock the PDF', 'Your PDF is unchanged. Check that there’s free space, then try again.');
+        }
+      } finally {
+        unlockingRef.current = false;
+        setUnlocking(false);
+      }
+    };
+    Alert.prompt(
+      retry ? 'Enter the password again' : 'Enter the PDF’s password',
+      `“${doc.name}” is protected. Scan Kit keeps an unlocked copy, so you only need the password once.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Unlock', isPreferred: true, onPress: (value?: string) => { unlockWith(value ?? ''); } },
+      ],
+      'secure-text',
+    );
+  }, [reload, toast]);
+
   const handleConvertPdf = useCallback(async () => {
     const doc = docRef.current;
     if (!doc?.pdfUri || convertingRef.current) return;
@@ -928,10 +1016,17 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
       if (kind === 'locked' || kind === 'unreadable') setConvertRefused(true);
       else console.error('Convert to pages failed', err);
       if (kind === 'locked') {
-        Alert.alert(
-          'This PDF is password protected',
-          'Scan Kit can’t convert a locked PDF. Remove its password in the app it came from, then import it again.',
-        );
+        if (pdfUnlockAvailable() && Platform.OS === 'ios') {
+          Alert.alert('This PDF is password protected', 'Enter its password to unlock it, then convert it.', [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Enter password', onPress: () => handleUnlockPdf() },
+          ]);
+        } else {
+          Alert.alert(
+            'This PDF is password protected',
+            'Scan Kit can’t convert a locked PDF. Remove its password in the app it came from, then import it again.',
+          );
+        }
       } else if (kind === 'unreadable') {
         Alert.alert('Couldn’t read this PDF', 'The file may be damaged. Try importing it again.');
       } else {
@@ -941,7 +1036,7 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
       convertingRef.current = false;
       setConverting(null);
     }
-  }, [withPendingChoices, bumpLastSaved, toast, handleUndoConvert]);
+  }, [withPendingChoices, bumpLastSaved, toast, handleUndoConvert, handleUnlockPdf]);
 
   const annotateNavRef = useRef(false);
   const handleAnnotate = useCallback(() => {
@@ -1116,13 +1211,15 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
     ? []
     : [
         { key: 'sign', icon: 'signature', label: 'Sign', onPress: () => openTool('/tools/sign') },
-        { key: 'watermark', icon: 'water-outline', label: 'Watermark', onPress: () => openTool('/tools/watermark') },
+        { key: 'watermark', icon: 'watermark', label: 'Watermark', onPress: () => openTool('/tools/watermark') },
         { key: 'timestamp', icon: 'time-outline', label: 'Timestamp', onPress: () => openTool('/tools/timestamp') },
         ...(pageCount > 1
           ? [{ key: 'extract', icon: 'cut-outline' as const, label: 'Extract', onPress: () => openTool('/tools/extract') }]
           : []),
       ];
   const convertAvailable = !!document.pdfUri && canConvertPdf();
+  // Alert.prompt (the password field) is iOS-only.
+  const canUnlock = Platform.OS === 'ios' && pdfUnlockAvailable();
   const moreGroups: MoreAction[][] = document.pdfUri
     ? [
         convertAvailable
@@ -1146,7 +1243,8 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
           { key: 'duplicate', icon: 'duplicate-outline', label: 'Duplicate', onPress: handleDuplicate },
         ],
         [
-          { key: 'retake', icon: 'camera-reverse-outline', label: `Retake ${pageLabel}`, onPress: handleRetake },
+          // Retake is a per-page action: it lives in the page menu (touch and
+          // hold a thumbnail), where it is clear which page it replaces.
           // A one-page document as an image is Export, JPEG image.
           ...(pageCount > 1
             ? [{ key: 'share-page', icon: 'image-outline' as const, label: `Share ${pageLabel} as image`, onPress: handleSharePage }]
@@ -1225,20 +1323,28 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
           />
         ) : null}
         {pdfError ? (
-          <View style={styles.centered} accessibilityLiveRegion="polite">
-            <Ionicons name={pdfError === 'locked' ? 'lock-closed-outline' : 'document-text-outline'} size={44} color={colors.chromeMuted} />
-            <Text style={[Type.headline, styles.centeredText, { color: colors.chromeText }]}>
-              {pdfError === 'locked' ? 'This PDF is password protected' : 'Couldn’t open this PDF'}
-            </Text>
-            <Text style={[Type.callout, styles.centeredText, { color: colors.chromeMuted }]}>
-              {pdfError === 'locked'
-                ? 'Scan Kit can’t show a locked PDF. You can still share it, or remove the password in the app it came from and import it again.'
-                : 'The file may be damaged. You can still share it, or try importing it again.'}
-            </Text>
+          // The app's one empty state, on the dark chrome (round 8 design #6).
+          <View style={styles.pdfEmpty} accessibilityLiveRegion="polite">
+            <EmptyState
+              chrome
+              icon={pdfError === 'locked' ? 'lock-closed-outline' : 'document-text-outline'}
+              title={pdfError === 'locked' ? 'This PDF is password protected' : 'Couldn’t open this PDF'}
+              subtitle={
+                pdfError === 'locked'
+                  ? canUnlock
+                    ? 'Enter its password to open it. Scan Kit then keeps an unlocked copy, so you won’t need the password again.'
+                    : 'Scan Kit can’t show a locked PDF. You can still share it, or remove the password in the app it came from and import it again.'
+                  : 'The file may be damaged. You can still share it, or try importing it again.'
+              }
+              {...(pdfError === 'locked' && canUnlock
+                ? { actionLabel: 'Enter password', actionIcon: 'key-outline' as const, actionLoading: unlocking, onAction: () => handleUnlockPdf() }
+                : {})}
+            />
           </View>
         ) : PdfDocumentView ? (
           <>
             <PdfDocumentView
+              key={pdfReload}
               source={document.pdfUri.split('?')[0]}
               backgroundHex={colors.chrome}
               style={styles.pdfView}
@@ -1524,6 +1630,7 @@ const styles = StyleSheet.create({
   pdfView: { flex: 1 },
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: Spacing.sm, padding: Spacing.xxl },
   centeredText: { textAlign: 'center' },
+  pdfEmpty: { flex: 1 },
   missingBtn: { alignSelf: 'stretch', marginTop: Spacing.lg },
   ocrBusy: { alignItems: 'center', gap: Spacing.sm, paddingVertical: Spacing.xxl },
   ocrBody: { maxHeight: 320, borderRadius: Radius.md },

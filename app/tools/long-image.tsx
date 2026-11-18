@@ -125,7 +125,7 @@ export default function LongImageScreen() {
           <PrimaryButton title="Share image" icon="share-outline" onPress={share} />
         ) : (
           <PrimaryButton
-            title={working ? 'Creating long image…' : doc ? 'Create long image' : 'Choose a document'}
+            title={working ? 'Creating long image…' : 'Create long image'}
             onPress={start}
             disabled={!doc}
             loading={working}

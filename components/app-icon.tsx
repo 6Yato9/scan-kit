@@ -9,7 +9,9 @@
 //   stroke than every other outline icon, so it reads as solid in a list.
 // - 'long-image' (Long image): image-outline already means "a page as an
 //   image" (Share page as image, JPEG export), so pages stitched into one tall
-//   picture get their own glyph.
+//   picture get their own glyph: a page stretched taller, arrows up and down.
+// - 'watermark' (Watermark): Ionicons only has the water drop, a pun on the
+//   name; SF Symbols' page with a stamp says "mark every page".
 // - 'id-card' (ID card): Ionicons' id-card-outline is an upright badge; ID
 //   cards are landscape, as SF Symbols' person.text.rectangle is.
 // The pencil is a solid stroke rather than an outline, so it is drawn at the
@@ -20,7 +22,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { SymbolView, type SFSymbol, type SymbolWeight } from 'expo-symbols';
 
 export type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
-type SymbolGlyph = 'signature' | 'rename' | 'long-image' | 'id-card';
+type SymbolGlyph = 'signature' | 'rename' | 'long-image' | 'id-card' | 'watermark';
 export type AppIconName = IoniconName | SymbolGlyph;
 
 const SYMBOLS: Record<
@@ -31,9 +33,10 @@ const SYMBOLS: Record<
   // to carry the same visual weight as its square neighbours.
   signature: { symbol: 'signature', fallback: 'create-outline', scale: 1.2 },
   rename: { symbol: 'pencil', fallback: 'pencil-outline', scale: 0.95, weight: 'light' },
-  // A tall page split in two: SF Symbols only has the side-by-side split, so
-  // it is turned upright.
-  'long-image': { symbol: 'rectangle.split.2x1', fallback: 'albums-outline', scale: 1.1, rotate: '90deg' },
+  // A page stretched taller: arrows up and down out of its top and bottom.
+  'long-image': { symbol: 'rectangle.expand.vertical', fallback: 'albums-outline', scale: 1.05 },
+  // A page carrying a stamp: what a watermark does to every page.
+  watermark: { symbol: 'checkmark.seal.text.page', fallback: 'ribbon-outline', scale: 1.05 },
   // Wide and short like the signature, so drawn a little larger.
   'id-card': { symbol: 'person.text.rectangle', fallback: 'id-card-outline', scale: 1.1 },
 };

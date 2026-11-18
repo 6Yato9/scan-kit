@@ -13,7 +13,8 @@ jest.mock('../lib/doc-size', () => ({ documentsBytes: jest.fn() }));
 
 import { movedOrder } from '../components/thumbnail-strip';
 import { dropLastWord, firstCandidate } from '../components/word-clamp-text';
-import { exportAllName, uniqueNames } from '../components/multi-share-sheet';
+import { exportAllName } from '../components/multi-share-sheet';
+import { uniqueNames } from '../lib/unique-names';
 
 describe('movedOrder', () => {
   it('moves a page right or left, as old indices in their new places', () => {

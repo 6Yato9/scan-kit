@@ -563,6 +563,48 @@ export type DocFileRefs = { id: string; pages: string[]; pdfUri?: string; update
 const PAGE_FILE = /^page-\d+(?:\.orig)?\.jpg$/;
 
 /**
+ * Reads document `id`'s current record and runs `act` on it INSIDE the docs
+ * lock (lib/storage.ts withDocumentFileRefs), so no record write can land
+ * between the read and what `act` does. `act` must be synchronous. Null when
+ * the record is gone or doesn't parse.
+ */
+export type WithFreshFileRefs = <T>(id: string, act: (fresh: DocFileRefs | null) => T) => Promise<T>;
+
+/** True when `rec` hasn't changed for SWEEP_GRACE_MS (no edit can be in flight). */
+function recordSettled(rec: DocFileRefs, now: number): boolean {
+  return !!rec.updatedAt && now - rec.updatedAt >= SWEEP_GRACE_MS;
+}
+
+/** One document's stray Convert-to-pages files (see sweepConvertLeftovers). Synchronous. */
+function removeConvertLeftovers(rec: DocFileRefs, now: number): number {
+  if (!recordSettled(rec, now)) return 0;
+  const dir = new Directory(Paths.document, 'scan-kit', rec.id);
+  if (!dir.exists) return 0;
+  const referenced = new Set(
+    [...rec.pages, rec.pdfUri].filter((u): u is string => !!u).map(u => baseName(stripQuery(u))),
+  );
+  const isPdfDoc = !!rec.pdfUri && rec.pages.length === 0;
+  let removed = 0;
+  let pagesRemoved = false;
+  for (const item of dir.list()) {
+    try {
+      if (!(item instanceof File)) continue;
+      const name = baseName(item.uri);
+      if (referenced.has(name)) continue;
+      const strayPdf = name === 'document.pdf' && !rec.pdfUri;
+      const strayPage = isPdfDoc && PAGE_FILE.test(name);
+      if (!strayPdf && !strayPage) continue;
+      if (!isSettled(item, now)) continue;
+      item.delete();
+      removed++;
+      if (strayPage) pagesRemoved = true;
+    } catch {}
+  }
+  if (pagesRemoved) pruneDocumentOcr(rec.id);
+  return removed;
+}
+
+/**
  * Startup sweep for what an interrupted "Convert to pages" (lib/convert-pdf.ts)
  * or its Undo can leave in a document folder:
  *  - `document.pdf` in a document that is no longer a PDF (killed between the
@@ -573,35 +615,32 @@ const PAGE_FILE = /^page-\d+(?:\.orig)?\.jpg$/;
  * Deliberately narrow and conservative: only those two patterns; never a file
  * the record references (by name); never a file modified within
  * SWEEP_GRACE_MS; never anything in a document whose record changed within
- * SWEEP_GRACE_MS (an edit may be in flight). Returns how many were removed.
+ * SWEEP_GRACE_MS (an edit may be in flight).
+ *
+ * `records` is only a snapshot used to pick candidates. Each candidate's record
+ * is read again under the docs lock (`withFresh`) and its files are judged
+ * against THAT, inside the lock: a conversion or Undo that switched the record
+ * after the snapshot (and bumped updatedAt) is seen, so e.g. the document.pdf
+ * an Undo just copied back — with the stash's old mtime — is never deleted
+ * (r8 code review #5). Returns how many files were removed.
  */
-export function sweepConvertLeftovers(records: DocFileRefs[], now: number = Date.now()): number {
+export async function sweepConvertLeftovers(
+  records: DocFileRefs[],
+  withFresh: WithFreshFileRefs,
+  now: number = Date.now(),
+): Promise<number> {
   let removed = 0;
-  for (const rec of records) {
+  for (const snapshot of records) {
+    if (!recordSettled(snapshot, now)) continue; // changed recently in the snapshot already
     try {
-      if (!rec.updatedAt || now - rec.updatedAt < SWEEP_GRACE_MS) continue;
-      const dir = new Directory(Paths.document, 'scan-kit', rec.id);
-      if (!dir.exists) continue;
-      const referenced = new Set(
-        [...rec.pages, rec.pdfUri].filter((u): u is string => !!u).map(u => baseName(stripQuery(u))),
-      );
-      const isPdfDoc = !!rec.pdfUri && rec.pages.length === 0;
-      let pagesRemoved = false;
-      for (const item of dir.list()) {
+      removed += await withFresh(snapshot.id, fresh => {
+        if (!fresh) return 0;
         try {
-          if (!(item instanceof File)) continue;
-          const name = baseName(item.uri);
-          if (referenced.has(name)) continue;
-          const strayPdf = name === 'document.pdf' && !rec.pdfUri;
-          const strayPage = isPdfDoc && PAGE_FILE.test(name);
-          if (!strayPdf && !strayPage) continue;
-          if (!isSettled(item, now)) continue;
-          item.delete();
-          removed++;
-          if (strayPage) pagesRemoved = true;
-        } catch {}
-      }
-      if (pagesRemoved) pruneDocumentOcr(rec.id);
+          return removeConvertLeftovers(fresh, now);
+        } catch {
+          return 0;
+        }
+      });
     } catch {}
   }
   return removed;
@@ -671,18 +710,99 @@ const TEMP_DIRS = [
   'page-undo',
   'pdf-convert',
   'incoming',
+  // Sign / Watermark / Timestamp Undo copies (lib/page-stamp.ts).
+  'stamp-undo',
 ];
 /** Open-in staging files older builds wrote straight into the Caches root. */
 const LEGACY_STAGED = /^(?:incoming|attempt)-\d+-/;
 
 /**
+ * When app/import.tsx staged a file, from the Date.now() stamp at the start of
+ * its own name ("incoming-1763459000000-Lease.pdf", "attempt-…-incoming-…"),
+ * or null for a name without one.
+ *
+ * Staged files are aged by this, NOT by their modification time: File.copy
+ * (FileManager.copyItem) keeps the source's mtime, so a fresh copy of an old
+ * photo or PDF looks hours old and the startup sweep would delete it while the
+ * import that made it is still running (r8 code review #2).
+ */
+export function stagedAt(name: string): number | null {
+  const m = /^(?:incoming|attempt)-(\d{1,15})-/.exec(name);
+  if (!m) return null;
+  const t = Number(m[1]);
+  return Number.isFinite(t) && t > 0 ? t : null;
+}
+
+/** Settled by its name's staging stamp; a name without one falls back to mtime. */
+function isStagedSettled(item: File | Directory, now: number): boolean {
+  const t = stagedAt(baseName(item.uri));
+  if (t === null) return isSettled(item, now);
+  return now - t >= SWEEP_GRACE_MS;
+}
+
+/** Caches file recording when the startup sweep first saw each Documents/Inbox copy. */
+const INBOX_SEEN_FILE = 'inbox-seen.json';
+
+/**
+ * Documents/Inbox holds the copies iOS makes for "Open in Scan Kit";
+ * app/import.tsx removes each once it has staged its own, so one still here is
+ * from an import that never ran. Their names carry no stamp and iOS's copy keeps
+ * the original's mtime, so neither tells how long a copy has been here: the
+ * sweep records when it first saw each one (in Caches/inbox-seen.json) and
+ * deletes it only on a later launch, SWEEP_GRACE_MS after that. A cold
+ * "Open in" of an old file is therefore never deleted before it is staged.
+ */
+function sweepInbox(now: number): number {
+  let removed = 0;
+  const seenFile = new File(Paths.cache, INBOX_SEEN_FILE);
+  let seen: Record<string, number> = {};
+  try {
+    if (seenFile.exists) {
+      const parsed = JSON.parse(seenFile.textSync());
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) seen = parsed;
+    }
+  } catch {}
+  let items: (Directory | File)[] = [];
+  try {
+    const dir = new Directory(Paths.document, 'Inbox');
+    if (dir.exists) items = dir.list();
+  } catch {
+    return 0; // can't list it: keep the record as it is, delete nothing
+  }
+  const next: Record<string, number> = {};
+  for (const item of items) {
+    const name = baseName(item.uri);
+    const first = typeof seen[name] === 'number' && seen[name] <= now ? seen[name] : now;
+    if (now - first >= SWEEP_GRACE_MS) {
+      try {
+        item.delete();
+        removed++;
+        continue;
+      } catch {}
+    }
+    next[name] = first;
+  }
+  try {
+    if (Object.keys(next).length > 0) seenFile.write(JSON.stringify(next));
+    else if (seenFile.exists) seenFile.delete();
+  } catch {}
+  return removed;
+}
+
+/**
  * Removes temp files older than SWEEP_GRACE_MS that earlier sessions left
- * behind: scanner output in Documents/, auto-crop output in tmp/, and picker,
- * manipulator and export leftovers in Caches/. Returns how many were removed.
+ * behind: scanner output in Documents/, auto-crop output in tmp/, picker,
+ * manipulator and export leftovers in Caches/, and "Open in" staging copies
+ * (aged by the stamp in their names, see stagedAt, and by first sighting in
+ * Documents/Inbox, see sweepInbox). Returns how many were removed.
  */
 export function sweepTempLeftovers(now: number = Date.now()): number {
   let removed = 0;
-  const sweep = (dir: Directory, match: (name: string) => boolean) => {
+  const sweep = (
+    dir: Directory,
+    match: (name: string) => boolean,
+    settled: (item: File | Directory, now: number) => boolean = isSettled,
+  ) => {
     let items: (Directory | File)[];
     try {
       if (!dir.exists) return;
@@ -692,18 +812,18 @@ export function sweepTempLeftovers(now: number = Date.now()): number {
     }
     for (const item of items) {
       try {
-        if (!match(baseName(item.uri)) || !isSettled(item, now)) continue;
+        if (!match(baseName(item.uri)) || !settled(item, now)) continue;
         item.delete();
         removed++;
       } catch {}
     }
   };
   sweep(new Directory(Paths.document), name => SCANNER_OUTPUT.test(name));
-  for (const name of TEMP_DIRS) sweep(new Directory(Paths.cache, name), () => true);
-  sweep(new Directory(Paths.cache), name => LEGACY_STAGED.test(name));
-  // The copies iOS makes for "Open in Scan Kit"; app/import.tsx removes each
-  // once staged, so one still here is from an import that never ran.
-  sweep(new Directory(Paths.document, 'Inbox'), () => true);
+  for (const name of TEMP_DIRS) {
+    sweep(new Directory(Paths.cache, name), () => true, name === 'incoming' ? isStagedSettled : isSettled);
+  }
+  sweep(new Directory(Paths.cache), name => LEGACY_STAGED.test(name), isStagedSettled);
+  removed += sweepInbox(now);
   const root = containerRoot();
   if (root) sweep(new Directory(`${root}tmp`), name => /^doc-[0-9A-F-]+\.jpg$/i.test(name));
   return removed;

@@ -406,6 +406,35 @@ export function documentFileRefsForCleanup(): Promise<
   });
 }
 
+/**
+ * Reads document `id`'s file references afresh and runs `act` on them inside
+ * the docs lock, so no record write lands between the read and what `act`
+ * does with the files (lib/files.ts sweepConvertLeftovers deletes strays this
+ * way). Trashed documents included. `act` gets null when the record is gone or
+ * doesn't parse, and must be synchronous: the lock is held only until it returns.
+ */
+export function withDocumentFileRefs<T>(
+  id: string,
+  act: (fresh: { id: string; pages: string[]; pdfUri?: string; updatedAt: number } | null) => T,
+): Promise<T> {
+  return withDocsLock(async () => {
+    await ensureMigrated();
+    let refs: { id: string; pages: string[]; pdfUri?: string; updatedAt: number } | null = null;
+    try {
+      const raw = await AsyncStorage.getItem(docKey(id));
+      if (raw != null) {
+        const doc = healDocPaths(JSON.parse(raw) as Document);
+        if (doc && doc.id === id && Array.isArray(doc.pages)) {
+          refs = { id: doc.id, pages: doc.pages, pdfUri: doc.pdfUri, updatedAt: doc.updatedAt ?? 0 };
+        }
+      }
+    } catch {
+      console.warn(`storage: corrupt doc ${id}, kept out of the sweep`);
+    }
+    return act(refs);
+  });
+}
+
 // ── Recently deleted (trash) ─────────────────────────────────────────────────
 // Deleting a document moves it to the trash: the record and files stay, the
 // record gets `trashedAt`, and getDocuments stops returning it. It can be

@@ -57,6 +57,8 @@ jest.mock('expo-file-system', () => {
     move = mockMove;
     create = jest.fn(function (this: any) { this.exists = true; fileContents[this.uri] = ''; });
     info = jest.fn(function (this: any) { return { exists: this.exists, modificationTime: mockMtimes[this.uri] ?? 1 }; });
+    write = jest.fn(function (this: any, content: string) { fileContents[this.uri] = content; this.exists = true; });
+    textSync = jest.fn(function (this: any) { return fileContents[this.uri] ?? ''; });
     constructor(dirOrUri: any, name?: string) {
       const uri = name ? `${part(dirOrUri)}/${name}` : String(part(dirOrUri));
       if (mockFileInstances[uri]) return mockFileInstances[uri];
@@ -114,6 +116,7 @@ import {
   isDisposableTemp,
   deleteDisposableTemps,
   sweepTempLeftovers,
+  stagedAt,
   sweepConvertLeftovers,
   restorePageWithShadow,
   pageLayoutGeneration,
@@ -768,26 +771,33 @@ describe('sweepConvertLeftovers (r7 #5: crash orphans from Convert to pages)', (
   beforeEach(() => jest.clearAllMocks());
   const pdfUri = (id: string) => `${DOCS}/${id}/document.pdf`;
   const pageUri = (id: string, i: number) => `${DOCS}/${id}/page-${i}.jpg?v=3`;
+  type Refs = { id: string; pages: string[]; pdfUri?: string; updatedAt: number };
+  /** The docs lock, standing in for lib/storage.ts withDocumentFileRefs: `fresh` holds the current records. */
+  const lockWith = (fresh: Record<string, Refs | null>) =>
+    jest.fn(async (id: string, act: (r: Refs | null) => any) => act(fresh[id] ?? null)) as any;
+  /** Sweep with records that haven't changed since the snapshot. */
+  const sweep = (records: Refs[]) =>
+    sweepConvertLeftovers(records, lockWith(Object.fromEntries(records.map(r => [r.id, r]))), now);
 
-  test('removes document.pdf left in a document that is now pages', () => {
+  test('removes document.pdf left in a document that is now pages', async () => {
     seedFile('conv', 'page-0.jpg', 'P0');
     seedFile('conv', 'page-0.orig.jpg', 'O0');
     seedFile('conv', 'document.pdf', 'PDF');
     listFromContents('conv');
-    expect(sweepConvertLeftovers([{ id: 'conv', pages: [pageUri('conv', 0)], updatedAt: old }], now)).toBe(1);
+    expect(await sweep([{ id: 'conv', pages: [pageUri('conv', 0)], updatedAt: old }])).toBe(1);
     expect(read('conv', 'document.pdf')).toBeUndefined();
     expect(read('conv', 'page-0.jpg')).toBe('P0');
     expect(read('conv', 'page-0.orig.jpg')).toBe('O0');
   });
 
-  test('removes page files (and shadows) left in a document that is still a PDF', () => {
+  test('removes page files (and shadows) left in a document that is still a PDF', async () => {
     seedFile('half', 'document.pdf', 'PDF');
     seedFile('half', 'page-0.jpg', 'P0');
     seedFile('half', 'page-0.orig.jpg', 'O0');
     seedFile('half', 'page-1.jpg', 'P1');
     seedFile('half', 'ocr-lines.json', '{}');
     listFromContents('half');
-    expect(sweepConvertLeftovers([{ id: 'half', pages: [], pdfUri: pdfUri('half'), updatedAt: old }], now)).toBe(3);
+    expect(await sweep([{ id: 'half', pages: [], pdfUri: pdfUri('half'), updatedAt: old }])).toBe(3);
     expect(read('half', 'document.pdf')).toBe('PDF');
     expect(read('half', 'page-0.jpg')).toBeUndefined();
     expect(read('half', 'page-1.jpg')).toBeUndefined();
@@ -795,71 +805,201 @@ describe('sweepConvertLeftovers (r7 #5: crash orphans from Convert to pages)', (
     expect(mockPruneOcr).toHaveBeenCalledWith('half');
   });
 
-  test('never deletes a file the record references', () => {
+  test('never deletes a file the record references', async () => {
     // A record that (oddly) has both: everything it names is kept.
     seedFile('both', 'document.pdf', 'PDF');
     seedFile('both', 'page-0.jpg', 'P0');
     listFromContents('both');
-    expect(
-      sweepConvertLeftovers([{ id: 'both', pages: [pageUri('both', 0)], pdfUri: pdfUri('both'), updatedAt: old }], now),
-    ).toBe(0);
+    expect(await sweep([{ id: 'both', pages: [pageUri('both', 0)], pdfUri: pdfUri('both'), updatedAt: old }])).toBe(0);
     expect(read('both', 'document.pdf')).toBe('PDF');
     expect(read('both', 'page-0.jpg')).toBe('P0');
   });
 
-  test('leaves recently modified files alone (an Undo copying the PDF back right now)', () => {
+  test('leaves recently modified files alone (an Undo copying the PDF back right now)', async () => {
     seedFile('fresh', 'page-0.jpg', 'P0');
     seedFile('fresh', 'document.pdf', 'PDF', now - 1000);
     listFromContents('fresh');
-    expect(sweepConvertLeftovers([{ id: 'fresh', pages: [pageUri('fresh', 0)], updatedAt: old }], now)).toBe(0);
+    expect(await sweep([{ id: 'fresh', pages: [pageUri('fresh', 0)], updatedAt: old }])).toBe(0);
     expect(read('fresh', 'document.pdf')).toBe('PDF');
   });
 
-  test('skips a document whose record changed recently (an edit may be in flight)', () => {
+  test('skips a document whose record changed recently (an edit may be in flight)', async () => {
     seedFile('busy', 'page-0.jpg', 'P0');
     seedFile('busy', 'document.pdf', 'PDF');
     listFromContents('busy');
-    expect(sweepConvertLeftovers([{ id: 'busy', pages: [pageUri('busy', 0)], updatedAt: now - 5_000 }], now)).toBe(0);
+    expect(await sweep([{ id: 'busy', pages: [pageUri('busy', 0)], updatedAt: now - 5_000 }])).toBe(0);
     expect(read('busy', 'document.pdf')).toBe('PDF');
   });
 
-  test('a PDF record pointing at another file name keeps the folder’s document.pdf', () => {
+  test('a PDF record pointing at another file name keeps the folder’s document.pdf', async () => {
     seedFile('legacy', 'document.pdf', 'PDF');
     seedFile('legacy', 'scan.pdf', 'OTHER');
     listFromContents('legacy');
-    expect(
-      sweepConvertLeftovers([{ id: 'legacy', pages: [], pdfUri: `${DOCS}/legacy/scan.pdf`, updatedAt: old }], now),
-    ).toBe(0);
+    expect(await sweep([{ id: 'legacy', pages: [], pdfUri: `${DOCS}/legacy/scan.pdf`, updatedAt: old }])).toBe(0);
     expect(read('legacy', 'document.pdf')).toBe('PDF');
   });
 
-  test('ordinary page documents are untouched, including page files past the end', () => {
+  test('ordinary page documents are untouched, including page files past the end', async () => {
     seedFile('img', 'page-0.jpg', 'P0');
     seedFile('img', 'page-5.jpg', 'P5');
     listFromContents('img');
-    expect(sweepConvertLeftovers([{ id: 'img', pages: [pageUri('img', 0)], updatedAt: old }], now)).toBe(0);
+    expect(await sweep([{ id: 'img', pages: [pageUri('img', 0)], updatedAt: old }])).toBe(0);
     expect(read('img', 'page-5.jpg')).toBe('P5');
+  });
+
+  test('r8 #5: judges files by the record re-read under the lock, not the stale snapshot', async () => {
+    // Snapshot: a page document converted long ago, so its document.pdf looks
+    // stray. Meanwhile an Undo copied the PDF back (with the stash's old mtime)
+    // and switched the record back to the PDF.
+    seedFile('undo', 'page-0.jpg', 'P0');
+    seedFile('undo', 'document.pdf', 'PDF');
+    listFromContents('undo');
+    const snapshot: Refs = { id: 'undo', pages: [pageUri('undo', 0)], updatedAt: old };
+    const fresh: Refs = { id: 'undo', pages: [], pdfUri: pdfUri('undo'), updatedAt: now - 2_000 };
+    const withFresh = lockWith({ undo: fresh });
+    expect(await sweepConvertLeftovers([snapshot], withFresh, now)).toBe(0);
+    expect(withFresh).toHaveBeenCalledWith('undo', expect.any(Function));
+    expect(read('undo', 'document.pdf')).toBe('PDF');
+    expect(read('undo', 'page-0.jpg')).toBe('P0');
+  });
+
+  test('r8 #5: a record switched meanwhile is judged by its new shape', async () => {
+    // Snapshot says PDF document (page files would be strays); the fresh
+    // record is a settled page document: its pages are referenced and kept.
+    seedFile('sw', 'page-0.jpg', 'P0');
+    seedFile('sw', 'document.pdf', 'PDF');
+    listFromContents('sw');
+    const snapshot: Refs = { id: 'sw', pages: [], pdfUri: pdfUri('sw'), updatedAt: old };
+    const fresh: Refs = { id: 'sw', pages: [pageUri('sw', 0)], updatedAt: old };
+    expect(await sweepConvertLeftovers([snapshot], lockWith({ sw: fresh }), now)).toBe(1);
+    expect(read('sw', 'page-0.jpg')).toBe('P0');
+    expect(read('sw', 'document.pdf')).toBeUndefined();
+  });
+
+  test('r8 #5: a document deleted meanwhile is left alone', async () => {
+    seedFile('gone', 'page-0.jpg', 'P0');
+    seedFile('gone', 'document.pdf', 'PDF');
+    listFromContents('gone');
+    const snapshot: Refs = { id: 'gone', pages: [pageUri('gone', 0)], updatedAt: old };
+    expect(await sweepConvertLeftovers([snapshot], lockWith({}), now)).toBe(0);
+    expect(read('gone', 'document.pdf')).toBe('PDF');
+  });
+
+  test('r8 #5: deletes only inside the lock callback, and never consults the lock for a busy snapshot', async () => {
+    seedFile('lk', 'page-0.jpg', 'P0');
+    seedFile('lk', 'document.pdf', 'PDF');
+    listFromContents('lk');
+    const rec: Refs = { id: 'lk', pages: [pageUri('lk', 0)], updatedAt: old };
+    let insideLock = false;
+    const deletedInside: boolean[] = [];
+    mockDelete.mockImplementation(function (this: any) {
+      deletedInside.push(insideLock);
+      delete fileContents[this.uri];
+      this.exists = false;
+    });
+    const withFresh = jest.fn(async (_id: string, act: (r: Refs | null) => any) => {
+      insideLock = true;
+      try { return act(rec); } finally { insideLock = false; }
+    }) as any;
+    const busy: Refs = { id: 'busy2', pages: [], updatedAt: now - 1000 };
+    expect(await sweepConvertLeftovers([rec, busy], withFresh, now)).toBe(1);
+    expect(deletedInside).toEqual([true]);
+    expect(withFresh).toHaveBeenCalledTimes(1);
+    mockDelete.mockImplementation(function (this: any) {
+      delete fileContents[this.uri];
+      this.exists = false;
+    });
   });
 });
 
 describe('Open-in staging is swept (r7 #3)', () => {
   beforeEach(() => jest.clearAllMocks());
-  test('settled files in Caches/incoming, legacy root staging files and stale Inbox copies are removed', () => {
-    const now = 10_000_000_000;
-    const staged: any = new MockFile('file:///Library/Caches//incoming/incoming-1-contract.pdf');
-    const live: any = new MockFile('file:///Library/Caches//incoming/attempt-2-contract.pdf');
-    mockMtimes[live.uri] = now - 1000;
-    new MockDirectory({ uri: 'file:///Library/Caches/' }, 'incoming').list = jest.fn(() => [staged, live]);
-    const legacy: any = new MockFile('file:///Library/Caches/incoming-1700000000000-x.pdf');
-    const other: any = new MockFile('file:///Library/Caches/com.apple.something');
-    new MockDirectory({ uri: 'file:///Library/Caches/' }).list = jest.fn(() => [legacy, other]);
-    const inbox: any = new MockFile('file:///documents/Inbox/contract.pdf');
-    new MockDirectory({ uri: 'file:///documents' }, 'Inbox').list = jest.fn(() => [inbox]);
-    expect(sweepTempLeftovers(now)).toBe(3);
+  const now = 10_000_000_000;
+  const CACHES = 'file:///Library/Caches/';
+  const seenUri = `${CACHES}/inbox-seen.json`;
+
+  test('settled files in Caches/incoming and legacy root staging files are removed', () => {
+    const staged: any = new MockFile(`${CACHES}/incoming/incoming-1-contract.pdf`);
+    const live: any = new MockFile(`${CACHES}/incoming/attempt-${now - 1000}-incoming-1-contract.pdf`);
+    new MockDirectory({ uri: CACHES }, 'incoming').list = jest.fn(() => [staged, live]);
+    const legacy: any = new MockFile(`${CACHES}incoming-1700000000-x.pdf`);
+    const other: any = new MockFile(`${CACHES}com.apple.something`);
+    new MockDirectory({ uri: CACHES }).list = jest.fn(() => [legacy, other]);
+    expect(sweepTempLeftovers(now)).toBe(2);
     expect(staged.exists).toBe(false);
     expect(live.exists).toBe(true);
     expect(legacy.exists).toBe(false);
     expect(other.exists).toBe(true);
+  });
+
+  test('r8 #2: a staged copy is aged by the stamp in its name, not by the mtime File.copy kept', () => {
+    // Cold "Open in" of a year-old PDF: the copies keep the original's mtime.
+    const yearAgo = now - 365 * 24 * 60 * 60 * 1000;
+    const staged: any = new MockFile(`${CACHES}/incoming/incoming-${now - 3000}-Lease.pdf`);
+    const attempt: any = new MockFile(`${CACHES}/incoming/attempt-${now - 2000}-incoming-${now - 3000}-Lease.pdf`);
+    const legacy: any = new MockFile(`${CACHES}attempt-${now - 2000}-Old.pdf`);
+    for (const f of [staged, attempt, legacy]) mockMtimes[f.uri] = yearAgo;
+    new MockDirectory({ uri: CACHES }, 'incoming').list = jest.fn(() => [staged, attempt]);
+    new MockDirectory({ uri: CACHES }).list = jest.fn(() => [legacy]);
+    expect(sweepTempLeftovers(now)).toBe(0);
+    expect(staged.exists).toBe(true);
+    expect(attempt.exists).toBe(true);
+    expect(legacy.exists).toBe(true);
+    // The same files, swept from a launch more than the grace period later, go.
+    expect(sweepTempLeftovers(now + 11 * 60 * 1000)).toBe(3);
+    expect(staged.exists).toBe(false);
+    expect(attempt.exists).toBe(false);
+  });
+
+  test('a recent mtime still keeps a file without a stamp in Caches/incoming', () => {
+    const odd: any = new MockFile(`${CACHES}/incoming/contract.pdf`);
+    mockMtimes[odd.uri] = now - 1000;
+    new MockDirectory({ uri: CACHES }, 'incoming').list = jest.fn(() => [odd]);
+    expect(sweepTempLeftovers(now)).toBe(0);
+    expect(odd.exists).toBe(true);
+  });
+
+  test('stagedAt reads the staging stamp from the name', () => {
+    expect(stagedAt('incoming-1763459000000-Lease.pdf')).toBe(1763459000000);
+    expect(stagedAt('attempt-1763459000500-incoming-1763459000000-Lease.pdf')).toBe(1763459000500);
+    expect(stagedAt('Lease.pdf')).toBeNull();
+    expect(stagedAt('incoming--Lease.pdf')).toBeNull();
+  });
+
+  test('r8 #2: an Inbox copy is deleted only on a later launch, a grace period after it was first seen', () => {
+    const inbox: any = new MockFile('file:///documents/Inbox/contract.pdf');
+    mockMtimes[inbox.uri] = 1; // iOS's copy keeps the original's (ancient) mtime
+    new MockDirectory({ uri: 'file:///documents' }, 'Inbox').list = jest.fn(() => (inbox.exists ? [inbox] : []));
+    // Cold launch for "Open in": first sighting, kept for the import to stage.
+    expect(sweepTempLeftovers(now)).toBe(0);
+    expect(inbox.exists).toBe(true);
+    expect(JSON.parse(fileContents[seenUri])).toEqual({ 'contract.pdf': now });
+    // A relaunch soon after: still within the grace period.
+    expect(sweepTempLeftovers(now + 60_000)).toBe(0);
+    expect(inbox.exists).toBe(true);
+    // Still there on a launch well after: the import never ran — removed.
+    expect(sweepTempLeftovers(now + 11 * 60 * 1000)).toBe(1);
     expect(inbox.exists).toBe(false);
+    expect(fileContents[seenUri]).toBeUndefined(); // nothing left to track
+  });
+
+  test('an Inbox copy the import removed is forgotten, so a later one with the same name starts afresh', () => {
+    const inbox: any = new MockFile('file:///documents/Inbox/scan.pdf');
+    let present = true;
+    new MockDirectory({ uri: 'file:///documents' }, 'Inbox').list = jest.fn(() => (present ? [inbox] : []));
+    expect(sweepTempLeftovers(now)).toBe(0);
+    present = false; // app/import.tsx staged it and removed the Inbox copy
+    expect(sweepTempLeftovers(now + 60_000)).toBe(0);
+    present = true; // the user opens another "scan.pdf" an hour later
+    expect(sweepTempLeftovers(now + 60 * 60 * 1000)).toBe(0);
+    expect(inbox.exists).toBe(true);
+  });
+
+  test('a corrupt Inbox record is ignored, never a reason to delete', () => {
+    fileContents[seenUri] = '{not json';
+    const inbox: any = new MockFile('file:///documents/Inbox/contract.pdf');
+    new MockDirectory({ uri: 'file:///documents' }, 'Inbox').list = jest.fn(() => [inbox]);
+    expect(sweepTempLeftovers(now)).toBe(0);
+    expect(inbox.exists).toBe(true);
   });
 });

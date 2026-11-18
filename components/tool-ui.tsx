@@ -225,7 +225,9 @@ export function useImageAspect(uri: string | null | undefined): number {
 /**
  * A page image at a fixed width with an overlay layer of exactly the same size,
  * so tools can preview stamps where they will land in the PDF. `children`
- * receives the rendered page size in points.
+ * receives the rendered page size in points. Until a document is chosen
+ * (`uri` null) it is a dashed, page-shaped slot of exactly the same size, so
+ * nothing below moves when the page arrives.
  */
 export function PagePreview({
   uri,
@@ -234,7 +236,7 @@ export function PagePreview({
   children,
   onPress,
 }: {
-  /** null draws a blank sample page (faint text lines), so a stamp can be previewed before a document is chosen. */
+  /** null: no document chosen yet, so an empty "Choose a document to preview" slot. */
   uri: string | null;
   aspect: number;
   width: number;
@@ -243,13 +245,28 @@ export function PagePreview({
 }) {
   const { colors } = useTheme();
   const height = width * aspect;
+  if (!uri) {
+    return (
+      <View
+        style={[
+          styles.emptySlot,
+          { width: width + Spacing.sm * 2, height: height + Spacing.sm * 2, borderColor: colors.ring },
+        ]}
+        accessible
+        accessibilityLabel="Preview. Choose a document to preview it here."
+      >
+        <View style={[styles.emptySlotIcon, { backgroundColor: colors.accentLight }]}>
+          <Ionicons name="document-outline" size={22} color={colors.accent} />
+        </View>
+        <Text style={[Type.footnote, styles.center, styles.emptySlotText, { color: colors.muted }]}>
+          {'Choose a document\nto preview'}
+        </Text>
+      </View>
+    );
+  }
   const body = (
     <View style={{ width, height }}>
-      {uri ? (
-        <Image source={{ uri }} style={{ width, height }} resizeMode="stretch" />
-      ) : (
-        <SamplePage width={width} height={height} />
-      )}
+      <Image source={{ uri }} style={{ width, height }} resizeMode="stretch" />
       <View style={StyleSheet.absoluteFill} pointerEvents="none">
         {children?.({ width, height })}
       </View>
@@ -271,25 +288,6 @@ export function PagePreview({
       ) : (
         body
       )}
-    </View>
-  );
-}
-
-/** A blank page with a few faint text lines: the stand-in until a document is chosen. */
-function SamplePage({ width, height }: { width: number; height: number }) {
-  const { colors } = useTheme();
-  const pad = width * 0.1;
-  const line = Math.max(3, width * 0.022);
-  const rows = [0.55, 0.9, 0.82, 0.88, 0.6, 0, 0.92, 0.85, 0.9, 0.7, 0, 0.88, 0.8, 0.45];
-  return (
-    <View style={{ width, height, backgroundColor: colors.paper, paddingHorizontal: pad, paddingTop: pad }}>
-      <View style={{ width: '40%', height: line * 1.8, borderRadius: line, backgroundColor: colors.paperLine, marginBottom: line * 3 }} />
-      {rows.map((w, i) => (
-        <View
-          key={i}
-          style={{ width: `${w * 100}%`, height: line, borderRadius: line / 2, backgroundColor: colors.paperLine, marginBottom: line * 2.2 }}
-        />
-      ))}
     </View>
   );
 }
@@ -360,15 +358,15 @@ export function SelectionMark({ selected, order }: { selected: boolean; order?: 
 }
 
 /**
- * Single-choice indicator: an empty ring, or an accent ring with a dot. Every
- * row of a single-choice list shows one, so unchosen rows still read as
- * choices (multi-select uses SelectionMark's filled disc with a check).
+ * Single-choice indicator: the app's one selection idiom, a trailing accent
+ * checkmark on the chosen row (as in Settings and every sheet). Unchosen rows
+ * keep the same empty slot, so labels never shift when the choice moves.
  */
 export function RadioMark({ selected }: { selected: boolean }) {
   const { colors } = useTheme();
   return (
-    <View style={[styles.mark, styles.markEmpty, { borderColor: selected ? colors.accent : colors.ring }]}>
-      {selected ? <View style={[styles.radioDot, { backgroundColor: colors.accent }]} /> : null}
+    <View style={styles.checkSlot}>
+      {selected ? <Ionicons name="checkmark" size={22} color={colors.accent} /> : null}
     </View>
   );
 }
@@ -387,8 +385,8 @@ export function DocThumb({ doc, width = 40, height = 52 }: { doc: Document; widt
 }
 
 /**
- * One document in a picker. Single choice shows a radio on every row (filled
- * on the chosen one), like OptionList; `multi` shows a check ring on every row
+ * One document in a picker. Single choice shows a trailing checkmark on the
+ * chosen row, like OptionList and Settings; `multi` shows a check ring on every row
  * (filled when chosen), and `order` numbers it for multi-select in a
  * meaningful order. Wrap rows in a DocGroup.
  */
@@ -474,7 +472,7 @@ export function NoDocumentsScreen({
   );
 }
 
-/** A grouped list of mutually exclusive options, a radio on every row. */
+/** A grouped list of mutually exclusive options; the chosen one carries a trailing checkmark. */
 export function OptionList<T extends string | number>({
   options,
   value,
@@ -621,7 +619,7 @@ const styles = StyleSheet.create({
   meta: { marginTop: 2 },
   mark: { width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   markEmpty: { borderWidth: 1.5 },
-  radioDot: { width: 12, height: 12, borderRadius: 6 },
+  checkSlot: { width: 22, height: 22, alignItems: 'center', justifyContent: 'center' },
   badgeText: { fontSize: 13, fontWeight: '700' },
   swatches: {
     flexDirection: 'row',
@@ -652,6 +650,18 @@ const styles = StyleSheet.create({
     borderRadius: Radius.md,
   },
   previewEdge: { borderWidth: StyleSheet.hairlineWidth },
+  emptySlot: {
+    alignSelf: 'center',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.sm,
+    paddingHorizontal: Spacing.lg,
+    borderRadius: Radius.md,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+  },
+  emptySlotIcon: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
+  emptySlotText: { lineHeight: 18 },
   option: {
     flexDirection: 'row',
     alignItems: 'center',

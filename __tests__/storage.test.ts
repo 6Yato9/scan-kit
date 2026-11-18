@@ -745,6 +745,34 @@ describe('ghost documents and lost indexes (core #6, #14)', () => {
     expect(typeof pdf.updatedAt).toBe('number');
   });
 
+  test('withDocumentFileRefs reads the record afresh inside the docs lock (r8 #5)', async () => {
+    await storage.saveDocument({ ...doc, id: 'conv', pages: [], pdfUri: 'file:///CURRENT/Documents/scan-kit/conv/document.pdf' });
+    // A write queued before the sweep's turn is seen by it.
+    const write = storage.patchDocument('conv', { pages: ['file:///CURRENT/Documents/scan-kit/conv/page-0.jpg'], pdfUri: undefined, updatedAt: 5000 });
+    const order: string[] = [];
+    const seen = storage.withDocumentFileRefs('conv', fresh => {
+      order.push('act');
+      return fresh;
+    });
+    // A write queued after it waits until `act` has returned.
+    const later = storage.patchDocument('conv', { name: 'Renamed' }).then(() => order.push('later write'));
+    const fresh = await seen;
+    await write;
+    await later;
+    expect(order).toEqual(['act', 'later write']);
+    expect(fresh).toEqual({ id: 'conv', pages: ['file:///CURRENT/Documents/scan-kit/conv/page-0.jpg'], pdfUri: undefined, updatedAt: 5000 });
+  });
+
+  test('withDocumentFileRefs gives null for a missing or corrupt record, trashed ones included', async () => {
+    expect(await storage.withDocumentFileRefs('nope', r => r)).toBeNull();
+    await storage.saveDocument({ ...doc, id: 'bad' });
+    await AsyncStorage.setItem('@scan_kit_doc:bad', '{corrupt');
+    expect(await storage.withDocumentFileRefs('bad', r => r)).toBeNull();
+    await storage.saveDocument({ ...doc, id: 'tr' });
+    await storage.trashDocument('tr');
+    expect((await storage.withDocumentFileRefs('tr', r => r))?.id).toBe('tr');
+  });
+
   test('documentIdsForCleanup keeps trashed documents', async () => {
     await storage.saveDocument({ ...doc, id: 'A' });
     await storage.trashDocument('A');

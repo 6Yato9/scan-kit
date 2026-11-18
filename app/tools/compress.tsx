@@ -1,6 +1,9 @@
 // app/tools/compress.tsx
-// Shrinks a scanned document's page images in place (lib/compress.ts) and
-// reports the size before and after. Imported PDFs are not supported — their
+// "Free up space": shrinks a scanned document's stored page images in place
+// (lib/compress.ts) and reports the size before and after. Named for what it
+// does to the device, not the file, so it can't be mistaken for Export's
+// harmless "Smaller PDF" (which only shrinks the copy being shared) — this one
+// changes the document itself, for good. Imported PDFs are not supported — their
 // pages aren't images this app can re-encode — so they aren't listed.
 import { useMemo, useState } from 'react';
 import { Alert, StyleSheet, Text, View } from 'react-native';
@@ -27,7 +30,7 @@ import { notifyError, notifySuccess } from '@/lib/haptics';
 import { Radius, Spacing, Type } from '@/lib/theme';
 
 const LEVELS: { value: CompressLevel; label: string; detail: string }[] = [
-  { value: 'small', label: 'Smallest file', detail: 'Good for email. Fine print may soften.' },
+  { value: 'small', label: 'Smallest', detail: 'Frees the most space. Fine print may soften.' },
   { value: 'balanced', label: 'Balanced', detail: 'Clear text at a much smaller size.' },
   { value: 'sharp', label: 'Sharp', detail: 'Near-original detail, smaller saving.' },
 ];
@@ -54,11 +57,11 @@ export default function CompressScreen() {
       invalidateDocPreviews(doc.id);
       setResult({ ...r, docId: doc.id });
       notifySuccess();
-      show(r.after < r.before ? `Saved ${formatBytes(r.before - r.after)}` : 'Already as small as it gets');
+      show(r.after < r.before ? `Freed ${formatBytes(r.before - r.after)}` : 'Already as small as it gets');
       reload();
     } catch {
       notifyError();
-      Alert.alert('Couldn’t compress this document', 'Some pages may not have been compressed. Try again.');
+      Alert.alert('Couldn’t shrink this document', 'Some pages may not have been shrunk. Try again.');
       reload();
     } finally {
       setProgress(null);
@@ -68,11 +71,11 @@ export default function CompressScreen() {
   const handleCompress = () => {
     if (!doc || running) return;
     Alert.alert(
-      'Compress this document?',
-      `The page images in “${doc.name}” will be replaced with smaller versions. This can’t be undone.`,
+      'Shrink this document for good?',
+      `The pages of “${doc.name}” will be saved again at a smaller size, replacing the current ones. This can’t be undone.`,
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Compress', onPress: run },
+        { text: 'Shrink', style: 'destructive', onPress: run },
       ],
     );
   };
@@ -80,9 +83,9 @@ export default function CompressScreen() {
   if (loaded && docs.length === 0) {
     return (
       <NoDocumentsScreen
-        toolTitle="Compress"
+        toolTitle="Free up space"
         icon="contract-outline"
-        subtitle="Compress makes scanned documents smaller. Scan or import a document first."
+        subtitle="Free up space shrinks the pages of scanned documents. Scan or import a document first."
       />
     );
   }
@@ -91,12 +94,12 @@ export default function CompressScreen() {
 
   return (
     <ToolScreen
-      title="Compress"
+      title="Free up space"
       footer={
         <>
           {progress ? (
             <ToolProgress
-              label={`Compressing page ${Math.min(progress.current + 1, progress.total)} of ${progress.total}…`}
+              label={`Shrinking page ${Math.min(progress.current + 1, progress.total)} of ${progress.total}…`}
               current={progress.current}
               total={progress.total}
             />
@@ -114,7 +117,7 @@ export default function CompressScreen() {
             )
           ) : (
             <PrimaryButton
-              title={doc ? `Compress document (${formatBytes(currentSize)})` : 'Choose a document'}
+              title={doc ? `Shrink pages (${formatBytes(currentSize)} now)` : 'Shrink pages'}
               onPress={handleCompress}
               disabled={!doc}
               loading={running}
@@ -127,15 +130,15 @@ export default function CompressScreen() {
       {fromViewer ? <FilterBaker /> : null}
       <ToolIntro
         icon="contract-outline"
-        title="Make a document smaller"
-        text="Saves its pages again at a lower size to free up space on this device."
+        title="Shrink a document for good"
+        text="Saves its pages again at a smaller size, replacing them, to free up space on this device."
       />
       <ToolDocPicker
         docs={docs}
         doc={doc}
         fixed={fixed}
         disabled={running}
-        note="Imported PDFs can’t be compressed, so they aren’t listed."
+        note="Imported PDFs can’t be shrunk here, so they aren’t listed."
         onPick={d => {
           setDocId(d.id);
           setResult(null);
@@ -159,8 +162,8 @@ export default function CompressScreen() {
       <SectionLabel>Size</SectionLabel>
       <OptionList options={LEVELS} value={level} onChange={v => { setLevel(v); setResult(null); }} />
       <ToolNote>
-        This replaces the page images and can’t be undone. To send a smaller file and keep the pages as they are, share
-        the document and choose Smaller PDF.
+        This replaces the stored pages and can’t be undone. To send a smaller file and keep the pages as they are,
+        share the document and choose Smaller PDF instead.
       </ToolNote>
     </ToolScreen>
   );

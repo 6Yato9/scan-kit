@@ -498,7 +498,7 @@ function canMergePdfs(): boolean {
   return typeof VisionOcr?.mergePdfs === 'function';
 }
 
-/** The native merge failed (not cancelled, not timed out): fall back to one paper size. */
+/** The native merge failed (not cancelled, not timed out): see generatePdf for the fallback. */
 class MergeFailed extends Error {}
 
 /** One page, read and (when searchable) recognised; its sheet is built per paper. */
@@ -673,7 +673,12 @@ export async function generatePdf(
       return await renderAndMerge(runs, prepareRun(true), n, opts);
     } catch (err) {
       if (!(err instanceof MergeFailed)) throw err;
-      // Stitching failed: one paper size for everything still beats no PDF.
+      // Stitching failed. A short document still gets a PDF: one print job on
+      // one paper size, no bigger than a single run. A long one fails cleanly:
+      // rendering every page in one job is exactly the memory blow-up the
+      // bounded runs exist to avoid, and a merge usually fails when the device
+      // is already short of space or memory (r8 code review #3).
+      if (n > MAX_RUN_PAGES) throw new PdfError('Couldn’t create the PDF.', 'render');
     }
   }
   const single = runs.length === 1 ? runs[0] : planPaperRuns(naturals, pageSize, false)[0];

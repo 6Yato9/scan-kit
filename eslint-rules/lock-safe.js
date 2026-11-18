@@ -19,16 +19,25 @@
 //   ActionSheetIOS share sheets may only be
 //   called from the lock-aware helpers: lib/share.ts (shareFile, printFile)
 //   and lib/photos.ts (savePagesToPhotos). Those await whenUnlocked()
-//   (lib/nav-guard.ts) internally, so callers can't forget.
+//   (lib/nav-guard.ts) internally, so callers can't forget. Any reference
+//   counts, not only a call: `const f = Sharing.shareAsync`,
+//   `.then(Print.printAsync)`, `const { shareAsync } = Sharing`.
 //
 // lock-safe/navigation-after-await
 //   router.back / replace / push / navigate / dismiss / dismissTo /
-//   dismissAll may not run "late", i.e. when the app may have locked since
-//   the tap that started the work:
-//     - after an `await` in the same function (or inside a loop that awaits);
+//   dismissAll (and React Navigation's goBack / pop / popTo / popToTop /
+//   reset / dispatch) may not run "late", i.e. when the app may have locked
+//   since the tap that started the work:
+//     - after an `await` in the same function (or inside a loop that awaits)
+//       — a tap handler included: code after ITS await is late too;
 //     - inside a .then / .catch / .finally callback;
-//     - inside any function CREATED after an await or in such a callback — a
-//       setTimeout / requestAnimationFrame / listener callback, an inner helper;
+//     - inside a useEffect / useLayoutEffect callback: an effect runs after a
+//       render, often one caused by state set after an await;
+//     - inside a non-tap JSX callback prop (onDismiss, onSaved, onFinish …):
+//       the component may call it after async work of its own;
+//     - inside any function CREATED in one of those places — a setTimeout /
+//       requestAnimationFrame / listener callback, an inner helper (a timer
+//       started straight from a tap is fine);
 //     - through a local function that navigates, called or handed on late
 //       (`.then(done)`, `await x; done()`, `setTimeout(done)`), or the method
 //       itself handed on (`.then(router.back)`).
@@ -39,10 +48,14 @@
 //   buttons are not covered by the alert guard. Wrap navigation in:
 //       navigateWhenUnlocked(() => router.replace(...));
 //   which runs it at once when unlocked, otherwise after unlock once the lock
-//   screen has gone. Not reported: JSX event handlers, `onPress`-style keys
-//   in object literals (toast actions, Alert buttons — the alert guard holds
-//   those) and navigateWhenUnlocked callbacks — those only run from a tap or
-//   once unlocked.
+//   screen has gone (in an effect, return its result: the cleanup cancels a
+//   held navigation). Not reported: tap props in JSX (TAP_PROPS: onPress,
+//   onLongPress, onBack …), `onPress`-style keys in object literals (toast
+//   actions, Alert buttons — the alert guard holds those) and
+//   navigateWhenUnlocked callbacks — those start only from a tap or once
+//   unlocked (up to their own first await).
+//   Not covered (one file is all a lint rule sees): a navigating helper
+//   imported from another module and called late.
 //
 // ALLOWING A DELIBERATE EXCEPTION
 //   Put a disable comment on the line before, WITH a reason after `--`:
@@ -65,7 +78,12 @@ const PRESENTER_IMPORTS = {
   'expo-media-library': new Set(['saveToLibraryAsync', 'createAssetAsync']),
 };
 
-const NAV_METHODS = new Set(['back', 'replace', 'push', 'navigate', 'dismiss', 'dismissTo', 'dismissAll']);
+const NAV_METHODS = new Set([
+  // expo-router
+  'back', 'replace', 'push', 'navigate', 'dismiss', 'dismissTo', 'dismissAll',
+  // React Navigation (useNavigation())
+  'goBack', 'pop', 'popTo', 'popToTop', 'reset', 'dispatch',
+]);
 const NAV_OBJECTS = new Set(['router', 'navigation', 'nav']);
 const PROMISE_CALLBACKS = new Set(['then', 'catch', 'finally']);
 
@@ -104,16 +122,36 @@ const nativePresenter = {
           }
         }
       },
-      CallExpression(node) {
-        const name = propName(node.callee);
+      // Any reference, called or not: `Sharing.shareAsync(uri)`, but also
+      // `const f = Sharing.shareAsync; f(uri)` and `.then(Sharing.shareAsync)`.
+      MemberExpression(node) {
+        const name = propName(node);
         if (!name) return;
-        const obj = node.callee.object;
+        const obj = node.object;
         const isRnShare =
           name === 'share' &&
           ((obj.type === 'Identifier' && shareNames.has(obj.name)) ||
-            (obj.type === 'MemberExpression' && propName(obj) === 'Share')); // RN.Share.share()
+            (obj.type === 'MemberExpression' && propName(obj) === 'Share')); // RN.Share.share
         if (PRESENTER_METHODS.has(name) || isRnShare) {
-          context.report({ node, messageId: 'call', data: { name: isRnShare ? 'Share.share' : name } });
+          const at = node.parent && node.parent.type === 'CallExpression' && node.parent.callee === node ? node.parent : node;
+          context.report({ node: at, messageId: 'call', data: { name: isRnShare ? 'Share.share' : name } });
+        }
+      },
+      // `const { shareAsync } = Sharing`, `const { share } = Share`, `const { shareAsync: f } = await import('expo-sharing')`.
+      VariableDeclarator(node) {
+        if (node.id.type !== 'ObjectPattern') return;
+        let init = node.init;
+        if (init && init.type === 'AwaitExpression') init = init.argument;
+        const fromShare =
+          !!init &&
+          ((init.type === 'Identifier' && shareNames.has(init.name)) || (init.type === 'MemberExpression' && propName(init) === 'Share'));
+        for (const prop of node.id.properties) {
+          if (prop.type !== 'Property') continue;
+          const key = prop.key.type === 'Identifier' ? prop.key.name : prop.key.type === 'Literal' ? String(prop.key.value) : null;
+          if (!key) continue;
+          if (PRESENTER_METHODS.has(key) || (key === 'share' && fromShare)) {
+            context.report({ node: prop, messageId: 'call', data: { name: key === 'share' ? 'Share.share' : key } });
+          }
         }
       },
     };
@@ -129,6 +167,15 @@ const ROUTER_MODULES = new Set(['expo-router', '@react-navigation/native', '@rea
 const GUARDS = new Set(['navigateWhenUnlocked']);
 /** Object keys whose function is a tap handler (a toast action, an Alert button — the alert guard holds those). */
 const TAP_KEYS = /^on(?:Press|LongPress|PressIn|PressOut)$/;
+/**
+ * JSX props that only ever run from the user's own touch or typing (nothing is
+ * tappable while locked). Every other `on…` prop (onDismiss, onClose, onSaved,
+ * onFinish, onLoad …) may be called by the component after async work of its
+ * own, so navigation in one is held to the same rule as code after an await.
+ */
+const TAP_PROPS = /^on(?:Press|LongPress|PressIn|PressOut|Back|SecondaryAction|SubmitEditing|ChangeText|ValueChange)$/;
+/** Hooks whose callback runs after a render — often one caused by state set after an await. */
+const EFFECT_HOOKS = new Set(['useEffect', 'useLayoutEffect', 'useInsertionEffect']);
 /** UI that is only safe from a tap: its buttons are not covered by the alert guard. */
 const LATE_PRESENTERS = new Set(['showActionSheetWithOptions']);
 
@@ -148,22 +195,42 @@ function calleeName(call) {
   return propName(call.callee);
 }
 
+/** The JSX attribute a function / value is the value of, or null. */
+function jsxAttributeOf(node) {
+  const parent = node.parent;
+  if (!parent || parent.type !== 'JSXExpressionContainer') return null;
+  const attr = parent.parent;
+  if (!attr || attr.type !== 'JSXAttribute' || attr.name.type !== 'JSXIdentifier') return null;
+  return attr.name.name;
+}
+/** An `on…` JSX prop that is not a tap: the component decides when it runs. */
+function isLateProp(name) {
+  return !!name && /^on[A-Z]/.test(name) && !TAP_PROPS.test(name);
+}
+
 /**
- * A function whose body is known to run only from a tap or once unlocked, so
- * nothing in it is "late" however late it was created: a JSX event handler,
- * a tap key in an object literal (toast actions, Alert buttons), or the
- * callback handed to navigateWhenUnlocked.
+ * A function whose body STARTS from a tap or once unlocked, so it is not late
+ * merely because of where it was created: a tap prop in JSX, a tap key in an
+ * object literal (toast actions, Alert buttons), or the callback handed to
+ * navigateWhenUnlocked. Code after an await inside it is still late.
  */
-function isExemptFunction(fn) {
+function startsFromTap(fn) {
   const parent = fn.parent;
   if (!parent) return false;
-  if (parent.type === 'JSXExpressionContainer') return true;
+  const attr = jsxAttributeOf(fn);
+  if (attr !== null) return TAP_PROPS.test(attr);
   if (parent.type === 'Property' && parent.value === fn) {
     const key = parent.key.type === 'Identifier' ? parent.key.name : parent.key.type === 'Literal' ? String(parent.key.value) : '';
     if (TAP_KEYS.test(key)) return true;
   }
   if (parent.type === 'CallExpression' && parent.arguments.includes(fn) && GUARDS.has(calleeName(parent) || '')) return true;
   return false;
+}
+
+/** The callback of useEffect / useLayoutEffect (also `React.useEffect`). */
+function isEffectCallback(fn) {
+  const parent = fn.parent;
+  return !!parent && parent.type === 'CallExpression' && parent.arguments[0] === fn && EFFECT_HOOKS.has(calleeName(parent) || '');
 }
 
 const navigationAfterAwait = {
@@ -180,6 +247,10 @@ const navigationAfterAwait = {
         '{{call}}() runs in a callback created after an await (a timer, a listener, a promise chain): if the app was locked meanwhile it acts on the /lock screen. Wrap it in navigateWhenUnlocked(() => …) from lib/nav-guard.',
       indirect:
         '{{call}} navigates, and runs here after async work: if the app was locked meanwhile it acts on the /lock screen. Wrap the call in navigateWhenUnlocked(() => …) from lib/nav-guard.',
+      inEffect:
+        '{{call}}() runs in an effect, i.e. after a render that state set after async work may have caused: if the app was locked meanwhile it acts on the /lock screen. Wrap it in navigateWhenUnlocked(() => …) from lib/nav-guard.',
+      inProp:
+        '{{call}}() runs in the {{prop}} callback, which the component may call after async work of its own (only tap props such as onPress are known to run from a tap): wrap it in navigateWhenUnlocked(() => …) from lib/nav-guard.',
       sheet:
         '{{call}}() opens an action sheet after async work: it would appear above the App Lock screen, and its buttons are not guarded. Open action sheets only from a tap.',
     },
@@ -292,7 +363,7 @@ const navigationAfterAwait = {
       let found = false;
       const visit = (node, top) => {
         if (found || !node || typeof node.type !== 'string') return;
-        if (!top && FUNCTION_TYPES.has(node.type) && isExemptFunction(node)) return;
+        if (!top && FUNCTION_TYPES.has(node.type) && startsFromTap(node)) return;
         if (node.type === 'CallExpression') {
           if (navCallLabel(node)) { found = true; return; }
           if (depth < 4 && node.callee.type === 'Identifier') {
@@ -325,7 +396,9 @@ const navigationAfterAwait = {
         loopsWithAwait: new Set(),
         loopsAtCreation: parent ? currentLoops(parent) : [],
         promiseCb: isPromiseCallback(node),
-        exempt: isExemptFunction(node),
+        tapStart: startsFromTap(node),
+        effect: isEffectCallback(node),
+        lateProp: isLateProp(jsxAttributeOf(node)) ? jsxAttributeOf(node) : null,
       };
       frames.push(frame);
       stack.push(frame);
@@ -341,13 +414,19 @@ const navigationAfterAwait = {
     }
 
     const deferredMemo = new Map();
-    /** Created after an await (or inside a promise callback / another such function), and not a tap handler. */
+    /**
+     * Created where code is already late — after an await, in a promise
+     * callback, an effect, a non-tap prop callback, or another such function —
+     * and not itself started by a tap.
+     */
     function isDeferred(frame) {
-      if (!frame || frame.exempt || !frame.parent) return false;
+      if (!frame || frame.tapStart || !frame.parent) return false;
       if (deferredMemo.has(frame)) return deferredMemo.get(frame);
       const p = frame.parent;
       const result =
         p.promiseCb ||
+        p.effect ||
+        !!p.lateProp ||
         isDeferred(p) ||
         p.awaits.some(a => a < frame.node.range[0]) ||
         frame.loopsAtCreation.some(l => p.loopsWithAwait.has(l));
@@ -355,13 +434,17 @@ const navigationAfterAwait = {
       return result;
     }
     /** Why code at `node` in `frame` may run while locked, or null. */
+    // Even in a tap handler, code after the handler's own await is late.
     function lateness(node, frame, loopsHere) {
-      if (!frame || frame.exempt) return null;
+      if (!frame) return null;
       if (frame.promiseCb) return 'inCallback';
       if (frame.awaits.some(a => a < node.range[1]) || loopsHere.some(l => frame.loopsWithAwait.has(l))) return 'afterAwait';
+      if (frame.effect) return 'inEffect';
+      if (frame.lateProp) return 'inProp';
       if (isDeferred(frame)) return 'deferred';
       return null;
     }
+    const jsxRefProps = []; // `onSaved={close}`, `onDismiss={router.back}`: { node, prop }
 
     const handlers = {
       AwaitExpression(node) {
@@ -396,10 +479,26 @@ const navigationAfterAwait = {
           }
         }
       },
+      // A function handed to a non-tap prop by name: `onSaved={close}`.
+      JSXAttribute(node) {
+        if (node.name.type !== 'JSXIdentifier' || !isLateProp(node.name.name)) return;
+        const v = node.value;
+        if (!v || v.type !== 'JSXExpressionContainer') return;
+        if (v.expression.type === 'Identifier' || v.expression.type === 'MemberExpression') {
+          jsxRefProps.push({ node: v.expression, prop: node.name.name });
+        }
+      },
       'Program:exit'() {
         for (const { node, frame, loopsHere, label } of navCalls) {
           const why = lateness(node, frame, loopsHere);
-          if (why) context.report({ node, messageId: why, data: { call: label } });
+          if (why) context.report({ node, messageId: why, data: { call: label, prop: frame.lateProp || '' } });
+        }
+        for (const { node, prop } of jsxRefProps) {
+          if (isNavMemberRef(node)) {
+            context.report({ node, messageId: 'inProp', data: { call: sourceCode.getText(node), prop } });
+          } else if (node.type === 'Identifier' && (isNavFunctionRef(node) || navigates(functionOf(node)))) {
+            context.report({ node, messageId: 'indirect', data: { call: node.name } });
+          }
         }
         for (const { node, frame, loopsHere, label } of sheetCalls) {
           if (lateness(node, frame, loopsHere)) context.report({ node, messageId: 'sheet', data: { call: label } });

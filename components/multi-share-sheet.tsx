@@ -30,6 +30,7 @@ import { useTheme } from '@/contexts/theme-context';
 import { formatBytes } from '@/components/tool-ui';
 import { documentsBytes } from '@/lib/doc-size';
 import { zipFiles, ZipCancelledError, ZipLimitError } from '@/lib/zip-stream';
+import { uniqueNames } from '@/lib/unique-names';
 import { Radius, Spacing, Type } from '@/lib/theme';
 
 type Props = {
@@ -68,23 +69,6 @@ export function combinedName(docs: { name: string }[]): string {
 export function exportAllName(now: Date = new Date()): string {
   const pad = (v: number) => String(v).padStart(2, '0');
   return `Scan Kit documents ${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-}
-
-/** Unique file names inside a ZIP: a second "Scan.pdf" becomes "Scan 2.pdf". */
-export function uniqueNames(names: string[]): string[] {
-  // Every output name is reserved (case-insensitively) as it is produced, and a
-  // generated "Name N" keeps counting until it is free — so an existing
-  // "Receipt 2" can never collide with a generated one.
-  const taken = new Set<string>();
-  return names.map(n => {
-    const dot = n.lastIndexOf('.');
-    const stem = dot > 0 ? n.slice(0, dot) : n;
-    const ext = dot > 0 ? n.slice(dot) : '';
-    let candidate = n;
-    for (let i = 2; taken.has(candidate.toLowerCase()); i++) candidate = `${stem} ${i}${ext}`;
-    taken.add(candidate.toLowerCase());
-    return candidate;
-  });
 }
 
 export function MultiShareSheet({ visible, documents, onClose, exportAll = false }: Props) {

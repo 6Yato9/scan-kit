@@ -37,14 +37,15 @@ const TOOL_SECTIONS: { title: string; tools: Tool[] }[] = [
       { id: 'extract-text', icon: 'reader-outline', label: 'Extract text', href: '/tools/extract-text' },
       { id: 'extract', icon: 'cut-outline', label: 'Extract pages', href: '/tools/extract' },
       { id: 'long-image', icon: 'long-image', label: 'Long image', href: '/tools/long-image' },
-      { id: 'compress', icon: 'contract-outline', label: 'Compress', href: '/tools/compress' },
+      // Not "Compress": it shrinks the stored pages for good, unlike Export's Smaller PDF.
+      { id: 'compress', icon: 'contract-outline', label: 'Free up space', href: '/tools/compress' },
     ],
   },
   {
     title: 'Edit',
     tools: [
       { id: 'sign', icon: 'signature', label: 'Sign', href: '/tools/sign' },
-      { id: 'watermark', icon: 'water-outline', label: 'Watermark', href: '/tools/watermark' },
+      { id: 'watermark', icon: 'watermark', label: 'Watermark', href: '/tools/watermark' },
       { id: 'timestamp', icon: 'time-outline', label: 'Timestamp', href: '/tools/timestamp' },
       { id: 'erase-marks', icon: 'color-wand-outline', label: 'Erase marks', href: '/tools/erase-marks' },
     ],

@@ -36,6 +36,7 @@ import {
   placeExportFile,
   printFile,
   shareFile,
+  shareText,
   ShareError,
 } from '@/lib/share';
 import { ocrAvailable } from '@/lib/ocr';
@@ -89,6 +90,21 @@ async function pageStats(pages: string[]): Promise<PageStat[]> {
 }
 
 const PDF_FILE = { mimeType: 'application/pdf', UTI: 'com.adobe.pdf' };
+
+/**
+ * The Text row's detail, "Recognized text · about 240 words": word count is
+ * what people judge plain text by. Counts under 20 are exact; above that they
+ * are rounded like the size estimates.
+ */
+export function textDetail(text: string): string {
+  const words = text.split(/\s+/).filter(Boolean).length;
+  let count: string;
+  if (words === 1) count = '1 word';
+  else if (words < 20) count = `${words} words`;
+  else if (words < 1000) count = `about ${Math.round(words / 10) * 10} words`;
+  else count = `about ${(Math.round(words / 100) * 100).toLocaleString('en-US')} words`;
+  return `Recognized text · ${count}`;
+}
 
 function pdfPhaseLabel(phase: PdfProgressPhase, done: number, total: number): string {
   if (phase === 'rendering') return 'Finishing up';
@@ -180,6 +196,9 @@ export function ExportSheet({ visible, document, onClose }: Props) {
 
   const isPdfDoc = !!document.pdfUri;
   const pageCount = document.pages.length;
+  // The recognized text (search index): shared as plain text, ready to paste.
+  // Hidden when the document has none yet.
+  const docText = document.ocrText?.trim() ?? '';
   const canSearchable = !isPdfDoc && pageCount > 0 && ocrAvailable();
   const canProtect = canProtectPdf() && (isPdfDoc || pageCount > 0);
 
@@ -241,6 +260,20 @@ export function ExportSheet({ visible, document, onClose }: Props) {
   }
 
   const runningRef = useRef(false);
+
+  /** Shares the recognized text over this sheet; closes it once the share sheet is done. */
+  async function runShareText() {
+    if (busy || runningRef.current || !docText) return;
+    runningRef.current = true;
+    const session = sessionRef.current;
+    try {
+      // Waits while App Lock is on; dismissing the share sheet isn't an error.
+      await shareText(docText);
+      if (sessionRef.current === session) onClose();
+    } finally {
+      runningRef.current = false;
+    }
+  }
 
   /** Waits for this document's queued or running filter bakes, with progress. */
   async function finishEnhancements(signal: AbortSignal): Promise<void> {
@@ -526,7 +559,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
                   label="PDF"
                   detail={detailLine(['Original file', sizeLabel])}
                   onPress={() => run('pdf')}
-                  last={!canProtect}
+                  last={!canProtect && !docText}
                 />
                 {canProtect ? (
                   <SheetRow
@@ -534,8 +567,11 @@ export function ExportSheet({ visible, document, onClose }: Props) {
                     label="Password-protected PDF"
                     detail={protectedDetail}
                     onPress={() => setPwMode(true)}
-                    last
+                    last={!docText}
                   />
+                ) : null}
+                {docText ? (
+                  <SheetRow icon="reader-outline" label="Text" detail={textDetail(docText)} onPress={runShareText} last />
                 ) : null}
               </>
             ) : (
@@ -565,8 +601,11 @@ export function ExportSheet({ visible, document, onClose }: Props) {
                   label={pageCount === 1 ? 'JPEG image' : 'JPEG images'}
                   detail={detailLine([pageCount === 1 ? 'One image' : `${pageCount} images in a ZIP`, sizeLabel])}
                   onPress={() => run('images')}
-                  last
+                  last={!docText}
                 />
+                {docText ? (
+                  <SheetRow icon="reader-outline" label="Text" detail={textDetail(docText)} onPress={runShareText} last />
+                ) : null}
               </>
             )}
           </SheetGroup>

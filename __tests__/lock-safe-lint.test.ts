@@ -51,6 +51,16 @@ tester.run('native-presenter', plugin.rules['native-presenter'], {
     // r7: Share under another name.
     { code: "import { Share as RNShare } from 'react-native';\nRNShare.share({ message: text });", errors: [{ messageId: 'call' }] },
     { code: "import * as RN from 'react-native';\nRN.Share.share({ message: text });", errors: [{ messageId: 'call' }] },
+    // r8 #4: the presenter taken by reference, not called on the spot.
+    { code: 'const f = Sharing.shareAsync; await f(uri);', errors: [{ messageId: 'call' }] },
+    { code: 'const go = S.shareAsync;\nfunction later() { go(uri); }', errors: [{ messageId: 'call' }] },
+    { code: 'save().then(Print.printAsync);', errors: [{ messageId: 'call' }] },
+    { code: "const f = require('expo-sharing').shareAsync;", errors: [{ messageId: 'call' }] },
+    { code: 'const { shareAsync } = Sharing; shareAsync(uri);', errors: [{ messageId: 'call' }] },
+    { code: "const { shareAsync: send } = await import('expo-sharing'); send(uri);", errors: [{ messageId: 'call' }] },
+    { code: 'const { saveToLibraryAsync } = MediaLibrary;', errors: [{ messageId: 'call' }] },
+    { code: 'const { share } = Share; share({ message });', errors: [{ messageId: 'call' }] },
+    { code: 'const s = Share.share;', errors: [{ messageId: 'call' }] },
   ],
 });
 
@@ -84,6 +94,28 @@ tester.run('navigation-after-await', plugin.rules['navigation-after-await'], {
     'function onMore() { ActionSheetIOS.showActionSheetWithOptions({ options }, i => pick(i)); }',
     // Destructured router method before any await.
     'function F() { const { back } = useRouter(); back(); }',
+    // r8 #4: React Navigation methods from a tap or before any await.
+    'function F() { const navigation = useNavigation(); return <Button onPress={() => navigation.goBack()} />; }',
+    'function f() { navigation.pop(); navigation.reset({ index: 0, routes: [] }); }',
+    // Not a router: a list's pop / an object's reset.
+    'async function f() { await x; stack.pop(); form.reset(); }',
+    // A timer started from a tap (no await before it).
+    'function F() { return <Button onPress={() => { setTimeout(() => router.back(), 1000); }} />; }',
+    'const onPress = () => setTimeout(() => router.back(), 1000);',
+    // Other tap props: a header's back button, a secondary action button.
+    'function F() { return <ScreenHeader onBack={() => router.back()} />; }',
+    'function F() { return <Empty onSecondaryAction={() => router.push("/tools")} />; }',
+    // A tap prop handed a function by name.
+    'function F() { const close = () => router.back(); return <Button onPress={close} />; }',
+    // A non-tap prop that doesn't navigate, or only through the guard.
+    'function F() { return <Modal onDismiss={() => setOpen(false)} />; }',
+    'function F() { return <Sheet onSaved={() => navigateWhenUnlocked(() => router.back())} />; }',
+    // An effect that navigates only through the guard, or doesn't navigate.
+    'function F() { useEffect(() => navigateWhenUnlocked(() => router.replace("/v")), [id]); }',
+    'function F() { useEffect(() => { if (!id) return; return navigateWhenUnlocked(() => router.replace("/v")); }, [id]); }',
+    'function F() { useEffect(() => { setReady(true); }, []); }',
+    // An effect that only subscribes to a tap-driven callback.
+    'function F() { useEffect(() => toast.show("Saved", { onPress: () => router.push("/v") }), []); }',
   ],
   invalid: [
     { code: 'async function f() { await save(); router.back(); }', errors: [{ messageId: 'afterAwait' }] },
@@ -120,6 +152,36 @@ tester.run('navigation-after-await', plugin.rules['navigation-after-await'], {
     { code: 'async function f() { await save(); setTimeout(router.back, 300); }', errors: [{ messageId: 'indirect' }] },
     // Through two local functions.
     { code: 'function close() { router.back(); }\nfunction finish() { close(); }\nsave().then(finish);', errors: [{ messageId: 'indirect' }] },
+    // r8 #4 holes, one fixture each.
+    // React Navigation's goBack / pop / popToTop / reset / dispatch after an await.
+    { code: 'async function f() { await save(); navigation.goBack(); }', errors: [{ messageId: 'afterAwait' }] },
+    { code: 'function F() { const nav = useNavigation(); return async () => { await save(); nav.pop(); }; }', errors: [{ messageId: 'afterAwait' }] },
+    { code: 'async function f() { await save(); navigation.popToTop(); }', errors: [{ messageId: 'afterAwait' }] },
+    { code: 'save().then(() => navigation.reset({ index: 0, routes: [{ name: "Home" }] }));', errors: [{ messageId: 'inCallback' }] },
+    { code: 'async function f() { await save(); navigation.dispatch(StackActions.pop()); }', errors: [{ messageId: 'afterAwait' }] },
+    { code: 'async function f() { const { goBack } = navigation; await save(); goBack(); }', errors: [{ messageId: 'afterAwait' }] },
+    // A tap handler's own await: what follows it is late even inside onPress.
+    { code: 'function F() { return <Button onPress={async () => { await save(); router.back(); }} />; }', errors: [{ messageId: 'afterAwait' }] },
+    { code: 'toast.show("x", { onPress: async () => { await undo(); router.replace("/v"); } });', errors: [{ messageId: 'afterAwait' }] },
+    // A timer started from a tap is fine; one started after the tap's await is not.
+    { code: 'function F() { return <Button onPress={async () => { await save(); setTimeout(() => router.back(), 1000); }} />; }', errors: [{ messageId: 'deferred' }] },
+    { code: 'const onPress = async () => { await save(); setTimeout(() => router.back(), 1000); };', errors: [{ messageId: 'deferred' }] },
+    // The JSX exemption covers tap props only: onDismiss / onSaved / onFinish
+    // may be called by the component after async work of its own.
+    { code: 'function F() { return <Modal onDismiss={() => router.back()} />; }', errors: [{ messageId: 'inProp' }] },
+    { code: 'function F() { return <ExportSheet onSaved={() => { router.replace("/viewer"); }} />; }', errors: [{ messageId: 'inProp' }] },
+    { code: 'function F() { return <Wizard onFinish={function () { router.push("/a"); }} />; }', errors: [{ messageId: 'inProp' }] },
+    { code: 'function F() { return <Sheet onDone={() => setTimeout(() => router.back(), 0)} />; }', errors: [{ messageId: 'deferred' }] },
+    { code: 'function F() { const close = () => router.back(); return <Sheet onSaved={close} />; }', errors: [{ messageId: 'indirect' }] },
+    { code: 'function F() { return <Sheet onClosed={router.back} />; }', errors: [{ messageId: 'inProp' }] },
+    { code: 'async function f() { await load(); return <Sheet onDismissed={() => router.back()} />; }', errors: [{ messageId: 'inProp' }] },
+    // Navigation in an effect: it runs after a render that state set after an
+    // await may have caused (`await save(); setSavedId(id)` → effect → replace).
+    { code: 'function F() { useEffect(() => { if (savedId) router.replace({ pathname: "/viewer", params: { id: savedId } }); }, [savedId]); }', errors: [{ messageId: 'inEffect' }] },
+    { code: 'function F() { React.useLayoutEffect(() => { if (!doc) navigation.goBack(); }, [doc]); }', errors: [{ messageId: 'inEffect' }] },
+    { code: 'function F() { const close = () => router.back(); useEffect(() => { if (done) close(); }, [done]); }', errors: [{ messageId: 'indirect' }] },
+    { code: 'function F() { useEffect(() => { const t = setTimeout(() => router.back(), 500); return () => clearTimeout(t); }, []); }', errors: [{ messageId: 'deferred' }] },
+    { code: 'function F() { useEffect(() => { const sub = AppState.addEventListener("change", () => router.back()); return () => sub.remove(); }, []); }', errors: [{ messageId: 'deferred' }] },
   ],
 });
 

@@ -1,6 +1,8 @@
 // app/tools/sign.tsx
 // Draw a signature, choose the page (or every page) and where it goes, then
-// save a signed copy as a new PDF.
+// sign the document itself: the signature is drawn into the page (and its
+// unfiltered shadow), so the pages stay searchable and re-filterable, and the
+// viewer offers Undo (lib/page-stamp.ts). "Save as a copy" signs a duplicate.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
@@ -15,8 +17,6 @@ import {
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { Ionicons } from '@expo/vector-icons';
-import * as Crypto from 'expo-crypto';
-import { useRouter } from 'expo-router';
 import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
@@ -33,16 +33,13 @@ import {
 } from '@/components/tool-ui';
 import { ToolDocPicker, useToolDoc } from '@/components/tool-doc';
 import { FilterBaker } from '@/components/filter-baker';
-import { generatePdf } from '@/lib/pdf';
-import { copyPdfToStorage, deleteDocumentFiles } from '@/lib/files';
-import { deleteQuietly } from '@/lib/share';
-import { getDocSettings, saveDocument } from '@/lib/storage';
+import { usePageStamper, useStampFinish } from '@/components/page-stamper';
+import { copyName, PDF_NOT_LISTED_NOTE, stampCopy, stampPages, StampError, targetPages } from '@/lib/page-stamp';
 import { notifyError, notifySuccess, tapLight } from '@/lib/haptics';
 import {
   clampPlacement,
   defaultPlacement,
   signatureHeightFraction,
-  signatureOverlay,
   type Placement,
   type Signature,
 } from '@/lib/stamp';
@@ -55,7 +52,6 @@ import {
   rememberSignature,
   type SavedSignature,
 } from '@/lib/saved-signatures';
-import { navigateWhenUnlocked } from '@/lib/nav-guard';
 
 const PAD_HEIGHT = 180;
 const SIZES = [
@@ -114,7 +110,6 @@ function clearPad(){ clearTimeout(timer); ctx.save(); ctx.setTransform(1,0,0,1,0
 }
 
 export default function SignScreen() {
-  const router = useRouter();
   const { colors } = useTheme();
   const { width: screenW } = useWindowDimensions();
   const webRef = useRef<WebView>(null);
@@ -128,12 +123,21 @@ export default function SignScreen() {
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
 
   const { doc, setDocId, fixed, fromViewer } = useToolDoc(docs);
+  const stamper = usePageStamper();
+  const finish = useStampFinish(fromViewer);
   // Signatures used before (newest first) and the one picked, if any.
   const [saved, setSaved] = useState<SavedSignature[]>([]);
   const [savedPick, setSavedPick] = useState<string | null>(null);
   useEffect(() => {
     listSavedSignatures().then(setSaved).catch(() => {});
   }, []);
+  // From the Tools tab with a single document: there is nothing to choose.
+  useEffect(() => {
+    if (loaded && !fixed && !doc && docs.length === 1) {
+      setDocId(docs[0].id);
+      setPageIndex(docs[0].pages.length - 1);
+    }
+  }, [loaded, fixed, doc, docs, setDocId]);
   // Opened on a document: start on its last page, like picking it would.
   const startedOn = useRef<string | null>(null);
   useEffect(() => {
@@ -238,42 +242,43 @@ export default function SignScreen() {
     tapLight();
   };
 
-  const apply = async () => {
+  const pages = doc ? targetPages(doc.pages.length, pageIndex, everyPage) : [];
+  const pagesLabel = !doc ? '' : pages.length > 1 ? `all ${pages.length} pages` : doc.pages.length > 1 ? `page ${pages[0] + 1}` : 'the page';
+
+  /** Signs the document itself (Undo in the viewer), or a copy of it. */
+  const apply = async (mode: 'in-place' | 'copy') => {
     if (!doc || !sig || !place || progress) return;
-    const id = Crypto.randomUUID();
-    let temp: string | null = null;
-    const target = Math.min(pageIndex, doc.pages.length - 1);
-    const overlay = signatureOverlay(sig, place);
-    setProgress({ current: 0, total: doc.pages.length });
+    const spec = { kind: 'signature' as const, signature: sig, placement: place };
+    const render = (pageUri: string, origUri: string | null) => stamper.stamp(pageUri, origUri, spec);
+    const onProgress = (done: number, total: number) => setProgress({ current: done, total });
+    setProgress({ current: 0, total: pages.length });
     try {
-      const { pdfPageSize } = await getDocSettings();
-      temp = await generatePdf(doc.pages, {
-        pageSize: pdfPageSize,
-        overlayHtml: i => (everyPage || i === target ? overlay : ''),
-        onProgress: done => setProgress({ current: done, total: doc.pages.length }),
-      });
-      const stored = copyPdfToStorage(temp, id);
-      const now = Date.now();
-      await saveDocument({
-        id,
-        name: `${doc.name} (signed)`,
-        pages: [],
-        pdfUri: stored,
-        folder: doc.folder,
-        createdAt: now,
-        updatedAt: now,
-      });
-      // Remembered for next time (moves up if it was a saved one already).
-      await rememberSignature(sig);
-      notifySuccess();
-      // The viewer shows the toast: it covers the app-wide toast host.
-      navigateWhenUnlocked(() => router.replace({ pathname: '/viewer', params: { id, notice: 'Signed copy saved. The original is unchanged.' } }));
-    } catch {
-      try { deleteDocumentFiles(id); } catch {}
+      if (mode === 'copy') {
+        const copy = await stampCopy(doc, copyName(doc.name, 'signed'), pages, render, onProgress);
+        await rememberSignature(sig);
+        notifySuccess();
+        finish({ docId: copy.id, message: 'Signed copy saved. The original is unchanged.', page: pages[0], openCopy: true });
+      } else {
+        const { undo } = await stampPages(doc.id, pages, render, { onProgress });
+        // Remembered for next time (moves up if it was a saved one already).
+        await rememberSignature(sig);
+        notifySuccess();
+        finish({
+          docId: doc.id,
+          message: pages.length > 1 ? `Signed ${pages.length} pages` : doc.pages.length > 1 ? `Signed page ${pages[0] + 1}` : 'Signed',
+          page: pages[0],
+          undo,
+          undoneMessage: 'Signature removed',
+        });
+      }
+    } catch (err) {
       notifyError();
-      Alert.alert('Couldn’t sign the document', 'The PDF couldn’t be created. Try again, or try with fewer pages.');
+      if (!(err instanceof StampError)) console.error('Sign failed', err);
+      Alert.alert(
+        'Couldn’t sign the document',
+        err instanceof StampError ? err.message : 'Your document is unchanged. Try again.',
+      );
     } finally {
-      deleteQuietly(temp);
       setProgress(null);
     }
   };
@@ -292,9 +297,8 @@ export default function SignScreen() {
   const previewW = Math.min(screenW * 0.5, 220);
   // Names exactly what is still missing.
   const sigStep = saved.length ? 'Choose or draw a signature' : 'Draw your signature';
-  const buttonTitle = !doc && !sig
-    ? 'Choose a document and signature'
-    : !doc ? 'Choose a document' : !sig ? sigStep : 'Save signed copy';
+  // With no document yet it names the action; the picker above says what to do.
+  const buttonTitle = doc && !sig ? sigStep : doc ? `Sign ${pagesLabel}` : 'Sign';
 
   return (
     <ToolScreen
@@ -304,19 +308,31 @@ export default function SignScreen() {
         <>
           {progress ? (
             <ToolProgress
-              label={`Preparing page ${Math.min(progress.current + 1, progress.total)} of ${progress.total}…`}
+              label={progress.total > 1 ? `Signing page ${Math.min(progress.current + 1, progress.total)} of ${progress.total}…` : 'Signing…'}
               current={progress.current}
               total={progress.total}
             />
           ) : null}
-          <PrimaryButton title={buttonTitle} onPress={apply} disabled={!sig || !doc} loading={!!progress} />
+          <PrimaryButton title={buttonTitle} onPress={() => apply('in-place')} disabled={!sig || !doc} loading={!!progress} />
+          {doc && sig && !progress ? (
+            <PrimaryButton title="Save as a copy" variant="secondary" onPress={() => apply('copy')} style={styles.secondary} />
+          ) : null}
         </>
       }
     >
       {/* Presented over the viewer: a baker underneath would never run (see FilterBaker). */}
       {fromViewer ? <FilterBaker /> : null}
+      {stamper.host}
       {/* 1. Document (fixed when opened on one from the viewer) */}
-      <ToolDocPicker docs={docs} doc={doc} fixed={fixed} disabled={!!progress} onPick={pickDoc} />
+      <ToolDocPicker
+        docs={docs}
+        doc={doc}
+        fixed={fixed}
+        disabled={!!progress}
+        onPick={pickDoc}
+        autoOpen={loaded && !fromViewer}
+        note={PDF_NOT_LISTED_NOTE}
+      />
 
       {/* 2. Live preview, always shown like Watermark's and Timestamp's: the
           chosen page (a sample page until a document is chosen) with the
@@ -454,13 +470,14 @@ export default function SignScreen() {
           <Segmented options={SIZES.map(s => ({ value: s.value, label: s.label }))} value={size} onChange={changeSize} />
         </>
       ) : null}
-      <ToolNote>A signed copy is saved as a new PDF. The original document is kept.</ToolNote>
+      <ToolNote>The signature becomes part of the page, and you can undo it right after. To keep this document as it is, save a signed copy instead.</ToolNote>
     </ToolScreen>
   );
 }
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
+  secondary: { marginTop: Spacing.sm },
   pad: {
     height: PAD_HEIGHT,
     borderRadius: Radius.md,

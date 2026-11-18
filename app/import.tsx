@@ -22,6 +22,8 @@ import { PrimaryButton } from '@/components/primary-button';
 import { LockScreen, useAppLocked } from '@/components/lock-gate';
 import { displayNameOf, documentNameFor, importKindOf } from '@/lib/incoming-file';
 import { abandonSystemUI } from '@/lib/system-ui';
+import { indexPdfText } from '@/lib/pdf-text';
+import { navigateWhenUnlocked } from '@/lib/nav-guard';
 import { Spacing, Type } from '@/lib/theme';
 
 type Status = { state: 'working' } | { state: 'failed'; title: string; body: string; retry?: boolean };
@@ -136,6 +138,9 @@ export default function ImportScreen() {
       if (id) {
         // The document has its own copy now.
         dropStaged();
+        // A PDF's own text goes into the search index straight away (images
+        // are recognised by the import itself).
+        if (kind === 'pdf') indexPdfText(id).catch(() => {});
         // A finished import that nobody is waiting for stays in Files; just don't navigate.
         if (mounted.current) setSavedId(id);
         return;
@@ -195,10 +200,11 @@ export default function ImportScreen() {
     if (!attemptingRef.current) dropStaged();
   }, []);
 
-  // Open the viewer only once the app is unlocked.
+  // Open the viewer only once the app is unlocked (and the lock screen has
+  // gone); leaving the screen first cancels the held navigation.
   useEffect(() => {
     if (!savedId || locked) return;
-    router.replace({ pathname: '/viewer', params: { id: savedId } });
+    return navigateWhenUnlocked(() => router.replace({ pathname: '/viewer', params: { id: savedId } }));
   }, [savedId, locked, router]);
 
   const goHome = () => {

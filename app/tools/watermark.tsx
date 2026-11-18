@@ -1,9 +1,9 @@
 // app/tools/watermark.tsx
-// Stamp a text watermark on every page and save the result as a new PDF.
-import { useState } from 'react';
+// Stamp a text watermark on every page of the document itself (drawn into the
+// pages, so they stay searchable and re-filterable; the viewer offers Undo —
+// lib/page-stamp.ts), or on a copy with "Save as a copy".
+import { useEffect, useState } from 'react';
 import { Alert, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
-import * as Crypto from 'expo-crypto';
-import { useRouter } from 'expo-router';
 import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
@@ -20,22 +20,18 @@ import {
 } from '@/components/tool-ui';
 import { ToolDocPicker, useToolDoc } from '@/components/tool-doc';
 import { FilterBaker } from '@/components/filter-baker';
-import { generatePdf } from '@/lib/pdf';
-import { copyPdfToStorage, deleteDocumentFiles } from '@/lib/files';
-import { deleteQuietly } from '@/lib/share';
-import { getDocSettings, saveDocument } from '@/lib/storage';
+import { usePageStamper, useStampFinish } from '@/components/page-stamper';
+import { copyName, PDF_NOT_LISTED_NOTE, stampCopy, stampPages, StampError, targetPages } from '@/lib/page-stamp';
 import { notifyError, notifySuccess } from '@/lib/haptics';
 import {
   STAMP_RGB,
   WATERMARK_ANGLE,
   watermarkFontFraction,
   watermarkOpacity,
-  watermarkOverlay,
   type StampColor,
   type WatermarkStyle,
 } from '@/lib/stamp';
 import { Radius, Spacing, Type } from '@/lib/theme';
-import { navigateWhenUnlocked } from '@/lib/nav-guard';
 
 const STYLES: { value: WatermarkStyle; label: string }[] = [
   { value: 'diagonal', label: 'Diagonal' },
@@ -49,7 +45,6 @@ const COLORS: { value: StampColor; label: string }[] = [
 ];
 
 export default function WatermarkScreen() {
-  const router = useRouter();
   const { colors } = useTheme();
   const { width: screenW } = useWindowDimensions();
   const { docs, loaded } = useToolDocuments();
@@ -60,41 +55,46 @@ export default function WatermarkScreen() {
 
   // Never a default: stamping the wrong document is worse than one more tap.
   const { doc, setDocId, fixed, fromViewer } = useToolDoc(docs);
+  const stamper = usePageStamper();
+  const finish = useStampFinish(fromViewer);
+  // From the Tools tab with a single document: there is nothing to choose.
+  useEffect(() => {
+    if (loaded && !fixed && !doc && docs.length === 1) setDocId(docs[0].id);
+  }, [loaded, fixed, doc, docs, setDocId]);
   const aspect = useImageAspect(doc?.pages[0]);
   const label = text.trim();
 
-  const apply = async () => {
+  /** Watermarks every page of the document itself (Undo in the viewer), or of a copy. */
+  const apply = async (mode: 'in-place' | 'copy') => {
     if (!doc || !label || progress) return;
-    const id = Crypto.randomUUID();
-    let temp: string | null = null;
-    setProgress({ current: 0, total: doc.pages.length });
+    const spec = { kind: 'watermark' as const, text: label, style, color };
+    const render = (pageUri: string, origUri: string | null) => stamper.stamp(pageUri, origUri, spec);
+    const pages = targetPages(doc.pages.length, 0, true);
+    const onProgress = (done: number, total: number) => setProgress({ current: done, total });
+    setProgress({ current: 0, total: pages.length });
     try {
-      const { pdfPageSize } = await getDocSettings();
-      temp = await generatePdf(doc.pages, {
-        pageSize: pdfPageSize,
-        overlayHtml: (_i, size) => watermarkOverlay(label, style, color, size.width),
-        onProgress: done => setProgress({ current: done, total: doc.pages.length }),
-      });
-      const stored = copyPdfToStorage(temp, id);
-      const now = Date.now();
-      await saveDocument({
-        id,
-        name: `${doc.name} (watermarked)`,
-        pages: [],
-        pdfUri: stored,
-        folder: doc.folder,
-        createdAt: now,
-        updatedAt: now,
-      });
-      notifySuccess();
-      // The viewer shows the toast: it covers the app-wide toast host.
-      navigateWhenUnlocked(() => router.replace({ pathname: '/viewer', params: { id, notice: 'Watermarked copy saved. The original is unchanged.' } }));
-    } catch {
-      try { deleteDocumentFiles(id); } catch {}
+      if (mode === 'copy') {
+        const copy = await stampCopy(doc, copyName(doc.name, 'watermarked'), pages, render, onProgress);
+        notifySuccess();
+        finish({ docId: copy.id, message: 'Watermarked copy saved. The original is unchanged.', openCopy: true });
+      } else {
+        const { undo } = await stampPages(doc.id, pages, render, { onProgress });
+        notifySuccess();
+        finish({
+          docId: doc.id,
+          message: pages.length > 1 ? `Watermark added to ${pages.length} pages` : 'Watermark added',
+          undo,
+          undoneMessage: 'Watermark removed',
+        });
+      }
+    } catch (err) {
       notifyError();
-      Alert.alert('Couldn’t add the watermark', 'The PDF couldn’t be created. Try again, or try with fewer pages.');
+      if (!(err instanceof StampError)) console.error('Watermark failed', err);
+      Alert.alert(
+        'Couldn’t add the watermark',
+        err instanceof StampError ? err.message : 'Your document is unchanged. Try again.',
+      );
     } finally {
-      deleteQuietly(temp);
       setProgress(null);
     }
   };
@@ -103,7 +103,7 @@ export default function WatermarkScreen() {
     return (
       <NoDocumentsScreen
         toolTitle="Watermark"
-        icon="water-outline"
+        icon="watermark"
         subtitle="Watermark stamps text on every page of a scan. Scan or import a document first."
       />
     );
@@ -120,23 +120,35 @@ export default function WatermarkScreen() {
         <>
           {progress ? (
             <ToolProgress
-              label={`Adding watermark to page ${Math.min(progress.current + 1, progress.total)} of ${progress.total}…`}
+              label={progress.total > 1 ? `Adding the watermark to page ${Math.min(progress.current + 1, progress.total)} of ${progress.total}…` : 'Adding the watermark…'}
               current={progress.current}
               total={progress.total}
             />
           ) : null}
           <PrimaryButton
-            title={!doc ? 'Choose a document' : label ? 'Save watermarked copy' : 'Enter watermark text'}
-            onPress={apply}
+            title={!doc || label ? 'Add watermark' : 'Enter watermark text'}
+            onPress={() => apply('in-place')}
             disabled={!doc || !label}
             loading={!!progress}
           />
+          {doc && label && !progress ? (
+            <PrimaryButton title="Save as a copy" variant="secondary" onPress={() => apply('copy')} style={styles.secondary} />
+          ) : null}
         </>
       }
     >
       {/* Presented over the viewer: a baker underneath would never run (see FilterBaker). */}
       {fromViewer ? <FilterBaker /> : null}
-      <ToolDocPicker docs={docs} doc={doc} fixed={fixed} disabled={!!progress} onPick={d => setDocId(d.id)} />
+      {stamper.host}
+      <ToolDocPicker
+        docs={docs}
+        doc={doc}
+        fixed={fixed}
+        disabled={!!progress}
+        onPick={d => setDocId(d.id)}
+        autoOpen={loaded && !fromViewer}
+        note={PDF_NOT_LISTED_NOTE}
+      />
 
       {/* Live preview: the first page (a sample page until one is chosen) with
           the watermark drawn exactly as the PDF will get it. */}
@@ -191,12 +203,13 @@ export default function WatermarkScreen() {
         onChange={setColor}
       />
 
-      <ToolNote>A new PDF is saved with the watermark on every page. The original document is kept.</ToolNote>
+      <ToolNote>The watermark becomes part of every page, and you can undo it right after. To keep this document as it is, save a watermarked copy instead.</ToolNote>
     </ToolScreen>
   );
 }
 
 const styles = StyleSheet.create({
+  secondary: { marginTop: Spacing.sm },
   previewWrap: { marginTop: Spacing.lg },
   input: { borderRadius: Radius.md, paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md },
   centerStamp: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },

@@ -79,7 +79,7 @@ export default function ExtractScreen() {
       title="Extract pages"
       footer={
         <PrimaryButton
-          title={!doc ? 'Choose a document' : pages.size ? `Extract ${pageCountLabel(pages.size)}` : 'Select pages to extract'}
+          title={doc && pages.size ? `Extract ${pageCountLabel(pages.size)}` : 'Extract pages'}
           onPress={handleExtract}
           disabled={pages.size === 0}
           loading={saving}

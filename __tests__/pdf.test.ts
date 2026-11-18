@@ -582,6 +582,30 @@ describe('long documents print in bounded runs (r7 #7)', () => {
     expect(onProgress.mock.calls.filter(c => c[2] === 'preparing').map(c => c[0])).toEqual(Array.from({ length: 30 }, (_, i) => i));
   });
 
+  test('r8 #3: a failed merge of a long document fails cleanly — never one giant render', async () => {
+    native.mergePdfs = jest.fn(() => Promise.reject(new Error('ERR_PDF_MERGE')));
+    const pages = Array.from({ length: 60 }, (_, i) => `file:///p${i}.jpg`);
+    await expect(generatePdf(pages, { pageSize: 'A4' })).rejects.toMatchObject({ kind: 'render' });
+    // Only the three bounded runs were printed; no fourth all-pages job.
+    expect(mockPrint).toHaveBeenCalledTimes(3);
+    expect(Math.max(...mockPrint.mock.calls.map(c => c[0].html.match(/class="s"/g).length))).toBe(MAX_RUN_PAGES);
+    for (const r of ['run0', 'run1', 'run2']) {
+      expect(FileSystem.deleteAsync).toHaveBeenCalledWith(`file:///Caches/Print/${r}.pdf`, { idempotent: true });
+    }
+  });
+
+  test('r8 #3: a failed merge of a short mixed document still falls back to one bounded job', async () => {
+    native.mergePdfs = jest.fn(() => Promise.reject(new Error('ERR_PDF_MERGE')));
+    sizesByUri = Object.fromEntries(
+      Array.from({ length: MAX_RUN_PAGES }, (_, i) => [`file:///p${i}.jpg`, i % 2 ? LANDSCAPE : PORTRAIT]),
+    );
+    const pages = Array.from({ length: MAX_RUN_PAGES }, (_, i) => `file:///p${i}.jpg`);
+    const uri = await generatePdf(pages, { pageSize: 'Auto' });
+    const last = mockPrint.mock.calls[mockPrint.mock.calls.length - 1][0];
+    expect(last.html.match(/class="s"/g)).toHaveLength(MAX_RUN_PAGES);
+    expect(uri).toBe(`file:///Caches/Print/run${mockPrint.mock.calls.length - 1}.pdf`);
+  });
+
   test('without the native merge a long document stays one job (older builds)', async () => {
     delete native.mergePdfs;
     const pages = Array.from({ length: 40 }, (_, i) => `file:///p${i}.jpg`);

@@ -5,7 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { AppIcon, type AppIconName } from '@/components/app-icon';
 import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';
-import { Spacing, Type } from '@/lib/theme';
+import { Colors, Spacing, Type } from '@/lib/theme';
 
 type Variant = 'no-docs' | 'empty-folder' | 'no-search-results';
 type IconName = keyof typeof Ionicons.glyphMap;
@@ -17,6 +17,8 @@ type Props = {
   onAction?: () => void;
   actionLabel?: string;
   actionIcon?: IconName;
+  /** The primary action is running (spinner, not tappable). */
+  actionLoading?: boolean;
   /** Optional second, quieter action (e.g. "Import file"). */
   onSecondaryAction?: () => void;
   secondaryLabel?: string;
@@ -26,6 +28,8 @@ type Props = {
   title?: string;
   subtitle?: string;
   icon?: AppIconName;
+  /** On the always-dark viewer chrome (e.g. a PDF that can't be shown). */
+  chrome?: boolean;
 };
 
 const COPY: Record<Variant, { title: string; subtitle: string; icon: IconName }> = {
@@ -41,14 +45,21 @@ export function EmptyState({
   onAction,
   actionLabel,
   actionIcon,
+  actionLoading,
   onSecondaryAction,
   secondaryLabel,
   secondaryIcon,
   title,
   subtitle,
   icon,
+  chrome = false,
 }: Props) {
   const { colors } = useTheme();
+  // The viewer is dark in both themes: the dark palette's tint, chrome text.
+  const tint = chrome ? Colors.dark.accentLight : colors.accentLight;
+  const iconColor = chrome ? colors.chromeAccent : colors.accent;
+  const titleColor = chrome ? colors.chromeText : colors.text;
+  const bodyColor = chrome ? colors.chromeMuted : colors.muted;
   const copy = COPY[variant];
   const heading = title
     ?? (variant === 'empty-folder' && folderName ? `“${folderName}” is empty` : copy.title);
@@ -56,14 +67,14 @@ export function EmptyState({
     ?? (variant === 'no-search-results' && query ? `No documents match “${query}”.` : copy.subtitle);
   return (
     <View style={styles.container}>
-      <View style={[styles.iconCircle, { backgroundColor: colors.accentLight }]}>
-        <AppIcon name={icon ?? copy.icon} size={36} color={colors.accent} />
+      <View style={[styles.iconCircle, { backgroundColor: tint }]}>
+        <AppIcon name={icon ?? copy.icon} size={36} color={iconColor} />
       </View>
-      <Text style={[Type.title, styles.title, { color: colors.text }]}>{heading}</Text>
-      <Text style={[Type.callout, styles.subtitle, { color: colors.muted }]}>{body}</Text>
+      <Text style={[Type.title, styles.title, { color: titleColor }]}>{heading}</Text>
+      <Text style={[Type.callout, styles.subtitle, { color: bodyColor }]}>{body}</Text>
       {onAction && actionLabel ? (
         <View style={styles.actions}>
-          <PrimaryButton title={actionLabel} icon={actionIcon} onPress={onAction} />
+          <PrimaryButton title={actionLabel} icon={actionIcon} onPress={onAction} loading={actionLoading} />
           {onSecondaryAction && secondaryLabel ? (
             <PrimaryButton title={secondaryLabel} icon={secondaryIcon} variant="secondary" onPress={onSecondaryAction} />
           ) : null}

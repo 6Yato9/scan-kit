@@ -109,7 +109,7 @@ export default function EraseMarksScreen() {
             />
           ) : null}
           <PrimaryButton
-            title={selected ? `Erase marks on ${pageCountLabel(selected.pages.length)}` : 'Choose a document'}
+            title={selected ? `Erase marks on ${pageCountLabel(selected.pages.length)}` : 'Erase marks'}
             onPress={handleApply}
             disabled={!selected}
             loading={running}
