@@ -19,7 +19,9 @@
 //   docgray - the same flattening on luminance, as gray.
 //   Both run a stroke guard (strokeGuard) so faint pencil, light signature
 //   lines and thin rules are not whitened away with the paper.
-//   docbw   - flattened gray, then a Sauvola adaptive threshold. Optional
+//   docbw   - flattened gray, then a Sauvola adaptive threshold, capped at
+//             each stroke's own ink/paper midpoint so small text keeps its
+//             weight and its counters open. Optional
 //             `bias` (-1..1, brighter = fewer dark pixels) and `crisp`
 //             (-1..1, edge hardness) come from the Adjust sliders.
 //   All three measure the paper's own grain (paperSpread) and set their
@@ -314,7 +316,15 @@ function paperSpread(d, w, h, s) {
 //    least isoDark, or anywhere when even its darkest pixel is at least
 //    lightAny (a faint fleck too light to be ink);
 //  - a faint one (darkest >= lightAny) up to 4 x SPECK goes too when isolated:
-//    a paper fibre is longer than a speck but just as light.
+//    a paper fibre is longer than a speck but just as light;
+//  - with rel > 0 (Enhanced, Grayscale) a small speck NEAR big ink goes too
+//    when it is much lighter than that ink: on grainy paper the gaps between
+//    lines of text are all "near", and grey grain flecks (output 150-215)
+//    survived there. A full stop or an i-dot is about as dark as the ink it
+//    belongs to, so the speck is compared with the LIGHTEST big ink nearby:
+//    it goes when its darkness (255 - darkest) is under rel x that ink's
+//    darkness. Next to pencil the lightest ink is the pencil, so pencilled
+//    i-dots stay; next to print only, a grey fleck goes.
 // "Darkest" is read from depth (the pre-threshold gray, for Black & white) or
 // from the output itself. Pathological pages (millions of runs) are left as
 // they are rather than risk the WebView's memory.
@@ -322,13 +332,13 @@ var MAX_RUNS = 3000000;
 // Enhanced / Grayscale thresholds, on output levels: big ink is darker than
 // SPECK_INK (pencil lands around 110-150); isolated specks lighter than
 // SPECK_ISOLATED go, and any small speck lighter than SPECK_FAINT.
-var SPECK_INK = 170, SPECK_ISOLATED = 90, SPECK_FAINT = 215;
+var SPECK_INK = 170, SPECK_ISOLATED = 90, SPECK_FAINT = 215, SPECK_REL = 0.32;
 // Black & white, on the flattened gray before thresholding (paper ~255): a
 // grain speck thresholds to solid black but was light before (200+), while a
 // printed dot (a leader, an ellipsis) was dark, so an isolated speck goes only
 // when it was lighter than BW_ISOLATED.
 var BW_INK = 190, BW_ISOLATED = 120, BW_FAINT = 205;
-function despeckle(d, w, h, depth, isoDark, lightAny, bigDark) {
+function despeckle(d, w, h, depth, isoDark, lightAny, bigDark, rel) {
   var long = w > h ? w : h, speck = Math.max(4, Math.round((long / 500) * (long / 500)));
   var cap = 65536, nr = 0;
   var X0 = new Int32Array(cap), X1 = new Int32Array(cap), RY = new Int32Array(cap), P = new Int32Array(cap), MN = new Uint8Array(cap);
@@ -376,22 +386,25 @@ function despeckle(d, w, h, depth, isoDark, lightAny, bigDark) {
     A[rt] += X1[k] - X0[k] + 1;
     if (MN[k] < MN[rt]) MN[rt] = MN[k];
   }
-  // Big ink on a coarse grid, grown by the "nearby" radius.
+  // Big ink on a coarse grid, grown by the "nearby" radius. Each cell holds
+  // 1 + the darkest level of the LIGHTEST big ink touching it (0 = none), so
+  // the max filter that grows it keeps the lightest ink in reach.
   var cs = Math.max(2, Math.round(long / 400)), gw = Math.ceil(w / cs), gh = Math.ceil(h / cs);
   var G = new Float32Array(gw * gh), any = false;
   for (k = 0; k < nr; k++) {
     var q = P[k];
     if (A[q] < speck || MN[q] >= bigDark) continue;
     var gr = ((RY[k] / cs) | 0) * gw;
-    for (var c = (X0[k] / cs) | 0, ce = (X1[k] / cs) | 0; c <= ce; c++) G[gr + c] = 1;
+    for (var c = (X0[k] / cs) | 0, ce = (X1[k] / cs) | 0; c <= ce; c++) if (G[gr + c] < MN[q] + 1) G[gr + c] = MN[q] + 1;
     any = true;
   }
   if (any) morph(G, gw, gh, Math.max(1, Math.round(long / 100 / cs)), true);
   for (k = 0; k < nr; k++) {
     var o = P[k], a = A[o];
     if (a >= 4 * speck) continue;
-    var near = G[((RY[o] / cs) | 0) * gw + ((X0[o] / cs) | 0)] > 0, m = MN[o];
-    if (a < speck ? (m >= lightAny || (!near && m >= isoDark)) : (!near && m >= lightAny)) {
+    var gi = G[((RY[o] / cs) | 0) * gw + ((X0[o] / cs) | 0)], near = gi > 0, m = MN[o];
+    var faint = near && rel > 0 && 255 - m < rel * (256 - gi);
+    if (a < speck ? (m >= lightAny || faint || (!near && m >= isoDark)) : (!near && m >= lightAny)) {
       for (x = X0[k], i = (RY[k] * w + x) * 4; x <= X1[k]; x++, i += 4) { d[i] = 255; d[i + 1] = 255; d[i + 2] = 255; }
     }
   }
@@ -527,7 +540,7 @@ function docMagic(d, w, h) {
       }
     }
   }
-  despeckle(d, w, h, null, SPECK_ISOLATED, SPECK_FAINT, SPECK_INK);
+  despeckle(d, w, h, null, SPECK_ISOLATED, SPECK_FAINT, SPECK_INK, SPECK_REL);
 }
 
 function docGray(d, w, h) {
@@ -543,7 +556,7 @@ function docGray(d, w, h) {
       d[i] = v; d[i + 1] = v; d[i + 2] = v;
     }
   }
-  despeckle(d, w, h, null, SPECK_ISOLATED, SPECK_FAINT, SPECK_INK);
+  despeckle(d, w, h, null, SPECK_ISOLATED, SPECK_FAINT, SPECK_INK, SPECK_REL);
 }
 
 // Sauvola threshold T = m * (1 + k * (sd / 128 - 1)) over a square window, on
@@ -574,7 +587,7 @@ function docBW(d, w, h, op) {
   }
   var long = w > h ? w : h;
   var r = Math.max(4, Math.round(long / 90));
-  var K = 0.1, BETA = 0.55;
+  var K = 0.1, BETA = 0.55, MID = 0.5;
   // Brightness slider: shifts the threshold, never past bare paper (which stays
   // white whatever the setting) — brighter drops faint marks, darker keeps more.
   var tShift = -25 * bias;
@@ -587,6 +600,27 @@ function docBW(d, w, h, op) {
   // spread down (as Enhanced's white point does), so grain is paper too.
   var cut = 255 * (sp.median - 2.5 * sp.sigma);
   cut = cut > 242 ? 242 : (cut < 209 ? 209 : cut);
+  // Stroke-width guard. Sauvola's threshold sits well above the midpoint
+  // between ink and paper wherever the window is mostly paper, so the blurred
+  // rim of every stroke turned black: small serif text came out bold and the
+  // holes of e, a, o and 8 filled in. The true edge of a blurred stroke is
+  // where it is halfway between its own ink and the paper, so the threshold is
+  // also capped at that midpoint, with the ink level read as the darkest pixel
+  // within a stroke's reach (about 1/800 of the long side). Faint pencil
+  // and thin rules are measured against their own (light) ink, so they keep
+  // their width instead of vanishing; bare paper is still cut to white above.
+  // On big pages the minimum is taken on cells of a few pixels (block minima,
+  // then a min filter over the cells), which keeps the cost per pixel small.
+  var mr = Math.max(1, Math.round(long / 800)), ms = Math.max(1, Math.round(mr / 3));
+  var mgw = Math.ceil(w / ms), mgh = Math.ceil(h / ms), MINS = new Uint8Array(mgw * mgh).fill(255);
+  var mcx = new Int32Array(w);
+  for (x = 0; x < w; x++) mcx[x] = (x / ms) | 0;
+  for (y = 0; y < h; y++) {
+    var mrow = ((y / ms) | 0) * mgw;
+    for (x = 0, j = y * w; x < w; x++, j++) if (gray[j] < MINS[mrow + mcx[x]]) MINS[mrow + mcx[x]] = gray[j];
+  }
+  morph(MINS, mgw, mgh, Math.ceil(mr / ms), false);
+  var paperL = sp.median < 1 ? 255 * sp.median : 255;
   var colS = new Float64Array(w), colQ = new Float64Array(w), rows = 0, v;
   // Prime the strip with rows 0..r-1; row y+r is added at the top of each step.
   for (y = 0; y < r && y < h; y++) {
@@ -597,6 +631,7 @@ function docBW(d, w, h, op) {
     var add = y + r, sub = y - r - 1;
     if (add < h) { for (x = 0, j = add * w; x < w; x++, j++) { v = gray[j]; colS[x] += v; colQ[x] += v * v; } rows++; }
     if (sub >= 0) { for (x = 0, j = sub * w; x < w; x++, j++) { v = gray[j]; colS[x] -= v; colQ[x] -= v * v; } rows--; }
+    var minRow = ((y / ms) | 0) * mgw;
     var S = 0, Q = 0, cols = 0;
     for (x = 0; x < r && x < w; x++) { S += colS[x]; Q += colQ[x]; cols++; }
     for (x = 0, j = y * w, i = y * w * 4; x < w; x++, j++, i += 4) {
@@ -606,7 +641,9 @@ function docBW(d, w, h, op) {
       var sd = va > 0 ? Math.sqrt(va) : 0;
       var T = m * (1 + K * (sd / 128 - 1));
       var T2 = m - BETA * sd;
-      T = (T2 < T ? T2 : T) + tShift;
+      if (T2 < T) T = T2;
+      var ink = MINS[minRow + mcx[x]], T3 = ink + MID * (paperL - ink);
+      T = (T3 < T ? T3 : T) + tShift;
       v = gray[j];
       var o;
       if (v >= cut) o = 255;                 // bare paper
@@ -615,7 +652,7 @@ function docBW(d, w, h, op) {
       d[i] = o; d[i + 1] = o; d[i + 2] = o;
     }
   }
-  despeckle(d, w, h, gray, BW_ISOLATED, BW_FAINT, BW_INK);
+  despeckle(d, w, h, gray, BW_ISOLATED, BW_FAINT, BW_INK, 0);
 }
 
 function applyPrimitive(d, key, a) {

@@ -362,7 +362,10 @@ describe('grain and speckle (R6)', () => {
     if (y >= 700 && y < 703 && x >= 100 && x < 900 && (x - 100) % 14 < 3) return 'leader';
     return null;
   }
-  function grainyPage() {
+  const isGapFleck = (x: number, y: number) =>
+    x >= 100 && x < 820 && y > 200 && y < 335 && (y - 200) % 40 >= 13 && (y - 200) % 40 < 37 && x % 23 < 2 && y % 7 < 2;
+  /** `gapFlecks`: also light grey 2x2 flecks (10% darker than the paper) in the gaps between the text lines. */
+  function grainyPage(gapFlecks = false) {
     const d = new Uint8ClampedArray(GW * GH * 4);
     let seed = 777;
     const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
@@ -378,6 +381,7 @@ describe('grain and speckle (R6)', () => {
       // Mottled paper: slow blotches plus fine noise, about 3% either way.
       let k = 1 + 0.025 * Math.sin(x / 7.3) * Math.sin(y / 5.1) + (rnd() - 0.5) * 0.06;
       if (fleck[y * GW + x]) k *= 0.8;
+      if (gapFlecks && isGapFleck(x, y)) k *= 0.9;
       if (m === 'ink' || m === 'dot' || m === 'leader') k = 0.12;
       else if (m === 'pencil' || m === 'pdot') k *= 0.72;
       const light = 1 - 0.3 * (x / GW);
@@ -427,6 +431,25 @@ describe('grain and speckle (R6)', () => {
     });
   }
 
+  // Light grey flecks in the gaps between lines of text (within the "near
+  // text" radius, where R6 kept anything darker than 215) survived as stray
+  // specks: 48% of fleck pixels stayed grey before R7, about 5% now. Full stops
+  // and i-dots in the same gaps are as dark as the text, so they must stay.
+  function greyGaps(d: Uint8ClampedArray) {
+    let n = 0, all = 0;
+    for (let y = 200; y < 335; y++) for (let x = 100; x < 820; x++) if (isGapFleck(x, y)) { all++; if (gat(d, x, y) < 235) n++; }
+    return n / all;
+  }
+  for (const [label, op] of [['Enhanced', { magic: 1 }], ['Grayscale', { docgray: 1 }]] as [string, Op][]) {
+    test(`${label}: grey specks between lines of text go, full stops and i-dots stay (R7)`, () => {
+      const d = grainyPage(true);
+      applyOps(d, GW, GH, [op]);
+      expect(greyGaps(d)).toBeLessThan(0.12);
+      expect(darkest(d, 'dot')).toBeLessThan(100);
+      expect(darkest(d, 'pdot')).toBeLessThan(190);
+    });
+  }
+
   test('Black & white: no pepper on grainy paper, full stops, i-dots, a dotted leader and pencil kept', () => {
     const d = grainyPage();
     applyOps(d, GW, GH, [{ docbw: 1 }]);
@@ -438,6 +461,54 @@ describe('grain and speckle (R6)', () => {
     expect(darkest(d, 'pdot')).toBeLessThan(100);
   });
 
+});
+
+describe('small text in Black & white (R7)', () => {
+  // Rows of tiny "o"s (about 7 px x-height, a 2-3 px counter) anti-aliased
+  // and blurred like a phone photo of small serif print. Sauvola's threshold
+  // sat far above the ink/paper midpoint here, so every stroke swelled and the
+  // counters filled solid (0% open and 1.5x the ink before R7).
+  test('counters stay open and strokes keep their weight', () => {
+    const w = 600, h = 800, S = 4;
+    const cov = new Float32Array(w * h);
+    const glyphs: [number, number][] = [];
+    for (let gy = 100; gy < 600; gy += 22) for (let gx = 60; gx < 540; gx += 11) glyphs.push([gx + 0.5, gy + 0.5]);
+    for (const [cx, cy] of glyphs) {
+      for (let y = Math.floor(cy - 6); y <= cy + 6; y++) for (let x = Math.floor(cx - 5); x <= cx + 5; x++) {
+        let c = 0;
+        for (let sy = 0; sy < S; sy++) for (let sx = 0; sx < S; sx++) {
+          const r = Math.hypot((x + (sx + 0.5) / S - cx) / 2.6, (y + (sy + 0.5) / S - cy) / 3.6);
+          if (r <= 1 && r >= 0.45) c++;
+        }
+        cov[y * w + x] = c / (S * S);
+      }
+    }
+    const K = [0.25, 0.5, 0.25];
+    const d = new Uint8ClampedArray(w * h * 4);
+    let seed = 99;
+    const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff - 0.5; };
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      let b = 0;
+      for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) {
+        const yy = Math.min(h - 1, Math.max(0, y + j)), xx = Math.min(w - 1, Math.max(0, x + i));
+        b += K[j + 1] * K[i + 1] * cov[yy * w + xx];
+      }
+      const v = 232 * (1 - 0.25 * x / w) * (1 - 0.85 * b) + 4 * rnd();
+      const k = (y * w + x) * 4;
+      d[k] = v; d[k + 1] = v * 0.98; d[k + 2] = v * 0.92; d[k + 3] = 255;
+    }
+    applyOps(d, w, h, [{ docbw: 1 }]);
+    let open = 0, black = 0, ink = 0;
+    for (const [cx, cy] of glyphs) {
+      if (d[(Math.floor(cy) * w + Math.floor(cx)) * 4] >= 128) open++;
+      for (let y = Math.floor(cy - 6); y <= cy + 6; y++) for (let x = Math.floor(cx - 5); x <= cx + 5; x++) {
+        if (cov[y * w + x] >= 0.5) ink++;
+        if (d[(y * w + x) * 4] < 128) black++;
+      }
+    }
+    expect(open / glyphs.length).toBeGreaterThan(0.95);
+    expect(black / ink).toBeLessThan(1.3);
+  });
 });
 
 describe('page border (R6)', () => {
@@ -462,6 +533,35 @@ describe('page border (R6)', () => {
         let s = 0;
         for (let y = h * 0.6; y < h; y++) s += d[(Math.floor(y) * w + x) * 4];
         expect(s / (h * 0.4)).toBeGreaterThan(250);
+      }
+    });
+  }
+
+  // R7: the Warranty Card page (a hand shadow over the lower right, the crop's
+  // last column 20% brighter) showed a grey sliver 2-6 px in from the right
+  // edge on pages filtered before the R6 fix. Every edge, a brighter AND a
+  // darker artefact line, and a block grid that does not divide the page.
+  for (const op of [{ magic: 1 }, { docgray: 1 }, { docbw: 1 }] as Op[]) {
+    test(`${Object.keys(op)[0]}: no sliver on any edge of a shadowed page (R7)`, () => {
+      const w = 607, h = 859;
+      const d = new Uint8ClampedArray(w * h * 4);
+      const ramp = (t: number) => Math.min(1, Math.max(0, t));
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        // Shadow over the lower right and, more weakly, along the top-left.
+        const shade = (1 - 0.42 * ramp((x - w * 0.3) / 150) * ramp((y - h * 0.4) / 150)) * (1 - 0.15 * ramp(1 - (x + y) / 300));
+        let v = 236 * shade;
+        if (x === w - 1 || y === h - 1) v = Math.min(255, v * 1.25);   // warp sampled past the paper: brighter
+        if (x === 0 || y === 0) v *= 0.8;                               // or a dark line from the table
+        const i = (y * w + x) * 4;
+        d[i] = v; d[i + 1] = v * 0.98; d[i + 2] = v * 0.93; d[i + 3] = 255;
+      }
+      applyOps(d, w, h, [op]);
+      const colMean = (x: number) => { let s = 0; for (let y = 2; y < h - 2; y++) s += d[(y * w + x) * 4]; return s / (h - 4); };
+      const rowMean = (y: number) => { let s = 0; for (let x = 2; x < w - 2; x++) s += d[(y * w + x) * 4]; return s / (w - 4); };
+      // The 1 px artefact line itself may stay; the band just inside it must be paper.
+      for (let k = 1; k < 10; k++) {
+        const worst = Math.min(colMean(k), colMean(w - 1 - k), rowMean(k), rowMean(h - 1 - k));
+        expect([k, worst > 250]).toEqual([k, true]);
       }
     });
   }
