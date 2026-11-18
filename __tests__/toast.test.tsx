@@ -43,3 +43,21 @@ test('a new toast gets a fresh action', () => {
   expect(onUndo).toHaveBeenCalledTimes(2);
   act(() => { jest.runAllTimers(); });
 });
+
+test('an action toast stays up for 6 s, a plain one for under 2 s', () => {
+  function Plain() {
+    const toast = useToast();
+    return <Pressable onPress={() => toast.show('Saved')}><Text>Save</Text></Pressable>;
+  }
+  render(<ToastProvider><Trigger onUndo={() => {}} /><Plain /></ToastProvider>);
+  fireEvent.press(screen.getByText('Delete'));
+  act(() => { jest.advanceTimersByTime(5500); });
+  expect(screen.getByRole('button', { name: 'Undo' })).toBeTruthy();
+  act(() => { jest.advanceTimersByTime(1000 + 300); });
+  expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
+
+  fireEvent.press(screen.getByText('Save'));
+  expect(screen.getByText('Saved')).toBeTruthy();
+  act(() => { jest.advanceTimersByTime(1800 + 300); });
+  expect(screen.queryByText('Saved')).toBeNull();
+});

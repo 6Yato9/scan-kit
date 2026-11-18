@@ -1,7 +1,10 @@
 // components/toast.tsx
 // Lightweight toast: a provider + useToast() hook exposing show(message).
 // Uses React Native's built-in Animated API (no reanimated). The toast fades
-// and slides in near the bottom, rests ~1.8s, then fades out.
+// and slides in near the bottom, rests ~1.8 s, then fades out. A toast with an
+// action (Undo, Open) rests 6 s, long enough to read it and reach the button,
+// and 10 s while VoiceOver is running, so the button can still be reached by
+// swiping to it.
 import {
   createContext,
   useCallback,
@@ -23,9 +26,11 @@ type ToastContextType = { show: (message: string, options?: ToastOptions) => voi
 
 const ToastContext = createContext<ToastContextType | null>(null);
 
-const VISIBLE_MS = 1800;
+export const VISIBLE_MS = 1800;
 /** Long enough to read the message and reach for the action. */
-const ACTION_VISIBLE_MS = 5000;
+export const ACTION_VISIBLE_MS = 6000;
+/** VoiceOver reads the message first, then the user swipes to the action. */
+export const ACTION_VISIBLE_MS_SCREEN_READER = 10000;
 
 export function ToastProvider({
   children,
@@ -49,6 +54,19 @@ export function ToastProvider({
   // The action stays on screen (and pressable) while the toast fades out, so a
   // quick second tap must not run it again — Undo twice would restore twice.
   const actionUsed = useRef(false);
+  const screenReader = useRef(false);
+
+  useEffect(() => {
+    let alive = true;
+    AccessibilityInfo.isScreenReaderEnabled()
+      .then(on => { if (alive) screenReader.current = on; })
+      .catch(() => {});
+    const sub = AccessibilityInfo.addEventListener('screenReaderChanged', on => { screenReader.current = on; });
+    return () => {
+      alive = false;
+      sub?.remove();
+    };
+  }, []);
 
   const hide = useCallback(() => {
     if (hideTimer.current) clearTimeout(hideTimer.current);
@@ -77,7 +95,10 @@ export function ToastProvider({
       Animated.timing(translateY, { toValue: 0, duration: 200, useNativeDriver: true }),
     ]).start();
 
-    hideTimer.current = setTimeout(hide, options?.action ? ACTION_VISIBLE_MS : VISIBLE_MS);
+    const visible = options?.action
+      ? (screenReader.current ? ACTION_VISIBLE_MS_SCREEN_READER : ACTION_VISIBLE_MS)
+      : VISIBLE_MS;
+    hideTimer.current = setTimeout(hide, visible);
   }, [opacity, translateY, hide]);
 
   useEffect(() => {

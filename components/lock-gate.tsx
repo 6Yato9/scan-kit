@@ -18,6 +18,12 @@
 //     a dead lock screen behind once the screen above it closes.
 //   - Screens that can appear above /lock while locked (app/import.tsx)
 //     render <LockScreen /> themselves and hold any navigation until unlock.
+//   - System UI shown over the top screen when the app goes to the background
+//     (share sheet, print dialog, action sheet, photo picker) is dismissed by
+//     native-stack before it presents /lock, so it never stays above the lock.
+//     A React Native Alert is the exception: it has its own window above the
+//     app and can't be closed from JS. Its buttons do nothing while locked
+//     (lib/alert-guard.ts), so it can't be used to act without unlocking.
 //
 // Behaviour:
 //   - Locks on a cold start and whenever the app goes to the BACKGROUND. It
@@ -40,11 +46,17 @@ import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';
 import { authenticate, biometricKind, BiometricKind } from '@/lib/biometrics';
 import { getAppLockEnabled, subscribeAppLock } from '@/lib/storage';
+import { installAlertGuard } from '@/lib/alert-guard';
 import { Spacing, Type } from '@/lib/theme';
 
 const LOCK_ROUTE = '/lock';
 /** Shows the lock screen itself while locked (app/import.tsx). */
 const IMPORT_ROUTE = '/import';
+
+// Read synchronously by the alert guard at the moment a button is pressed, so it
+// is set together with the `locked` state, without waiting for a render.
+let lockedNow = false;
+installAlertGuard(() => lockedNow);
 
 type LockState = { locked: boolean; kind: BiometricKind; tryUnlock: () => void };
 
@@ -105,7 +117,11 @@ export function LockGate({ children }: { children: React.ReactNode }) {
 
   // null = still loading the persisted flag (cover the app so nothing flashes).
   const [enabled, setEnabled] = useState<boolean | null>(null);
-  const [locked, setLocked] = useState(false);
+  const [locked, setLockedState] = useState(false);
+  const setLocked = useCallback((next: boolean) => {
+    lockedNow = next;
+    setLockedState(next);
+  }, []);
   const [kind, setKind] = useState<BiometricKind>('passcode');
   // The /lock route is on screen: it takes the touches, not the overlay below.
   const routeShown = pathname === LOCK_ROUTE;
@@ -121,7 +137,7 @@ export function LockGate({ children }: { children: React.ReactNode }) {
   // The /lock route sees `locked` turn false and dismisses itself.
   const unlock = useCallback(() => {
     setLocked(false);
-  }, []);
+  }, [setLocked]);
 
   const tryUnlock = useCallback(async () => {
     if (authingRef.current) return;
@@ -162,7 +178,7 @@ export function LockGate({ children }: { children: React.ReactNode }) {
       cancelled = true;
       unsubscribe();
     };
-  }, [tryUnlock, unlock]);
+  }, [tryUnlock, unlock, setLocked]);
 
   // Lock when the app is backgrounded; prompt once when it comes back.
   useEffect(() => {
@@ -187,7 +203,7 @@ export function LockGate({ children }: { children: React.ReactNode }) {
       }
     });
     return () => sub.remove();
-  }, [enabled, tryUnlock, router]);
+  }, [enabled, tryUnlock, router, setLocked]);
 
   const isLocked = enabled === true && locked;
   const value: LockState = { locked: isLocked, kind, tryUnlock };

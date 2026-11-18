@@ -136,6 +136,11 @@ function ThemedStack() {
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       {/* App lock (components/lock-gate.tsx): covers full-screen modals too. */}
       <Stack.Screen name="lock" options={{ presentation: 'fullScreenModal', headerShown: false, gestureEnabled: false, animation: 'fade' }} />
+      {/* "Open in Scan Kit" (app/import.tsx). Full screen: it may land on top of
+          /lock and then shows the lock itself, which must cover the whole screen
+          (a card pushed over a modal becomes a page sheet with the screen below
+          peeking out at the top). */}
+      <Stack.Screen name="import" options={{ presentation: 'fullScreenModal', headerShown: false, gestureEnabled: false, animation: 'fade' }} />
       <Stack.Screen
         name="onboarding"
         options={{ headerShown: false, presentation: 'fullScreenModal' }}
