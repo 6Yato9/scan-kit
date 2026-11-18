@@ -21,7 +21,10 @@ enum DocumentDetector {
       throw NSError(domain: "DocumentDetector", code: 1,
                     userInfo: [NSLocalizedDescriptionKey: "Could not read image"])
     }
-    guard let quad = try detect(cg) else { return nil }
+    guard let detected = try detect(cg) else { return nil }
+    // Detected edges sit on the paper/background boundary, so a hairline of
+    // desk survives the warp. Pull each corner slightly toward the centre.
+    let quad = inset(detected, by: 0.012)
 
     let ci = CIImage(cgImage: cg)
     let w = ci.extent.width, h = ci.extent.height
@@ -75,6 +78,13 @@ enum DocumentDetector {
       NSLog("[DocumentDetector] rectangle detection failed: %@", error.localizedDescription)
     }
     return nil
+  }
+
+  private static func inset(_ q: Quad, by f: CGFloat) -> Quad {
+    let cx = (q.topLeft.x + q.topRight.x + q.bottomRight.x + q.bottomLeft.x) / 4
+    let cy = (q.topLeft.y + q.topRight.y + q.bottomRight.y + q.bottomLeft.y) / 4
+    func m(_ p: CGPoint) -> CGPoint { CGPoint(x: p.x + (cx - p.x) * f * 2, y: p.y + (cy - p.y) * f * 2) }
+    return Quad(topLeft: m(q.topLeft), topRight: m(q.topRight), bottomRight: m(q.bottomRight), bottomLeft: m(q.bottomLeft))
   }
 
   /// Reject outlines that are tiny or that are essentially the whole frame
