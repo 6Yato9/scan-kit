@@ -622,7 +622,9 @@ describe('temp files (critique #10)', () => {
   test('isDisposableTemp recognises picker, manipulator, auto-crop and scanner output only', () => {
     expect(isDisposableTemp('file:///Library/Caches/ImagePicker/A.jpg')).toBe(true);
     expect(isDisposableTemp('file:///tmp/doc-1234.jpg')).toBe(true);
-    expect(isDisposableTemp('file:///documents/DOCUMENT_SCAN_0_20261118.jpg?v=1')).toBe(true);
+    expect(isDisposableTemp('file:///documents/DOCUMENT_SCAN_0_20261118_103000.jpg?v=1')).toBe(true);
+    // Documents is the user's: only the scanner's exact output name counts.
+    expect(isDisposableTemp('file:///documents/DOCUMENT_SCAN_0_my-copy.jpg')).toBe(false);
     expect(isDisposableTemp('file:///documents/scan-kit/d/page-0.jpg')).toBe(false);
     expect(isDisposableTemp('file:///documents/Inbox/contract.pdf')).toBe(false);
     expect(isDisposableTemp(undefined)).toBe(false);
@@ -639,8 +641,8 @@ describe('temp files (critique #10)', () => {
 
   test('the startup sweep removes settled scanner output, keeps fresh files', () => {
     const now = 10_000_000_000;
-    const old: any = new MockFile('file:///documents/DOCUMENT_SCAN_0_old.jpg');
-    const fresh: any = new MockFile('file:///documents/DOCUMENT_SCAN_1_new.jpg');
+    const old: any = new MockFile('file:///documents/DOCUMENT_SCAN_0_20261101_093000.jpg');
+    const fresh: any = new MockFile('file:///documents/DOCUMENT_SCAN_1_20261118_103000.jpg');
     const mine: any = new MockFile('file:///documents/notes.txt');
     mockMtimes[fresh.uri] = now - 1000;
     const docsDir = new MockDirectory({ uri: 'file:///documents' });

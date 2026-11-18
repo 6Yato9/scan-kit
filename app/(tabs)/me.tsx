@@ -14,6 +14,7 @@ import type { Document } from '@/types/document';
 import { authenticate, biometricKind, BiometricKind, canAuthenticate } from '@/lib/biometrics';
 import { tapLight } from '@/lib/haptics';
 import { filesCopyAvailable, getFilesCopyEnabled, removeFilesCopies, setFilesCopyEnabled } from '@/lib/files-copy';
+import { getRecoveredGroups } from '@/lib/recovered-files';
 import { useTheme } from '@/contexts/theme-context';
 import { LargeTitle } from '@/components/screen-header';
 import { SectionLabel } from '@/components/section-label';
@@ -109,9 +110,13 @@ export default function SettingsScreen() {
     ]);
   };
 
+  // Files an update set aside (lib/recovered-files.ts): the row shows only when there are some.
+  const [recoveredCount, setRecoveredCount] = useState(0);
+
   useFocusEffect(useCallback(() => {
     let cancelled = false;
     getAppLockEnabled().then(v => { if (!cancelled) setAppLock(v); });
+    getRecoveredGroups().then(g => { if (!cancelled) setRecoveredCount(g.length); }).catch(() => {});
     // Walking the folder is synchronous; let the screen paint (with its
     // spinner) first.
     const task = InteractionManager.runAfterInteractions(() => {
@@ -202,6 +207,13 @@ export default function SettingsScreen() {
               accessory={{ type: 'value', text: storageUsed }}
             />
             <SettingsRow
+              icon="contract-outline"
+              label="Free up space"
+              description="Shrink the pages of a scanned document"
+              accessory={{ type: 'chevron' }}
+              onPress={() => router.push('/tools/compress')}
+            />
+            <SettingsRow
               icon="archive-outline"
               label="Export all documents"
               description="Searchable PDFs in one ZIP file"
@@ -224,8 +236,16 @@ export default function SettingsScreen() {
               description={`Restore deleted documents for ${TRASH_RETENTION_DAYS} days`}
               accessory={{ type: 'chevron' }}
               onPress={() => router.push('/settings/recently-deleted' as never)}
-              last
+              last={recoveredCount === 0}
             />
+            {recoveredCount > 0 && <SettingsRow
+              icon="file-tray-full-outline"
+              label="Recovered files"
+              description="Pages an update set aside"
+              accessory={{ type: 'chevron' }}
+              onPress={() => router.push('/settings/recovered-files' as never)}
+              last
+            />}
           </SettingsGroup>
 
           <SettingsGroup>

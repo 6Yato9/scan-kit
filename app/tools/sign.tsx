@@ -21,6 +21,7 @@ import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
 import { AppSwitch } from '@/components/app-switch';
 import {
+  FooterActions,
   NoDocumentsScreen,
   PagePreview,
   Segmented,
@@ -31,8 +32,9 @@ import {
   useImageAspect,
   useToolDocuments,
 } from '@/components/tool-ui';
-import { ToolDocPicker, useToolDoc } from '@/components/tool-doc';
+import { ToolDocPicker, useConvertiblePdfs, useToolDoc, type PickerConvert } from '@/components/tool-doc';
 import { FilterBaker } from '@/components/filter-baker';
+import { PageThumb } from '@/components/page-thumb';
 import { reportStampFailure, usePageStamper, useStampFinish } from '@/components/page-stamper';
 import { copyName, PDF_NOT_LISTED_NOTE, stampCopy, stampPages, targetPages } from '@/lib/page-stamp';
 import { notifySuccess, tapLight } from '@/lib/haptics';
@@ -113,7 +115,9 @@ export default function SignScreen() {
   const { colors } = useTheme();
   const { width: screenW } = useWindowDimensions();
   const webRef = useRef<WebView>(null);
-  const { docs, loaded } = useToolDocuments();
+  const { docs, loaded, reload } = useToolDocuments();
+  // Imported PDFs: listed in the picker with Convert, never a dead end.
+  const { pdfs, loaded: pdfsLoaded, reload: reloadPdfs } = useConvertiblePdfs();
   const [sig, setSig] = useState<Signature | null>(null);
   const [drawing, setDrawing] = useState(false);
   const [pageIndex, setPageIndex] = useState(0);
@@ -122,7 +126,7 @@ export default function SignScreen() {
   const [placement, setPlacement] = useState<Placement | null>(null);
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
 
-  const { doc, setDocId, fixed, fromViewer } = useToolDoc(docs);
+  const { doc, docId, setDocId, fixed, fromViewer } = useToolDoc(docs);
   const stamper = usePageStamper();
   const finish = useStampFinish(fromViewer);
   // Signatures used before (newest first) and the one picked, if any.
@@ -133,11 +137,11 @@ export default function SignScreen() {
   }, []);
   // From the Tools tab with a single document: there is nothing to choose.
   useEffect(() => {
-    if (loaded && !fixed && !doc && docs.length === 1) {
+    if (loaded && !fixed && !docId && docs.length === 1) {
       setDocId(docs[0].id);
       setPageIndex(docs[0].pages.length - 1);
     }
-  }, [loaded, fixed, doc, docs, setDocId]);
+  }, [loaded, fixed, docId, docs, setDocId]);
   // Opened on a document: start on its last page, like picking it would.
   const startedOn = useRef<string | null>(null);
   useEffect(() => {
@@ -279,7 +283,23 @@ export default function SignScreen() {
     }
   };
 
-  if (loaded && docs.length === 0) {
+  // Picking an imported PDF converts it to pages (with Undo), then chooses it.
+  const convert: PickerConvert = {
+    pdfs,
+    verb: 'sign',
+    onConverted: d => {
+      reload();
+      reloadPdfs();
+      pickDoc(d);
+    },
+    onUndone: id => {
+      reload();
+      reloadPdfs();
+      if (docId === id) setDocId(null);
+    },
+  };
+
+  if (loaded && pdfsLoaded && docs.length === 0 && pdfs.length === 0) {
     return (
       <NoDocumentsScreen
         toolTitle="Sign"
@@ -291,10 +311,10 @@ export default function SignScreen() {
 
   // Same preview size and place as Watermark and Timestamp.
   const previewW = Math.min(screenW * 0.5, 220);
-  // Names exactly what is still missing.
-  const sigStep = saved.length ? 'Choose or draw a signature' : 'Draw your signature';
-  // With no document yet it names the action; the picker above says what to do.
-  const buttonTitle = doc && !sig ? sigStep : doc ? `Sign ${pagesLabel}` : 'Sign';
+  // Always names the outcome ("Sign page 3"); it stays dimmed until there is
+  // a signature, and the pad's "Sign here" says what to do. An instruction on a
+  // disabled button ("Choose or draw a signature") read as a broken control.
+  const buttonTitle = doc ? `Sign ${pagesLabel}` : 'Sign';
 
   return (
     <ToolScreen
@@ -310,10 +330,12 @@ export default function SignScreen() {
               total={progress.total}
             />
           ) : null}
-          <PrimaryButton title={buttonTitle} onPress={() => apply('in-place')} disabled={!sig || !doc} loading={!!progress} />
-          {doc && sig && !progress ? (
-            <PrimaryButton title="Save as a copy" variant="secondary" onPress={() => apply('copy')} style={styles.secondary} />
-          ) : null}
+          <FooterActions
+            secondary={
+              <PrimaryButton title="Save as a copy" variant="secondary" onPress={() => apply('copy')} disabled={!sig || !doc || !!progress} />
+            }
+            primary={<PrimaryButton title={buttonTitle} onPress={() => apply('in-place')} disabled={!sig || !doc} loading={!!progress} />}
+          />
         </>
       }
     >
@@ -329,6 +351,7 @@ export default function SignScreen() {
         onPick={pickDoc}
         autoOpen={loaded && !fromViewer}
         note={PDF_NOT_LISTED_NOTE}
+        convert={convert}
       />
 
       {/* 2. Live preview, always shown like Watermark's and Timestamp's: the
@@ -349,8 +372,9 @@ export default function SignScreen() {
                   accessibilityLabel={`Page ${i + 1}`}
                   style={[styles.pageThumb, { borderColor: on ? colors.accent : colors.bg }]}
                 >
-                  <Image
-                    source={{ uri: `${p}?v=${doc.updatedAt}` }}
+                  {/* Fits a landscape page whole instead of cropping it to its middle. */}
+                  <PageThumb
+                    uri={`${p}?v=${doc.updatedAt}`}
                     style={[styles.pageImg, { backgroundColor: colors.placeholder, borderColor: colors.thumbBorder }]}
                   />
                   <Text style={[Type.caption, styles.pageNum, { color: on ? colors.accent : colors.muted }]}>
@@ -469,7 +493,6 @@ export default function SignScreen() {
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  secondary: { marginTop: Spacing.sm },
   pad: {
     height: PAD_HEIGHT,
     borderRadius: Radius.md,

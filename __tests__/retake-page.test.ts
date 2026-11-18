@@ -28,6 +28,7 @@ let mockLayout = 0;
 const mockDeleteTemps = jest.fn((uris: string[]) => uris.forEach(u => mockFs.delete(u)));
 
 jest.mock('../lib/files', () => ({
+  moveScannerOutputToCaches: (u: string[]) => u,
   // "Re-encodes" by tagging the bytes with the quality, so the test can see the
   // page went through the quality step.
   copyPageWithQuality: jest.fn(async (src: string, doc: string, i: number, q: number) => {

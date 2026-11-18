@@ -11,6 +11,7 @@ import { splitSpreads } from '@/lib/book-split';
 import { notifyError } from '@/lib/haptics';
 import { alertScanError, deleteTempFiles, pickPhotos, scanWithCamera } from '@/lib/tool-scan';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
+import { noteNewDocument } from '@/lib/new-doc-note';
 
 export default function BookScreen() {
   const { saveAndOpen } = useScan();
@@ -47,6 +48,7 @@ export default function BookScreen() {
       }
       // saveAndOpen copies the pages into storage before it resolves.
       const id = await saveAndOpen({ pages });
+      if (id) noteNewDocument(id);
       if (id) navigateWhenUnlocked(() => router.replace({ pathname: '/viewer', params: { id } }));
     } finally {
       deleteTempFiles(temps);

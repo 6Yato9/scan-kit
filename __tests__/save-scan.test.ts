@@ -2,6 +2,7 @@ import { saveScan, indexDocText } from '../lib/save-scan';
 
 jest.mock('expo-crypto', () => ({ randomUUID: () => 'fixed-id' }));
 jest.mock('../lib/files', () => ({
+  moveScannerOutputToCaches: (u: string[]) => u,
   copyPageWithQuality: jest.fn(async (_uri: string, docId: string, i: number) =>
     `file:///docs/${docId}/page-${i}.jpg`),
   copyPdfToStorage: jest.fn(() => 'file:///docs/fixed-id/document.pdf'),

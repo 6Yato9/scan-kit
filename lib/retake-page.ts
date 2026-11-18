@@ -15,6 +15,7 @@ import {
   copyPageWithQuality,
   deleteDisposableTemps,
   isScannerOutput,
+  moveScannerOutputToCaches,
   pageLayoutGeneration,
   replacePage,
   restorePageWithShadow,
@@ -68,10 +69,12 @@ const isDefaultAdj = (a: PageAdjustment) => !a.brightness && !a.contrast && !a.s
 export async function retakePage(
   docId: string,
   index: number,
-  uri: string,
+  rawUri: string,
   quality: number,
   options: { autoCrop?: boolean } = {},
 ): Promise<RetakeResult> {
+  // A scanner page lands in Documents (shown in the Files app): out of there first.
+  const [uri] = moveScannerOutputToCaches([rawUri]);
   // Auto-crop before taking the page lock: it's slow and touches no stored file.
   const crop = options.autoCrop ?? !isScannerOutput(uri);
   const input = crop ? (await autoCropDocument(uri, quality)).uri : uri;

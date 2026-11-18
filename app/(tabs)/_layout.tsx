@@ -18,6 +18,7 @@ import { useScan } from '@/contexts/scan-context';
 import { useTheme } from '@/contexts/theme-context';
 import { selection, tapMedium } from '@/lib/haptics';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
+import { noteNewDocument } from '@/lib/new-doc-note';
 
 // Filled glyph for the active tab, outline for the rest.
 type IconName = keyof typeof Ionicons.glyphMap;
@@ -127,6 +128,11 @@ function FloatingTabBar({ state, navigation, descriptors }: BottomTabBarProps) {
   if (hidden) return null;
 
   return (
+    <>
+    {/* Scroll edge: the screen's background fades in under the floating bar,
+        so a row resting half under it (a description cut by the bar's edge)
+        softens away instead of reading as broken. */}
+    <EdgeFade height={insets.bottom + 8 + 64 + EDGE_FADE_ABOVE_BAR} color={colors.bg} />
     <View
       onLayout={onBarLayout}
       style={[
@@ -183,6 +189,8 @@ function FloatingTabBar({ state, navigation, descriptors }: BottomTabBarProps) {
               onPress={async () => {
                 tapMedium();
                 const id = await triggerScan();
+                // The viewer confirms it: "Saved as …" with Rename (lib/new-doc-note).
+                if (id) noteNewDocument(id);
                 if (id) navigateWhenUnlocked(() => router.push({ pathname: '/viewer', params: { id } }));
               }}
               style={styles.scanBtn}
@@ -226,6 +234,31 @@ function FloatingTabBar({ state, navigation, descriptors }: BottomTabBarProps) {
         );
       })}
     </View>
+    </>
+  );
+}
+
+/** How far above the floating bar's top edge the fade starts. */
+const EDGE_FADE_ABOVE_BAR = 28;
+const EDGE_FADE_STEPS = 16;
+
+/**
+ * A soft fade from transparent to `color` (no gradient library in this build:
+ * thin bands of rising opacity, eased so no band edge shows). It is fully
+ * opaque from the bar's vertical middle down to the screen edge.
+ */
+function EdgeFade({ height, color }: { height: number; color: string }) {
+  const ramp = EDGE_FADE_ABOVE_BAR + 32;
+  return (
+    <View pointerEvents="none" style={[styles.edgeFade, { height }]}>
+      <View style={{ height: ramp }}>
+        {Array.from({ length: EDGE_FADE_STEPS }, (_, i) => {
+          const t = (i + 1) / EDGE_FADE_STEPS;
+          return <View key={i} style={{ flex: 1, backgroundColor: color, opacity: t * t * (3 - 2 * t) }} />;
+        })}
+      </View>
+      <View style={{ flex: 1, backgroundColor: color }} />
+    </View>
   );
 }
 
@@ -249,6 +282,7 @@ export default function TabLayout() {
 }
 
 const styles = StyleSheet.create({
+  edgeFade: { position: 'absolute', left: 0, right: 0, bottom: 0 },
   floatingBar: {
     position: 'absolute',
     height: 64,

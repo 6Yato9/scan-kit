@@ -8,6 +8,9 @@ import { saveScan, indexDocText } from '@/lib/save-scan';
 import { autoName } from '@/lib/auto-name';
 import { bakePages } from '@/lib/bake';
 import { withSystemUI } from '@/lib/system-ui';
+import { moveScannerOutputToCaches } from '@/lib/files';
+import { takeUncroppedPages } from '@/lib/tool-scan';
+import { noteNewDocument } from '@/lib/new-doc-note';
 import { serialized } from '@/lib/serial';
 import { useTheme } from '@/contexts/theme-context';
 import { Radius, Spacing, Type } from '@/lib/theme';
@@ -71,6 +74,9 @@ export function ScanProvider({ children }: { children: ReactNode }) {
       });
       setLastSaved(Date.now());
       notifySuccess();
+      // The viewer greets the new document: "Saved as …" with Rename, or Crop
+      // for a photo whose page edges weren't found (lib/new-doc-note).
+      noteNewDocument(id, { uncropped: takeUncroppedPages(input.pages ?? []) });
       // Bake the default filter into the pages' pixels without blocking the
       // caller (it opens the viewer, which shows progress). bakePages registers
       // every page synchronously, so the viewer already shows the chosen filter
@@ -110,7 +116,9 @@ export function ScanProvider({ children }: { children: ReactNode }) {
         () => ({ scannedImages: [] as string[] }),
       );
       if (!scannedImages?.length) return null;
-      return await saveAndOpen({ pages: scannedImages });
+      // The scanner writes into Documents, which the Files app shows: move its
+      // pages to Caches before anything else happens to them.
+      return await saveAndOpen({ pages: moveScannerOutputToCaches(scannedImages) });
     } catch (err) {
       console.error('Scan failed', err);
       const msg = err instanceof Error ? err.message : String(err);

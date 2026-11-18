@@ -9,44 +9,45 @@
 //   <container>/Library/Application Support/signatures/…
 //
 // Builds up to round 9 kept them in <container>/Documents/. The Documents
-// folder is what the Files app shows once UIFileSharingEnabled is on ("Keep a
-// copy in Files"), and anything there would be visible — and deletable —
-// outside App Lock. Application Support is private to the app, backed up the
-// same way as Documents, and never cleaned up by iOS (it is also where
-// AsyncStorage already keeps the document records).
+// folder is what the Files app shows (UIFileSharingEnabled), so from this
+// layout on it BELONGS TO THE USER: they can make folders there — one may well
+// be called "scan-kit" or "signatures" — and drop or edit files in it. The
+// rule everything below follows: the app never moves, merges, overwrites or
+// deletes anything in Documents except what it can positively identify as its
+// own:
+//  - a document folder: named with a document id (a UUID) and holding nothing
+//    but what the app writes into one (page-N.jpg, page-N.orig.jpg, their side
+//    files, document.pdf, ocr/*.json) — see looksLikeDocFolder;
+//  - the saved-signatures folder: nothing but index.json and sig-XXXXXXXX.png;
+//  - the April 2026 Merge tool's pages: documents/<UUID>/page_N.jpg;
+//  - its own "Keep a copy in Files" PDFs (lib/files-copy.ts, by manifest and
+//    fingerprint) and the scanner's / Files-copy temp files (lib/files.ts).
+// Anything else — a user's "scan-kit" folder with their own files in it, a
+// PDF, a sub-folder — is never touched, whatever state the move is in.
 //
 // THE MOVE (migrateStorageLayout) runs once per process, synchronously, the
 // first time anything asks for a path here — so nothing can read or write a
 // page before it has happened. It is:
-//  - rename-only: each folder is moved with one rename (FileManager.moveItem on
-//    the same volume), never copied and deleted, so there is no moment where a
-//    file exists in neither place and nothing is ever deleted;
-//  - all-or-nothing per folder: when a rename fails, the folder stays where it
-//    was and this session keeps using it from there (state 'documents'); the
-//    move is tried again on the next launch;
-//  - resumable and idempotent: when both the old and the new folder exist (an
-//    interrupted merge, or an older build run after a newer one re-created the
-//    old folder) their contents are merged item by item, again by rename; an
-//    item present in both is never overwritten — the one in Documents is kept
-//    in Application Support/scan-kit-recovered/. Until the merge completes
-//    (state 'split') each document is looked up in both places;
-//  - recorded: Application Support/storage-layout.json notes when it finished.
-//    The record is informational; the folders on disk are the truth, so a
-//    lost record can never cause a second, wrong move.
+//  - rename-based: a document folder is moved with one rename on the same
+//    volume. Only when a rename fails is a file copied, verified (size and
+//    MD5) and then removed from Documents — never removed unverified;
+//  - per document: a folder that can't be moved stays where it was and is
+//    used from there (state 'split'); it is tried again on the next launch;
+//  - merging, never overwriting: when a document's folder exists in both
+//    places (an older build run after a newer one re-created it), the contents
+//    are merged item by item; an item present in both is never overwritten —
+//    the one from Documents is kept in Application Support/scan-kit-recovered/,
+//    which Settings › Recovered files shows (lib/recovered-files via
+//    listRecoveredGroups below);
+//  - recorded: Application Support/storage-layout.json, written atomically
+//    (a verified side file renamed into place, and read back from the side
+//    file if the app died in between). A marker that exists but can't be read
+//    is taken as "already migrated" — the conservative reading.
 //
 // Stored records hold absolute file:// URIs written under the old layout (and
 // possibly an old container path). rebaseStoredUri maps every one of them to
 // where the file is now; lib/storage.ts applies it to every record it reads
 // and writes, so old records heal on read and are rewritten on the next save.
-//
-// Documents/ also held a few other things the app wrote before it was visible
-// in Files: Documents/documents/ (pages of documents merged by an April 2026
-// build) and development leftovers. Once, on the first launch of this layout,
-// everything in Documents except Inbox (iOS's "Open in" copies), the scanner's
-// transient output and dot-files is moved to Application Support/
-// legacy-documents/, and rebaseStoredUri points any record still referring to
-// one of those files at its new place. After that one pass Documents belongs
-// to the user and is never touched again.
 //
 // Android, web and any container this code does not recognise keep the old
 // layout (state 'documents', nothing is moved): their Documents folder is
@@ -56,18 +57,33 @@ import { Directory, File, Paths } from 'expo-file-system';
 /** Name of the folder holding one sub-folder per document (in both layouts). */
 export const SCAN_DIR_NAME = 'scan-kit';
 export const SIGNATURES_DIR_NAME = 'signatures';
-/** Items in Documents that a Documents-root move keeps there. */
 const INBOX = 'Inbox';
-const RECOVERED_DIR_NAME = 'scan-kit-recovered';
-const LEGACY_DOCS_DIR_NAME = 'legacy-documents';
+export const RECOVERED_DIR_NAME = 'scan-kit-recovered';
+export const LEGACY_DOCS_DIR_NAME = 'legacy-documents';
 const MARKER_NAME = 'storage-layout.json';
-const LAYOUT_VERSION = 2;
-/** The document scanner writes its pages straight into Documents/ (lib/files.ts sweeps them). */
-const SCANNER_OUTPUT = /^DOCUMENT_SCAN_\d+_[^/]*\.jpe?g$/i;
+/** lib/files-copy.ts keeps its manifest here; its existence means copies were made. */
+export const FILES_COPY_MANIFEST_NAME = 'files-copy.json';
+const LAYOUT_VERSION = 3;
+/** The April 2026 Merge tool kept merged documents' pages in Documents/documents/<id>/. */
+const APRIL_MERGE_DIR = 'documents';
+/** How many launches the Documents-root pass is tried before it is given up. */
+const MAX_LEFTOVER_ATTEMPTS = 3;
+
+/** A document id (every id the app has ever made is Crypto.randomUUID()). */
+export const DOC_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Every file name the app writes directly into a document's folder. */
+const DOC_FOLDER_FILE =
+  /^(?:page-\d+(?:\.orig)?(?:\.new|\.part|\.shifting|\.tmp)?\.jpg|page-tmp-\d+(?:\.orig)?\.jpg|document\.pdf|reorder\.commit)$/;
+/** A page or a PDF: what makes a folder a document's rather than an empty look-alike. */
+const DOC_CONTENT = /^(?:page-\d+\.jpg|document\.pdf)$/;
+const OCR_DIR = 'ocr';
+const SIGNATURE_FILE = /^(?:index\.json|sig-[0-9a-f]{8}\.png(?:\.new)?)$/;
+const APRIL_PAGE = /^page_\d+\.jpg$/;
 
 /**
  * - 'app-support': everything is in Application Support (the normal case).
- * - 'split': the move is part done; documents are looked up in both places.
+ * - 'split': some document folders couldn't be moved this launch; they are
+ *   used from Documents until a later launch moves them.
  * - 'documents': nothing has moved (not iOS, or the move failed this launch).
  */
 export type LayoutState = 'app-support' | 'split' | 'documents';
@@ -76,7 +92,7 @@ export type LayoutReport = {
   state: LayoutState;
   /** Where new document folders are made. */
   scanRoot: string;
-  /** Documents/scan-kit while it still exists next to the new root. */
+  /** Documents/scan-kit while app document folders are still in it. */
   legacyScanRoot: string | null;
   signaturesDir: string;
   /** What this launch's migration did (empty when there was nothing to do). */
@@ -98,9 +114,10 @@ type Layout = {
 
 type Marker = {
   version?: number;
-  /** 'pending' while the one-time Documents-root pass runs; 'done' after. */
+  /** The one-time Documents-root pass: 'pending' while it runs, 'done' after. */
   strays?: 'pending' | 'done';
   straysAt?: number;
+  strayAttempts?: number;
   migratedAt?: number;
 };
 
@@ -122,6 +139,23 @@ function nameOf(item: File | Directory): string {
   }
 }
 
+/** `dir.exists`, or `fallback` when even that can't be read. */
+function exists(item: File | Directory, fallback: boolean): boolean {
+  try {
+    return item.exists;
+  } catch {
+    return fallback;
+  }
+}
+
+function listOf(dir: Directory): (File | Directory)[] | null {
+  try {
+    return dir.exists ? dir.list() : [];
+  } catch {
+    return null;
+  }
+}
+
 /**
  * <container>/Library/Application Support, derived from the Documents and
  * Caches folders expo-file-system reports (it has no constant for it). Only
@@ -140,38 +174,215 @@ export function applicationSupportDir(): Directory | null {
   }
 }
 
+/**
+ * A folder for the app's own small state files that is never shown in Files:
+ * Application Support on iOS, the (private) Documents folder elsewhere.
+ */
+export function privateStateDir(): Directory {
+  const support = applicationSupportDir();
+  if (support) {
+    try {
+      support.create({ intermediates: true, idempotent: true });
+    } catch {}
+    return support;
+  }
+  return new Directory(Paths.document);
+}
+
 function documentsDir(): Directory {
   return new Directory(Paths.document);
 }
 
-function readMarker(support: Directory): Marker {
+// ── Atomic JSON files ───────────────────────────────────────────────────────
+//
+// expo-file-system writes text non-atomically (atomically: false): an app
+// killed mid-write leaves a truncated file. These helpers write a side file
+// "<name>.new", read it back to check it, and only then rename it into place.
+// The app can die after the old file is removed and before the rename, so a
+// reader falls back to the side file, and a writer finishes that rename first.
+
+export type JsonRead<T> = { state: 'absent' } | { state: 'ok'; value: T } | { state: 'corrupt' };
+
+function parseFile(f: File): { ok: true; value: unknown } | { ok: false; present: boolean } {
   try {
-    const f = new File(support, MARKER_NAME);
-    if (!f.exists) return {};
-    const parsed = JSON.parse(f.textSync());
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    if (!f.exists) return { ok: false, present: false };
   } catch {
-    return {};
+    return { ok: false, present: true };
+  }
+  try {
+    return { ok: true, value: JSON.parse(f.textSync()) };
+  } catch {
+    return { ok: false, present: true };
   }
 }
 
-function writeMarker(support: Directory, marker: Marker): boolean {
+/** Reads `<dir>/<name>` (or its side file, see above). Never throws. */
+export function readJsonSync<T = unknown>(dir: Directory, name: string): JsonRead<T> {
+  const main = parseFile(new File(dir, name));
+  if (main.ok) return { state: 'ok', value: main.value as T };
+  const side = parseFile(new File(dir, `${name}.new`));
+  if (side.ok) return { state: 'ok', value: side.value as T };
+  return main.present || side.present ? { state: 'corrupt' } : { state: 'absent' };
+}
+
+/** Writes `value` to `<dir>/<name>` atomically (see above). Returns false when it couldn't. */
+export function writeJsonSync(dir: Directory, name: string, value: unknown): boolean {
+  const text = JSON.stringify(value);
+  const main = new File(dir, name);
+  const side = new File(dir, `${name}.new`);
   try {
-    const f = new File(support, MARKER_NAME);
-    if (!f.exists) f.create();
-    f.write(JSON.stringify({ ...marker, version: LAYOUT_VERSION }));
+    // A previous write died between removing the old file and the rename: the
+    // side file is the current content, so finish that first.
+    if (!main.exists && side.exists && parseFile(side).ok) side.move(new File(dir, name));
+    const fresh = new File(dir, `${name}.new`);
+    if (fresh.exists) fresh.delete();
+    fresh.create();
+    fresh.write(text);
+    if (fresh.textSync() !== text) throw new Error('write did not verify');
+    const target = new File(dir, name);
+    if (target.exists) target.delete();
+    fresh.move(new File(dir, name));
     return true;
   } catch {
     return false;
   }
 }
 
+/** Removes `<dir>/<name>` and its side file. */
+export function deleteJsonSync(dir: Directory, name: string): void {
+  for (const n of [name, `${name}.new`]) {
+    try {
+      const f = new File(dir, n);
+      if (f.exists) f.delete();
+    } catch {}
+  }
+}
+
+// ── What counts as the app's own ────────────────────────────────────────────
+
 /**
- * Moves the folder `src` to `dest` by rename. When `dest` already exists the
- * two are merged item by item (recursively), still by rename; an item present
- * in both stays in `dest`, and the one from `src` is moved to `recovered()`
- * under its relative path `rel`. `src` is removed only once it is empty.
- * Never deletes a file. Returns true when `src` is gone (everything moved).
+ * True when `dir` holds nothing but what the app writes into a document's
+ * folder (dot-files aside). With `requireId`, its name must also be a
+ * document id; with `requireContent` (the default when `requireId`), it must
+ * hold at least one page or PDF. A user's folder — whatever it is called —
+ * fails this as soon as it holds one file of their own.
+ */
+export function looksLikeDocFolder(dir: Directory, requireId: boolean, requireContent = requireId): boolean {
+  if (requireId && !DOC_ID.test(nameOf(dir))) return false;
+  const items = listOf(dir);
+  if (!items) return false;
+  let content = false;
+  for (const item of items) {
+    const name = nameOf(item);
+    if (name.startsWith('.')) continue;
+    if (item instanceof Directory) {
+      if (name !== OCR_DIR) return false;
+      const ocr = listOf(item);
+      if (!ocr) return false;
+      for (const o of ocr) {
+        const n = nameOf(o);
+        if (n.startsWith('.')) continue;
+        if (o instanceof Directory || !/\.json$/.test(n)) return false;
+      }
+    } else {
+      if (!DOC_FOLDER_FILE.test(name)) return false;
+      if (DOC_CONTENT.test(name)) content = true;
+    }
+  }
+  return content || !requireContent;
+}
+
+/** True when `dir` holds only the saved signatures' index and images. */
+export function looksLikeSignaturesFolder(dir: Directory): boolean {
+  const items = listOf(dir);
+  if (!items) return false;
+  let any = false;
+  for (const item of items) {
+    const name = nameOf(item);
+    if (name.startsWith('.')) continue;
+    if (item instanceof Directory || !SIGNATURE_FILE.test(name)) return false;
+    any = true;
+  }
+  return any;
+}
+
+/** documents/<UUID>/ of the April 2026 Merge tool: page_N.jpg files only. */
+function looksLikeAprilMergeFolder(dir: Directory): boolean {
+  if (!DOC_ID.test(nameOf(dir))) return false;
+  const items = listOf(dir);
+  if (!items) return false;
+  let any = false;
+  for (const item of items) {
+    const name = nameOf(item);
+    if (name.startsWith('.')) continue;
+    if (item instanceof Directory || !APRIL_PAGE.test(name)) return false;
+    any = true;
+  }
+  return any;
+}
+
+// ── Moving ──────────────────────────────────────────────────────────────────
+
+/**
+ * Moves file `item` to `target` (which must not exist). By rename; if the
+ * rename fails, by copying, checking the copy against the original (size, and
+ * MD5 where it can be read) and only then removing the original. On any doubt
+ * the original stays and the copy is removed. Returns true when it moved.
+ */
+function moveFile(item: File, target: File, rel: string, log: Layout): boolean {
+  const srcUri = item.uri;
+  try {
+    item.move(target);
+    return true;
+  } catch (e) {
+    log.errors.push(`move ${rel}: ${String(e)}`);
+  }
+  const src = new File(srcUri);
+  if (!exists(src, false)) return exists(target, false); // it went after all
+  try {
+    src.copy(target);
+    const copy = new File(target.uri);
+    const same = copy.exists && copy.size === src.size && sameMd5(src, copy);
+    if (!same) {
+      try { if (copy.exists) copy.delete(); } catch {}
+      log.errors.push(`copy ${rel}: did not verify`);
+      return false;
+    }
+    try {
+      src.delete();
+    } catch (e) {
+      // Both exist now; the copy is used, and the original is tried again
+      // next launch (it then merges as identical-name, kept aside).
+      log.errors.push(`remove copied ${rel}: ${String(e)}`);
+    }
+    log.actions.push(`copied ${rel}`);
+    return true;
+  } catch (e) {
+    log.errors.push(`copy ${rel}: ${String(e)}`);
+    try { const t = new File(target.uri); if (t.exists) t.delete(); } catch {}
+    return false;
+  }
+}
+
+/** MD5s agree, or can't be read on this platform (the size check stands then). */
+function sameMd5(a: File, b: File): boolean {
+  try {
+    const x = a.md5;
+    const y = b.md5;
+    if (typeof x !== 'string' || typeof y !== 'string') return true;
+    return x === y;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Moves the folder `src` to `dest`. When `dest` doesn't exist, by one rename;
+ * otherwise (or when that rename fails) the two are merged item by item; an
+ * item present in both stays in `dest`, and the one from `src` is moved to
+ * `recovered(rel)`. `src` is removed only once it is empty. Never deletes a
+ * file that hasn't been verified to exist elsewhere. Returns true when `src`
+ * is gone (everything moved).
  */
 function relocateDir(
   srcDir: Directory,
@@ -187,8 +398,9 @@ function relocateDir(
   const destUri = destDir.uri;
   const src = () => new Directory(srcUri);
   const dest = () => new Directory(destUri);
-  if (!src().exists) return true;
-  if (!dest().exists) {
+  if (!exists(src(), true)) return true;
+  let created = false;
+  if (!exists(dest(), true)) {
     try {
       // dest does not exist, so this is a rename of src to dest — not a move
       // INTO dest (Directory.move nests when the destination exists).
@@ -196,18 +408,22 @@ function relocateDir(
     } catch (e) {
       log.errors.push(`move ${rel}: ${String(e)}`);
     }
-    if (!src().exists && dest().exists) {
+    if (!exists(src(), true) && exists(dest(), false)) {
       log.actions.push(`moved ${rel}`);
       return true;
     }
-    if (!dest().exists) return false; // nothing happened: src is intact where it was
-    // Both exist now (should not happen with a rename): merge below.
+    // The rename failed: move what's inside one item at a time instead.
+    try {
+      dest().create({ intermediates: true, idempotent: true });
+      created = true;
+    } catch (e) {
+      log.errors.push(`create ${rel}: ${String(e)}`);
+      return false;
+    }
   }
-  let items: (File | Directory)[];
-  try {
-    items = src().list();
-  } catch (e) {
-    log.errors.push(`list ${rel}: ${String(e)}`);
+  const items = listOf(src());
+  if (!items) {
+    log.errors.push(`list ${rel}`);
     return false;
   }
   for (const item of items) {
@@ -227,8 +443,7 @@ function relocateDir(
         const target = new File(dest(), name);
         const clash = new Directory(dest(), name);
         if (!target.exists && !clash.exists) {
-          item.move(target);
-          log.actions.push(`merged ${childRel}`);
+          if (moveFile(item, target, childRel, log)) log.actions.push(`merged ${childRel}`);
         } else {
           moveAside(item, recovered(rel), name, log, childRel);
         }
@@ -242,7 +457,14 @@ function relocateDir(
   } catch (e) {
     log.errors.push(`remove empty ${rel}: ${String(e)}`);
   }
-  return !src().exists;
+  // A folder made here that nothing could be moved into would be found
+  // first (docDir) and hide the one still holding the files: remove it.
+  if (created) {
+    try {
+      if (dest().exists && dest().list().length === 0) dest().delete();
+    } catch {}
+  }
+  return !exists(src(), true);
 }
 
 /** Moves `item` into `dir` under `name` (or `name 2`, `name 3`, …), never over anything. */
@@ -254,8 +476,11 @@ function moveAside(item: File | Directory, dir: Directory, name: string, log: La
       const asFile = new File(dir, candidate);
       const asDir = new Directory(dir, candidate);
       if (asFile.exists || asDir.exists) continue;
-      if (item instanceof Directory) item.move(asDir);
-      else item.move(asFile);
+      if (item instanceof Directory) {
+        if (!relocateDir(item, asDir, rel, () => new Directory(dir, `${candidate} conflicts`), log)) return false;
+      } else if (!moveFile(item, asFile, rel, log)) {
+        return false;
+      }
       log.actions.push(`${verb} ${rel} → ${nameOf(dir)}/${candidate}`);
       return true;
     }
@@ -265,57 +490,150 @@ function moveAside(item: File | Directory, dir: Directory, name: string, log: La
   return false; // left where it was
 }
 
-/**
- * The one-time pass over the Documents root (see the header): everything but
- * the folders handled by the move itself, Inbox, scanner output and dot-files
- * goes to Application Support/legacy-documents/. Runs once: the marker says
- * 'pending' before anything moves and 'done' after, so an interrupted pass is
- * finished on the next launch, and a completed one never runs again (Documents
- * may then hold the user's own files). Skipped entirely if the marker can't be
- * written.
- */
-function moveDocumentsLeftovers(support: Directory, marker: Marker, log: Layout, now: number): Marker {
-  if (marker.strays === 'done') return marker;
-  const pending: Marker = { ...marker, strays: 'pending' };
-  if (!writeMarker(support, pending)) {
-    log.errors.push('marker not writable: leftovers pass skipped');
-    return marker;
-  }
-  const legacy = new Directory(support, LEGACY_DOCS_DIR_NAME);
-  let items: (File | Directory)[] = [];
-  try {
-    const docs = documentsDir();
-    if (docs.exists) items = docs.list();
-  } catch (e) {
-    log.errors.push(`list Documents: ${String(e)}`);
-    return pending; // retried next launch
-  }
-  let allMoved = true;
-  for (const item of items) {
-    const name = nameOf(item);
-    if (name === SCAN_DIR_NAME || name === SIGNATURES_DIR_NAME || name === INBOX) continue;
-    if (name.startsWith('.') || SCANNER_OUTPUT.test(name)) continue;
-    if (item instanceof Directory) {
-      if (!relocateDir(item, new Directory(legacy, name), `Documents/${name}`, r => recoveredDir(support, now, r), log)) allMoved = false;
-    } else {
-      if (!moveAside(item, legacy, name, log, `Documents/${name}`, 'moved')) allMoved = false;
-    }
-  }
-  if (!allMoved) return pending;
-  const done: Marker = { ...pending, strays: 'done', straysAt: now };
-  writeMarker(support, done);
-  return done;
-}
-
 function recoveredDir(support: Directory, now: number, rel: string): Directory {
   return new Directory(support, RECOVERED_DIR_NAME, String(now), ...rel.split('/').filter(Boolean));
 }
 
+// ── The steps ───────────────────────────────────────────────────────────────
+
+/**
+ * Document folders in Documents/scan-kit that are the app's: see
+ * looksLikeDocFolder. Before the move has completed once the folder was the
+ * app's alone (Documents wasn't visible in Files), so any name is accepted —
+ * and dot-named temp folders (.retake-staging) go along; after that only
+ * document ids are.
+ */
+function appDocFolders(oldScan: Directory, completed: boolean): Directory[] {
+  const items = listOf(oldScan) ?? [];
+  return items.filter((c): c is Directory => {
+    if (!(c instanceof Directory)) return false;
+    if (nameOf(c).startsWith('.')) return !completed;
+    return completed ? looksLikeDocFolder(c, true, true) : looksLikeDocFolder(c, false, false);
+  });
+}
+
+/** Moves the app's document folders out of Documents/scan-kit (see the header). */
+function moveScanRoot(oldScan: Directory, newScan: Directory, completed: boolean, support: Directory, now: number, log: Layout): void {
+  if (!exists(oldScan, false)) return;
+  const items = listOf(oldScan);
+  if (!items) {
+    log.errors.push('list scan-kit');
+    return;
+  }
+  const ours = appDocFolders(oldScan, completed);
+  if (ours.length === 0) return; // nothing of the app's (or a user's folder of that name)
+  const recovered = (rel: string) => recoveredDir(support, now, rel);
+  // The usual first launch: the whole folder is the app's, one rename.
+  if (!completed && !exists(newScan, true) && ours.length === items.length) {
+    if (relocateDir(oldScan, newScan, SCAN_DIR_NAME, recovered, log)) return;
+  }
+  try {
+    newScan.create({ intermediates: true, idempotent: true });
+  } catch (e) {
+    log.errors.push(`create scan-kit: ${String(e)}`);
+    return;
+  }
+  let moved = false;
+  for (const d of appDocFolders(oldScan, completed)) {
+    const name = nameOf(d);
+    if (relocateDir(d, new Directory(newScan, name), `${SCAN_DIR_NAME}/${name}`, recovered, log)) moved = true;
+  }
+  // Only a folder this pass emptied of the app's own document folders is removed.
+  if (moved) {
+    try {
+      const left = new Directory(oldScan.uri);
+      if (left.exists && left.list().length === 0) {
+        left.delete();
+        log.actions.push('removed empty Documents/scan-kit');
+      }
+    } catch {}
+  }
+}
+
+/** Moves the saved signatures out of Documents/signatures, if that folder is the app's. */
+function moveSignatures(oldSigs: Directory, newSigs: Directory, support: Directory, now: number, log: Layout): void {
+  if (!exists(oldSigs, false) || !looksLikeSignaturesFolder(oldSigs)) return;
+  // Both indexes, read before the merge sets the older one aside.
+  const oldIndex = readJsonSync<unknown[]>(oldSigs, 'index.json');
+  const newIndex = exists(newSigs, false) ? readJsonSync<unknown[]>(newSigs, 'index.json') : ({ state: 'absent' } as const);
+  relocateDir(oldSigs, newSigs, SIGNATURES_DIR_NAME, rel => recoveredDir(support, now, rel), log);
+  // An older build saved signatures after a newer one: list them in one index
+  // (the newer build's first), so none of them disappears from the Sign tool.
+  if (oldIndex.state === 'ok' && newIndex.state === 'ok' && Array.isArray(oldIndex.value) && Array.isArray(newIndex.value)) {
+    const seen = new Set<string>();
+    const merged: unknown[] = [];
+    for (const e of [...newIndex.value, ...oldIndex.value]) {
+      const id = e && typeof e === 'object' ? (e as { id?: unknown }).id : null;
+      if (typeof id !== 'string' || seen.has(id)) continue;
+      if (!exists(new File(newSigs, `${id}.png`), false)) continue;
+      seen.add(id);
+      merged.push(e);
+    }
+    if (writeJsonSync(new Directory(newSigs.uri), 'index.json', merged)) log.actions.push('merged signatures index');
+  }
+}
+
+/**
+ * The one-time pass over the Documents root: the April 2026 Merge tool's
+ * pages (Documents/documents/<UUID>/page_N.jpg — the only other thing any
+ * build wrote there) go to Application Support/legacy-documents/documents/,
+ * where rebaseStoredUri finds them. Nothing else in Documents is looked at, so
+ * even a pass run at the wrong time can't move a user's file or a Files copy.
+ * Refused outright (`refuse`) when the marker can't be read or Files copies
+ * exist — both mean Documents has been the user's for a while. A pass cut
+ * short is finished on a later launch (it can only ever pick up those
+ * folders), at most MAX_LEFTOVER_ATTEMPTS launches in all.
+ */
+function moveDocumentsLeftovers(support: Directory, marker: Marker, refuse: boolean, log: Layout, now: number): Marker {
+  if (marker.strays === 'done') return marker;
+  const attempts = (marker.strayAttempts ?? 0) + 1;
+  if (refuse || attempts > MAX_LEFTOVER_ATTEMPTS) {
+    const done: Marker = { ...marker, strays: 'done', straysAt: now };
+    writeJsonSync(support, MARKER_NAME, { ...done, version: LAYOUT_VERSION });
+    return done;
+  }
+  const pending: Marker = { ...marker, strays: 'pending', strayAttempts: attempts };
+  if (!writeJsonSync(support, MARKER_NAME, { ...pending, version: LAYOUT_VERSION })) {
+    log.errors.push('marker not writable: leftovers pass skipped');
+    return marker;
+  }
+  let allMoved = true;
+  const april = new Directory(documentsDir(), APRIL_MERGE_DIR);
+  if (exists(april, false)) {
+    const legacy = new Directory(support, LEGACY_DOCS_DIR_NAME, APRIL_MERGE_DIR);
+    const children = listOf(april);
+    if (!children) allMoved = false;
+    let moved = false;
+    for (const c of children ?? []) {
+      if (!(c instanceof Directory) || !looksLikeAprilMergeFolder(c)) continue; // not ours: left alone
+      try {
+        legacy.create({ intermediates: true, idempotent: true });
+      } catch {
+        allMoved = false;
+        break;
+      }
+      const name = nameOf(c);
+      if (relocateDir(c, new Directory(legacy, name), `Documents/${APRIL_MERGE_DIR}/${name}`, r => recoveredDir(support, now, r), log)) moved = true;
+      else allMoved = false;
+    }
+    if (moved) {
+      try {
+        const left = new Directory(april.uri);
+        if (left.exists && left.list().length === 0) left.delete();
+      } catch {}
+    }
+  }
+  if (!allMoved) return pending;
+  const done: Marker = { ...pending, strays: 'done', straysAt: now };
+  writeJsonSync(support, MARKER_NAME, { ...done, version: LAYOUT_VERSION });
+  return done;
+}
+
 /**
  * Moves the app's data out of Documents (see the header). Safe to call any
- * number of times; does real work only when something is still in Documents.
- * Never throws. Normally called through the path getters below; exported for
- * tests and for the app's startup.
+ * number of times; does real work only when something of the app's is still
+ * in Documents. Never throws. Normally called through the path getters below;
+ * exported for tests and for the app's startup.
  */
 export function migrateStorageLayout(now: number = Date.now()): LayoutReport {
   const docs = documentsDir();
@@ -337,19 +655,25 @@ export function migrateStorageLayout(now: number = Date.now()): LayoutReport {
 
   const newScan = new Directory(support, SCAN_DIR_NAME);
   const newSigs = new Directory(support, SIGNATURES_DIR_NAME);
-  const recovered = (rel: string) => recoveredDir(support, now, rel);
+  let completed = true; // until known otherwise: the careful reading
   try {
     support.create({ intermediates: true, idempotent: true });
-    if (support.exists) {
-      relocateDir(oldScan, newScan, SCAN_DIR_NAME, recovered, next);
-      // Saved signatures: a convenience (two PNGs and an index).
-      relocateDir(oldSigs, newSigs, SIGNATURES_DIR_NAME, recovered, next);
-      const marker = moveDocumentsLeftovers(support, readMarker(support), next, now);
-      if (!exists(oldScan, true) && !exists(oldSigs, true) && !marker.migratedAt) {
-        writeMarker(support, { ...marker, migratedAt: now });
-      }
-    } else {
-      next.errors.push('Application Support missing');
+    if (!support.exists) throw new Error('Application Support missing');
+    const read = readJsonSync<Marker>(support, MARKER_NAME);
+    let marker: Marker = read.state === 'ok' && read.value && typeof read.value === 'object' && !Array.isArray(read.value) ? read.value : {};
+    const copiesMade = readJsonSync(support, FILES_COPY_MANIFEST_NAME).state !== 'absent';
+    completed = read.state === 'corrupt' || !!marker.migratedAt || copiesMade;
+
+    moveScanRoot(oldScan, newScan, completed, support, now, next);
+    // Saved signatures: a convenience (a few PNGs and an index).
+    moveSignatures(oldSigs, newSigs, support, now, next);
+    marker = moveDocumentsLeftovers(support, marker, read.state === 'corrupt' || copiesMade, next, now);
+    const leftBehind = appDocFolders(oldScan, completed).length > 0;
+    if (read.state === 'corrupt') {
+      // Unreadable: it was written by a launch that ran the move. Repair it.
+      writeJsonSync(support, MARKER_NAME, { version: LAYOUT_VERSION, strays: 'done', straysAt: now, migratedAt: now });
+    } else if (!leftBehind && !marker.migratedAt) {
+      writeJsonSync(support, MARKER_NAME, { ...marker, migratedAt: now, version: LAYOUT_VERSION });
     }
   } catch (e) {
     next.errors.push(`migration: ${String(e)}`);
@@ -357,18 +681,19 @@ export function migrateStorageLayout(now: number = Date.now()): LayoutReport {
 
   // Which folders to use follows from what is on disk now, whatever happened
   // above — never from what the steps meant to do.
-  const oldScanLeft = exists(oldScan, true);
-  if (!oldScanLeft) {
+  const leftBehind = appDocFolders(oldScan, completed).length > 0;
+  if (!leftBehind) {
     next.scanRoot = newScan.uri; // made on demand on a fresh install
     next.state = 'app-support';
   } else if (exists(newScan, false)) {
-    // Part merged: new folders go to the new root, old ones are still found.
+    // Part moved: new folders go to the new root, old ones are still found.
     next.scanRoot = newScan.uri;
     next.legacyScanRoot = oldScan.uri;
     next.state = 'split';
   } // else nothing moved: stay in Documents ('documents'), try again next launch.
-  // A signatures folder that couldn't be moved whole keeps being used as it is.
-  next.signatures = (!exists(oldSigs, true) || exists(newSigs, false) ? newSigs : oldSigs).uri;
+  // A signatures folder of the app's that couldn't be moved keeps being used as it is.
+  const sigsStayed = exists(oldSigs, false) && !exists(newSigs, false) && looksLikeSignaturesFolder(oldSigs);
+  next.signatures = (sigsStayed ? oldSigs : newSigs).uri;
   const legacyDocs = new Directory(support, LEGACY_DOCS_DIR_NAME);
   next.legacyDocs = exists(legacyDocs, false) ? legacyDocs.uri : null;
 
@@ -376,15 +701,6 @@ export function migrateStorageLayout(now: number = Date.now()): LayoutReport {
     console.log(`storage-layout: ${next.state}; ${next.actions.length} moved, ${next.errors.length} errors`, next.errors.slice(0, 5));
   }
   return report(next);
-}
-
-/** `dir.exists`, or `fallback` when even that can't be read. */
-function exists(dir: Directory, fallback: boolean): boolean {
-  try {
-    return dir.exists;
-  } catch {
-    return fallback;
-  }
 }
 
 function report(l: Layout): LayoutReport {
@@ -506,8 +822,18 @@ export function rebaseStoredUri(uri: string): string {
     try {
       decoded = decodeURIComponent(id);
     } catch {}
-    const rebuilt = slash(docDir(decoded).uri) + rest.slice(cut + 1);
-    return rebuilt;
+    const tail = rest.slice(cut + 1);
+    const l = current();
+    if (l.legacyScanRoot) {
+      // A document part moved: each file is where it is.
+      const primary = slash(new Directory(l.scanRoot, decoded).uri) + tail;
+      const legacy = slash(new Directory(l.legacyScanRoot, decoded).uri) + tail;
+      try {
+        if (new File(primary.split('?')[0]).exists) return primary;
+        if (new File(legacy.split('?')[0]).exists) return legacy;
+      } catch {}
+    }
+    return slash(docDir(decoded).uri) + tail;
   }
   const l = current();
   const j = uri.indexOf('/Documents/');
@@ -521,6 +847,156 @@ export function rebaseStoredUri(uri: string): string {
     }
   }
   return uri;
+}
+
+// ── Recovered files (Settings › Recovered files) ────────────────────────────
+
+/** One set of files the app set aside, shown as one row. */
+export type RecoveredGroup = {
+  /** Stable key: the folder's URI. */
+  key: string;
+  /** The folder holding the group (deleted with it). */
+  dir: string;
+  kind: 'pages' | 'pdf' | 'signatures' | 'files';
+  /** When it was set aside (ms), when known. */
+  savedAt: number | null;
+  /** Page images in page order (pages), the PDF (pdf), or every file. */
+  files: string[];
+  bytes: number;
+};
+
+const IMAGE_FILE = /\.(?:jpe?g|png|heic)$/i;
+const PAGE_ORDER = /^page[-_](\d+)\.jpg$/i;
+
+function filesUnder(dir: Directory, out: File[] = []): File[] {
+  for (const item of listOf(dir) ?? []) {
+    if (nameOf(item).startsWith('.')) continue;
+    if (item instanceof Directory) filesUnder(item, out);
+    else out.push(item);
+  }
+  return out;
+}
+
+function sizeOf(f: File): number {
+  try {
+    return f.size ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+function groupOf(dir: Directory, savedAt: number | null, referenced: Set<string>, signatures = false): RecoveredGroup | null {
+  const all = filesUnder(dir);
+  // A file a document still uses (legacy-documents) is not "recovered": it is in use.
+  if (all.some(f => referenced.has(f.uri.split('?')[0]))) return null;
+  const visible = all.filter(f => !/\.json$/i.test(nameOf(f)) && !/\.orig\.jpg$/i.test(nameOf(f)));
+  if (visible.length === 0) return null;
+  const bytes = all.reduce((s, f) => s + sizeOf(f), 0);
+  const pages = visible
+    .map(f => ({ f, m: PAGE_ORDER.exec(nameOf(f)) }))
+    .filter(x => x.m)
+    .sort((a, b) => Number(a.m![1]) - Number(b.m![1]))
+    .map(x => x.f.uri);
+  const pdf = visible.find(f => nameOf(f) === 'document.pdf');
+  if (signatures) return { key: dir.uri, dir: dir.uri, kind: 'signatures', savedAt, files: visible.filter(f => IMAGE_FILE.test(nameOf(f))).map(f => f.uri), bytes };
+  if (pdf && pages.length === 0) return { key: dir.uri, dir: dir.uri, kind: 'pdf', savedAt, files: [pdf.uri], bytes };
+  if (pages.length > 0 && pages.length === visible.filter(f => f !== pdf).length) {
+    return { key: dir.uri, dir: dir.uri, kind: 'pages', savedAt, files: pages, bytes };
+  }
+  return { key: dir.uri, dir: dir.uri, kind: 'files', savedAt, files: visible.map(f => f.uri), bytes };
+}
+
+/**
+ * What the app has set aside and the user can't otherwise see: files an
+ * update merge kept aside (scan-kit-recovered/<when>/…), and files the
+ * one-time Documents pass moved that no document uses (legacy-documents/).
+ * `referenced` holds every file URI a document record (live or deleted) uses;
+ * those are never offered. Null when the records couldn't all be read: then
+ * legacy-documents is left out entirely (any file there might be in use).
+ * iOS only; empty elsewhere.
+ */
+export function listRecoveredGroups(referenced: Set<string> | null): RecoveredGroup[] {
+  const support = applicationSupportDir();
+  if (!support) return [];
+  current(); // the move first: it may set more aside
+  const out: RecoveredGroup[] = [];
+  const push = (g: RecoveredGroup | null) => { if (g) out.push(g); };
+  const none = new Set<string>();
+  for (const batch of listOf(new Directory(support, RECOVERED_DIR_NAME)) ?? []) {
+    if (!(batch instanceof Directory)) continue;
+    const when = Number(nameOf(batch));
+    const savedAt = Number.isFinite(when) && when > 0 ? when : null;
+    for (const top of listOf(batch) ?? []) {
+      const topName = nameOf(top);
+      if (top instanceof Directory && topName === SCAN_DIR_NAME) {
+        for (const d of listOf(top) ?? []) {
+          if (d instanceof Directory) push(groupOf(d, savedAt, referenced ?? none));
+        }
+      } else if (top instanceof Directory) {
+        push(groupOf(top, savedAt, referenced ?? none, topName === SIGNATURES_DIR_NAME));
+      }
+    }
+    const loose = (listOf(batch) ?? []).filter((f): f is File => f instanceof File && !nameOf(f).startsWith('.'));
+    if (loose.length) {
+      out.push({ key: `${batch.uri}#files`, dir: '', kind: 'files', savedAt, files: loose.map(f => f.uri), bytes: loose.reduce((s, f) => s + sizeOf(f), 0) });
+    }
+  }
+  const legacy = new Directory(support, LEGACY_DOCS_DIR_NAME);
+  const inUse = referenced ?? none;
+  for (const top of referenced ? listOf(legacy) ?? [] : []) {
+    if (top instanceof Directory && nameOf(top) === APRIL_MERGE_DIR) {
+      for (const d of listOf(top) ?? []) if (d instanceof Directory) push(groupOf(d, null, inUse));
+    } else if (top instanceof Directory) {
+      push(groupOf(top, null, inUse));
+    } else if (!nameOf(top).startsWith('.') && !inUse.has(top.uri)) {
+      out.push({ key: top.uri, dir: '', kind: IMAGE_FILE.test(nameOf(top)) ? 'pages' : 'files', savedAt: null, files: [top.uri], bytes: sizeOf(top as File) });
+    }
+  }
+  return out.sort((a, b) => (b.savedAt ?? 0) - (a.savedAt ?? 0));
+}
+
+/**
+ * Permanently removes a recovered group's files (and its folder, and any
+ * folder above it that is left empty, up to the recovered / legacy root).
+ * Only ever inside those two folders. Returns true when everything went.
+ */
+export function deleteRecoveredGroup(group: RecoveredGroup): boolean {
+  const support = applicationSupportDir();
+  if (!support) return false;
+  const roots = [new Directory(support, RECOVERED_DIR_NAME).uri, new Directory(support, LEGACY_DOCS_DIR_NAME).uri];
+  const inside = (u: string) => roots.some(r => u.startsWith(r) && u !== r);
+  let ok = true;
+  try {
+    if (group.dir && inside(group.dir)) {
+      const d = new Directory(group.dir);
+      if (d.exists) d.delete();
+    } else {
+      for (const u of group.files) {
+        if (!inside(u)) { ok = false; continue; }
+        const f = new File(u);
+        if (f.exists) f.delete();
+      }
+    }
+  } catch {
+    ok = false;
+  }
+  // Tidy now-empty parents (a batch folder, scan-kit/ inside it, the roots).
+  const start = group.dir || group.files[0] || '';
+  let parent = start.replace(/\/+$/, '');
+  for (let i = 0; i < 4 && parent; i++) {
+    parent = parent.slice(0, parent.lastIndexOf('/'));
+    const dir = new Directory(parent);
+    const isRoot = roots.some(r => slash(r) === slash(dir.uri));
+    if (!inside(slash(dir.uri)) && !isRoot) break;
+    try {
+      if (dir.exists && dir.list().length === 0) dir.delete();
+      else break;
+    } catch {
+      break;
+    }
+    if (isRoot) break;
+  }
+  return ok;
 }
 
 /** Tests only: forget the layout so the next call migrates again. */

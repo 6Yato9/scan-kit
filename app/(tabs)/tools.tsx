@@ -19,8 +19,11 @@ type Tool = {
 
 // Genuine tools only. Anything the core screens already do lives there instead:
 // import (Files "+"), reorder / rotate / text (viewer), print / save as images /
-// smaller PDF (Export), merge (Files: select or long-press). Every section is a
-// full row of four.
+// smaller PDF (Export), merge (Files: select or long-press), and Free up space
+// (Settings › Storage, beside the space used: it converts nothing). Tiles keep
+// the same four columns in every section, so icons line up down the screen;
+// the one short section (Convert) comes last, where a shorter row reads as the
+// end of the grid rather than a gap.
 const TOOL_SECTIONS: { title: string; tools: Tool[] }[] = [
   {
     title: 'Scan',
@@ -32,22 +35,20 @@ const TOOL_SECTIONS: { title: string; tools: Tool[] }[] = [
     ],
   },
   {
-    title: 'Convert',
-    tools: [
-      { id: 'extract-text', icon: 'reader-outline', label: 'Extract text', href: '/tools/extract-text' },
-      { id: 'extract', icon: 'cut-outline', label: 'Extract pages', href: '/tools/extract' },
-      { id: 'long-image', icon: 'long-image', label: 'Long image', href: '/tools/long-image' },
-      // Not "Compress": it shrinks the stored pages for good, unlike Export's Smaller PDF.
-      { id: 'compress', icon: 'contract-outline', label: 'Free up space', href: '/tools/compress' },
-    ],
-  },
-  {
     title: 'Edit',
     tools: [
       { id: 'sign', icon: 'signature', label: 'Sign', href: '/tools/sign' },
       { id: 'watermark', icon: 'watermark', label: 'Watermark', href: '/tools/watermark' },
       { id: 'timestamp', icon: 'time-outline', label: 'Timestamp', href: '/tools/timestamp' },
       { id: 'erase-marks', icon: 'color-wand-outline', label: 'Erase marks', href: '/tools/erase-marks' },
+    ],
+  },
+  {
+    title: 'Convert',
+    tools: [
+      { id: 'extract-text', icon: 'reader-outline', label: 'Extract text', href: '/tools/extract-text' },
+      { id: 'extract', icon: 'cut-outline', label: 'Extract pages', href: '/tools/extract' },
+      { id: 'long-image', icon: 'long-image', label: 'Long image', href: '/tools/long-image' },
     ],
   },
 ];

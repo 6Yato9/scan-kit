@@ -9,7 +9,7 @@ import { useRouter } from 'expo-router';
 import { useTheme } from '@/contexts/theme-context';
 import { PageThumb } from '@/components/page-thumb';
 import { PrimaryButton } from '@/components/primary-button';
-import { NoDocumentsScreen, SectionRow, ToolScreen, pageCountLabel, useToolDocuments } from '@/components/tool-ui';
+import { NoDocumentsScreen, SectionRow, ToolScreen, isSinglePageDoc, pageCountLabel, useToolDocuments } from '@/components/tool-ui';
 import { ToolDocPicker, useToolDoc } from '@/components/tool-doc';
 import { FilterBaker } from '@/components/filter-baker';
 import { extractPages } from '@/lib/doc-ops';
@@ -22,6 +22,8 @@ export default function ExtractScreen() {
   const router = useRouter();
   const { colors } = useTheme();
   const { docs, loaded } = useToolDocuments(d => !d.pdfUri && d.pages.length > 1);
+  // One-page documents: offered "Add pages" instead of a dead end.
+  const { docs: singles, loaded: singlesLoaded } = useToolDocuments(isSinglePageDoc);
   const [pages, setPages] = useState<Set<number>>(new Set());
   const [saving, setSaving] = useState(false);
 
@@ -63,13 +65,18 @@ export default function ExtractScreen() {
     }
   };
 
-  if (loaded && docs.length === 0) {
+  if (loaded && singlesLoaded && docs.length === 0) {
     return (
       <NoDocumentsScreen
         toolTitle="Extract pages"
         icon="cut-outline"
         title="No multi-page documents"
-        subtitle="Extracting pages needs a document with at least two pages. Scan or import one first."
+        subtitle={
+          singles.length
+            ? 'Extracting pages needs a document with at least two pages, and yours have one each. Add pages to one, or scan a new document.'
+            : 'Extracting pages needs a document with at least two pages. Scan or import one first.'
+        }
+        addPagesTo={singles}
       />
     );
   }

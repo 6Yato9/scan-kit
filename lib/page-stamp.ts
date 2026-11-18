@@ -11,12 +11,20 @@
 // app/annotate.tsx).
 //
 // Undo: before anything is written, each target page and its shadow are copied
-// to their own folder in Caches/stamp-undo with the page's filter and
-// adjustments. undoStamp puts them back exactly, unless the pages have been
-// reordered or deleted since (then the indices mean other pages and nothing is
-// touched). A stash lives until it is used, thrown away (discardStampUndo: the
-// run failed, or the viewer's Undo offer expired) or swept at startup; a newer
-// run never deletes another run's stash, which may still be rolling back.
+// to their own folder in private storage (Application Support/stamp-undo, which
+// iOS never purges) with the page's filter and adjustments. undoStamp puts them
+// back exactly, unless the pages have been reordered or deleted since (then the
+// indices mean other pages and nothing is touched). A stash lives until it is
+// used, thrown away (discardStampUndo: the run failed, or the viewer's Undo
+// offer expired) or removed on the next launch; a newer run never deletes
+// another run's stash, which may still be rolling back.
+//
+// Crash safety: the stash folder also holds a journal (journal.json) while the
+// run is going — which pages it is about to write and, for each, the size and
+// MD5 of the pixels it wrote. If the app dies part-way, the next launch
+// (recoverInterruptedStamps, from app/_layout.tsx) finds the journal and puts
+// back every page that still holds what the run wrote, so a document is never
+// left half-signed with no way back. A page that changed since is left alone.
 //
 // Runs on one document are serialized: a second Sign / Watermark / Timestamp
 // started while the first is still rolling back waits for it, so its stash and
@@ -30,8 +38,8 @@
 // Writes go through runPageEdit (lib/bake.ts): under the per-document lock,
 // beside the page and renamed over it (a crash can't leave a truncated page),
 // and any in-flight filter bake for the page is redone from the new shadow.
-import { Directory, File, Paths } from 'expo-file-system';
-import { docDir } from './storage-layout';
+import { Directory, File } from 'expo-file-system';
+import { deleteJsonSync, docDir, privateStateDir, readJsonSync, writeJsonSync } from './storage-layout';
 import { writeAsStringAsync } from 'expo-file-system/legacy';
 import type { Document, PageAdjustment, PageFilter } from '../types/document';
 import { bakePage, runPageEdit, waitForPendingBakes, withDocLock } from './bake';
@@ -66,6 +74,60 @@ export type StampRender = (pageUri: string, origUri: string | null) => Promise<S
 
 const DEFAULT_ADJ: PageAdjustment = { brightness: 0, contrast: 0, saturation: 0 };
 const STASH_ROOT = 'stamp-undo';
+const JOURNAL = 'journal.json';
+/** This process: stashes named with it are this session's (see recoverInterruptedStamps). */
+const SESSION = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+
+/** Identifies the pixels a run wrote into a page (null fields: couldn't be read). */
+type PixelPrint = { size: number | null; md5: string | null };
+
+/** What a run in progress records next to its stash. */
+type StampJournal = {
+  v: 1;
+  session: string;
+  docId: string;
+  pages: StampUndo['pages'];
+  /** Page index → the pixels being / having been written there. */
+  written: Record<string, PixelPrint>;
+};
+
+function stashRoot(): Directory {
+  return new Directory(privateStateDir(), STASH_ROOT);
+}
+
+function printOf(uri: string): PixelPrint {
+  const f = new File(uri.split('?')[0]);
+  let size: number | null = null;
+  let md5: string | null = null;
+  try { size = typeof f.size === 'number' ? f.size : null; } catch {}
+  try { md5 = typeof f.md5 === 'string' ? f.md5 : null; } catch {}
+  return { size, md5 };
+}
+
+/** True when the page file is (still) the pixels `p` describes. Unknown on both sides counts as no. */
+function samePixels(uri: string, p: PixelPrint): boolean {
+  const now = printOf(uri);
+  let checked = false;
+  if (p.size !== null && now.size !== null) {
+    if (p.size !== now.size) return false;
+    checked = true;
+  }
+  if (p.md5 && now.md5) {
+    if (p.md5 !== now.md5) return false;
+    checked = true;
+  }
+  return checked;
+}
+
+/** Best effort: a run whose journal can't be written still runs (as before journals). */
+function writeJournal(undo: StampUndo, written: Record<string, PixelPrint>): void {
+  const j: StampJournal = { v: 1, session: SESSION, docId: undo.docId, pages: undo.pages, written };
+  if (!writeJsonSync(new Directory(undo.dir), JOURNAL, j)) console.warn('Stamp: journal not written');
+}
+
+function endJournal(undo: StampUndo | null): void {
+  if (undo) deleteJsonSync(new Directory(undo.dir), JOURNAL);
+}
 const DATA_URL_PREFIX = /^data:image\/jpeg;base64,/;
 
 export type StampUndo = {
@@ -156,7 +218,7 @@ let stashSeq = 0;
 function stashPages(doc: Document, indices: number[]): StampUndo {
   // Its own folder: another run's stash (still needed for its rollback or its
   // Undo) is never touched.
-  const dir = new Directory(Paths.cache, STASH_ROOT, `${Date.now()}-${++stashSeq}`);
+  const dir = new Directory(stashRoot(), `${SESSION}-${Date.now()}-${++stashSeq}`);
   dir.create({ intermediates: true, idempotent: true });
   const srcDir = docDir(doc.id);
   const pages = indices.map(index => {
@@ -234,6 +296,8 @@ async function stampPagesNow(
   const undo = keepUndo ? await withDocLock(docId, () => stashPages(start, targets)) : null;
   const layout = undo?.layout ?? pageLayoutGeneration(docId);
   const done: number[] = [];
+  const written: Record<string, PixelPrint> = {};
+  if (undo) writeJournal(undo, written);
   const rebake: { index: number; filter: PageFilter; adjustment: PageAdjustment | undefined }[] = [];
   onProgress?.(0, targets.length);
 
@@ -262,6 +326,12 @@ async function stampPagesNow(
         if (hasOrig) {
           await writeAsStringAsync(originalSideUri(docId, index), pixels.orig!.replace(DATA_URL_PREFIX, ''), { encoding: 'base64' });
         }
+        // Journal first: if the app dies from here on, the next launch knows
+        // this page may hold the mark, and recognises the pixels.
+        if (undo) {
+          written[String(index)] = printOf(pageSideUri(docId, index));
+          writeJournal(undo, written);
+        }
         promotePageSide(docId, index);
         if (hasOrig) promoteOriginalSide(docId, index);
         done.push(index);
@@ -284,6 +354,8 @@ async function stampPagesNow(
       try {
         await restoreStashed(undo, done);
       } catch (restoreErr) {
+        // Told to the user right here, with its own retry: not for the next launch.
+        endJournal(undo);
         // The pages done so far still carry the mark. Say so, and keep their
         // stash so putting them back can be tried again.
         console.warn('Stamp: putting the pages back failed', restoreErr);
@@ -309,6 +381,7 @@ async function stampPagesNow(
     throw signal?.aborted ? cancelled() : err;
   }
 
+  endJournal(undo); // complete: the stash stays only for Undo
   for (const r of rebake) {
     bakePage(docId, r.index, r.filter, r.adjustment).catch(e => console.warn('Re-bake after stamp failed', e));
   }
@@ -317,11 +390,16 @@ async function stampPagesNow(
   return { doc, undo };
 }
 
-/** Puts the stashed copies of `only` (default: every stashed page) back. Runs its own page edit. */
-async function restoreStashed(undo: StampUndo, only?: number[]): Promise<Document> {
+/**
+ * Puts the stashed copies of `only` (default: every stashed page) back. Runs
+ * its own page edit. `atStartup`: a crashed run's rollback — the layout check
+ * is meaningless across launches (recoverInterruptedStamps checks each page's
+ * pixels instead).
+ */
+async function restoreStashed(undo: StampUndo, only?: number[], atStartup = false): Promise<Document> {
   const entries = only ? undo.pages.filter(p => only.includes(p.index)) : undo.pages;
   return runPageEdit(undo.docId, { pages: entries.map(p => p.index) }, async () => {
-    if (pageLayoutGeneration(undo.docId) !== undo.layout) {
+    if (!atStartup && pageLayoutGeneration(undo.docId) !== undo.layout) {
       throw new StampError('pages-moved', 'The pages have been moved or deleted since, so the change can’t be undone.');
     }
     const current = await getDocument(undo.docId);
@@ -422,6 +500,65 @@ export async function stampCopy(
     try { deleteDocumentFiles(copy.id); } catch {}
     throw err;
   }
+}
+
+/**
+ * Startup: finishes what a run the app died in the middle of left behind
+ * (see the header). For every stash of an earlier session: a journal means
+ * the run never ended, so each page it wrote that still holds exactly those
+ * pixels is put back (page, shadow, filter, adjustments) from the stash. Then
+ * the stash goes — its Undo offer died with that session. A rollback that
+ * fails keeps the stash for the next launch. Returns how many pages were put
+ * back. Never throws.
+ */
+export async function recoverInterruptedStamps(): Promise<number> {
+  let restored = 0;
+  const restoredDocs = new Set<string>();
+  let stashes: (Directory | File)[] = [];
+  try {
+    const root = stashRoot();
+    if (!root.exists) return 0;
+    stashes = root.list();
+  } catch {
+    return 0;
+  }
+  for (const item of stashes) {
+    if (!(item instanceof Directory)) continue;
+    const name = item.uri.replace(/\/+$/, '').split('/').pop() ?? '';
+    if (name.startsWith(`${SESSION}-`)) continue; // this session's own
+    let keep = false;
+    try {
+      const read = readJsonSync<StampJournal>(item, JOURNAL);
+      if (read.state === 'ok' && read.value && read.value.v === 1 && typeof read.value.docId === 'string') {
+        const j = read.value;
+        const pages = (Array.isArray(j.pages) ? j.pages : []).filter(p => {
+          const print = j.written?.[String(p.index)];
+          return !!print && samePixels(pageFileUri(j.docId, p.index), print) && new File(p.stash).exists;
+        });
+        if (pages.length) {
+          try {
+            await restoreStashed({ docId: j.docId, dir: item.uri, pages, layout: pageLayoutGeneration(j.docId) }, undefined, true);
+            restored += pages.length;
+            restoredDocs.add(j.docId);
+            console.log(`Stamp: put back ${pages.length} page(s) of an interrupted change`);
+          } catch (err) {
+            const kind = err instanceof StampError ? err.kind : null;
+            // The document or the page is gone: nothing left to put back.
+            keep = kind !== 'missing-doc' && kind !== 'missing-page';
+            console.warn('Stamp: rolling back an interrupted change failed', err);
+          }
+        }
+      }
+    } catch {}
+    if (!keep) {
+      try { item.delete(); } catch {}
+    }
+  }
+  // The restored pages' text is read again (only changed pages: lib/ocr-cache).
+  for (const id of restoredDocs) {
+    getDocument(id).then(d => (d ? indexDocText(id, d.pages) : undefined)).catch(() => {});
+  }
+  return restored;
 }
 
 /** Under a tool's document list: why imported PDFs are missing from it. */

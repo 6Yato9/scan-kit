@@ -23,6 +23,7 @@ const mockCopyPage = jest.fn(async (_uri: string, docId: string, i: number) => {
 });
 const mockDeleteTemps = jest.fn();
 jest.mock('../lib/files', () => ({
+  moveScannerOutputToCaches: (u: string[]) => u,
   copyPageWithQuality: (...a: [string, string, number]) => mockCopyPage(...a),
   deleteDisposableTemps: (...a: any[]) => mockDeleteTemps(...a),
   isScannerOutput: (uri: string) => /DOCUMENT_SCAN_/.test(uri),

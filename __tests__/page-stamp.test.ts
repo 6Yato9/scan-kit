@@ -11,8 +11,19 @@ jest.mock('expo-file-system', () => {
     uri: string;
     constructor(...parts: any[]) { this.uri = parts.map(part).join('/'); }
     get exists() { return mockFs.has(this.uri); }
+    get size() { return mockFs.get(this.uri)?.length ?? 0; }
+    get md5() { return mockFs.has(this.uri) ? `md5:${mockFs.get(this.uri)}` : null; }
     delete() { mockFs.delete(this.uri); }
     copy(dest: any) { mockFs.set(dest.uri, mockFs.get(this.uri)!); }
+    create() { mockFs.set(this.uri, ''); }
+    write(c: string) { mockFs.set(this.uri, c); }
+    textSync() { if (!mockFs.has(this.uri)) throw new Error('ENOENT'); return mockFs.get(this.uri)!; }
+    move(dest: any) {
+      if (mockFs.has(dest.uri)) throw new Error('EEXIST');
+      mockFs.set(dest.uri, mockFs.get(this.uri)!);
+      mockFs.delete(this.uri);
+      this.uri = dest.uri;
+    }
   }
   class MockDirectory {
     uri: string;
@@ -20,6 +31,17 @@ jest.mock('expo-file-system', () => {
     get exists() { return [...mockFs.keys()].some(k => k.startsWith(`${this.uri}/`)); }
     create() {}
     delete() { for (const k of [...mockFs.keys()]) if (k.startsWith(`${this.uri}/`)) mockFs.delete(k); }
+    list() {
+      const seen = new Map<string, any>();
+      for (const k of mockFs.keys()) {
+        if (!k.startsWith(`${this.uri}/`)) continue;
+        const rest = k.slice(this.uri.length + 1);
+        const head = rest.split('/')[0];
+        if (seen.has(head)) continue;
+        seen.set(head, rest.includes('/') ? new MockDirectory(`${this.uri}/${head}`) : new MockFile(`${this.uri}/${head}`));
+      }
+      return [...seen.values()];
+    }
   }
   return { File: MockFile, Directory: MockDirectory, Paths: { document: { uri: 'file:///docs' }, cache: { uri: 'file:///cache' } } };
 });
@@ -104,6 +126,7 @@ const mockIndex = jest.fn(async (..._args: unknown[]) => {});
 jest.mock('../lib/save-scan', () => ({ indexDocText: (...a: unknown[]) => mockIndex(...a) }));
 import {
   lookOf,
+  recoverInterruptedStamps,
   pagesPhrase,
   partialMessage,
   stampCopy,
@@ -358,5 +381,66 @@ describe('Save as a copy (r9 code #4)', () => {
     await expect(stampCopy(mockDoc, 'Lease (signed)', [0, 1], render)).rejects.toThrow('webview died');
     expect(mockOthers.has('copy1')).toBe(false);
     expect([...mockFs.keys()].some(k => k.includes('/copy1/'))).toBe(false);
+  });
+});
+
+describe('a run the app died in the middle of (crash journal)', () => {
+  /** Runs a three-page stamp that never gets past page 3: the app is killed there. */
+  async function crashOnThirdPage() {
+    let calls = 0;
+    const hang = jest.fn(async (page: string, orig: string | null) => {
+      if (++calls === 3) return new Promise<never>(() => {}); // killed while drawing page 3
+      return baseRender(page, orig);
+    });
+    // Its own module instance: the hung run must not hold up later tests' runs.
+    jest.resetModules();
+    const dying = require('../lib/page-stamp') as typeof import('../lib/page-stamp');
+    void dying.stampPages('d1', [0, 1, 2], hang);
+    for (let i = 0; i < 50 && calls < 3; i++) await new Promise(r => setTimeout(r, 0));
+    expect(mockFs.get(pageUri('d1', 0))).toBe('b64:SIGNED(page0-enhanced)');
+    expect(mockFs.get(pageUri('d1', 1))).toBe('b64:SIGNED(page1-enhanced)');
+    // The next launch: a new process, the same disk and records.
+    jest.resetModules();
+    return require('../lib/page-stamp') as typeof import('../lib/page-stamp');
+  }
+
+  test('the next launch puts back every page the run had marked, with its shadow, filter and adjustments', async () => {
+    const next = await crashOnThirdPage();
+    mockDoc = { ...mockDoc, filters: ['grayscale', 'grayscale', 'bw'] }; // as if recorded mid-run
+    expect(await next.recoverInterruptedStamps()).toBe(2);
+    expect(mockFs.get(pageUri('d1', 0))).toBe('page0-enhanced');
+    expect(mockFs.get(pageUri('d1', 1))).toBe('page1-enhanced');
+    expect(mockFs.get(origUri('d1', 1))).toBe('page1-raw');
+    expect(mockFs.get(pageUri('d1', 2))).toBe('page2-enhanced'); // never touched
+    expect(mockDoc.filters).toEqual(['original', 'enhanced', 'bw']);
+    expect(mockDoc.adjustments[1]).toEqual({ brightness: 20, contrast: 0, saturation: 0 });
+    // The stash and its journal are gone; a second launch does nothing.
+    expect(stashKeys()).toEqual([]);
+    expect(await next.recoverInterruptedStamps()).toBe(0);
+  });
+
+  test('a page changed since (it no longer holds what the run wrote) is left alone', async () => {
+    const next = await crashOnThirdPage();
+    mockFs.set(pageUri('d1', 1), 'edited-later');
+    expect(await next.recoverInterruptedStamps()).toBe(1);
+    expect(mockFs.get(pageUri('d1', 0))).toBe('page0-enhanced');
+    expect(mockFs.get(pageUri('d1', 1))).toBe('edited-later');
+  });
+
+  test('a finished run leaves no journal: its stash is just dropped on the next launch', async () => {
+    await stampPages('d1', [0, 1], render);
+    jest.resetModules();
+    const next = require('../lib/page-stamp') as typeof import('../lib/page-stamp');
+    expect(await next.recoverInterruptedStamps()).toBe(0);
+    expect(mockFs.get(pageUri('d1', 0))).toBe('b64:SIGNED(page0-enhanced)');
+    expect(stashKeys()).toEqual([]);
+  });
+
+  test('this session’s own stashes (an Undo still on offer) are never touched', async () => {
+    const { undo } = await stampPages('d1', [0], render);
+    expect(await recoverInterruptedStamps()).toBe(0);
+    expect(stashKeys().length).toBeGreaterThan(0);
+    await undoStamp(undo!);
+    expect(mockFs.get(pageUri('d1', 0))).toBe('page0-enhanced');
   });
 });

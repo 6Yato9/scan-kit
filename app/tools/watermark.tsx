@@ -9,6 +9,7 @@ import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
 import {
   ColorSwatches,
+  FooterActions,
   NoDocumentsScreen,
   PagePreview,
   Segmented,
@@ -18,7 +19,7 @@ import {
   useImageAspect,
   useToolDocuments,
 } from '@/components/tool-ui';
-import { ToolDocPicker, useToolDoc } from '@/components/tool-doc';
+import { ToolDocPicker, useConvertiblePdfs, useToolDoc, type PickerConvert } from '@/components/tool-doc';
 import { FilterBaker } from '@/components/filter-baker';
 import { reportStampFailure, usePageStamper, useStampFinish } from '@/components/page-stamper';
 import { copyName, PDF_NOT_LISTED_NOTE, stampCopy, stampPages, targetPages } from '@/lib/page-stamp';
@@ -47,20 +48,22 @@ const COLORS: { value: StampColor; label: string }[] = [
 export default function WatermarkScreen() {
   const { colors } = useTheme();
   const { width: screenW, height: screenH } = useWindowDimensions();
-  const { docs, loaded } = useToolDocuments();
+  const { docs, loaded, reload } = useToolDocuments();
+  // Imported PDFs: listed in the picker with Convert, never a dead end.
+  const { pdfs, loaded: pdfsLoaded, reload: reloadPdfs } = useConvertiblePdfs();
   const [text, setText] = useState('CONFIDENTIAL');
   const [style, setStyle] = useState<WatermarkStyle>('diagonal');
   const [color, setColor] = useState<StampColor>('gray');
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
 
   // Never a default: stamping the wrong document is worse than one more tap.
-  const { doc, setDocId, fixed, fromViewer } = useToolDoc(docs);
+  const { doc, docId, setDocId, fixed, fromViewer } = useToolDoc(docs);
   const stamper = usePageStamper();
   const finish = useStampFinish(fromViewer);
   // From the Tools tab with a single document: there is nothing to choose.
   useEffect(() => {
-    if (loaded && !fixed && !doc && docs.length === 1) setDocId(docs[0].id);
-  }, [loaded, fixed, doc, docs, setDocId]);
+    if (loaded && !fixed && !docId && docs.length === 1) setDocId(docs[0].id);
+  }, [loaded, fixed, docId, docs, setDocId]);
   const aspect = useImageAspect(doc?.pages[0]);
   const label = text.trim();
 
@@ -95,7 +98,23 @@ export default function WatermarkScreen() {
     }
   };
 
-  if (loaded && docs.length === 0) {
+  // Picking an imported PDF converts it to pages (with Undo), then chooses it.
+  const convert: PickerConvert = {
+    pdfs,
+    verb: 'watermark',
+    onConverted: d => {
+      reload();
+      reloadPdfs();
+      setDocId(d.id);
+    },
+    onUndone: id => {
+      reload();
+      reloadPdfs();
+      if (docId === id) setDocId(null);
+    },
+  };
+
+  if (loaded && pdfsLoaded && docs.length === 0 && pdfs.length === 0) {
     return (
       <NoDocumentsScreen
         toolTitle="Watermark"
@@ -105,11 +124,10 @@ export default function WatermarkScreen() {
     );
   }
 
-  // Small enough that the text and style controls stay above the fold, also
-  // with the two-button footer (Add watermark, Save as a copy): the page's
-  // height is capped as well as its width, so a tall page doesn't push Style
-  // under the footer.
-  const previewMaxH = Math.round(screenH * 0.25);
+  // Small enough that every control down to the colour swatches stays above
+  // the pinned footer: the page's height is capped as well as its width, so a
+  // tall page doesn't push Color under it.
+  const previewMaxH = Math.round(screenH * 0.2);
   const previewW = Math.min(screenW * 0.5, 220, previewMaxH / aspect);
   const [r, g, b] = STAMP_RGB[color];
 
@@ -126,15 +144,19 @@ export default function WatermarkScreen() {
               total={progress.total}
             />
           ) : null}
-          <PrimaryButton
-            title={!doc || label ? 'Add watermark' : 'Enter watermark text'}
-            onPress={() => apply('in-place')}
-            disabled={!doc || !label}
-            loading={!!progress}
+          <FooterActions
+            secondary={
+              <PrimaryButton title="Save as a copy" variant="secondary" onPress={() => apply('copy')} disabled={!doc || !label || !!progress} />
+            }
+            primary={
+              <PrimaryButton
+                title={!doc || label ? 'Add watermark' : 'Enter text'}
+                onPress={() => apply('in-place')}
+                disabled={!doc || !label}
+                loading={!!progress}
+              />
+            }
           />
-          {doc && label && !progress ? (
-            <PrimaryButton title="Save as a copy" variant="secondary" onPress={() => apply('copy')} style={styles.secondary} />
-          ) : null}
         </>
       }
     >
@@ -149,6 +171,7 @@ export default function WatermarkScreen() {
         onPick={d => setDocId(d.id)}
         autoOpen={loaded && !fromViewer}
         note={PDF_NOT_LISTED_NOTE}
+        convert={convert}
       />
 
       {/* Live preview: the first page (a sample page until one is chosen) with
@@ -210,7 +233,6 @@ export default function WatermarkScreen() {
 }
 
 const styles = StyleSheet.create({
-  secondary: { marginTop: Spacing.sm },
   previewWrap: { marginTop: Spacing.lg },
   input: { borderRadius: Radius.md, paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md },
   centerStamp: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },

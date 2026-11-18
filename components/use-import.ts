@@ -9,7 +9,10 @@ import { Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
-import { autoCropDocuments } from '@/lib/document-detect';
+import { autoCropDocument } from '@/lib/document-detect';
+import { deleteDisposableTemps } from '@/lib/files';
+import { noteNewDocument } from '@/lib/new-doc-note';
+import { VisionOcr } from '@/modules/vision-ocr/src';
 import { useScan } from '@/contexts/scan-context';
 import { documentNameFor, importKindOf, type ImportKind } from '@/lib/incoming-file';
 import { patchDocument } from '@/lib/storage';
@@ -18,6 +21,28 @@ import { navigateWhenUnlocked } from '@/lib/nav-guard';
 
 export { importKindOf } from '@/lib/incoming-file';
 export type { ImportKind } from '@/lib/incoming-file';
+
+/**
+ * Auto-crops imported photos in order, one at a time (bounded memory), like
+ * lib/document-detect's autoCropDocuments, but also reports which pages had
+ * no page outline (kept as photographed), so the viewer can say so and offer
+ * Crop instead of silently showing a photo of a desk.
+ */
+async function autoCropWithMisses(uris: string[], quality: number): Promise<{ pages: string[]; uncropped: number[] }> {
+  const pages: string[] = [];
+  const uncropped: number[] = [];
+  // Without page detection (not iOS, an older build) nothing was looked for,
+  // so nothing was "not found".
+  const canDetect = typeof VisionOcr?.detectDocument === 'function';
+  for (let i = 0; i < uris.length; i++) {
+    const result = await autoCropDocument(uris[i], quality);
+    pages.push(result.uri);
+    if (canDetect && !result.detected) uncropped.push(i);
+    // The picker's cache copy, replaced by its cropped copy: nothing reads it again.
+    if (result.uri.split('?')[0] !== uris[i].split('?')[0]) deleteDisposableTemps([uris[i]]);
+  }
+  return { pages, uncropped };
+}
 
 export function useImportDocuments() {
   const { saveAndOpen } = useScan();
@@ -40,13 +65,18 @@ export function useImportDocuments() {
    */
   const saveFiles = useCallback(async (uris: string[], kind: ImportKind, name?: string | null): Promise<string | null> => {
     let id: string | null;
+    let uncropped: number[] = [];
     if (kind === 'pdf') {
       id = await saveAndOpen({ pdfUri: uris[0] });
     } else {
       // Near-lossless here: saveScan compresses once more, at the user's scan quality.
-      const pages = await autoCropDocuments(uris, 0.95);
-      id = await saveAndOpen({ pages });
+      const cropped = await autoCropWithMisses(uris, 0.95);
+      uncropped = cropped.uncropped;
+      id = await saveAndOpen({ pages: cropped.pages });
     }
+    // The viewer greets it: "Saved as …" with Rename, or Crop for a page whose
+    // edges weren't found (lib/new-doc-note).
+    if (id) noteNewDocument(id, { uncropped });
     // A file keeps its own name ("Invoice.pdf" → "Invoice") instead of "Scan <date>".
     if (id && name) await patchDocument(id, { name }).catch(() => {});
     return id;

@@ -13,9 +13,12 @@ type Node = { type: 'dir' } | { type: 'file'; content: string; mtime: number };
 const mockFs = new Map<string, Node>();
 /** Keys (no trailing slash) whose move throws, to simulate a failed rename. */
 const mockFailMoves = new Set<string>();
-const mockState: { container: string; moves: number; docs?: string; cache?: string } = {
+/** Keys whose copy throws (a full disk). */
+const mockFailCopies = new Set<string>();
+const mockState: { container: string; moves: number; movedFrom: string[]; docs?: string; cache?: string } = {
   container: 'file:///var/mobile/Containers/Data/Application/C1',
   moves: 0,
+  movedFrom: [],
 };
 
 jest.mock('expo-file-system', () => {
@@ -35,6 +38,7 @@ jest.mock('expo-file-system', () => {
     if (mockFs.has(to)) throw new Error(`EEXIST ${to}`);
     if (mockFs.get(parentOf(to))?.type !== 'dir') throw new Error(`ENOENT parent of ${to}`);
     mockState.moves++;
+    mockState.movedFrom.push(from);
     const entries = [...mockFs.entries()].filter(([k]) => isUnder(k, from));
     for (const [k] of entries) mockFs.delete(k);
     for (const [k, v] of entries) mockFs.set(to + k.slice(from.length), v);
@@ -84,6 +88,7 @@ jest.mock('expo-file-system', () => {
     get name() { return nameOf(this.key); }
     get exists() { return mockFs.get(this.key)?.type === 'file'; }
     get size() { const n = mockFs.get(this.key); return n?.type === 'file' ? n.content.length : 0; }
+    get md5() { const n = mockFs.get(this.key); return n?.type === 'file' ? `md5:${n.content}` : null; }
     textSync() { const n = mockFs.get(this.key); if (n?.type !== 'file') throw new Error('ENOENT'); return n.content; }
     create() {
       if (mockFs.get(parentOf(this.key))?.type !== 'dir') throw new Error('parent missing');
@@ -102,6 +107,8 @@ jest.mock('expo-file-system', () => {
     copy(dest: any) {
       const n = mockFs.get(this.key);
       if (n?.type !== 'file') throw new Error('ENOENT');
+      if (mockFailCopies.has(this.key)) throw new Error(`ENOSPC copy ${this.key}`);
+      if (mockFs.has(dest.key)) throw new Error(`EEXIST ${dest.key}`);
       mockFs.set(dest.key, { ...n });
     }
     delete() { if (!this.exists) throw new Error('ENOENT'); mockFs.delete(this.key); }
@@ -154,6 +161,13 @@ function under(prefix: string): string[] {
   return [...mockFs.keys()].filter(k => k.startsWith(`${prefix}/`)).map(k => k.slice(prefix.length + 1)).sort();
 }
 
+/** Document ids as the app makes them (Crypto.randomUUID). */
+const U1 = '0b2f6c1e-5a1d-4c3e-9f00-1a2b3c4d5e61';
+const U2 = '7c9d8e7f-6a5b-4c3d-8e2f-0a1b2c3d4e52';
+/** A document the April 2026 Merge tool made (Documents/documents/<id>/page_N.jpg). */
+const M = '3e4f5a6b-7c8d-4e9f-a0b1-c2d3e4f5a6b7';
+const SCAN = 'DOCUMENT_SCAN_0_20261101_093000.jpg';
+
 /** A library as builds up to round 9 left it, plus iOS's own Library folders. */
 function seedOldLayout() {
   dir(C1);
@@ -170,22 +184,33 @@ function seedOldLayout() {
   put(`${DOCS}/scan-kit/doc-trash/page-0.jpg`, 'T0');
   put(`${DOCS}/signatures/index.json`, '[{"id":"sig-00000001"}]');
   put(`${DOCS}/signatures/sig-00000001.png`, 'PNG');
-  put(`${DOCS}/harness-log.txt`, 'log');
-  put(`${DOCS}/documents/merged-1/page_0.jpg`, 'M0'); // April 2026 Merge tool
+  put(`${DOCS}/documents/${M}/page_0.jpg`, 'M0'); // April 2026 Merge tool
   put(`${DOCS}/Inbox/Lease.pdf`, 'inbox');
-  put(`${DOCS}/DOCUMENT_SCAN_0_123.jpg`, 'scanner');
+  put(`${DOCS}/${SCAN}`, 'scanner');
 }
 
 beforeEach(() => {
   jest.resetModules();
   mockFs.clear();
   mockFailMoves.clear();
+  mockFailCopies.clear();
   mockState.container = C1;
   mockState.moves = 0;
+  mockState.movedFrom = [];
   delete mockState.docs;
   delete mockState.cache;
   L = require('../lib/storage-layout');
 });
+
+/** Launches the app again (a fresh process): the move runs again from scratch. */
+function relaunch(now: number) {
+  jest.resetModules();
+  L = require('../lib/storage-layout');
+  return L.migrateStorageLayout(now);
+}
+
+const marker = () => JSON.parse(files(SUPPORT)['storage-layout.json']);
+const movesOutOfDocuments = () => mockState.movedFrom.filter(k => k.startsWith(`${DOCS}/`)).length;
 
 describe('moving the app data out of Documents', () => {
   test('an upgrade moves every page, shadow, OCR file and signature byte for byte', () => {
@@ -204,35 +229,30 @@ describe('moving the app data out of Documents', () => {
     expect(files(`${SUPPORT}/com.example`)).toEqual({ 'RCTAsyncLocalStorage_V1/manifest.json': '{}' });
   });
 
-  test('nothing internal stays visible in Documents', () => {
+  test('nothing of the app stays visible in Documents, and nothing else is touched', () => {
     seedOldLayout();
+    put(`${DOCS}/harness-log.txt`, 'log'); // not something any build wrote: left alone
     L.migrateStorageLayout(1000);
 
-    // Only iOS's Inbox and the scanner's transient output (both swept by lib/files.ts).
-    expect(under(DOCS)).toEqual(['DOCUMENT_SCAN_0_123.jpg', 'Inbox', 'Inbox/Lease.pdf']);
-    expect(files(`${SUPPORT}/legacy-documents`)).toEqual({
-      'harness-log.txt': 'log',
-      'documents/merged-1/page_0.jpg': 'M0',
-    });
+    // iOS's Inbox and the scanner's transient output (both swept by lib/files.ts).
+    expect(under(DOCS)).toEqual([SCAN, 'Inbox', 'Inbox/Lease.pdf', 'harness-log.txt']);
+    expect(files(`${SUPPORT}/legacy-documents`)).toEqual({ [`documents/${M}/page_0.jpg`]: 'M0' });
   });
 
   test('it is done with renames, never by copying and deleting', () => {
     seedOldLayout();
     L.migrateStorageLayout(1000);
-    // scan-kit, signatures, harness-log.txt, documents/ — one rename each.
-    expect(mockState.moves).toBe(4);
+    // scan-kit, signatures, documents/<id> — one rename each.
+    expect(movesOutOfDocuments()).toBe(3);
   });
 
   test('completion is recorded, and a second launch does nothing', () => {
     seedOldLayout();
     L.migrateStorageLayout(1000);
-    const marker = JSON.parse(files(SUPPORT)['storage-layout.json']);
-    expect(marker).toMatchObject({ version: 2, strays: 'done', migratedAt: 1000 });
+    expect(marker()).toMatchObject({ version: 3, strays: 'done', migratedAt: 1000 });
     const snapshot = new Map(mockFs);
 
-    jest.resetModules();
-    L = require('../lib/storage-layout');
-    const r = L.migrateStorageLayout(2000);
+    const r = relaunch(2000);
 
     expect(r.state).toBe('app-support');
     expect(r.actions).toEqual([]);
@@ -287,52 +307,68 @@ describe('moving the app data out of Documents', () => {
 });
 
 describe('when the move fails', () => {
-  test('a failed rename leaves everything where it was and the app keeps using it', () => {
+  test('a failed rename of the whole folder still moves each document with its own rename', () => {
     seedOldLayout();
     const before = files(`${DOCS}/scan-kit`);
     mockFailMoves.add(`${DOCS}/scan-kit`);
 
     const r = L.migrateStorageLayout(1000);
 
-    expect(r.state).toBe('documents');
-    expect(files(`${DOCS}/scan-kit`)).toEqual(before);
-    expect(L.docDir('doc-a').uri).toBe(`${DOCS}/scan-kit/doc-a/`);
-    expect(L.scanRoot().uri).toBe(`${DOCS}/scan-kit/`);
-    // Not recorded as complete.
-    expect(JSON.parse(files(SUPPORT)['storage-layout.json']).migratedAt).toBeUndefined();
-  });
-
-  test('the next launch tries again and completes', () => {
-    seedOldLayout();
-    const before = files(`${DOCS}/scan-kit`);
-    mockFailMoves.add(`${DOCS}/scan-kit`);
-    L.migrateStorageLayout(1000);
-
-    mockFailMoves.clear();
-    jest.resetModules();
-    L = require('../lib/storage-layout');
-    const r = L.migrateStorageLayout(2000);
-
     expect(r.state).toBe('app-support');
     expect(files(`${SUPPORT}/scan-kit`)).toEqual(before);
     expect(mockFs.has(`${DOCS}/scan-kit`)).toBe(false);
   });
 
+  test('a page that can’t be renamed is copied, checked, and only then removed from Documents', () => {
+    seedOldLayout();
+    for (const k of ['scan-kit', 'scan-kit/doc-a', 'scan-kit/doc-a/page-1.jpg']) mockFailMoves.add(`${DOCS}/${k}`);
+
+    const r = L.migrateStorageLayout(1000);
+
+    expect(r.state).toBe('app-support');
+    expect(files(`${SUPPORT}/scan-kit/doc-a`)['page-1.jpg']).toBe('A1');
+    expect(mockFs.has(`${DOCS}/scan-kit`)).toBe(false);
+  });
+
+  test('a document that can be neither renamed nor copied stays where it was and is used from there', () => {
+    seedOldLayout();
+    const before = files(`${DOCS}/scan-kit/doc-pdf`);
+    for (const k of ['scan-kit', 'scan-kit/doc-pdf', 'scan-kit/doc-pdf/document.pdf']) mockFailMoves.add(`${DOCS}/${k}`);
+    mockFailCopies.add(`${DOCS}/scan-kit/doc-pdf/document.pdf`);
+
+    const r = L.migrateStorageLayout(1000);
+
+    expect(r.state).toBe('split');
+    expect(files(`${DOCS}/scan-kit/doc-pdf`)).toEqual(before); // nothing lost, nothing half-copied
+    expect(mockFs.has(`${SUPPORT}/scan-kit/doc-pdf/document.pdf`)).toBe(false);
+    expect(L.docDir('doc-pdf').uri).toBe(`${DOCS}/scan-kit/doc-pdf/`);
+    expect(L.docDir('doc-a').uri).toBe(`${SUPPORT}/scan-kit/doc-a/`);
+    expect(marker().migratedAt).toBeUndefined(); // not recorded as complete
+
+    mockFailMoves.clear();
+    mockFailCopies.clear();
+    expect(relaunch(2000).state).toBe('app-support');
+    expect(files(`${SUPPORT}/scan-kit/doc-pdf`)).toEqual(before);
+    expect(mockFs.has(`${DOCS}/scan-kit`)).toBe(false);
+    expect(marker().migratedAt).toBe(2000);
+  });
+
   test('a crash between the two folders is finished on the next launch', () => {
     seedOldLayout();
     // Launch 1 moved scan-kit and died before signatures.
-    mockFailMoves.add(`${DOCS}/signatures`);
+    for (const k of ['signatures', 'signatures/index.json', 'signatures/sig-00000001.png']) mockFailMoves.add(`${DOCS}/${k}`);
+    for (const k of ['signatures/index.json', 'signatures/sig-00000001.png']) mockFailCopies.add(`${DOCS}/${k}`);
     L.migrateStorageLayout(1000);
-    expect(L.signaturesDir().uri).toBe(`${DOCS}/signatures/`); // still used from Documents
+    // Still used from Documents (an empty new folder was made, so the new one is used).
+    expect(files(`${DOCS}/signatures`)).toEqual({ 'index.json': '[{"id":"sig-00000001"}]', 'sig-00000001.png': 'PNG' });
     mockFailMoves.clear();
+    mockFailCopies.clear();
 
-    jest.resetModules();
-    L = require('../lib/storage-layout');
-    const r = L.migrateStorageLayout(2000);
+    const r = relaunch(2000);
 
     expect(r.state).toBe('app-support');
     expect(files(`${SUPPORT}/signatures`)).toEqual({ 'index.json': '[{"id":"sig-00000001"}]', 'sig-00000001.png': 'PNG' });
-    expect(JSON.parse(files(SUPPORT)['storage-layout.json']).migratedAt).toBe(2000);
+    expect(mockFs.has(`${DOCS}/signatures`)).toBe(false);
   });
 
   test('both roots present: the contents are merged, and nothing is overwritten or lost', () => {
@@ -355,56 +391,251 @@ describe('when the move fails', () => {
     expect(files(`${SUPPORT}/scan-kit-recovered/1000/scan-kit/doc-a`)).toEqual({ 'page-0.jpg': 'A0' });
     expect(mockFs.has(`${DOCS}/scan-kit`)).toBe(false);
   });
+});
 
-  test('a merge cut short leaves a split layout that still finds every document', () => {
+describe('after the move, Documents belongs to the user', () => {
+  /** Upgraded on launch 1 (at t=1000); Documents is now visible in Files. */
+  function upgraded() {
     seedOldLayout();
-    dir(`${SUPPORT}/scan-kit`);
-    put(`${SUPPORT}/scan-kit/doc-new/page-0.jpg`, 'N0');
-    mockFailMoves.add(`${DOCS}/scan-kit/doc-pdf`);
+    L.migrateStorageLayout(1000);
+  }
 
-    const r = L.migrateStorageLayout(1000);
+  test('a folder the user calls "scan-kit", with their own files, is never merged, moved or swept', async () => {
+    upgraded();
+    put(`${DOCS}/scan-kit/Taxes/receipt.pdf`, 'user-receipt');
+    put(`${DOCS}/scan-kit/notes.txt`, 'user-notes');
+    dir(`${DOCS}/scan-kit/Empty folder`);
+    const before = new Map(mockFs);
 
-    expect(r.state).toBe('split');
-    expect(L.docDir('doc-a').uri).toBe(`${SUPPORT}/scan-kit/doc-a/`);
-    expect(L.docDir('doc-pdf').uri).toBe(`${DOCS}/scan-kit/doc-pdf/`); // still where it was
-    expect(L.docDir('brand-new').uri).toBe(`${SUPPORT}/scan-kit/brand-new/`);
-    expect(L.scanRoots().map(d => d.uri)).toEqual([`${SUPPORT}/scan-kit/`, `${DOCS}/scan-kit/`]);
-    expect(files(`${DOCS}/scan-kit`)).toEqual({ 'doc-pdf/document.pdf': '%PDF' });
+    const r = relaunch(2000);
 
-    mockFailMoves.clear();
-    jest.resetModules();
-    L = require('../lib/storage-layout');
-    expect(L.migrateStorageLayout(2000).state).toBe('app-support');
-    expect(files(`${SUPPORT}/scan-kit`)['doc-pdf/document.pdf']).toBe('%PDF');
+    expect(r.state).toBe('app-support');
+    expect(r.actions).toEqual([]);
+    expect(new Map(mockFs)).toEqual(before);
+    expect(L.scanRoots().map(d => d.uri)).toEqual([`${SUPPORT}/scan-kit/`]);
+    // Every later launch too.
+    relaunch(3000);
+    expect(new Map(mockFs)).toEqual(before);
+  });
+
+  test('a folder that looks like a document’s but isn’t named with a document id is left alone', () => {
+    upgraded();
+    put(`${DOCS}/scan-kit/Holiday/page-0.jpg`, 'user-photo');
+    relaunch(2000);
+    expect(files(`${DOCS}/scan-kit`)).toEqual({ 'Holiday/page-0.jpg': 'user-photo' });
+  });
+
+  test('a document-id folder with one of the user’s files in it is left alone', () => {
+    upgraded();
+    put(`${DOCS}/scan-kit/${U1}/page-0.jpg`, 'P');
+    put(`${DOCS}/scan-kit/${U1}/my-letter.docx`, 'user');
+    relaunch(2000);
+    expect(files(`${DOCS}/scan-kit/${U1}`)).toEqual({ 'page-0.jpg': 'P', 'my-letter.docx': 'user' });
+  });
+
+  test('a folder the user calls "signatures" is left alone', () => {
+    upgraded();
+    put(`${DOCS}/signatures/John.png`, 'user-sig');
+    const r = relaunch(2000);
+    expect(files(`${DOCS}/signatures`)).toEqual({ 'John.png': 'user-sig' });
+    expect(r.signaturesDir).toBe(`${SUPPORT}/signatures/`);
+    expect(files(`${SUPPORT}/signatures`)).toEqual({ 'index.json': '[{"id":"sig-00000001"}]', 'sig-00000001.png': 'PNG' });
+  });
+
+  test('a user folder named "documents" is never taken by the one-time pass', () => {
+    seedOldLayout();
+    put(`${DOCS}/documents/Taxes/2025.pdf`, 'user');
+    put(`${DOCS}/documents/${U2}/page_0.jpg`, 'X');
+    put(`${DOCS}/documents/${U2}/cv.pdf`, 'user-cv'); // not just Merge pages: not ours
+    L.migrateStorageLayout(1000);
+    expect(files(`${DOCS}/documents`)).toEqual({ 'Taxes/2025.pdf': 'user', [`${U2}/page_0.jpg`]: 'X', [`${U2}/cv.pdf`]: 'user-cv' });
+    expect(files(`${SUPPORT}/legacy-documents`)).toEqual({ [`documents/${M}/page_0.jpg`]: 'M0' });
+  });
+
+  test('downgrade, then upgrade again: the older build’s documents come back, its edits are kept aside, the user’s files stay', () => {
+    upgraded();
+    // The older build re-created Documents/scan-kit: an edit of an existing
+    // document (same file names) and a new document, plus a signature.
+    put(`${DOCS}/scan-kit/doc-a/page-0.jpg`, 'A0-edited-by-older-build');
+    put(`${DOCS}/scan-kit/doc-a/page-2.jpg`, 'A2-added-by-older-build');
+    put(`${DOCS}/scan-kit/${U2}/page-0.jpg`, 'older-build-new-doc');
+    put(`${DOCS}/scan-kit/Taxes/receipt.pdf`, 'user-receipt');
+    put(`${DOCS}/signatures/index.json`, '[{"id":"sig-00000002"}]');
+    put(`${DOCS}/signatures/sig-00000002.png`, 'PNG2');
+
+    const r = relaunch(5000);
+
+    expect(r.state).toBe('app-support');
+    // 'doc-a' isn't a document id: after the first move only real ids come back.
+    // (Real documents always have one; see the next test.)
+    expect(files(`${DOCS}/scan-kit`)['doc-a/page-0.jpg']).toBe('A0-edited-by-older-build');
+    expect(files(`${SUPPORT}/scan-kit/${U2}`)).toEqual({ 'page-0.jpg': 'older-build-new-doc' });
+    expect(files(`${DOCS}/scan-kit`)['Taxes/receipt.pdf']).toBe('user-receipt');
+    // Signatures from both builds are listed in one index.
+    expect(JSON.parse(files(`${SUPPORT}/signatures`)['index.json'])).toEqual([{ id: 'sig-00000001' }, { id: 'sig-00000002' }]);
+    expect(files(`${SUPPORT}/signatures`)['sig-00000002.png']).toBe('PNG2');
+    expect(mockFs.has(`${DOCS}/signatures`)).toBe(false);
+  });
+
+  test('downgrade, then upgrade again: a document edited by both builds keeps both versions', () => {
+    dir(C1); dir(DOCS); dir(`${C1}/Library`); dir(`${C1}/Library/Caches`);
+    put(`${DOCS}/scan-kit/${U1}/page-0.jpg`, 'v1');
+    L.migrateStorageLayout(1000);
+    put(`${SUPPORT}/scan-kit/${U1}/page-0.jpg`, 'v2'); // edited after the upgrade (rename-replace)
+    mockFs.delete(`${SUPPORT}/scan-kit/${U1}/page-0.jpg`);
+    put(`${SUPPORT}/scan-kit/${U1}/page-0.jpg`, 'v2');
+    put(`${DOCS}/scan-kit/${U1}/page-0.jpg`, 'v1-edited-by-older-build');
+    put(`${DOCS}/scan-kit/${U1}/page-1.jpg`, 'v1-page-added');
+
+    relaunch(5000);
+
+    expect(files(`${SUPPORT}/scan-kit/${U1}`)).toEqual({ 'page-0.jpg': 'v2', 'page-1.jpg': 'v1-page-added' });
+    expect(files(`${SUPPORT}/scan-kit-recovered/5000/scan-kit/${U1}`)).toEqual({ 'page-0.jpg': 'v1-edited-by-older-build' });
+    expect(mockFs.has(`${DOCS}/scan-kit`)).toBe(false); // emptied of the app's folders, so it goes
+    // …and Settings › Recovered files offers it.
+    const groups = L.listRecoveredGroups(new Set());
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toMatchObject({ kind: 'pages', savedAt: 5000, files: [`${SUPPORT}/scan-kit-recovered/5000/scan-kit/${U1}/page-0.jpg`] });
+  });
+
+  test('an older build’s empty "scan-kit" folder is never deleted (it can’t be told from a user’s)', () => {
+    upgraded();
+    dir(`${DOCS}/scan-kit`);
+    relaunch(2000);
+    expect(mockFs.get(`${DOCS}/scan-kit`)?.type).toBe('dir');
+  });
+});
+
+describe('the record of the move', () => {
+  test('a marker that can’t be read counts as "already moved": the Documents pass never runs again', () => {
+    seedOldLayout();
+    L.migrateStorageLayout(1000);
+    put(`${SUPPORT}/storage-layout.json`, '{"version":3,"strays":"do'); // torn write
+    put(`${DOCS}/documents/${U2}/page_0.jpg`, 'looks-like-april'); // would be taken if the pass ran
+    put(`${DOCS}/scan-kit/Holiday/page-0.jpg`, 'user');
+
+    const r = relaunch(2000);
+
+    expect(r.state).toBe('app-support');
+    expect(files(`${DOCS}/documents`)).toEqual({ [`${U2}/page_0.jpg`]: 'looks-like-april' });
+    expect(files(`${DOCS}/scan-kit`)).toEqual({ 'Holiday/page-0.jpg': 'user' });
+    expect(marker()).toMatchObject({ strays: 'done', migratedAt: 2000 }); // repaired
+  });
+
+  test('a marker lost between removing the old file and the rename is read from its side file', () => {
+    seedOldLayout();
+    L.migrateStorageLayout(1000);
+    const text = files(SUPPORT)['storage-layout.json'];
+    mockFs.delete(`${SUPPORT}/storage-layout.json`);
+    put(`${SUPPORT}/storage-layout.json.new`, text);
+    put(`${DOCS}/documents/${U2}/page_0.jpg`, 'looks-like-april');
+
+    relaunch(2000);
+
+    expect(files(`${DOCS}/documents`)).toEqual({ [`${U2}/page_0.jpg`]: 'looks-like-april' });
+    expect(L.readJsonSync(new (require('expo-file-system').Directory)(SUPPORT), 'storage-layout.json')).toMatchObject({ state: 'ok' });
+  });
+
+  test('no marker at all, but Files copies were made: the Documents pass never runs', () => {
+    seedOldLayout();
+    put(`${SUPPORT}/files-copy.json`, '{}');
+    put(`${DOCS}/Receipt.pdf`, 'a copy');
+    L.migrateStorageLayout(1000);
+    expect(files(`${DOCS}/documents`)).toEqual({ [`${M}/page_0.jpg`]: 'M0' });
+    expect(files(DOCS)['Receipt.pdf']).toBe('a copy');
+    // The app's own document folders (UUIDs only, by now) still come out.
+    expect(files(`${SUPPORT}/scan-kit`)).toEqual({});
+  });
+
+  test('writes are atomic: a verified side file, renamed into place', () => {
+    dir(C1); dir(DOCS); dir(`${C1}/Library`); dir(SUPPORT);
+    const { Directory } = require('expo-file-system');
+    const d = new Directory(SUPPORT);
+    expect(L.writeJsonSync(d, 'x.json', { a: 1 })).toBe(true);
+    expect(L.readJsonSync(d, 'x.json')).toEqual({ state: 'ok', value: { a: 1 } });
+    expect(mockFs.has(`${SUPPORT}/x.json.new`)).toBe(false);
+    // Died after removing the old file, before the rename: the side file is read, then finished.
+    mockFs.delete(`${SUPPORT}/x.json`);
+    put(`${SUPPORT}/x.json.new`, '{"a":2}');
+    expect(L.readJsonSync(d, 'x.json')).toEqual({ state: 'ok', value: { a: 2 } });
+    expect(L.writeJsonSync(d, 'x.json', { a: 3 })).toBe(true);
+    expect(files(SUPPORT)['x.json']).toBe('{"a":3}');
+    // A torn side file next to a good main file: the main file wins.
+    put(`${SUPPORT}/x.json.new`, '{"a":');
+    expect(L.readJsonSync(d, 'x.json')).toEqual({ state: 'ok', value: { a: 3 } });
+    // Both torn: corrupt, not absent.
+    put(`${SUPPORT}/x.json`, '{"a');
+    expect(L.readJsonSync(d, 'x.json')).toEqual({ state: 'corrupt' });
   });
 });
 
 describe('the one-time pass over the Documents root', () => {
-  test('never runs again once done: a file the user later puts there stays', () => {
+  test('never runs again once done: files and folders the user later puts there stay', () => {
     seedOldLayout();
     L.migrateStorageLayout(1000);
     put(`${DOCS}/My notes.pdf`, 'user');
+    put(`${DOCS}/documents/${U2}/page_0.jpg`, 'user-made-look-alike');
 
-    jest.resetModules();
-    L = require('../lib/storage-layout');
-    L.migrateStorageLayout(2000);
+    relaunch(2000);
 
     expect(files(DOCS)['My notes.pdf']).toBe('user');
+    expect(files(DOCS)[`documents/${U2}/page_0.jpg`]).toBe('user-made-look-alike');
   });
 
   test('one interrupted half way is finished on the next launch', () => {
     seedOldLayout();
-    mockFailMoves.add(`${DOCS}/harness-log.txt`);
+    for (const k of [`documents/${M}`, `documents/${M}/page_0.jpg`]) mockFailMoves.add(`${DOCS}/${k}`);
+    mockFailCopies.add(`${DOCS}/documents/${M}/page_0.jpg`);
     L.migrateStorageLayout(1000);
-    expect(JSON.parse(files(SUPPORT)['storage-layout.json']).strays).toBe('pending');
+    expect(marker()).toMatchObject({ strays: 'pending', strayAttempts: 1, migratedAt: 1000 });
     mockFailMoves.clear();
+    mockFailCopies.clear();
 
-    jest.resetModules();
-    L = require('../lib/storage-layout');
-    L.migrateStorageLayout(2000);
+    relaunch(2000);
 
-    expect(under(DOCS)).toEqual(['DOCUMENT_SCAN_0_123.jpg', 'Inbox', 'Inbox/Lease.pdf']);
-    expect(JSON.parse(files(SUPPORT)['storage-layout.json']).strays).toBe('done');
+    expect(under(DOCS)).toEqual([SCAN, 'Inbox', 'Inbox/Lease.pdf']);
+    expect(marker().strays).toBe('done');
+  });
+
+  test('given up after three launches', () => {
+    seedOldLayout();
+    for (const k of [`documents/${M}`, `documents/${M}/page_0.jpg`]) mockFailMoves.add(`${DOCS}/${k}`);
+    mockFailCopies.add(`${DOCS}/documents/${M}/page_0.jpg`);
+    L.migrateStorageLayout(1000);
+    relaunch(2000);
+    relaunch(3000);
+    expect(marker()).toMatchObject({ strays: 'pending', strayAttempts: 3 });
+    mockFailMoves.clear();
+    mockFailCopies.clear();
+    relaunch(4000);
+    expect(marker().strays).toBe('done');
+    expect(files(`${DOCS}/documents`)).toEqual({ [`${M}/page_0.jpg`]: 'M0' });
+  });
+});
+
+describe('recovered files', () => {
+  test('legacy pages a document still uses are never offered; unused ones are', () => {
+    seedOldLayout();
+    L.migrateStorageLayout(1000);
+    const page = `${SUPPORT}/legacy-documents/documents/${M}/page_0.jpg`;
+    expect(L.listRecoveredGroups(new Set([page]))).toEqual([]);
+    expect(L.listRecoveredGroups(null)).toEqual([]); // records unreadable: never offered
+    const groups = L.listRecoveredGroups(new Set());
+    expect(groups).toEqual([expect.objectContaining({ kind: 'pages', files: [page], savedAt: null })]);
+
+    expect(L.deleteRecoveredGroup(groups[0])).toBe(true);
+    expect(mockFs.has(`${SUPPORT}/legacy-documents`)).toBe(false); // empty parents tidied
+    expect(L.listRecoveredGroups(new Set())).toEqual([]);
+  });
+
+  test('deleting a group never reaches outside the recovered folders', () => {
+    seedOldLayout();
+    L.migrateStorageLayout(1000);
+    const stray = { key: 'x', dir: `${SUPPORT}/scan-kit/doc-a/`, kind: 'pages' as const, savedAt: null, files: [`${SUPPORT}/scan-kit/doc-a/page-0.jpg`], bytes: 1 };
+    expect(L.deleteRecoveredGroup({ ...stray, dir: '' })).toBe(false);
+    expect(files(`${SUPPORT}/scan-kit/doc-a`)['page-0.jpg']).toBe('A0');
+    L.deleteRecoveredGroup(stray);
+    expect(files(`${SUPPORT}/scan-kit/doc-a`)['page-0.jpg']).toBe('A0');
   });
 });
 
@@ -429,9 +660,9 @@ describe('stored URIs heal to wherever the file is now', () => {
     expect(L.rebaseStoredUri(`${SUPPORT}/scan-kit/doc-a/page-1.jpg`)).toBe(`${SUPPORT}/scan-kit/doc-a/page-1.jpg`);
   });
 
-  test('both roots present (partial migration): each document maps to where its folder is', () => {
-    dir(`${SUPPORT}/scan-kit`);
-    mockFailMoves.add(`${DOCS}/scan-kit/doc-pdf`);
+  test('a document left behind (split): each document maps to where its folder is', () => {
+    for (const k of ['scan-kit', 'scan-kit/doc-pdf', 'scan-kit/doc-pdf/document.pdf']) mockFailMoves.add(`${DOCS}/${k}`);
+    mockFailCopies.add(`${DOCS}/scan-kit/doc-pdf/document.pdf`);
     L.migrateStorageLayout(1000);
     expect(L.storageLayout().state).toBe('split');
     expect(L.rebaseStoredUri(`${C0}/Documents/scan-kit/doc-a/page-0.jpg`)).toBe(`${SUPPORT}/scan-kit/doc-a/page-0.jpg`);
@@ -439,15 +670,9 @@ describe('stored URIs heal to wherever the file is now', () => {
     expect(L.rebaseStoredUri(`${C0}/Documents/scan-kit/doc-pdf/document.pdf`)).toBe(`${DOCS}/scan-kit/doc-pdf/document.pdf`);
   });
 
-  test('a failed move keeps URIs on the old root', () => {
-    mockFailMoves.add(`${DOCS}/scan-kit`);
-    L.migrateStorageLayout(1000);
-    expect(L.rebaseStoredUri(`${C0}/Documents/scan-kit/doc-a/page-0.jpg`)).toBe(`${DOCS}/scan-kit/doc-a/page-0.jpg`);
-  });
-
   test('pages of documents merged by the April 2026 build follow the leftovers pass', () => {
     L.migrateStorageLayout(1000);
-    expect(L.rebaseStoredUri(`${C0}/Documents/documents/merged-1/page_0.jpg`)).toBe(`${SUPPORT}/legacy-documents/documents/merged-1/page_0.jpg`);
+    expect(L.rebaseStoredUri(`${C0}/Documents/documents/${M}/page_0.jpg`)).toBe(`${SUPPORT}/legacy-documents/documents/${M}/page_0.jpg`);
   });
 
   test('anything the app does not own is left alone', () => {
@@ -524,11 +749,12 @@ describe('records in storage', () => {
     expect(exists(raw.pages[0])).toBe(true);
   });
 
-  test('after a failed move the records keep pointing at Documents, where the files still are', async () => {
+  test('a document left in Documents by a failed move still opens from there', async () => {
     jest.resetModules();
     mockFs.clear();
     seedOldLayout();
-    mockFailMoves.add(`${DOCS}/scan-kit`);
+    for (const k of ['scan-kit', 'scan-kit/doc-pdf', 'scan-kit/doc-pdf/document.pdf']) mockFailMoves.add(`${DOCS}/${k}`);
+    mockFailCopies.add(`${DOCS}/scan-kit/doc-pdf/document.pdf`);
     L = require('../lib/storage-layout');
     AsyncStorage = require('@react-native-async-storage/async-storage');
     storage = require('../lib/storage');
@@ -539,6 +765,7 @@ describe('records in storage', () => {
       for (const p of d.pages) expect(exists(p)).toBe(true);
       if (d.pdfUri) expect(exists(d.pdfUri)).toBe(true);
     }
+    expect(docs.find(d => d.id === 'doc-pdf')!.pdfUri).toBe(`${DOCS}/scan-kit/doc-pdf/document.pdf`);
   });
 });
 
@@ -567,16 +794,32 @@ describe('the startup sweep after the move', () => {
     }
     expect(mockFs.has(`${SUPPORT}/signatures/sig-00000001.png`)).toBe(true);
     expect(mockFs.has(`${SUPPORT}/scan-kit-recovered/1000/scan-kit/doc-a/page-0.jpg`)).toBe(true);
-    expect(mockFs.has(`${SUPPORT}/legacy-documents/harness-log.txt`)).toBe(true);
+    expect(mockFs.has(`${SUPPORT}/legacy-documents/documents/${M}/page_0.jpg`)).toBe(true);
   });
 
-  test('while the move is part done, nothing is deleted as an orphan in either root', async () => {
+  test('an orphan folder holding anything but the app’s own files is never deleted', async () => {
     seedOldLayout();
-    dir(`${SUPPORT}/scan-kit`);
+    L.migrateStorageLayout(1000);
+    // As an earlier build's merge could have left a user's folder (old mtimes kept).
+    put(`${SUPPORT}/scan-kit/Taxes/receipt.pdf`, 'user');
+    put(`${SUPPORT}/scan-kit/${U1}/page-0.jpg`, 'P');
+    put(`${SUPPORT}/scan-kit/${U1}/letter.docx`, 'user');
+
+    await realFiles().garbageCollectOrphans(['doc-a', 'doc-pdf', 'doc-trash'], NOW);
+
+    expect(files(`${SUPPORT}/scan-kit/Taxes`)).toEqual({ 'receipt.pdf': 'user' });
+    expect(files(`${SUPPORT}/scan-kit/${U1}`)).toEqual({ 'page-0.jpg': 'P', 'letter.docx': 'user' });
+  });
+
+  test('while a document is left in Documents, nothing is deleted as an orphan in either root', async () => {
+    seedOldLayout();
     put(`${SUPPORT}/scan-kit/orphan-new/page-0.jpg`, 'O1');
     put(`${DOCS}/scan-kit/orphan-old/page-0.jpg`, 'O2');
-    mockFailMoves.add(`${DOCS}/scan-kit/doc-pdf`);
-    mockFailMoves.add(`${DOCS}/scan-kit/orphan-old`);
+    for (const k of ['scan-kit', 'scan-kit/doc-pdf', 'scan-kit/doc-pdf/document.pdf', 'scan-kit/orphan-old', 'scan-kit/orphan-old/page-0.jpg']) {
+      mockFailMoves.add(`${DOCS}/${k}`);
+    }
+    mockFailCopies.add(`${DOCS}/scan-kit/doc-pdf/document.pdf`);
+    mockFailCopies.add(`${DOCS}/scan-kit/orphan-old/page-0.jpg`);
     L.migrateStorageLayout(1000);
     expect(L.storageLayout().state).toBe('split');
     // An interrupted rotate in the document still in Documents is finished there.
@@ -597,15 +840,34 @@ describe('the startup sweep after the move', () => {
     expect(files.isDisposableTemp(`${SUPPORT}/signatures/sig-00000001.png`)).toBe(false);
     expect(files.isDisposableTemp(`${DOCS}/scan-kit/doc-a/page-0.jpg`)).toBe(false);
     expect(files.isDisposableTemp(`${C1}/Library/Caches/ImagePicker/x.jpg`)).toBe(true);
-    expect(files.isDisposableTemp(`${DOCS}/DOCUMENT_SCAN_0_123.jpg`)).toBe(true);
+    expect(files.isDisposableTemp(`${DOCS}/${SCAN}`)).toBe(true);
+    expect(files.isDisposableTemp(`${DOCS}/Receipt.pdf`)).toBe(false);
   });
 
-  test('an empty Inbox is removed so Files shows nothing but the copies', () => {
+  test('an empty Inbox is removed; the user’s files in Documents never are', () => {
     seedOldLayout();
     L.migrateStorageLayout(1000);
+    put(`${DOCS}/My scan.jpg`, 'user');
+    put(`${DOCS}/DOCUMENT_SCAN_0_mine.jpg`, 'user-named'); // not the scanner's exact name
     mockFs.delete(`${DOCS}/Inbox/Lease.pdf`);
     realFiles().sweepTempLeftovers(NOW);
     expect(mockFs.has(`${DOCS}/Inbox`)).toBe(false);
-    expect(under(DOCS)).toEqual([]); // the scanner's settled leftover went too
+    // The scanner's settled leftover went; the user's files stay.
+    expect(under(DOCS)).toEqual(['DOCUMENT_SCAN_0_mine.jpg', 'My scan.jpg']);
+  });
+
+  test('scanner output is moved out of Documents the moment the scanner returns it', () => {
+    seedOldLayout();
+    L.migrateStorageLayout(1000);
+    put(`${DOCS}/DOCUMENT_SCAN_1_20261118_103000.jpg`, 'page');
+    const [moved, other] = realFiles().moveScannerOutputToCaches([
+      `${DOCS}/DOCUMENT_SCAN_1_20261118_103000.jpg`,
+      `${DOCS}/My scan.jpg`,
+    ]);
+    expect(moved).toBe(`${C1}/Library/Caches/scanner/DOCUMENT_SCAN_1_20261118_103000.jpg`);
+    expect(other).toBe(`${DOCS}/My scan.jpg`); // never anything else
+    expect(mockFs.has(`${DOCS}/DOCUMENT_SCAN_1_20261118_103000.jpg`)).toBe(false);
+    expect(realFiles().isScannerOutput(moved)).toBe(true); // still known as already cropped
+    expect(realFiles().isDisposableTemp(moved)).toBe(true);
   });
 });

@@ -54,6 +54,12 @@ jest.mock('@/lib/system-ui', () => ({ abandonSystemUI: jest.fn() }));
 const mockIndexPdfText = jest.fn(async (..._a: unknown[]) => 'indexed');
 jest.mock('@/lib/pdf-text', () => ({ indexPdfText: (...a: unknown[]) => mockIndexPdfText(...a) }));
 
+// "Open in place": the native, security-scoped, coordinated copy (absent in old dev clients).
+const mockNative: { copyIncomingFile?: jest.Mock } = {};
+jest.mock('@/modules/vision-ocr/src', () => ({
+  get VisionOcr() { return mockNative.copyIncomingFile ? mockNative : null; },
+}));
+
 import ImportScreen from '../app/import';
 
 const INBOX = 'file:///app/Documents/Inbox/Cafe%20receipt.jpg';
@@ -69,6 +75,7 @@ beforeEach(() => {
   mockSaveFiles.mockReset();
   mockIndexPdfText.mockClear();
   mockIncoming.uri = INBOX;
+  delete mockNative.copyIncomingFile;
   jest.spyOn(console, 'error').mockImplementation(() => {});
 });
 
@@ -134,4 +141,38 @@ test('an imported PDF has its own text read into the search index', async () => 
   await flush();
   expect(mockSaveFiles).toHaveBeenCalledWith([expect.any(String)], 'pdf', expect.any(String));
   expect(mockIndexPdfText).toHaveBeenCalledWith('doc-4');
+});
+
+describe('open in place (the user’s own file, security-scoped)', () => {
+  const ORIGINAL = 'file:///private/var/mobile/Library/Mobile%20Documents/com~apple~CloudDocs/Lease.pdf';
+
+  test('is read through VisionOcr.copyIncomingFile, and the original is never removed', async () => {
+    mockFs[ORIGINAL] = true;
+    mockIncoming.uri = ORIGINAL;
+    mockNative.copyIncomingFile = jest.fn(async (_src: string, dst: string) => { mockFs[dst] = true; return dst; });
+    mockSaveFiles.mockResolvedValueOnce('doc-5');
+    render(<ImportScreen />);
+    await flush();
+    expect(mockNative.copyIncomingFile).toHaveBeenCalledWith(ORIGINAL, expect.stringContaining('/cache/incoming/incoming-'));
+    expect(mockFs[ORIGINAL]).toBe(true);
+    expect(mockReplace).toHaveBeenCalledWith({ pathname: '/viewer', params: { id: 'doc-5' } });
+  });
+
+  test('falls back to a plain copy when the native copy fails', async () => {
+    mockNative.copyIncomingFile = jest.fn(async () => { throw new Error('coordination failed'); });
+    mockSaveFiles.mockResolvedValueOnce('doc-6');
+    render(<ImportScreen />);
+    await flush();
+    expect(mockSaveFiles).toHaveBeenCalled();
+    expect(mockReplace).toHaveBeenCalledWith({ pathname: '/viewer', params: { id: 'doc-6' } });
+  });
+
+  test('a file that can’t be read either way says so, and touches nothing', async () => {
+    mockIncoming.uri = ORIGINAL; // not readable by a plain copy (not in mockFs)
+    mockNative.copyIncomingFile = jest.fn(async () => { throw new Error('no access'); });
+    render(<ImportScreen />);
+    await flush();
+    expect(screen.getByText('Couldn’t open the file')).toBeTruthy();
+    expect(mockSaveFiles).not.toHaveBeenCalled();
+  });
 });

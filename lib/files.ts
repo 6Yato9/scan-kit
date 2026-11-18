@@ -6,7 +6,7 @@
 // while they run; the startup sweep (garbageCollectOrphans) finishes or undoes
 // an interrupted one from those files instead of deleting them.
 import { Directory, File, Paths } from 'expo-file-system';
-import { docDir, isAppDataUri, scanRoots, storageLayout, SCAN_DIR_NAME, SIGNATURES_DIR_NAME } from './storage-layout';
+import { docDir, isAppDataUri, looksLikeDocFolder, scanRoots, storageLayout, SCAN_DIR_NAME, SIGNATURES_DIR_NAME } from './storage-layout';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { cappedSize, getImageSize } from './image-size';
 import { forgetDocumentOcr, pruneDocumentOcr } from './ocr-cache';
@@ -513,9 +513,10 @@ function recoverInterrupted(dir: Directory, now: number): number {
  *  - finishes or undoes interrupted operations inside each listed doc folder
  *    (recoverInterrupted) — never deleting a file that is the only copy;
  *  - deletes every folder under scan-kit/ whose id is NOT in validDocIds
- *    (its record is gone) and that hasn't been touched for SWEEP_GRACE_MS, so
- *    a document being saved right now (folder made, record not yet written)
- *    survives;
+ *    (its record is gone), that hasn't been touched for SWEEP_GRACE_MS (so a
+ *    document being saved right now — folder made, record not yet written —
+ *    survives) and that holds only what the app writes into a document's
+ *    folder (lib/storage-layout looksLikeDocFolder);
  *  - removes stale temp files the app's pickers, scanner and exports leave
  *    behind (sweepTempLeftovers).
  *
@@ -550,8 +551,11 @@ export async function garbageCollectOrphans(validDocIds: string[], now: number =
         const name = baseName(child.uri);
         if (valid.has(name)) {
           handled += recoverInterrupted(child, now);
-        } else if (mayDelete && !PROTECTED_DIR_NAMES.has(name) && isSettled(child, now)) {
-          // Orphan directory: its doc record is gone. Remove it entirely.
+        } else if (mayDelete && !PROTECTED_DIR_NAMES.has(name) && isSettled(child, now) && looksLikeDocFolder(child, false, false)) {
+          // Orphan directory: its doc record is gone. Remove it entirely —
+          // only when it holds nothing but what the app puts in a document's
+          // folder: a folder with anything else in it is never the app's to
+          // delete (a move keeps old mtimes, so age alone proves nothing).
           child.delete();
           forgetDocumentOcr(name);
           handled++;
@@ -667,11 +671,52 @@ function containerRoot(): string {
   return docs.slice(0, docs.lastIndexOf('/') + 1);
 }
 
-/** A "Keep a copy in Files" PDF being written (lib/files-copy.ts writeCopy); hidden in Files. */
+/** A "Keep a copy in Files" PDF an older build was writing in Documents (now made in Caches/files-copy). */
 const FILES_COPY_TEMP = /^\.[0-9a-z]+-copy\.pdf$/;
 
 /** The document scanner writes its pages straight into Documents/. */
 const SCANNER_OUTPUT = /^DOCUMENT_SCAN_\d+_[^/]*\.jpe?g$/i;
+/**
+ * Exactly the name the scanner gives a page in the Documents root
+ * (react-native-document-scanner-plugin FileUtil: DOCUMENT_SCAN_<n>_<yyyyMMdd_HHmmss>.jpg).
+ * Documents is the user's folder, so only this is ever moved or deleted there.
+ */
+const SCANNER_OUTPUT_IN_DOCUMENTS = /^DOCUMENT_SCAN_\d+_\d{8}_\d{6}\.jpg$/;
+/** Caches/scanner: where the scanner's pages are moved the moment it returns them. */
+const SCANNER_DIR = 'scanner';
+
+/**
+ * Moves the document scanner's output out of Documents — which the Files app
+ * shows — into Caches/scanner, the moment the scanner returns it. Every call
+ * site of DocumentScanner.scanDocument passes its result through this (and
+ * the library entry points that take scanner pages do it again: a no-op for
+ * pages already moved). The name is kept, so isScannerOutput still knows the
+ * page is already cropped. A page that can't be moved is returned as it was
+ * (and swept later). Never touches anything but scanner output.
+ */
+export function moveScannerOutputToCaches(uris: string[]): string[] {
+  return uris.map(uri => {
+    try {
+      const clean = stripQuery(uri);
+      const docs = Paths.document.uri.replace(/\/*$/, '/');
+      if (!clean.startsWith(docs)) return uri;
+      const name = clean.slice(docs.length);
+      if (!SCANNER_OUTPUT_IN_DOCUMENTS.test(name)) return uri;
+      const src = new File(clean);
+      if (!src.exists) return uri;
+      const dir = new Directory(Paths.cache, SCANNER_DIR);
+      dir.create({ intermediates: true, idempotent: true });
+      // Same-second captures of an earlier session could share a name.
+      let dest = new File(dir, name);
+      for (let n = 2; dest.exists && n < 100; n++) dest = new File(dir, name.replace(/\.jpg$/, `-${n}.jpg`));
+      src.move(dest);
+      return dest.uri;
+    } catch (err) {
+      console.warn('moveScannerOutputToCaches', err);
+      return uri;
+    }
+  });
+}
 
 /**
  * True for files the app created only as a stepping stone and may delete once
@@ -691,7 +736,7 @@ export function isDisposableTemp(uri: string | null | undefined): boolean {
     const root = containerRoot();
     if (root && clean.startsWith(`${root}tmp/`)) return true;
     const docs = Paths.document.uri.replace(/\/*$/, '/');
-    return clean.startsWith(docs) && SCANNER_OUTPUT.test(clean.slice(docs.length));
+    return clean.startsWith(docs) && SCANNER_OUTPUT_IN_DOCUMENTS.test(clean.slice(docs.length));
   } catch {
     return false; // can't tell where it lives — keep it
   }
@@ -728,8 +773,13 @@ const TEMP_DIRS = [
   'page-undo',
   'pdf-convert',
   'incoming',
-  // Sign / Watermark / Timestamp Undo copies (lib/page-stamp.ts).
+  // Sign / Watermark / Timestamp Undo copies of older builds (lib/page-stamp.ts
+  // now keeps them in private storage with a crash journal).
   'stamp-undo',
+  // The document scanner's pages, moved out of Documents (moveScannerOutputToCaches).
+  SCANNER_DIR,
+  // "Keep a copy in Files" PDFs being made (lib/files-copy.ts).
+  'files-copy',
 ];
 /** Open-in staging files older builds wrote straight into the Caches root. */
 const LEGACY_STAGED = /^(?:incoming|attempt)-\d+-/;
@@ -845,7 +895,9 @@ export function sweepTempLeftovers(now: number = Date.now()): number {
       } catch {}
     }
   };
-  sweep(new Directory(Paths.document), name => SCANNER_OUTPUT.test(name) || FILES_COPY_TEMP.test(name));
+  // Documents is the user's folder: only the scanner's exact output name and
+  // an older build's Files-copy temp (a dot-file) are ever removed there.
+  sweep(new Directory(Paths.document), name => SCANNER_OUTPUT_IN_DOCUMENTS.test(name) || FILES_COPY_TEMP.test(name));
   for (const name of TEMP_DIRS) {
     sweep(new Directory(Paths.cache, name), () => true, name === 'incoming' ? isStagedSettled : isSettled);
   }

@@ -7,8 +7,9 @@ import DocumentScanner from 'react-native-document-scanner-plugin';
 import { File } from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import { getScanSettings } from './storage';
-import { autoCropDocuments } from './document-detect';
+import { autoCropDocument } from './document-detect';
 import { withSystemUI } from './system-ui';
+import { deleteDisposableTemps, moveScannerOutputToCaches } from './files';
 
 const SCAN_QUALITY = { low: 50, medium: 75, high: 90 } as const;
 
@@ -36,7 +37,8 @@ export async function scanWithCamera(): Promise<string[] | null> {
       () => DocumentScanner.scanDocument({ croppedImageQuality: SCAN_QUALITY[settings.quality] }),
       () => ({ scannedImages: [] as string[] }),
     );
-    images = res.scannedImages;
+    // Out of Documents (shown in the Files app) straight away.
+    images = moveScannerOutputToCaches(res.scannedImages ?? []);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err ?? '');
     if (/cancel|user.+(stop|dismiss)/i.test(msg)) return null;
@@ -95,7 +97,30 @@ export async function pickPhotos(multiple = true, options: { autoCrop?: boolean 
   const picked = res.assets.map(a => a.uri);
   if (options.autoCrop === false) return picked;
   const settings = await getScanSettings();
-  const cropped = await autoCropDocuments(picked, SCAN_QUALITY[settings.quality] / 100);
-  deleteTempFiles(picked.filter((uri, i) => cropped[i] !== uri.split('?')[0] && cropped[i] !== uri));
+  const cropped: string[] = [];
+  for (const uri of picked) {
+    const result = await autoCropDocument(uri, SCAN_QUALITY[settings.quality] / 100);
+    cropped.push(result.uri);
+    if (result.uri.split('?')[0] !== uri.split('?')[0]) deleteDisposableTemps([uri]);
+    // No page outline found: kept as photographed. The document saved from it
+    // says so (scan-context noteNewDocument → "Couldn't find the page edges · Crop").
+    else if (!result.detected) uncroppedPicks.add(result.uri.split('?')[0]);
+  }
   return cropped;
+}
+
+/** Photos pickPhotos returned uncropped (no page edges found), until a save asks about them. */
+const uncroppedPicks = new Set<string>();
+
+/**
+ * Which of `pages` (zero-based) are photos pickPhotos couldn't find the page
+ * edges in. Each is reported once: asking forgets them.
+ */
+export function takeUncroppedPages(pages: string[]): number[] {
+  const out: number[] = [];
+  pages.forEach((p, i) => {
+    const key = p.split('?')[0];
+    if (uncroppedPicks.delete(key)) out.push(i);
+  });
+  return out;
 }

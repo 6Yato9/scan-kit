@@ -1,9 +1,9 @@
 // app/import.tsx
 // Landing screen for "Open in Scan Kit" (see app/+native-intent.tsx): saves the
 // incoming PDF or image as a new document and replaces itself with the viewer.
-// Images are auto-cropped like any other photo import. iOS copies the shared
-// file into Documents/Inbox; it is copied into our cache first and the Inbox
-// copy removed. Our copy is kept until a document has been saved from it, so
+// Images are auto-cropped like any other photo import. iOS hands over either
+// a copy in Documents/Inbox or (open in place) the user's original file; it is
+// copied into our cache first (stageCopy) and only an Inbox copy is removed. Our copy is kept until a document has been saved from it, so
 // a failed save offers "Try again" instead of asking for the file again. A
 // scan still being saved when the file arrives is waited for, not an error.
 //
@@ -25,6 +25,7 @@ import { abandonSystemUI } from '@/lib/system-ui';
 import { indexPdfText } from '@/lib/pdf-text';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
 import { Spacing, Type } from '@/lib/theme';
+import { VisionOcr } from '@/modules/vision-ocr/src';
 
 type Status = { state: 'working' } | { state: 'failed'; title: string; body: string; retry?: boolean };
 
@@ -39,12 +40,32 @@ function stagingDir(): Directory {
   return dir;
 }
 
-/** Copy into our cache first: the original may live in a location iOS cleans up. */
-function stageCopy(uri: string): string {
-  const src = new File(uri);
+/**
+ * Copy into our cache first: the original may live in a location iOS cleans
+ * up — or, with "Open in place" (LSSupportsOpeningDocumentsInPlace), it IS the
+ * user's own file, in another app's folder or iCloud Drive, handed over as a
+ * security-scoped URL. VisionOcr.copyIncomingFile opens that scope and reads
+ * through NSFileCoordinator (so a file still downloading or being saved is
+ * read whole); a plain copy can't reach such a file at all. The original is
+ * only ever read, never moved or removed (removeInboxCopy aside).
+ */
+async function stageCopy(uri: string): Promise<string> {
   const name = displayNameOf(uri).replace(/[^\w .()-]/g, '_') || 'import';
   const dest = new File(stagingDir(), `incoming-${Date.now()}-${name}`);
-  src.copy(dest);
+  const native = VisionOcr?.copyIncomingFile;
+  if (native) {
+    try {
+      await native(uri, dest.uri);
+      if (new File(dest.uri).exists) return dest.uri;
+    } catch (err) {
+      console.warn('copyIncomingFile failed; trying a plain copy', err);
+    }
+  }
+  // A dev client built before the native function existed, or a file the
+  // coordinated read couldn't open (an ordinary file in our own Inbox).
+  const leftover = new File(dest.uri);
+  if (leftover.exists) leftover.delete();
+  new File(uri).copy(new File(dest.uri));
   return dest.uri;
 }
 
@@ -175,22 +196,29 @@ export default function ImportScreen() {
       });
       return;
     }
-    try {
-      stagedRef.current = stageCopy(source);
-    } catch (err) {
-      console.warn('Stage incoming file failed', err);
-      removeInboxCopy(source);
-      setStatus({
-        state: 'failed',
-        title: 'Couldn’t open the file',
-        body: 'It may have been moved or deleted. Try sharing it again.',
-      });
-      return;
-    }
-    // We have our own copy now (kept until the import succeeds); iOS's Inbox
-    // copy is no longer needed whatever happens next.
-    removeInboxCopy(source);
-    attempt();
+    stageCopy(source).then(
+      staged => {
+        if (!mounted.current) {
+          deleteQuietly(staged);
+          return;
+        }
+        stagedRef.current = staged;
+        // We have our own copy now (kept until the import succeeds); iOS's
+        // Inbox copy is no longer needed whatever happens next.
+        removeInboxCopy(source);
+        attempt();
+      },
+      err => {
+        console.warn('Stage incoming file failed', err);
+        removeInboxCopy(source);
+        if (!mounted.current) return;
+        setStatus({
+          state: 'failed',
+          title: 'Couldn’t open the file',
+          body: 'It may have been moved or deleted. Try sharing it again.',
+        });
+      },
+    );
     // `attempt` reads refs only; this runs once per incoming file.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uri, saveFiles]);

@@ -3,7 +3,7 @@
 // (header + scroll body + pinned action bar), the document picker rows, the
 // option list, the empty state and a progress line. Keeping them here is what
 // makes the tools look like one product instead of fifteen.
-import { Children, createContext, Fragment, ReactNode, useCallback, useContext, useEffect, useState } from 'react';
+import { Children, createContext, Fragment, ReactNode, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import {
   BackHandler,
   Image,
@@ -23,17 +23,22 @@ import { PageThumb } from '@/components/page-thumb';
 import { useScan } from '@/contexts/scan-context';
 import { SectionLabel } from '@/components/section-label';
 import { HeaderTextButton, ScreenHeader } from '@/components/screen-header';
-import { EmptyState } from '@/components/empty-state';
+import { BottomSheet, SheetHeader } from '@/components/bottom-sheet';
+import { PrimaryButton } from '@/components/primary-button';
 import { AppIcon, type AppIconName } from '@/components/app-icon';
 import { getDocuments } from '@/lib/storage';
+import { usePdfThumbnail } from '@/lib/pdf-thumb';
 import { HIT, Radius, Spacing, Type } from '@/lib/theme';
 import type { Document } from '@/types/document';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
+import { noteNewDocument } from '@/lib/new-doc-note';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
 /** Image-page documents (not imported PDFs) — what most page tools work on. */
 export const isImageDoc = (d: Document) => !d.pdfUri && d.pages.length > 0;
+/** Image-page documents with exactly one page (nothing to join or split yet). */
+export const isSinglePageDoc = (d: Document) => !d.pdfUri && d.pages.length === 1;
 
 /**
  * Loads the documents a tool can work on, refreshing whenever the screen
@@ -394,6 +399,9 @@ export function RadioMark({ selected }: { selected: boolean }) {
 export function DocThumb({ doc, width = 40, height = 52 }: { doc: Document; width?: number; height?: number }) {
   const { colors } = useTheme();
   const frame = [styles.thumb, { width, height, backgroundColor: colors.placeholder, borderColor: colors.thumbBorder }];
+  // An imported PDF shows its first page once rendered (lib/pdf-thumb.ts), as in Files.
+  const pdfThumb = usePdfThumbnail(doc.id, doc.pdfUri);
+  if (doc.pdfUri && pdfThumb) return <PageThumb uri={pdfThumb} style={frame} />;
   return doc.pages[0] ? (
     <PageThumb uri={`${doc.pages[0]}?v=${doc.updatedAt}`} style={frame} />
   ) : (
@@ -450,43 +458,115 @@ export function DocRow({
 }
 
 /**
- * A whole tool screen for "nothing to work on yet". Uses the app's one empty
- * state (EmptyState, centred, actions under the text), so a tool with no
- * documents looks exactly like an empty list anywhere else.
+ * A whole tool screen for "nothing to work on yet", laid out like every other
+ * tool's first screen (Book mode, Whiteboard, Free up space): the tool's intro
+ * at the top, the actions pinned in the footer.
+ *
+ * `addPagesTo`: the tool needs two or more pages (Long image, Extract pages)
+ * and these documents have only one. Instead of a dead end, the main action
+ * opens one of them in the viewer, where Add puts more pages in it.
  */
 export function NoDocumentsScreen({
   toolTitle,
   icon,
   title,
   subtitle,
+  addPagesTo,
 }: {
   toolTitle: string;
   /** The tool's own icon, as on the Tools tab, so the tool keeps one glyph everywhere. */
   icon: AppIconName;
   title?: string;
   subtitle?: string;
+  addPagesTo?: Document[];
 }) {
   const router = useRouter();
   const { triggerScan } = useScan();
-  const insets = useSafeAreaInsets();
+  const { colors } = useTheme();
+  const [scanning, setScanning] = useState(false);
+  const [choosing, setChoosing] = useState(false);
+  const chosen = useRef<Document | null>(null);
+  const singles = addPagesTo ?? [];
+
+  const scan = async () => {
+    if (scanning) return;
+    setScanning(true);
+    try {
+      const id = await triggerScan();
+      if (id) noteNewDocument(id);
+      if (id) navigateWhenUnlocked(() => router.push({ pathname: '/viewer', params: { id } }));
+    } finally {
+      setScanning(false);
+    }
+  };
+  const importPhotos = () =>
+    router.navigate({ pathname: '/(tabs)/files', params: { action: 'importImages' } } as never);
+
   return (
-    <ToolScreen title={toolTitle} scroll={false}>
-      <View style={[styles.flex, { paddingBottom: insets.bottom + Spacing.xxl }]}>
-        <EmptyState
-          icon={icon}
-          title={title ?? 'No documents yet'}
-          subtitle={subtitle ?? 'Scan or import a document first, then come back to this tool.'}
-          actionLabel="Scan a document"
-          actionIcon="camera-outline"
-          onAction={async () => {
-            const id = await triggerScan();
-            if (id) navigateWhenUnlocked(() => router.push({ pathname: '/viewer', params: { id } }));
+    <ToolScreen
+      title={toolTitle}
+      footer={
+        singles.length ? (
+          <>
+            <PrimaryButton title="Add pages to a document" icon="add" onPress={() => setChoosing(true)} />
+            <PrimaryButton title="Scan a document" icon="camera-outline" variant="secondary" onPress={scan} loading={scanning} />
+          </>
+        ) : (
+          <>
+            <PrimaryButton title="Scan a document" icon="camera-outline" onPress={scan} loading={scanning} />
+            <PrimaryButton title="Import photos" icon="images-outline" variant="secondary" onPress={importPhotos} />
+          </>
+        )
+      }
+    >
+      <ToolIntro
+        icon={icon}
+        title={title ?? 'No documents yet'}
+        text={subtitle ?? 'Scan or import a document first, then come back to this tool.'}
+      />
+      {singles.length ? (
+        <BottomSheet
+          visible={choosing}
+          onClose={() => setChoosing(false)}
+          variant="grouped"
+          onDismissed={() => {
+            const d = chosen.current;
+            chosen.current = null;
+            // Opens it in the viewer; its Add button (after the last page) adds more.
+            if (d) {
+              navigateWhenUnlocked(() =>
+                router.push({ pathname: '/viewer', params: { id: d.id, notice: 'Tap Add to scan or import more pages' } }),
+              );
+            }
           }}
-          secondaryLabel="Import photos"
-          secondaryIcon="images-outline"
-          onSecondaryAction={() => router.navigate({ pathname: '/(tabs)/files', params: { action: 'importImages' } } as never)}
-        />
-      </View>
+        >
+          <SheetHeader title="Add pages to a document" subtitle="Choose one, then tap Add after its page." />
+          <ScrollView style={styles.sheetList} showsVerticalScrollIndicator={false} bounces={false}>
+            <DocGroup>
+              {singles.map(d => (
+                <Pressable
+                  key={d.id}
+                  onPress={() => {
+                    chosen.current = d;
+                    setChoosing(false);
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${d.name}, 1 page`}
+                  accessibilityHint="Opens it to add pages"
+                  style={({ pressed }) => [styles.row, pressed && { backgroundColor: colors.separator }]}
+                >
+                  <DocThumb doc={d} />
+                  <View style={styles.flex}>
+                    <Text style={[Type.body, { color: colors.text }]} numberOfLines={1}>{d.name}</Text>
+                    <Text style={[Type.footnote, styles.meta, { color: colors.muted }]}>{pageCountLabel(d.pages.length)}</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+                </Pressable>
+              ))}
+            </DocGroup>
+          </ScrollView>
+        </BottomSheet>
+      ) : null}
     </ToolScreen>
   );
 }
@@ -514,14 +594,15 @@ export function OptionList<T extends string | number>({
             accessibilityState={{ checked: on, selected: on }}
             style={({ pressed }) => [
               styles.option,
+              opt.detail ? styles.optionTall : null,
               i < options.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
               pressed && { opacity: 0.6 },
             ]}
           >
             <View style={styles.flex}>
-              <Text style={[Type.body, { color: colors.text }]}>{opt.label}</Text>
+              <Text style={[Type.body, styles.optionLabel, { color: colors.text }]}>{opt.label}</Text>
               {opt.detail ? (
-                <Text style={[Type.footnote, styles.meta, { color: colors.muted }]}>{opt.detail}</Text>
+                <Text style={[Type.footnote, styles.meta, styles.optionDetail, { color: colors.muted }]}>{opt.detail}</Text>
               ) : null}
             </View>
             <RadioMark selected={on} />
@@ -570,6 +651,22 @@ export function ColorSwatches<T extends string>({
           </Pressable>
         );
       })}
+    </View>
+  );
+}
+
+/**
+ * Two footer actions side by side: a quieter alternative on the left, the
+ * main action on the right (Sign / Watermark / Timestamp: "Save as a copy" and
+ * "Add watermark"). One row instead of two stacked full-width buttons, so the
+ * pinned footer doesn't cover the screen's last options. Both stay mounted;
+ * pass `disabled` rather than leaving one out, so neither changes width.
+ */
+export function FooterActions({ secondary, primary }: { secondary: ReactNode; primary: ReactNode }) {
+  return (
+    <View style={styles.actions}>
+      <View style={styles.actionSecondary}>{secondary}</View>
+      <View style={styles.actionPrimary}>{primary}</View>
     </View>
   );
 }
@@ -681,15 +778,27 @@ const styles = StyleSheet.create({
   },
   emptySlotIcon: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
   emptySlotText: { lineHeight: 18 },
+  // Same metrics as SettingsRow (components/settings-list.tsx), so a choice
+  // list in a tool and a list in Settings have rows of the same height: 52pt
+  // for one line, label 22 / detail 18 line heights with 12pt padding for two.
   option: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.md,
     paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.md,
-    minHeight: HIT + 4,
+    paddingVertical: Spacing.sm,
+    minHeight: HIT + 8,
   },
+  optionTall: { paddingVertical: Spacing.md },
+  optionLabel: { lineHeight: 22 },
+  optionDetail: { lineHeight: 18 },
   progress: { gap: Spacing.xs + 2 },
+  sheetList: { flexGrow: 0, flexShrink: 1 },
+  actions: { flexDirection: 'row', gap: Spacing.sm },
+  // The main action gets the larger share: its label names the outcome
+  // ("Sign all 3 pages"), the alternative is always "Save as a copy".
+  actionSecondary: { flex: 4 },
+  actionPrimary: { flex: 5 },
   track: { height: 4, borderRadius: 2, overflow: 'hidden' },
   fill: { height: 4, borderRadius: 2 },
 });

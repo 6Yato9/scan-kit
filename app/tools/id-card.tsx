@@ -8,7 +8,6 @@ import { useRouter } from 'expo-router';
 import { useTheme } from '@/contexts/theme-context';
 import { useScan } from '@/contexts/scan-context';
 import { PrimaryButton } from '@/components/primary-button';
-import { useToast } from '@/components/toast';
 import { SectionRow, ToolNote, ToolScreen } from '@/components/tool-ui';
 import { saveScan, indexDocText } from '@/lib/save-scan';
 import { getScanSettings } from '@/lib/storage';
@@ -17,6 +16,7 @@ import { notifyError, notifySuccess } from '@/lib/haptics';
 import { alertScanError, deleteTempFiles, pickPhotos, scanWithCamera } from '@/lib/tool-scan';
 import { Radius, Spacing, Type } from '@/lib/theme';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
+import { noteNewDocument } from '@/lib/new-doc-note';
 
 type Side = 'front' | 'back';
 const QUALITY = { low: 0.5, medium: 0.75, high: 0.9 } as const;
@@ -41,7 +41,6 @@ function chooseSource(title: string): Promise<'camera' | 'photos' | null> {
 export default function IdCardScreen() {
   const router = useRouter();
   const { colors } = useTheme();
-  const { show } = useToast();
   const { bumpLastSaved } = useScan();
   const [front, setFront] = useState<string | null>(null);
   const [back, setBack] = useState<string | null>(null);
@@ -93,7 +92,8 @@ export default function IdCardScreen() {
       bumpLastSaved();
       indexDocText(id, stored).catch(() => {});
       notifySuccess();
-      show('ID card saved');
+      // Said by the viewer (it covers the app-wide toast host): "Saved as …".
+      noteNewDocument(id);
       navigateWhenUnlocked(() => router.replace({ pathname: '/viewer', params: { id } }));
     } catch {
       notifyError();
@@ -157,7 +157,9 @@ export default function IdCardScreen() {
 }
 
 const styles = StyleSheet.create({
-  slot: { height: 190, borderRadius: Radius.md, borderWidth: 1.5, overflow: 'hidden' },
+  // The shape of a real card (ISO/IEC 7810 ID-1, 85.6 × 54 mm), so a capture
+  // fills its slot instead of sitting in a band of empty space.
+  slot: { width: '100%', aspectRatio: 85.6 / 54, borderRadius: Radius.md, borderWidth: 1.5, overflow: 'hidden' },
   dashed: { borderStyle: 'dashed' },
   preview: { width: '100%', height: '100%' },
   placeholder: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: Spacing.sm },

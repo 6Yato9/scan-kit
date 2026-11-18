@@ -8,7 +8,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
-import { NoDocumentsScreen, ToolNote, ToolScreen, isImageDoc, useToolDocuments } from '@/components/tool-ui';
+import { NoDocumentsScreen, ToolNote, ToolScreen, isImageDoc, isSinglePageDoc, useToolDocuments } from '@/components/tool-ui';
 import { ToolDocPicker, useToolDoc } from '@/components/tool-doc';
 import { buildLongImageHtml, planLongImage, type LongImagePlan } from '@/lib/long-image';
 import { deleteQuietly, exportFileName, makeExportDir, shareFile } from '@/lib/share';
@@ -33,6 +33,8 @@ export default function LongImageScreen() {
   const { width: screenW } = useWindowDimensions();
   // One page has nothing to join: only documents with two or more pages.
   const { docs, loaded } = useToolDocuments(isMultiPageImageDoc);
+  // One-page documents: offered "Add pages" instead of a dead end.
+  const { docs: singles, loaded: singlesLoaded } = useToolDocuments(isSinglePageDoc);
   const [job, setJob] = useState<{ html: string; plan: LongImagePlan; doc: Document } | null>(null);
   const [output, setOutput] = useState<Output | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -103,13 +105,18 @@ export default function LongImageScreen() {
     }
   };
 
-  if (loaded && docs.length === 0) {
+  if (loaded && singlesLoaded && docs.length === 0) {
     return (
       <NoDocumentsScreen
         toolTitle="Long image"
         icon="long-image"
         title="No multi-page documents"
-        subtitle="Long image joins a document’s pages into one tall picture. Scan or import a document with two or more pages first."
+        subtitle={
+          singles.length
+            ? 'Long image joins a document’s pages into one tall picture, and yours have one page each. Add pages to one, or scan a new document.'
+            : 'Long image joins a document’s pages into one tall picture. Scan or import a document with two or more pages first.'
+        }
+        addPagesTo={singles}
       />
     );
   }

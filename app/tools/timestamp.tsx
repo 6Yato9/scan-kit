@@ -7,6 +7,7 @@ import { StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
 import {
+  FooterActions,
   NoDocumentsScreen,
   OptionList,
   PagePreview,
@@ -17,7 +18,7 @@ import {
   useImageAspect,
   useToolDocuments,
 } from '@/components/tool-ui';
-import { ToolDocPicker, useToolDoc } from '@/components/tool-doc';
+import { ToolDocPicker, useConvertiblePdfs, useToolDoc, type PickerConvert } from '@/components/tool-doc';
 import { FilterBaker } from '@/components/filter-baker';
 import { reportStampFailure, usePageStamper, useStampFinish } from '@/components/page-stamper';
 import { copyName, PDF_NOT_LISTED_NOTE, stampCopy, stampPages, targetPages } from '@/lib/page-stamp';
@@ -42,7 +43,9 @@ const CORNERS: { value: Corner; label: string }[] = [
 
 export default function TimestampScreen() {
   const { width: screenW } = useWindowDimensions();
-  const { docs, loaded } = useToolDocuments();
+  const { docs, loaded, reload } = useToolDocuments();
+  // Imported PDFs: listed in the picker with Convert, never a dead end.
+  const { pdfs, loaded: pdfsLoaded, reload: reloadPdfs } = useConvertiblePdfs();
   const [when, setWhen] = useState<When>('scanned');
   const [format, setFormat] = useState<TimestampFormat>('datetime');
   const [corner, setCorner] = useState<Corner>('bottom-right');
@@ -50,13 +53,13 @@ export default function TimestampScreen() {
   const [now] = useState(() => Date.now());
 
   // Never a default: stamping the wrong document is worse than one more tap.
-  const { doc, setDocId, fixed, fromViewer } = useToolDoc(docs);
+  const { doc, docId, setDocId, fixed, fromViewer } = useToolDoc(docs);
   const stamper = usePageStamper();
   const finish = useStampFinish(fromViewer);
   // From the Tools tab with a single document: there is nothing to choose.
   useEffect(() => {
-    if (loaded && !fixed && !doc && docs.length === 1) setDocId(docs[0].id);
-  }, [loaded, fixed, doc, docs, setDocId]);
+    if (loaded && !fixed && !docId && docs.length === 1) setDocId(docs[0].id);
+  }, [loaded, fixed, docId, docs, setDocId]);
   const aspect = useImageAspect(doc?.pages[0]);
   const stamp = formatStamp(when === 'scanned' && doc ? doc.createdAt : now, format);
 
@@ -92,7 +95,23 @@ export default function TimestampScreen() {
     }
   };
 
-  if (loaded && docs.length === 0) {
+  // Picking an imported PDF converts it to pages (with Undo), then chooses it.
+  const convert: PickerConvert = {
+    pdfs,
+    verb: 'timestamp',
+    onConverted: d => {
+      reload();
+      reloadPdfs();
+      setDocId(d.id);
+    },
+    onUndone: id => {
+      reload();
+      reloadPdfs();
+      if (docId === id) setDocId(null);
+    },
+  };
+
+  if (loaded && pdfsLoaded && docs.length === 0 && pdfs.length === 0) {
     return (
       <NoDocumentsScreen
         toolTitle="Timestamp"
@@ -118,10 +137,12 @@ export default function TimestampScreen() {
               total={progress.total}
             />
           ) : null}
-          <PrimaryButton title="Add timestamp" onPress={() => apply('in-place')} disabled={!doc} loading={!!progress} />
-          {doc && !progress ? (
-            <PrimaryButton title="Save as a copy" variant="secondary" onPress={() => apply('copy')} style={styles.secondary} />
-          ) : null}
+          <FooterActions
+            secondary={
+              <PrimaryButton title="Save as a copy" variant="secondary" onPress={() => apply('copy')} disabled={!doc || !!progress} />
+            }
+            primary={<PrimaryButton title="Add timestamp" onPress={() => apply('in-place')} disabled={!doc} loading={!!progress} />}
+          />
         </>
       }
     >
@@ -136,6 +157,7 @@ export default function TimestampScreen() {
         onPick={d => setDocId(d.id)}
         autoOpen={loaded && !fromViewer}
         note={PDF_NOT_LISTED_NOTE}
+        convert={convert}
       />
 
       {/* Live preview: the first page (a sample page until one is chosen) with
@@ -198,5 +220,4 @@ export default function TimestampScreen() {
 
 const styles = StyleSheet.create({
   previewWrap: { marginTop: Spacing.lg },
-  secondary: { marginTop: Spacing.sm },
 });

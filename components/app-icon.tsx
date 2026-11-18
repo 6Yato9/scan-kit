@@ -50,9 +50,21 @@ export function ioniconFor(name: AppIconName): IoniconName {
   return isSymbolGlyph(name) ? SYMBOLS[name].fallback : name;
 }
 
-export function AppIcon({ name, size, color }: { name: AppIconName; size: number; color: string }) {
+export function AppIcon({
+  name,
+  size,
+  color,
+  weight: weightOverride,
+}: {
+  name: AppIconName;
+  size: number;
+  color: string;
+  /** SF Symbol stroke weight, overriding the glyph's default (e.g. a bolder pencil beside a title). */
+  weight?: SymbolWeight;
+}) {
   if (!isSymbolGlyph(name)) return <Ionicons name={name} size={size} color={color} />;
-  const { symbol, fallback: fallbackName, scale, rotate, weight = 'regular' } = SYMBOLS[name];
+  const { symbol, fallback: fallbackName, scale, rotate, weight: glyphWeight = 'regular' } = SYMBOLS[name];
+  const weight = weightOverride ?? glyphWeight;
   const fallback = <Ionicons name={fallbackName} size={size} color={color} />;
   if (Platform.OS !== 'ios') return fallback;
   return (

@@ -21,6 +21,7 @@ jest.mock('expo-file-system', () => {
 jest.mock('expo-file-system/legacy', () => ({ writeAsStringAsync: jest.fn() }));
 jest.mock('expo-crypto', () => ({ randomUUID: () => 'doc-1' }));
 jest.mock('../lib/files', () => ({
+  moveScannerOutputToCaches: (u: string[]) => u,
   originalUri: (id: string, i: number) => `file:///docs/scan-kit/${id}/page-${i}.orig.jpg`,
   deleteDocumentFiles: jest.fn(),
   copyPageWithQuality: jest.fn(async (_u: string, id: string, i: number) => `file:///docs/scan-kit/${id}/page-${i}.jpg`),

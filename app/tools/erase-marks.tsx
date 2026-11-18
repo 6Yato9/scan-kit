@@ -1,7 +1,8 @@
 // app/tools/erase-marks.tsx
 // Whitens light pencil and pen marks by baking a high-contrast black-and-white
 // filter into every page's pixels (lib/bake.ts). Bakes run from each page's
-// pristine .orig copy, so the viewer's "Original" filter can still undo it.
+// pristine .orig copy, so the viewer's Undo can put every page back exactly as
+// it was, its own earlier filter and adjustments included.
 import { useState } from 'react';
 import { Alert } from 'react-native';
 import { useRouter } from 'expo-router';
@@ -21,9 +22,22 @@ import { bakePage, invalidateDocPreviews } from '@/lib/bake';
 import { notifyError, notifySuccess } from '@/lib/haptics';
 import type { Document, PageAdjustment, PageFilter } from '@/types/document';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
+import { postViewerNotice } from '@/lib/viewer-notice';
 
 const ERASE_FILTER: PageFilter = 'bw';
 const ERASE_ADJUSTMENT: PageAdjustment = { brightness: 30, contrast: 30, saturation: 0 };
+
+/** Puts every page back as it was before Erase marks (see run). */
+async function undoErase(docId: string, before: { filter: PageFilter; adjustment: PageAdjustment | undefined }[]) {
+  const results = await Promise.allSettled(before.map((b, i) => bakePage(docId, i, b.filter, b.adjustment)));
+  invalidateDocPreviews(docId);
+  if (results.some(r => r.status === 'rejected')) {
+    notifyError();
+    Alert.alert('Couldn’t undo on every page', 'Open Filters on a page that still looks black and white, and choose its filter again.');
+    return;
+  }
+  postViewerNotice({ docId, message: 'Pages restored' });
+}
 
 export default function EraseMarksScreen() {
   const router = useRouter();
@@ -58,31 +72,25 @@ export default function EraseMarksScreen() {
       return;
     }
     notifySuccess();
-    const notice = failed ? `Cleaned ${total - failed} of ${total} pages` : 'Marks erased';
-    // The viewer shows the toast: it covers the app-wide toast host. Opened from
-    // the viewer, go back to it rather than stacking a second one.
+    // The viewer shows the toast, with Undo: it covers the app-wide toast host.
+    // Undo re-bakes every page from its pristine .orig with the filter and
+    // adjustments it had before, so earlier edits come back too (choosing
+    // Original in Filters would have wiped those).
+    const before = doc.pages.map((_, i) => ({ filter: doc.filters?.[i] ?? 'original', adjustment: doc.adjustments?.[i] }));
+    postViewerNotice({
+      docId: doc.id,
+      message: failed ? `Cleaned ${total - failed} of ${total} pages` : 'Marks erased',
+      action: { label: 'Undo', onPress: () => { void undoErase(doc.id, before); } },
+    });
+    // Opened from the viewer, go back to it rather than stacking a second one.
     navigateWhenUnlocked(() => {
-      if (fromViewer) router.dismissTo({ pathname: '/viewer', params: { id: doc.id, notice } });
-      else router.replace({ pathname: '/viewer', params: { id: doc.id, notice } });
+      if (fromViewer) router.dismissTo({ pathname: '/viewer', params: { id: doc.id } });
+      else router.replace({ pathname: '/viewer', params: { id: doc.id } });
     });
   };
 
   const handleApply = () => {
     if (!selected || running) return;
-    const hasEdits =
-      selected.filters?.some(f => f && f !== 'original') ||
-      selected.adjustments?.some(a => a && (a.brightness !== 0 || a.contrast !== 0 || a.saturation !== 0));
-    if (hasEdits) {
-      Alert.alert(
-        'Replace current filters?',
-        'This document already has filters or adjustments. Erase marks will replace them on every page.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Replace', onPress: () => run(selected) },
-        ],
-      );
-      return;
-    }
     run(selected);
   };
 
@@ -132,7 +140,7 @@ export default function EraseMarksScreen() {
         onPick={d => setSelectedId(d.id)}
       />
       <ToolNote>
-        {'This changes the document itself. To undo it, open the document, tap Filters, choose Original, then tap Apply to\u00A0all.'}
+        {'This changes the document itself, replacing any filters its pages have. You can undo it right\u00A0after.'}
       </ToolNote>
     </ToolScreen>
   );

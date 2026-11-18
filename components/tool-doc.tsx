@@ -8,15 +8,48 @@
 // compact "Document" row, so a tool's preview and options stay above the fold
 // however many documents there are.
 import { useEffect, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams } from 'expo-router';
 import { useTheme } from '@/contexts/theme-context';
 import { BottomSheet, SheetHeader } from '@/components/bottom-sheet';
 import { SectionLabel } from '@/components/section-label';
-import { DocGroup, DocRow, DocThumb, pageCountLabel } from '@/components/tool-ui';
+import { useToast } from '@/components/toast';
+import { DocGroup, DocRow, DocThumb, pageCountLabel, useToolDocuments } from '@/components/tool-ui';
+import {
+  canConvertPdf,
+  convertPdfToPages,
+  PdfConvertError,
+  undoPdfConversion,
+  type ConvertProgress,
+} from '@/lib/convert-pdf';
+import { notifyError, notifySuccess } from '@/lib/haptics';
 import { HIT, Radius, Spacing, Type } from '@/lib/theme';
 import type { Document } from '@/types/document';
+
+/** Imported PDFs: a page tool can't edit them until they are converted to pages. */
+export const isPdfDoc = (d: Document) => !!d.pdfUri;
+
+/**
+ * The imported PDFs a page tool could offer to convert (none when this build
+ * can't render PDF pages), refreshed with the screen like useToolDocuments.
+ */
+export function useConvertiblePdfs() {
+  const { docs, loaded, reload } = useToolDocuments(isPdfDoc);
+  return { pdfs: canConvertPdf() ? docs : [], loaded, reload };
+}
+
+/** Converting an imported PDF from a tool's picker (see ToolDocPicker `convert`). */
+export type PickerConvert = {
+  /** Imported PDFs, listed under the documents with a Convert button. */
+  pdfs: Document[];
+  /** What the tool does, for the sheet's note: "sign", "watermark", "timestamp". */
+  verb: string;
+  /** The PDF is now an image-page document: reload and choose it. */
+  onConverted: (doc: Document) => void;
+  /** Its conversion was undone from the toast: reload (it is a PDF again). */
+  onUndone: (docId: string) => void;
+};
 
 export function useToolDoc(docs: Document[]) {
   const params = useLocalSearchParams<{ docId?: string }>();
@@ -53,6 +86,7 @@ export function ToolDocPicker({
   onPick,
   note,
   autoOpen = false,
+  convert,
 }: {
   docs: Document[];
   doc: Document | null;
@@ -67,22 +101,113 @@ export function ToolDocPicker({
    * once the screen is in, so the tool starts from choosing a document.
    */
   autoOpen?: boolean;
+  /**
+   * Also list imported PDFs, each with Convert: the tool can't change a PDF,
+   * so instead of hiding them (a dead end when that is all there is) the
+   * sheet offers to turn one into pages, in place, with Undo.
+   */
+  convert?: PickerConvert;
 }) {
   const { colors } = useTheme();
+  const toast = useToast();
   const [open, setOpen] = useState(false);
   const autoOpened = useRef(false);
+  const pdfs = convert?.pdfs ?? [];
+  const total = docs.length + pdfs.length;
+  // A PDF tapped in the sheet: asked about once the sheet has fully closed (an
+  // alert presented while the sheet's modal is still dismissing never shows).
+  const pendingConvert = useRef<Document | null>(null);
+  const [converting, setConverting] = useState<{ doc: Document; progress: ConvertProgress } | null>(null);
+  const convertingRef = useRef(false);
+  const convertRef = useRef(convert);
+  convertRef.current = convert;
+
+  const runConvert = async (pdf: Document) => {
+    if (convertingRef.current) return;
+    convertingRef.current = true;
+    setConverting({ doc: pdf, progress: { stage: 'rendering' } });
+    try {
+      // 'original', as in the viewer: an imported PDF is usually computer-made
+      // and already clean; a scan filter would only soften its text.
+      const { doc: next, pageCount: n, undo } = await convertPdfToPages(pdf.id, {
+        filter: 'original',
+        onProgress: p => setConverting({ doc: pdf, progress: p }),
+      });
+      notifySuccess();
+      convertRef.current?.onConverted(next);
+      toast.show(
+        `Converted to ${n} ${n === 1 ? 'page' : 'pages'}`,
+        undo
+          ? {
+              action: {
+                label: 'Undo',
+                onPress: () => {
+                  undoPdfConversion(undo)
+                    .then(restored => convertRef.current?.onUndone(restored.id))
+                    .catch(() => Alert.alert('Couldn’t undo the conversion', 'The document stays as pages. Your pages are unchanged.'));
+                },
+              },
+            }
+          : undefined,
+      );
+    } catch (err) {
+      notifyError();
+      const kind = err instanceof PdfConvertError ? err.kind : 'failed';
+      if (kind === 'locked') {
+        Alert.alert('This PDF is password protected', 'Open it in Scan Kit and enter its password, then convert it.');
+      } else if (kind === 'unreadable') {
+        Alert.alert('Couldn’t read this PDF', 'The file may be damaged. Try importing it again.');
+      } else if (kind === 'missing') {
+        Alert.alert('This PDF is no longer here', 'It may have been deleted.');
+        convertRef.current?.onUndone(pdf.id);
+      } else {
+        Alert.alert('Couldn’t convert the PDF', 'Your PDF is unchanged. Check that there’s free space, then try again.');
+      }
+    } finally {
+      convertingRef.current = false;
+      setConverting(null);
+    }
+  };
+
+  const askConvert = (pdf: Document) => {
+    Alert.alert(
+      `Convert “${pdf.name}” to pages?`,
+      `To ${convert?.verb ?? 'edit'} a PDF, its pages are turned into images you can also crop, filter and mark up. You can undo it right after.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Convert', isPreferred: true, onPress: () => { void runConvert(pdf); } },
+      ],
+    );
+  };
+
   useEffect(() => {
-    if (!autoOpen || autoOpened.current || fixed || doc || docs.length === 0) return;
+    if (!autoOpen || autoOpened.current || fixed || doc || total === 0) return;
     // After the screen's push animation: a sheet presented mid-push is dropped.
     const t = setTimeout(() => {
       autoOpened.current = true;
       setOpen(true);
     }, 400);
     return () => clearTimeout(t);
-  }, [autoOpen, fixed, doc, docs.length]);
-  const tappable = !fixed && !disabled;
+  }, [autoOpen, fixed, doc, total]);
+  const tappable = !fixed && !disabled && !converting;
 
-  const body = doc ? (
+  const body = converting ? (
+    <>
+      <View style={[styles.emptyThumb, { backgroundColor: colors.accentLight }]}>
+        <ActivityIndicator color={colors.accent} />
+      </View>
+      <View style={styles.text}>
+        <Text style={[Type.subhead, styles.name, { color: colors.text }]} numberOfLines={1}>
+          {converting.doc.name}
+        </Text>
+        <Text style={[Type.footnote, { color: colors.muted }]}>
+          {converting.progress.stage === 'saving'
+            ? `Converting page ${converting.progress.done} of ${converting.progress.total}…`
+            : 'Converting to pages…'}
+        </Text>
+      </View>
+    </>
+  ) : doc ? (
     <>
       <DocThumb doc={doc} width={34} height={44} />
       <View style={styles.text}>
@@ -103,7 +228,7 @@ export function ToolDocPicker({
       <View style={styles.text}>
         <Text style={[Type.body, { color: colors.accent, fontWeight: '600' }]}>Choose a document</Text>
         <Text style={[Type.footnote, { color: colors.muted }]}>
-          {docs.length === 1 ? '1 document' : `${docs.length} documents`}
+          {total === 1 ? '1 document' : `${total} documents`}
         </Text>
       </View>
       <Ionicons name="chevron-forward" size={18} color={colors.muted} />
@@ -133,25 +258,79 @@ export function ToolDocPicker({
         </View>
       )}
 
-      <BottomSheet visible={open} onClose={() => setOpen(false)} variant="grouped">
-        <SheetHeader title="Choose a document" subtitle={note} />
+      <BottomSheet
+        visible={open}
+        onClose={() => setOpen(false)}
+        variant="grouped"
+        onDismissed={() => {
+          const pdf = pendingConvert.current;
+          pendingConvert.current = null;
+          if (pdf) askConvert(pdf);
+        }}
+      >
+        <SheetHeader title="Choose a document" subtitle={pdfs.length ? undefined : note} />
         <ScrollView style={styles.list} showsVerticalScrollIndicator={false} bounces={false}>
-          <DocGroup>
-            {docs.map(d => (
-              <DocRow
-                key={d.id}
-                doc={d}
-                selected={d.id === doc?.id}
-                onPress={() => {
-                  setOpen(false);
-                  if (d.id !== doc?.id) onPick(d);
-                }}
-              />
-            ))}
-          </DocGroup>
+          {docs.length ? (
+            <DocGroup>
+              {docs.map(d => (
+                <DocRow
+                  key={d.id}
+                  doc={d}
+                  selected={d.id === doc?.id}
+                  onPress={() => {
+                    setOpen(false);
+                    if (d.id !== doc?.id) onPick(d);
+                  }}
+                />
+              ))}
+            </DocGroup>
+          ) : null}
+          {pdfs.length ? (
+            <>
+              <SectionLabel style={docs.length ? undefined : styles.firstLabel}>Imported PDFs</SectionLabel>
+              <DocGroup>
+                {pdfs.map(d => (
+                  <ConvertRow
+                    key={d.id}
+                    doc={d}
+                    onPress={() => {
+                      pendingConvert.current = d;
+                      setOpen(false);
+                    }}
+                  />
+                ))}
+              </DocGroup>
+              <Text style={[Type.footnote, styles.pdfNote, { color: colors.muted }]}>
+                {`To ${convert?.verb ?? 'edit'} a PDF, convert it to pages first. You can undo it right after.`}
+              </Text>
+            </>
+          ) : null}
         </ScrollView>
       </BottomSheet>
     </>
+  );
+}
+
+/** An imported PDF in the picker: the row says what tapping it does (Convert). */
+function ConvertRow({ doc, onPress }: { doc: Document; onPress: () => void }) {
+  const { colors } = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={`${doc.name}, PDF`}
+      accessibilityHint="Converts it to pages"
+      style={({ pressed }) => [styles.convertRow, pressed && { backgroundColor: colors.separator }]}
+    >
+      <DocThumb doc={doc} />
+      <View style={styles.text}>
+        <Text style={[Type.body, { color: colors.text }]} numberOfLines={1}>
+          {doc.name}
+        </Text>
+        <Text style={[Type.footnote, styles.meta, { color: colors.muted }]}>PDF</Text>
+      </View>
+      <Text style={[Type.subhead, styles.convertAction, { color: colors.accent }]}>Convert</Text>
+    </Pressable>
   );
 }
 
@@ -193,4 +372,18 @@ const styles = StyleSheet.create({
   text: { flex: 1 },
   name: { fontWeight: '600', marginBottom: 1 },
   list: { flexGrow: 0, flexShrink: 1 },
+  firstLabel: { marginTop: 0 },
+  pdfNote: { marginTop: Spacing.sm, marginHorizontal: Spacing.xs, lineHeight: 18 },
+  meta: { marginTop: 2 },
+  // Same box as DocRow (components/tool-ui.tsx), with a text action at the end.
+  convertRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    paddingVertical: Spacing.sm + 2,
+    paddingLeft: Spacing.md,
+    paddingRight: Spacing.lg,
+    minHeight: HIT + 16,
+  },
+  convertAction: { fontWeight: '600' },
 });

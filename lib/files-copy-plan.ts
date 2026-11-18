@@ -1,75 +1,109 @@
 // lib/files-copy-plan.ts
 // Pure planning for "Keep a copy in Files" (lib/files-copy.ts): which PDF
-// copies to write and which to remove, given the live documents and what was
-// written last time. No native modules, so it is unit-tested.
-import { uniqueNames } from './unique-names';
+// copies to write and which to remove, given the live documents, what was
+// written before (the manifest) and the names other files already have in the
+// folder. No native modules, so it is unit-tested.
 
-/** What was written for one document: its file name and the record's updatedAt then. */
-export type CopyEntry = { name: string; stamp: number };
-/** Document id → the copy written for it. */
+/** What identifies a file this feature wrote: it is ours only while these still match. */
+export type Fingerprint = { size: number; mtime: number | null; md5: string | null };
+
+/**
+ * One copy this feature wrote, for one document.
+ *  - `fp`: the file as written. `undefined` only for entries an older build
+ *    recorded without one (trusted once, then fingerprinted); `null` while a
+ *    first copy is being put in place (there was no file of ours before).
+ *  - `next`: write-ahead record of a copy being put in place under `name`. If
+ *    the app dies in between, the file found there is recognised as ours by
+ *    either fingerprint, never mistaken for the user's.
+ */
+export type CopyEntry = {
+  name: string;
+  stamp: number;
+  fp?: Fingerprint | null;
+  next?: { stamp: number; fp: Fingerprint };
+};
+/** Document id → the copy written for it. Entries outlive their documents until the file is gone. */
 export type CopyManifest = Record<string, CopyEntry>;
 
 /** The parts of a document the plan needs. */
 export type CopyDoc = { id: string; name: string; createdAt: number; updatedAt: number; pages: string[]; pdfUri?: string };
 
 export type CopyPlan = {
-  /** File names to delete first: deleted documents, and renamed documents' old names. */
-  remove: string[];
+  /**
+   * Copies of ours to remove, before anything is written: a deleted document's,
+   * or a renamed / renumbered document's old name. Always removed, even when
+   * another document's copy will take the name next — so a failed or cancelled
+   * write can never leave a deleted document's PDF behind.
+   */
+  remove: { id: string; name: string }[];
   /** Documents whose copy is missing or out of date, with the file name to write. */
   write: { id: string; name: string; stamp: number }[];
-  /** Ids whose manifest entries go away with the removals. */
-  forget: string[];
 };
 
 /**
+ * Unique names, case-insensitively, that also avoid `occupied` (files in the
+ * folder that aren't this feature's — the user's own, or a copy they edited).
+ * Every name a document actually has is reserved up front, so a document
+ * really called "Receipt 2" keeps that name and a generated "Receipt N"
+ * counts past it.
+ */
+export function uniqueNamesAvoiding(names: string[], occupied: Iterable<string>): string[] {
+  const key = (n: string) => n.toLowerCase();
+  const blocked = new Set<string>(Array.from(occupied, key));
+  const taken = new Set<string>([...blocked, ...names.map(key)]);
+  const kept = new Set<string>();
+  return names.map(n => {
+    if (!kept.has(key(n)) && !blocked.has(key(n))) {
+      kept.add(key(n));
+      return n;
+    }
+    const dot = n.lastIndexOf('.');
+    const stem = dot > 0 ? n.slice(0, dot) : n;
+    const ext = dot > 0 ? n.slice(dot) : '';
+    let candidate = `${stem} 2${ext}`;
+    for (let i = 3; taken.has(key(candidate)); i++) candidate = `${stem} ${i}${ext}`;
+    taken.add(key(candidate));
+    kept.add(key(candidate));
+    return candidate;
+  });
+}
+
+/**
  * Every live document with pages (or a PDF) gets one copy. Names come from
- * `fileName` and are made unique case-insensitively, oldest document first,
- * so an existing copy keeps its name when a newer document takes the same
- * one ("Receipt.pdf", then "Receipt 2.pdf"). A copy is rewritten when its
- * document changed since (updatedAt) or its name did; a document that is gone
- * (deleted, or in Recently deleted) loses its copy. Only files this feature
- * wrote (the manifest) are ever removed.
+ * `fileName`, made unique oldest document first (so an existing copy keeps
+ * its name when a newer document takes the same one) and never one an
+ * `occupied` file has. A copy is rewritten when its document changed since
+ * (updatedAt) or its name did; a document that is gone (deleted, or in
+ * Recently deleted) loses its copy. Only files in the manifest are ever
+ * removed — and lib/files-copy.ts checks each one's fingerprint first.
  */
 export function planFilesCopy(
   docs: CopyDoc[],
   manifest: CopyManifest,
   fileName: (docName: string) => string,
+  occupied: Iterable<string> = [],
 ): CopyPlan {
   const live = docs
     .filter(d => !!d.pdfUri || d.pages.length > 0)
     .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
-  const names = uniqueNames(live.map(d => fileName(d.name)));
-  const liveIds = new Set(live.map(d => d.id));
-  const wanted = new Set(names.map(n => n.toLowerCase()));
+  const names = uniqueNamesAvoiding(live.map(d => fileName(d.name)), occupied);
+  const wantedFor = new Map(live.map((d, i) => [d.id, names[i]]));
 
-  const remove: string[] = [];
-  const forget: string[] = [];
+  const remove: CopyPlan['remove'] = [];
   for (const [id, entry] of Object.entries(manifest)) {
-    if (!liveIds.has(id)) {
-      forget.push(id);
-      // Another document may now own that name: it is rewritten below anyway.
-      remove.push(entry.name);
-    }
+    const wanted = wantedFor.get(id);
+    // Gone, or renamed (a case-only rename too: APFS treats them as one name,
+    // and the remove-then-write order handles it).
+    if (wanted === undefined || wanted !== entry.name) remove.push({ id, name: entry.name });
   }
 
   const write: CopyPlan['write'] = [];
   live.forEach((d, i) => {
     const entry = manifest[d.id];
     const name = names[i];
-    if (entry && entry.name !== name) {
-      // Renamed (or renumbered): the old file goes unless a document now wants that name.
-      if (!wanted.has(entry.name.toLowerCase())) remove.push(entry.name);
-    }
     if (!entry || entry.name !== name || entry.stamp !== d.updatedAt) {
       write.push({ id: d.id, name, stamp: d.updatedAt });
     }
   });
-
-  // A name freed by one document and taken by another is overwritten, not removed.
-  const writing = new Set(write.map(w => w.name.toLowerCase()));
-  return {
-    remove: Array.from(new Set(remove)).filter(n => !writing.has(n.toLowerCase())),
-    write,
-    forget,
-  };
+  return { remove, write };
 }

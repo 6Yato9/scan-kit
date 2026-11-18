@@ -22,7 +22,7 @@ const SECTIONS: { title: string; tips: Tip[] }[] = [
       { icon: 'ellipsis-horizontal-circle-outline', title: 'More actions', text: 'Long-press any document to share, rename, duplicate, move, merge or delete it.' },
       { icon: 'checkmark-circle-outline', title: 'Select several', text: 'In Files, tap Select to share, move, merge or delete many documents at once.' },
       { icon: 'crop-outline', title: 'Edit pages', text: 'Open a document and use the toolbar under the page to crop, apply a filter, rotate, mark up or copy its text.' },
-      { icon: 'signature', title: 'Sign and stamp', text: 'In a document, tap the more button to sign it or add a watermark or timestamp. These save a copy; the original stays as it is.' },
+      { icon: 'signature', title: 'Sign and stamp', text: 'In a document, tap the more button to sign it or add a watermark or timestamp. The change is made to the document itself and you can undo it right after, or choose Save as a copy to keep the original as it is.' },
       { icon: 'share-outline', title: 'Share and export', text: 'Send a document as a searchable PDF, a smaller PDF or images, save it to Photos, or print it.' },
     ],
   },

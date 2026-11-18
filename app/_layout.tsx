@@ -17,6 +17,7 @@ import { subscribeSystemUI } from '@/lib/system-ui';
 import { garbageCollectOrphans, sweepConvertLeftovers } from '@/lib/files';
 import { ensureStorageLayout } from '@/lib/storage-layout';
 import { clearLegacyOcrCache } from '@/lib/ocr-cache';
+import { recoverInterruptedStamps } from '@/lib/page-stamp';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
 import { documentFileRefsForCleanup, documentIdsForCleanup, getOnboarded, getOnboardedSync, pendingBakeMigrations, withDocumentFileRefs } from '@/lib/storage';
 
@@ -217,6 +218,7 @@ function ThemedStack() {
       <Stack.Screen name="settings/printer" options={{ title: 'Printing', presentation: 'card' }} />
       <Stack.Screen name="settings/help" options={{ title: 'Help', presentation: 'card' }} />
       <Stack.Screen name="settings/about" options={{ title: 'About', presentation: 'card' }} />
+      <Stack.Screen name="settings/recovered-files" options={{ title: 'Recovered files', presentation: 'card' }} />
       <Stack.Screen name="tools/qr" options={{ headerShown: false, presentation: 'fullScreenModal' }} />
       <Stack.Screen name="tools/id-card" options={{ headerShown: false, presentation: 'card' }} />
       <Stack.Screen name="tools/compress" options={toolOptions} />
@@ -240,6 +242,10 @@ function ThemedStack() {
 
 export default function RootLayout() {
   useEffect(() => {
+    // A Sign / Watermark / Timestamp the app died in the middle of is rolled
+    // back first, from its journal (lib/page-stamp.ts), before anything opens
+    // the document or the sweep below looks at its folder.
+    const stampsRecovered = recoverInterruptedStamps().catch(() => 0);
     // Fire-and-forget startup sweep of orphaned doc dirs and interrupted-
     // operation temp files. Delayed slightly so it never competes with render.
     // documentIdsForCleanup returns null when the list can't be trusted (doc
@@ -248,7 +254,8 @@ export default function RootLayout() {
       // Recognised text used to be cached outside the documents' folders,
       // where it outlived deleted documents (lib/ocr-cache.ts).
       clearLegacyOcrCache();
-      documentIdsForCleanup()
+      stampsRecovered
+        .then(() => documentIdsForCleanup())
         .then(ids => (ids ? garbageCollectOrphans(ids) : 0))
         // Then files a record no longer references, left by an interrupted
         // "Convert to pages" or its Undo (lib/files.ts sweepConvertLeftovers).

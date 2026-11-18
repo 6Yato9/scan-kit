@@ -2,7 +2,7 @@
 import * as Crypto from 'expo-crypto';
 import { Document } from '../types/document';
 import { saveDocument, updateDocumentWith } from './storage';
-import { copyPageWithQuality, copyPdfToStorage, deleteDisposableTemps, deleteDocumentFiles } from './files';
+import { copyPageWithQuality, copyPdfToStorage, deleteDisposableTemps, deleteDocumentFiles, moveScannerOutputToCaches } from './files';
 import { ocrAvailable, extractDocText } from './ocr';
 import { titleFromText } from './auto-name';
 import { withDocLock } from './bake';
@@ -39,7 +39,9 @@ export type SaveScanResult = { id: string; pages: string[] };
  * auto-crop output — see isDisposableTemp) are deleted.
  */
 export async function saveScan(input: SaveScanInput): Promise<SaveScanResult> {
-  const { pages = [], pdfUri, name, quality, nameIsDefault } = input;
+  const { pdfUri, name, quality, nameIsDefault } = input;
+  // Scanner pages never stay in Documents (shown in the Files app), whoever called.
+  const pages = moveScannerOutputToCaches(input.pages ?? []);
   if (!pdfUri && pages.length === 0) {
     throw new Error('saveScan: nothing to save — no pages and no pdfUri');
   }

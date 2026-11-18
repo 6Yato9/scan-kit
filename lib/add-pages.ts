@@ -7,7 +7,7 @@
 import { File } from 'expo-file-system';
 import { docDir } from './storage-layout';
 import { Document, PageAdjustment, PageFilter } from '../types/document';
-import { copyPageWithQuality, deleteDisposableTemps, isScannerOutput } from './files';
+import { copyPageWithQuality, deleteDisposableTemps, isScannerOutput, moveScannerOutputToCaches } from './files';
 import { getDocument, updateDocumentWith } from './storage';
 import { bakePages, runPageEdit } from './bake';
 import { indexDocText } from './save-scan';
@@ -41,10 +41,13 @@ export type AddPagesOptions = {
  */
 export async function addPagesToDocument(
   docId: string,
-  uris: string[],
+  rawUris: string[],
   quality: number,
   options: AddPagesOptions = {},
 ): Promise<AddPagesResult> {
+  // Scanner pages land in Documents (shown in the Files app): out of there
+  // first, whoever called (the viewer passes the scanner's result straight in).
+  const uris = moveScannerOutputToCaches(rawUris);
   // Auto-crop before taking the page lock: it's slow and touches no stored file.
   const inputs: string[] = [];
   for (const uri of uris) {

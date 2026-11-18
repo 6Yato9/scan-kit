@@ -60,6 +60,7 @@ import { indexDocText } from '@/lib/save-scan';
 import { indexPdfText, needsPdfText } from '@/lib/pdf-text';
 import { PdfUnlockError, pdfUnlockAvailable, unlockStoredPdf } from '@/lib/pdf-unlock';
 import { subscribeViewerNotices, takeViewerNotice } from '@/lib/viewer-notice';
+import { takeNewDocumentNote, uncroppedMessage } from '@/lib/new-doc-note';
 import { alertScanError, deleteTempFiles, pickPhotos, scanWithCamera, ToolScanError } from '@/lib/tool-scan';
 import { withSystemUI } from '@/lib/system-ui';
 import { insertAt, restoreStashedPage, stashPage } from '@/lib/page-undo';
@@ -192,10 +193,13 @@ function ViewerContent({
   // The page counter row (image pages or PDF): ViewerScreen pins toasts to it.
   const counterRowRef = useRef<View>(null);
   const anchorToast = useCallback(() => {
-    counterRowRef.current?.measureInWindow((_x, y) => {
-      // Never so low that a two-line toast would run off the screen (it may
-      // cover the home indicator, never the page).
-      if (Number.isFinite(y) && y > 0) onToastAnchor(Math.min(y, windowH - TOAST_ROOM));
+    counterRowRef.current?.measureInWindow((_x, y, _w, h) => {
+      // Wholly on the toolbar under the counter row, never straddling its top
+      // edge: the toast starts a little below the row (the counter stays in
+      // view) and never so low that a two-line toast would run off the screen
+      // (it may cover the home indicator, never the page).
+      const below = y + (Number.isFinite(h) ? h : 0) + Spacing.md;
+      if (Number.isFinite(y) && y > 0) onToastAnchor(Math.min(below, windowH - TOAST_ROOM));
     });
   }, [onToastAnchor, windowH]);
   const { bumpLastSaved } = useScan();
@@ -260,6 +264,33 @@ function ViewerContent({
     shownNotice.current = notice;
     toast.show(notice);
   }, [notice, status, toast]);
+
+  // A document just created (a scan, imported photos or a file) is confirmed
+  // by name, with Rename; a photo whose page edges auto-crop couldn't find is
+  // said so instead, with Crop on that page (lib/new-doc-note). Once.
+  useEffect(() => {
+    if (status !== 'ready' || !id) return;
+    const doc = docRef.current;
+    if (!doc) return;
+    const note = takeNewDocumentNote(id);
+    if (!note) return;
+    const count = doc.pages.length;
+    if (note.uncropped.length && count) {
+      const target = Math.min(note.uncropped[0], count - 1);
+      toast.show(uncroppedMessage(note.uncropped, count), {
+        action: {
+          label: 'Crop',
+          onPress: () => {
+            setCurrentPage(target);
+            flatListRef.current?.scrollToOffset({ offset: target * screenWidth, animated: false });
+            setCropVisible(true);
+          },
+        },
+      });
+    } else {
+      toast.show(`Saved as “${doc.name}”`, { action: { label: 'Rename', onPress: () => setRenameVisible(true) } });
+    }
+  }, [status, id, toast, screenWidth]);
 
   // The page a notice asked for, while the pager may not have laid out yet.
   const jumpTo = useRef<number | null>(null);
@@ -1215,8 +1246,10 @@ function ViewerContent({
         <Text style={[Type.headline, styles.titleText, { color: colors.chromeText }]} numberOfLines={1}>
           {document.name}
         </Text>
+        {/* 16pt at the regular weight, a step brighter than muted text: at
+            14pt light it read as a stray slash after the title. */}
         <View style={styles.titlePencil}>
-          <AppIcon name="rename" size={14} color={colors.chromeMuted} />
+          <AppIcon name="rename" size={16} color={colors.chromeText} weight="regular" />
         </View>
       </Pressable>
     </View>
@@ -1642,7 +1675,7 @@ const styles = StyleSheet.create({
   // Left-aligned next to the back button; the pencil says "tap to rename".
   titlePress: { flexShrink: 1, minHeight: HIT, flexDirection: 'row', alignItems: 'center', paddingRight: Spacing.sm },
   titleText: { flexShrink: 1 },
-  titlePencil: { marginLeft: Spacing.xs + 2, marginTop: 1 },
+  titlePencil: { marginLeft: Spacing.sm, marginTop: 1, opacity: 0.72 },
   pager: { flex: 1 },
   page: {
     flex: 1,
