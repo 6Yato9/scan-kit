@@ -21,6 +21,76 @@ public class VisionOcrModule: Module {
       Prop("backgroundHex") { (view: PdfDocumentView, hex: String) in view.setBackground(hex) }
     }
 
+    // Must stay the SECOND view: the first one is the module's default view
+    // (requireNativeView('VisionOcr') = PdfDocumentView in shipped JS).
+    View(DocumentCameraView.self) {
+      Events("onDetection", "onCapture", "onCaptureStart", "onCameraError")
+      Prop("autoCapture") { (view: DocumentCameraView, on: Bool) in view.setAutoCapture(on) }
+      Prop("flash") { (view: DocumentCameraView, mode: String) in view.setFlash(mode) }
+      Prop("torch") { (view: DocumentCameraView, on: Bool) in view.setTorch(on) }
+      Prop("active") { (view: DocumentCameraView, on: Bool) in view.setActive(on) }
+      Prop("simulatorImageUri") { (view: DocumentCameraView, uri: String?) in view.setSimulatorImage(uri) }
+      OnViewDidUpdateProps { (view: DocumentCameraView) in view.propsDidUpdate() }
+      AsyncFunction("capture") { (view: DocumentCameraView, promise: Promise) in view.capture(promise) }
+    }
+
+    /// Page outline in a photo: [x0,y0,...,x3,y3] TL, TR, BR, BL, normalised
+    /// 0...1, top-left origin, upright (EXIF applied). null when not confident.
+    AsyncFunction("detectQuad") { (uri: String, promise: Promise) in
+      DispatchQueue.global(qos: .userInitiated).async {
+        do {
+          let quad = try DocumentGeometry.detectQuad(path: DocumentGeometry.path(uri.components(separatedBy: "?")[0]))
+          promise.resolve(quad.map { DocumentGeometry.flatten($0) })
+        } catch let e as DocumentGeometry.Failure {
+          promise.reject(e.code, e.message)
+        } catch {
+          promise.reject("ERR_DETECT_QUAD", error.localizedDescription)
+        }
+      }
+    }
+
+    /// Perspective-corrected crop of `quad` from the upright source, written
+    /// as an upright JPEG with the long edge capped at maxEdge.
+    AsyncFunction("warpQuad") { (srcUri: String, quad: [Double], outUri: String, quality: Double, maxEdge: Double, promise: Promise) in
+      DispatchQueue.global(qos: .userInitiated).async {
+        do {
+          let pts = try DocumentGeometry.parseQuad(quad)
+          guard quality.isFinite, maxEdge.isFinite, maxEdge >= 1 else {
+            throw DocumentGeometry.Failure(code: "ERR_BAD_ARGS", message: "quality must be 0...1 and maxEdge >= 1")
+          }
+          let out = DocumentGeometry.path(outUri)
+          let (w, h) = try DocumentGeometry.warp(srcPath: DocumentGeometry.path(srcUri.components(separatedBy: "?")[0]),
+                                                 quad: pts, outPath: out,
+                                                 quality: min(1, max(0, quality)), maxEdge: Int(maxEdge))
+          promise.resolve(["uri": URL(fileURLWithPath: out).absoluteString, "width": w, "height": h])
+        } catch let e as DocumentGeometry.Failure {
+          promise.reject(e.code, e.message)
+        } catch {
+          promise.reject("ERR_WARP", error.localizedDescription)
+        }
+      }
+    }
+
+    /// Upright (EXIF baked in) JPEG copy with the long edge capped at maxEdge.
+    AsyncFunction("normalizeImage") { (srcUri: String, outUri: String, maxEdge: Double, quality: Double, promise: Promise) in
+      DispatchQueue.global(qos: .userInitiated).async {
+        do {
+          guard quality.isFinite, maxEdge.isFinite, maxEdge >= 1 else {
+            throw DocumentGeometry.Failure(code: "ERR_BAD_ARGS", message: "quality must be 0...1 and maxEdge >= 1")
+          }
+          let out = DocumentGeometry.path(outUri)
+          let (w, h) = try DocumentGeometry.normalize(srcPath: DocumentGeometry.path(srcUri.components(separatedBy: "?")[0]),
+                                                      outPath: out, maxEdge: Int(maxEdge),
+                                                      quality: min(1, max(0, quality)))
+          promise.resolve(["uri": URL(fileURLWithPath: out).absoluteString, "width": w, "height": h])
+        } catch let e as DocumentGeometry.Failure {
+          promise.reject(e.code, e.message)
+        } catch {
+          promise.reject("ERR_NORMALIZE", error.localizedDescription)
+        }
+      }
+    }
+
     AsyncFunction("recognize") { (uri: String, promise: Promise) in
       DispatchQueue.global(qos: .userInitiated).async {
         do {
@@ -155,8 +225,16 @@ public class VisionOcrModule: Module {
           let input = URL(string: uri).flatMap { $0.isFileURL ? $0.path : nil } ?? uri
           let out = FileManager.default.temporaryDirectory
             .appendingPathComponent("doc-\(UUID().uuidString).jpg").path
-          if let corrected = try DocumentDetector.detectAndCorrect(path: input, outputPath: out, quality: quality) {
-            promise.resolve(["uri": URL(fileURLWithPath: corrected).absoluteString, "detected": true])
+          // Auto-crop on import: stricter minimum area than detectQuad (no
+          // one reviews this crop), corners on the paper edge (no inset).
+          let quad: [CGPoint]? = try autoreleasepool {
+            let src = try DocumentGeometry.source(path: input)
+            guard let cg = DocumentGeometry.upright(source: src, maxPixel: 2048) else { return nil }
+            return DocumentGeometry.detect(cg, minArea: 0.30)
+          }
+          if let quad = quad {
+            _ = try DocumentGeometry.warp(srcPath: input, quad: quad, outPath: out, quality: quality, maxEdge: 4096)
+            promise.resolve(["uri": URL(fileURLWithPath: out).absoluteString, "detected": true])
           } else {
             promise.resolve(["uri": uri, "detected": false])
           }

@@ -10,7 +10,7 @@ Pod::Spec.new do |s|
   s.source         = { git: '' }
   s.static_framework = true
   s.dependency 'ExpoModulesCore'
-  s.frameworks     = 'Vision', 'PDFKit'
+  s.frameworks     = 'Vision', 'PDFKit', 'AVFoundation', 'CoreMotion', 'CoreImage', 'ImageIO'
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES' }
   s.source_files   = '**/*.{h,m,mm,swift}'
 end
