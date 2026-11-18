@@ -691,7 +691,7 @@ export async function sweepConvertLeftovers(
 
 // ── Temp files ───────────────────────────────────────────────────────────────
 
-function containerRoot(): string {
+export function containerRoot(): string {
   const docs = Paths.document.uri.replace(/\/+$/, '');
   return docs.slice(0, docs.lastIndexOf('/') + 1);
 }
@@ -826,6 +826,8 @@ const TEMP_DIRS = [
   SCANNER_DIR,
   // "Keep a copy in Files" PDFs being made (lib/files-copy.ts).
   'files-copy',
+  // HTML pages the off-screen WebViews load (components/local-webview.tsx).
+  'webview',
 ];
 /** Open-in staging files older builds wrote straight into the Caches root. */
 const LEGACY_STAGED = /^(?:incoming|attempt)-\d+-/;

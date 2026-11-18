@@ -1,7 +1,7 @@
 // components/filter-baker.tsx
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { WebView } from 'react-native-webview';
+import { LocalWebView } from './local-webview';
 import { buildBakeHtml, buildPreviewHtml } from '@/lib/bake-html';
 import { BakeHost, BakeJob, completeJob, failJob, registerBakeHost, releaseJob, takeNextJob } from '@/lib/bake-queue';
 
@@ -110,23 +110,16 @@ export function FilterBaker() {
 
   return (
     <View style={styles.host} pointerEvents="none">
-      <WebView
+      <LocalWebView
         key={`${job.id}-${generation}`}
-        source={{
-          html: job.previews
-            ? buildPreviewHtml(job.src, job.previews, job.previewWidth ?? 120)
-            : buildBakeHtml(job.src, job.ops),
-          baseUrl: 'file:///',
-        }}
+        html={job.previews
+          ? buildPreviewHtml(job.src, job.previews, job.previewWidth ?? 120)
+          : buildBakeHtml(job.src, job.ops)}
         style={styles.web}
         onMessage={handleMessage}
         onContentProcessDidTerminate={handleCrash}
         onRenderProcessGone={handleCrash}
         onError={handleLoadError}
-        originWhitelist={['*']}
-        allowFileAccess
-        allowFileAccessFromFileURLs
-        allowUniversalAccessFromFileURLs
         javaScriptEnabled
       />
     </View>

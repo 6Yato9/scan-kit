@@ -9,6 +9,7 @@ import {
   View,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
+import { LocalWebView } from '@/components/local-webview';
 import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
 import { File } from 'expo-file-system';
@@ -418,16 +419,12 @@ export default function AnnotateScreen() {
       {/* Canvas */}
       <View style={styles.canvasArea}>
         {html ? (
-          <WebView
+          <LocalWebView
             ref={webRef}
-            source={{ html, baseUrl: 'file:///' }}
+            html={html}
             style={[styles.webview, { backgroundColor: colors.chrome }]}
             scrollEnabled={false}
             onMessage={handleMessage}
-            originWhitelist={['*']}
-            allowFileAccess
-            allowFileAccessFromFileURLs
-            allowUniversalAccessFromFileURLs
           />
         ) : (
           <ActivityIndicator color={colors.chromeText} style={{ flex: 1 }} />

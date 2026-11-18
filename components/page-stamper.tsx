@@ -17,7 +17,7 @@
 // it did instead of waiting out a page that will never be drawn.
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Alert, StyleSheet, View } from 'react-native';
-import { WebView } from 'react-native-webview';
+import { LocalWebView } from './local-webview';
 import { useRouter } from 'expo-router';
 import { buildStampHtml, type StampSpec } from '@/lib/stamp';
 import {
@@ -146,18 +146,14 @@ export function usePageStamper(): {
 
   const host = useMemo(() => (job ? (
     <View style={styles.host} pointerEvents="none">
-      <WebView
+      <LocalWebView
         key={job.id}
-        source={{ html: job.html, baseUrl: 'file:///' }}
+        html={job.html}
         style={styles.web}
         onMessage={onMessage}
         onContentProcessDidTerminate={onCrash}
         onRenderProcessGone={onCrash}
         onError={onCrash}
-        originWhitelist={['*']}
-        allowFileAccess
-        allowFileAccessFromFileURLs
-        allowUniversalAccessFromFileURLs
         javaScriptEnabled
       />
     </View>

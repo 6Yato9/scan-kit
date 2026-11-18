@@ -3,7 +3,7 @@
 // it. Rendering happens in an off-screen WebView canvas (lib/long-image.ts).
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Image, StyleSheet, View, useWindowDimensions } from 'react-native';
-import { WebView } from 'react-native-webview';
+import { LocalWebView } from '@/components/local-webview';
 import * as FileSystem from 'expo-file-system/legacy';
 import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';
@@ -167,16 +167,12 @@ export default function LongImageScreen() {
 
       {job ? (
         <View style={styles.host} pointerEvents="none">
-          <WebView
-            source={{ html: job.html, baseUrl: 'file:///' }}
+          <LocalWebView
+            html={job.html}
             style={styles.web}
             onMessage={onMessage}
             onError={fail}
             onContentProcessDidTerminate={fail}
-            originWhitelist={['*']}
-            allowFileAccess
-            allowFileAccessFromFileURLs
-            allowUniversalAccessFromFileURLs
             javaScriptEnabled
           />
         </View>
