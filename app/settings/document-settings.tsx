@@ -1,6 +1,11 @@
 // app/settings/document-settings.tsx
-import { useCallback, useState } from 'react';
-import { StyleSheet, TextInput, View } from 'react-native';
+// The PDF image quality setting was removed: file size is chosen when
+// exporting (Export › Smaller PDF, or the Compress tool). The stored
+// `pdfQuality` value stays in DocSettings, defaulting to 'standard', so code
+// that still reads it keeps working.
+import { useCallback, useRef, useState } from 'react';
+import { Pressable, StyleSheet, TextInput } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from 'expo-router';
 import { getDocSettings, saveDocSettings, DocSettings } from '@/lib/storage';
 import { autoName } from '@/lib/auto-name';
@@ -14,14 +19,11 @@ const PAGE_SIZE_OPTIONS: { label: string; desc: string; value: DocSettings['pdfP
   { label: 'US Letter', desc: '8.5 × 11 in', value: 'Letter' },
 ];
 
-const QUALITY_OPTIONS: { label: string; value: DocSettings['pdfQuality']; desc: string }[] = [
-  { label: 'Standard', value: 'standard', desc: 'Smaller files, good for email' },
-  { label: 'High', value: 'high', desc: 'Full-resolution images' },
-];
-
 export default function DocumentSettingsScreen() {
   const { colors } = useTheme();
   const [settings, setSettings] = useState<DocSettings | null>(null);
+  const [editing, setEditing] = useState(false);
+  const inputRef = useRef<TextInput>(null);
 
   useFocusEffect(useCallback(() => {
     let cancelled = false;
@@ -36,25 +38,36 @@ export default function DocumentSettingsScreen() {
     await saveDocSettings(next);
   };
 
-  // Shows exactly what the scanner will produce (lib/auto-name.ts).
+  // Shows exactly what the scanner will produce (lib/auto-name.ts). Drawn with
+  // no-break spaces in the footer so the example never splits across lines.
   const example = autoName(new Date(), settings?.namePrefix ?? 'Scan');
 
   return (
     <ToolScreen title="Document settings">
-      <SettingsGroup title="Name for new scans" footer={`New scans will be named “${example}”.`}>
-        <View style={styles.inputRow}>
+      <SettingsGroup
+        title="Name for new scans"
+        footer={`New scans take their title from the text on the page. Until a title is read, or if none is found, they’re named “${example.replace(/ /g, '\u00A0')}”.`}
+      >
+        <Pressable style={styles.inputRow} onPress={() => inputRef.current?.focus()} accessible={false}>
           <TextInput
+            ref={inputRef}
             style={[Type.body, styles.input, { color: colors.text }]}
             value={settings?.namePrefix ?? ''}
             onChangeText={v => update({ namePrefix: v })}
+            onFocus={() => setEditing(true)}
+            onBlur={() => setEditing(false)}
             placeholder="Scan"
             placeholderTextColor={colors.muted}
             returnKeyType="done"
             autoCorrect={false}
             accessibilityLabel="Name for new scans"
+            accessibilityHint="Edits the start of the name new scans get"
             clearButtonMode="while-editing"
           />
-        </View>
+          {/* Edit cue: the row is a text field, not a label. The clear button
+              takes its place while editing. */}
+          {editing ? null : <Ionicons name="pencil-outline" size={18} color={colors.muted} />}
+        </Pressable>
       </SettingsGroup>
 
       <SettingsGroup title="Paper size" footer="Used for every PDF you export and everything you print. Each page fits on one sheet.">
@@ -70,23 +83,17 @@ export default function DocumentSettingsScreen() {
         ))}
       </SettingsGroup>
 
-      <SettingsGroup title="PDF image quality">
-        {QUALITY_OPTIONS.map((opt, i) => (
-          <SettingsRow
-            key={opt.value}
-            label={opt.label}
-            description={opt.desc}
-            accessory={{ type: 'check', selected: settings?.pdfQuality === opt.value }}
-            onPress={() => update({ pdfQuality: opt.value })}
-            last={i === QUALITY_OPTIONS.length - 1}
-          />
-        ))}
-      </SettingsGroup>
     </ToolScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  inputRow: { paddingHorizontal: Spacing.lg, minHeight: HIT + 8, justifyContent: 'center' },
-  input: { paddingVertical: Spacing.md },
+  inputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    paddingHorizontal: Spacing.lg,
+    minHeight: HIT + 8,
+  },
+  input: { flex: 1, paddingVertical: Spacing.md },
 });

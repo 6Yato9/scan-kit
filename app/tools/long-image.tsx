@@ -131,7 +131,7 @@ export default function LongImageScreen() {
       {shown ? (
         <>
           <SectionLabel>Preview</SectionLabel>
-          <View style={[styles.preview, { backgroundColor: colors.card }]}>
+          <View style={[styles.preview, { backgroundColor: colors.card, borderColor: colors.thumbBorder }]}>
             <Image
               source={{ uri: shown.uri }}
               style={{ width: previewW, height: (previewW * shown.plan.totalHeight) / shown.plan.width }}
@@ -176,7 +176,7 @@ export default function LongImageScreen() {
 }
 
 const styles = StyleSheet.create({
-  preview: { borderRadius: Radius.md, overflow: 'hidden', alignItems: 'center' },
+  preview: { borderRadius: Radius.md, overflow: 'hidden', alignItems: 'center', borderWidth: StyleSheet.hairlineWidth },
   gap: { height: Spacing.lg },
   // Same host trick as components/filter-baker.tsx: WKWebView only runs its
   // JavaScript when it is really laid out, so it is kept on screen at 1%

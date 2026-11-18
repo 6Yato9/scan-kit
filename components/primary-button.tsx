@@ -30,8 +30,15 @@ export function PrimaryButton({
   style?: ViewStyle;
 }) {
   const { colors } = useTheme();
-  const bg = variant === 'primary' ? colors.accentFill : variant === 'destructive' ? colors.dangerBg : colors.tintFill;
-  const fg = variant === 'primary' ? colors.onAccent : variant === 'destructive' ? colors.danger : colors.onTint;
+  // Disabled (not loading) is its own designed state — a neutral grey fill with
+  // faint text, readable in both modes — rather than the live colours faded.
+  const off = !!disabled && !loading;
+  const bg = off
+    ? colors.input
+    : variant === 'primary' ? colors.accentFill : variant === 'destructive' ? colors.dangerBg : colors.tintFill;
+  const fg = off
+    ? colors.faint
+    : variant === 'primary' ? colors.onAccent : variant === 'destructive' ? colors.danger : colors.onTint;
   const inactive = disabled || loading;
   return (
     <Pressable
@@ -42,7 +49,6 @@ export function PrimaryButton({
       style={({ pressed }) => [
         styles.btn,
         { backgroundColor: bg },
-        disabled && !loading && styles.disabled,
         pressed && styles.pressed,
         style,
       ]}
@@ -70,6 +76,5 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg,
   },
   content: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
-  disabled: { opacity: 0.4 },
   pressed: { opacity: 0.8 },
 });

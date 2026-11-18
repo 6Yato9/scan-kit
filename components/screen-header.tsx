@@ -137,8 +137,46 @@ export function ScreenHeader({
   );
 }
 
+/**
+ * The large title at the top of each tab (Home, Files, Tools, Settings). One
+ * component so the title has the same size, weight and position on every tab
+ * — switching tabs never makes it jump. The row is a fixed height whether or
+ * not `right` holds header buttons. Place it directly under the top safe-area
+ * inset, outside any horizontal padding (it applies its own).
+ */
+export function LargeTitle({ title, right }: { title: string; right?: ReactNode }) {
+  const { colors } = useTheme();
+  return (
+    <View style={styles.largeBar}>
+      <Text
+        style={[Type.largeTitle, styles.largeTitle, { color: colors.text }]}
+        accessibilityRole="header"
+        numberOfLines={1}
+        maxFontSizeMultiplier={1.3}
+      >
+        {title}
+      </Text>
+      {right ? <View style={styles.largeRight}>{right}</View> : null}
+    </View>
+  );
+}
+
+/** Total height LargeTitle occupies below the safe-area inset. */
+export const LARGE_TITLE_HEIGHT = Spacing.sm + 52;
+
 const styles = StyleSheet.create({
   bar: {},
+  largeBar: {
+    height: LARGE_TITLE_HEIGHT,
+    paddingTop: Spacing.sm,
+    paddingLeft: Spacing.xl,
+    paddingRight: Spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  largeTitle: { flexShrink: 1 },
+  largeRight: { flexDirection: 'row', alignItems: 'center', marginLeft: Spacing.sm },
   row: {
     height: 52,
     flexDirection: 'row',

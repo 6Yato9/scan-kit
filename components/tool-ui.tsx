@@ -185,7 +185,10 @@ export function ToolIntro({
         <View style={[styles.group, styles.points, { backgroundColor: colors.card }]}>
           {points.map((pt, i) => (
             <View key={pt.text} style={styles.point}>
-              <Ionicons name={pt.icon} size={20} color={colors.accent} style={styles.pointIcon} />
+              {/* Same tinted 30pt tile as SettingsRow: one list-icon treatment app-wide. */}
+              <View style={[styles.pointIcon, { backgroundColor: colors.accentLight }]}>
+                <Ionicons name={pt.icon} size={18} color={colors.accent} />
+              </View>
               <View
                 style={[
                   styles.pointBody,
@@ -248,10 +251,13 @@ export function PagePreview({
       <View style={StyleSheet.absoluteFill} pointerEvents="none">
         {children?.({ width, height })}
       </View>
+      {/* The page's edge, drawn over it so the overlay keeps exact page
+          coordinates: a white page must not melt into its frame. */}
+      <View style={[StyleSheet.absoluteFill, styles.previewEdge, { borderColor: colors.thumbBorder }]} pointerEvents="none" />
     </View>
   );
   return (
-    <View style={[styles.previewFrame, { backgroundColor: colors.card, shadowColor: colors.shadow }]}>
+    <View style={[styles.previewFrame, { backgroundColor: colors.input }]}>
       {onPress ? (
         <Pressable
           onPress={e => onPress({ x: e.nativeEvent.locationX / width, y: e.nativeEvent.locationY / height })}
@@ -267,12 +273,22 @@ export function PagePreview({
   );
 }
 
-/** A section label with a text action on the right ("Retake", "Select all"), baseline-aligned. */
+/**
+ * A section label with a text action on the right ("Retake", "Select all").
+ * It occupies exactly the space a plain SectionLabel does, so labels sit at
+ * the same height on every tool screen whether or not they carry an action:
+ * the 44pt button overhangs the label line through negative margins instead
+ * of making the row taller.
+ */
 export function SectionRow({ label, action, onAction }: { label: string; action?: string; onAction?: () => void }) {
   return (
     <View style={styles.sectionRow}>
       <SectionLabel style={styles.sectionRowLabel}>{label}</SectionLabel>
-      {action && onAction ? <HeaderTextButton title={action} onPress={onAction} /> : null}
+      {action && onAction ? (
+        <View style={styles.sectionAction}>
+          <HeaderTextButton title={action} onPress={onAction} />
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -307,7 +323,7 @@ export function DocGroup({ children }: { children: ReactNode }) {
   );
 }
 
-/** Radio / checkbox indicator: an empty ring, or a filled accent disc with a check or a number. */
+/** Multi-select indicator: an empty ring, or a filled accent disc with a check or a number. */
 export function SelectionMark({ selected, order }: { selected: boolean; order?: number }) {
   const { colors } = useTheme();
   if (!selected) return <View style={[styles.mark, styles.markEmpty, { borderColor: colors.ring }]} />;
@@ -336,10 +352,10 @@ export function DocThumb({ doc, width = 40, height = 52 }: { doc: Document; widt
 }
 
 /**
- * One document in a picker. The selection mark is always visible (an empty
- * ring until chosen) so the rows read as choices, not navigation. `order`
- * numbers the mark for multi-select in a meaningful order (merge). Wrap rows
- * in a DocGroup.
+ * One document in a picker. Single choice shows a checkmark on the chosen row,
+ * like OptionList and Settings; `multi` shows a ring on every row (filled when
+ * chosen), and `order` numbers it for multi-select in a meaningful order. Wrap
+ * rows in a DocGroup.
  */
 export function DocRow({
   doc,
@@ -376,7 +392,16 @@ export function DocRow({
         </Text>
         <Text style={[Type.footnote, styles.meta, { color: colors.muted }]}>{meta}</Text>
       </View>
-      <SelectionMark selected={selected} order={order} />
+      {multi || order ? (
+        <SelectionMark selected={selected} order={order} />
+      ) : (
+        // Single choice: the app's one idiom, a checkmark on the chosen row
+        // (circles are only for multi-select). The slot keeps its width so the
+        // name never reflows as the choice moves.
+        <View style={styles.checkSlot}>
+          {selected ? <Ionicons name="checkmark" size={22} color={colors.accent} /> : null}
+        </View>
+      )}
     </Pressable>
   );
 }
@@ -485,38 +510,8 @@ export function OptionList<T extends string | number>({
   );
 }
 
-/** A compact single-choice row (3–4 short options). */
-export function Segmented<T extends string>({
-  options,
-  value,
-  onChange,
-}: {
-  options: { value: T; label: string }[];
-  value: T;
-  onChange: (v: T) => void;
-}) {
-  const { colors } = useTheme();
-  return (
-    <View style={[styles.segment, { backgroundColor: colors.input }]} accessibilityRole="radiogroup">
-      {options.map(opt => {
-        const on = opt.value === value;
-        return (
-          <Pressable
-            key={opt.value}
-            onPress={() => onChange(opt.value)}
-            accessibilityRole="radio"
-            accessibilityState={{ checked: on }}
-            style={[styles.segmentItem, on && [styles.segmentOn, { backgroundColor: colors.segmentOn, shadowColor: colors.shadow }]]}
-          >
-            <Text style={[Type.subhead, { color: on ? colors.text : colors.muted }]} numberOfLines={1}>
-              {opt.label}
-            </Text>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
-}
+/** A compact single-choice row (3–4 short options): the app's one segmented control. */
+export { SegmentedControl as Segmented } from '@/components/segmented-control';
 
 /** A row of round colour swatches (ink colours are content, so they come from data, not the theme). */
 export function ColorSwatches<T extends string>({
@@ -610,7 +605,7 @@ const styles = StyleSheet.create({
   introCompactText: { marginTop: 2, lineHeight: 18 },
   points: { marginTop: Spacing.sm },
   point: { flexDirection: 'row', alignItems: 'center', paddingLeft: Spacing.lg },
-  pointIcon: { width: 24, marginRight: Spacing.md },
+  pointIcon: { width: 30, height: 30, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginRight: Spacing.md },
   pointBody: { flex: 1, paddingVertical: Spacing.md, paddingRight: Spacing.lg, minHeight: HIT + 4, justifyContent: 'center' },
   pointText: { lineHeight: 20 },
   inlineAction: { marginTop: Spacing.sm },
@@ -630,6 +625,7 @@ const styles = StyleSheet.create({
   thumb: { borderRadius: 5, borderWidth: StyleSheet.hairlineWidth },
   thumbIcon: { alignItems: 'center', justifyContent: 'center' },
   meta: { marginTop: 2 },
+  checkSlot: { width: 24, alignItems: 'center' },
   mark: { width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   markEmpty: { borderWidth: 1.5 },
   badgeText: { fontSize: 13, fontWeight: '700' },
@@ -643,38 +639,25 @@ const styles = StyleSheet.create({
   swatchRing: { padding: 3, borderRadius: 24, borderWidth: 2 },
   swatch: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
   group: { borderRadius: Radius.md, overflow: 'hidden' },
+  // Same outer spacing as SectionLabel (marginTop xxl, marginBottom sm).
   sectionRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: Spacing.lg,
-    marginBottom: Spacing.xs,
-    minHeight: HIT,
+    marginTop: Spacing.xxl,
+    marginBottom: Spacing.sm,
   },
   sectionRowLabel: { marginTop: 0, marginBottom: 0 },
-  segment: { flexDirection: 'row', borderRadius: Radius.sm + 2, padding: 3 },
-  segmentItem: {
-    flex: 1,
-    minHeight: HIT - 6,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: Radius.sm,
-    paddingHorizontal: Spacing.xs,
-  },
-  segmentOn: {
-    shadowOpacity: 0.12,
-    shadowRadius: 3,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 1,
-  },
+  sectionAction: { marginVertical: -(HIT - 16) / 2, marginRight: -Spacing.xs },
+  // A neutral mat around the page (like a document on a desk), so the page
+  // reads as a sheet in both modes.
   previewFrame: {
     alignSelf: 'center',
+    // Callers size the page assuming this padding (sign.tsx); keep it at sm.
     padding: Spacing.sm,
     borderRadius: Radius.md,
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
   },
+  previewEdge: { borderWidth: StyleSheet.hairlineWidth },
   option: {
     flexDirection: 'row',
     alignItems: 'center',

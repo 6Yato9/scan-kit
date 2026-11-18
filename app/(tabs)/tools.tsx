@@ -7,7 +7,8 @@ import { useRouter, type Href } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/theme-context';
 import { SectionLabel } from '@/components/section-label';
-import { Radius, Spacing } from '@/lib/theme';
+import { LargeTitle } from '@/components/screen-header';
+import { Radius, Spacing, TAB_BAR_CLEARANCE } from '@/lib/theme';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
@@ -84,11 +85,9 @@ export default function ToolsScreen() {
     <View style={[styles.container, { backgroundColor: colors.bg }]}>
       <ScrollView
         style={styles.container}
-        contentContainerStyle={{ paddingTop: insets.top + 14, paddingBottom: insets.bottom + 110 }}
+        contentContainerStyle={{ paddingTop: insets.top, paddingBottom: insets.bottom + TAB_BAR_CLEARANCE }}
       >
-        <Text style={[styles.screenTitle, { color: colors.text }]} accessibilityRole="header">
-          Tools
-        </Text>
+        <LargeTitle title="Tools" />
 
         {TOOL_SECTIONS.map(section => (
           <View key={section.title} style={styles.section}>
@@ -113,13 +112,6 @@ export default function ToolsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  screenTitle: {
-    fontSize: 30,
-    fontWeight: '800',
-    letterSpacing: -0.5,
-    paddingHorizontal: 20,
-    marginBottom: Spacing.xs,
-  },
   section: { paddingHorizontal: Spacing.gutter },
   sectionLabel: { marginHorizontal: Spacing.xs },
   card: {

@@ -91,7 +91,7 @@ export function SettingsRow({
       <View
         style={styles.row}
         accessible={!isSwitch}
-        accessibilityLabel={accessibilityLabel ?? (accessory.type === 'value' ? `${label}, ${accessory.text ?? 'calculating'}` : label)}
+        accessibilityLabel={accessibilityLabel ?? (accessory.type === 'value' ? `${label}, ${accessory.text ?? 'calculating'}` : description ? `${label}. ${description}` : label)}
       >
         {body}
       </View>
@@ -111,40 +111,8 @@ export function SettingsRow({
   );
 }
 
-/** iOS-style segmented control: 44pt tall, selected segment filled. */
-export function SegmentedControl<T extends string>({
-  options,
-  value,
-  onChange,
-}: {
-  options: { value: T; label: string; icon?: IconName }[];
-  value: T;
-  onChange: (v: T) => void;
-}) {
-  const { colors } = useTheme();
-  return (
-    <View style={[styles.segments, { backgroundColor: colors.card }]} accessibilityRole="radiogroup">
-      {options.map(opt => {
-        const selected = opt.value === value;
-        return (
-          <Pressable
-            key={opt.value}
-            onPress={() => onChange(opt.value)}
-            accessibilityRole="radio"
-            accessibilityState={{ selected, checked: selected }}
-            accessibilityLabel={opt.label}
-            style={[styles.segment, selected && [styles.segmentSelected, { backgroundColor: colors.accentFill, shadowColor: colors.shadow }]]}
-          >
-            {opt.icon ? <Ionicons name={opt.icon} size={16} color={selected ? colors.onAccent : colors.muted} /> : null}
-            <Text style={[Type.subhead, { color: selected ? colors.onAccent : colors.text, fontWeight: selected ? '600' : '500' }]}>
-              {opt.label}
-            </Text>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
-}
+/** The app's one segmented control, re-exported for settings screens. */
+export { SegmentedControl } from '@/components/segmented-control';
 
 const styles = StyleSheet.create({
   spacer: { height: Spacing.xxl },
@@ -163,20 +131,4 @@ const styles = StyleSheet.create({
   },
   text: { flex: 1 },
   desc: { marginTop: 2, lineHeight: 18 },
-  segments: { flexDirection: 'row', borderRadius: Radius.md, padding: 3, gap: 3 },
-  segment: {
-    flex: 1,
-    height: HIT,
-    borderRadius: Radius.sm + 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-  },
-  segmentSelected: {
-    shadowOpacity: 0.12,
-    shadowRadius: 3,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 2,
-  },
 });

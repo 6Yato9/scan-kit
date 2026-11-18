@@ -54,7 +54,7 @@ export default function ScanSettingsScreen() {
         ))}
       </SettingsGroup>
 
-      <SettingsGroup title="Default filter" footer="Every new page gets this filter. You can change it per page in the viewer.">
+      <SettingsGroup title="Default filter" footer="Every new page gets this filter. In the viewer you can change it for one page, or apply a filter to every page at once.">
         {FILTER_OPTIONS.map((opt, i) => (
           <SettingsRow
             key={opt.value}
