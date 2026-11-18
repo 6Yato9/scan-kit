@@ -21,8 +21,6 @@ import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
 import {
-  DocGroup,
-  DocRow,
   NoDocumentsScreen,
   PagePreview,
   Segmented,
@@ -33,7 +31,7 @@ import {
   useImageAspect,
   useToolDocuments,
 } from '@/components/tool-ui';
-import { ToolDocHeader, useToolDoc } from '@/components/tool-doc';
+import { ToolDocPicker, useToolDoc } from '@/components/tool-doc';
 import { FilterBaker } from '@/components/filter-baker';
 import { generatePdf } from '@/lib/pdf';
 import { copyPdfToStorage, deleteDocumentFiles } from '@/lib/files';
@@ -57,6 +55,7 @@ import {
   rememberSignature,
   type SavedSignature,
 } from '@/lib/saved-signatures';
+import { navigateWhenUnlocked } from '@/lib/nav-guard';
 
 const PAD_HEIGHT = 180;
 const SIZES = [
@@ -128,7 +127,7 @@ export default function SignScreen() {
   const [placement, setPlacement] = useState<Placement | null>(null);
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
 
-  const { doc, docId, setDocId, fixed, fromViewer } = useToolDoc(docs);
+  const { doc, setDocId, fixed, fromViewer } = useToolDoc(docs);
   // Signatures used before (newest first) and the one picked, if any.
   const [saved, setSaved] = useState<SavedSignature[]>([]);
   const [savedPick, setSavedPick] = useState<string | null>(null);
@@ -268,7 +267,7 @@ export default function SignScreen() {
       await rememberSignature(sig);
       notifySuccess();
       // The viewer shows the toast: it covers the app-wide toast host.
-      router.replace({ pathname: '/viewer', params: { id, notice: 'Signed copy saved. The original is unchanged.' } });
+      navigateWhenUnlocked(() => router.replace({ pathname: '/viewer', params: { id, notice: 'Signed copy saved. The original is unchanged.' } }));
     } catch {
       try { deleteDocumentFiles(id); } catch {}
       notifyError();
@@ -283,12 +282,13 @@ export default function SignScreen() {
     return (
       <NoDocumentsScreen
         toolTitle="Sign"
+        icon="signature"
         subtitle="Sign adds your signature to a scanned document. Scan or import a document first."
       />
     );
   }
 
-  const previewW = Math.min(screenW - Spacing.gutter * 2 - Spacing.sm * 2, 300);
+  const previewW = Math.min(screenW * 0.6, 260);
   const buttonTitle = !sig
     ? saved.length ? 'Choose or draw a signature' : 'Sign in the box above'
     : !doc ? 'Choose a document' : 'Save signed copy';
@@ -312,8 +312,10 @@ export default function SignScreen() {
     >
       {/* Presented over the viewer: a baker underneath would never run (see FilterBaker). */}
       {fromViewer ? <FilterBaker /> : null}
-      {/* 1. Signature — captured as you draw; no separate confirm step. */}
-      {fixed && doc ? <ToolDocHeader doc={doc} /> : null}
+      {/* 1. Document (fixed when opened on one from the viewer) */}
+      <ToolDocPicker docs={docs} doc={doc} fixed={fixed} disabled={!!progress} onPick={pickDoc} />
+
+      {/* 2. Signature — captured as you draw; no separate confirm step. */}
       <SectionRow label="Signature" action={sig ? 'Clear' : undefined} onAction={clearSignature} />
       {saved.length > 0 ? (
         <>
@@ -377,23 +379,14 @@ export default function SignScreen() {
         />
       </View>
 
-      {/* 2. Document (skipped when the tool was opened on one) */}
-      {fixed ? null : (
+      {/* 3. Live preview and placement: the chosen page (a sample page until
+          a document is chosen) with the signature where the PDF will get it. */}
+      {doc || sig ? (
         <>
-          <SectionLabel>Document</SectionLabel>
-          <DocGroup>
-            {docs.map(d => (
-              <DocRow key={d.id} doc={d} selected={d.id === docId} onPress={() => pickDoc(d)} />
-            ))}
-          </DocGroup>
-        </>
-      )}
-
-      {/* 3. Placement */}
-      {doc && sig && place && pageUri ? (
-        <>
-          <SectionLabel>{everyPage ? 'Placement, every page' : `Placement, page ${pageIndex + 1}`}</SectionLabel>
-          {doc.pages.length > 1 ? (
+          <SectionLabel>
+            {!doc ? 'Preview' : everyPage ? 'Placement, every page' : `Placement, page ${pageIndex + 1}`}
+          </SectionLabel>
+          {doc && doc.pages.length > 1 ? (
             <>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pages}>
                 {doc.pages.map((p, i) => {
@@ -431,25 +424,42 @@ export default function SignScreen() {
           ) : null}
 
           <View style={styles.previewWrap}>
-            <PagePreview uri={`${pageUri}?v=${doc.updatedAt}`} aspect={aspect} width={previewW} onPress={moveTo}>
-              {({ width, height }) => (
-                <Image
-                  source={{ uri: sig.dataUri }}
-                  style={{
-                    position: 'absolute',
-                    left: place.x * width,
-                    top: place.y * height,
-                    width: place.w * width,
-                    height: place.w * width * (sig.height / sig.width),
-                  }}
-                />
-              )}
+            <PagePreview
+              uri={doc && pageUri ? `${pageUri}?v=${doc.updatedAt}` : null}
+              aspect={aspect}
+              width={previewW}
+              onPress={sig ? moveTo : undefined}
+            >
+              {({ width, height }) =>
+                sig && place ? (
+                  <Image
+                    source={{ uri: sig.dataUri }}
+                    style={{
+                      position: 'absolute',
+                      left: place.x * width,
+                      top: place.y * height,
+                      width: place.w * width,
+                      height: place.w * width * (sig.height / sig.width),
+                    }}
+                  />
+                ) : null
+              }
             </PagePreview>
           </View>
-          <ToolNote>Tap the page where the signature should go.</ToolNote>
+          <ToolNote>
+            {!sig
+              ? 'Draw or choose a signature above, then tap the page where it should go.'
+              : !doc
+                ? 'Choose a document to place the signature on its page.'
+                : 'Tap the page where the signature should go.'}
+          </ToolNote>
 
-          <SectionLabel>Size</SectionLabel>
-          <Segmented options={SIZES.map(s => ({ value: s.value, label: s.label }))} value={size} onChange={changeSize} />
+          {sig ? (
+            <>
+              <SectionLabel>Size</SectionLabel>
+              <Segmented options={SIZES.map(s => ({ value: s.value, label: s.label }))} value={size} onChange={changeSize} />
+            </>
+          ) : null}
           <ToolNote>A signed copy is saved as a new PDF. The original document is kept.</ToolNote>
         </>
       ) : null}

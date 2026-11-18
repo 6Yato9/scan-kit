@@ -169,7 +169,7 @@ export default function ExtractTextScreen() {
         title="Turn a page into text"
         text={
           available
-            ? 'Scan a page or pick photos. The text is recognized on your device, ready to copy or share.'
+            ? 'Scan a page or pick photos. The text is recognized on your device, ready to copy or\u00A0share.'
             : 'Text recognition isn’t available on this device.'
         }
         points={

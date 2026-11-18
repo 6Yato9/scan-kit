@@ -82,6 +82,7 @@ import { BakeIndicator } from '@/components/bake-indicator';
 import { BottomSheet, SheetHeader } from '@/components/bottom-sheet';
 import { PrimaryButton } from '@/components/primary-button';
 import { HeaderIconButton, ScreenHeader } from '@/components/screen-header';
+import { LockScreen, useAppLocked } from '@/components/lock-gate';
 
 const DEFAULT_ADJ: PageAdjustment = { brightness: 0, contrast: 0, saturation: 0 };
 const isDefaultAdj = (a: PageAdjustment | undefined) =>
@@ -97,6 +98,10 @@ type OcrState = { status: 'running' } | { status: 'done'; text: string };
  */
 export default function ViewerScreen() {
   const rootToast = useToast();
+  // App Lock: normally the /lock route covers this screen. Should the viewer
+  // ever end up above it (work that finished while locked), it draws the lock
+  // itself, so a document is never usable without unlocking (lock-gate.tsx).
+  const locked = useAppLocked();
   // The viewer is always dark, so everything it presents (the … menu, export,
   // move to folder, recognized text) uses the dark palette too: a bright sheet
   // sliding over the dark page reads as a different app.
@@ -105,6 +110,11 @@ export default function ViewerScreen() {
       <ToastProvider onChrome offset={250}>
         <ViewerContent rootToast={rootToast} />
       </ToastProvider>
+      {locked && (
+        <View style={StyleSheet.absoluteFill} testID="viewer-lock">
+          <LockScreen />
+        </View>
+      )}
     </DarkThemeScope>
   );
 }
@@ -932,7 +942,7 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
   const moreTools: MoreAction[] = document.pdfUri
     ? []
     : [
-        { key: 'sign', icon: 'create-outline', label: 'Sign', onPress: () => openTool('/tools/sign') },
+        { key: 'sign', icon: 'signature', label: 'Sign', onPress: () => openTool('/tools/sign') },
         { key: 'watermark', icon: 'water-outline', label: 'Watermark', onPress: () => openTool('/tools/watermark') },
         { key: 'timestamp', icon: 'time-outline', label: 'Timestamp', onPress: () => openTool('/tools/timestamp') },
         ...(pageCount > 1

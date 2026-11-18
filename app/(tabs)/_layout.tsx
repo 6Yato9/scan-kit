@@ -17,6 +17,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useScan } from '@/contexts/scan-context';
 import { useTheme } from '@/contexts/theme-context';
 import { selection, tapMedium } from '@/lib/haptics';
+import { navigateWhenUnlocked } from '@/lib/nav-guard';
 
 // Filled glyph for the active tab, outline for the rest.
 type IconName = keyof typeof Ionicons.glyphMap;
@@ -182,7 +183,7 @@ function FloatingTabBar({ state, navigation, descriptors }: BottomTabBarProps) {
               onPress={async () => {
                 tapMedium();
                 const id = await triggerScan();
-                if (id) router.push({ pathname: '/viewer', params: { id } });
+                if (id) navigateWhenUnlocked(() => router.push({ pathname: '/viewer', params: { id } }));
               }}
               style={styles.scanBtn}
               accessibilityRole="button"

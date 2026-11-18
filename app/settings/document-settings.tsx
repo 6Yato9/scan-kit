@@ -47,7 +47,7 @@ export default function DocumentSettingsScreen() {
     <ToolScreen title="Document settings">
       <SettingsGroup
         title="Fallback name"
-        footer={`New scans are named from the text on the page, like “Invoice 2041”. When no title can be read, they get this name and the date: “${example.replace(/ /g, '\u00A0')}”.`}
+        footer={`New scans are named from the text on the page, like “Invoice 2041.” When no title can be read, they get this name and the date: “${example.replace(/ /g, '\u00A0')}.”`}
       >
         <Pressable style={styles.inputRow} onPress={() => inputRef.current?.focus()} accessible={false}>
           <TextInput

@@ -149,6 +149,67 @@ export function hasPendingBakes(docId: string): boolean {
   return false;
 }
 
+/** How many pages of `docId` still have a bake queued or running. */
+export function pendingBakeCount(docId: string): number {
+  const pages = new Set<number>();
+  for (const t of tickets) if (t.docId === docId && !t.superseded && t.pageIndex >= 0) pages.add(t.pageIndex);
+  return pages.size;
+}
+
+export class BakeWaitAborted extends Error {
+  constructor() {
+    super('aborted');
+    this.name = 'BakeWaitAborted';
+  }
+}
+
+export type WaitForBakesOptions = {
+  signal?: AbortSignal;
+  /** Give up waiting after this long and resolve 'timeout' (default 2 minutes). */
+  timeoutMs?: number;
+  /** Called with the number of pages still being enhanced, first right away. */
+  onProgress?: (remaining: number) => void;
+};
+
+/**
+ * Resolves once no page of `docId` has a bake queued or running — every
+ * enhancement has been written into the pixels, or dropped/failed (then the
+ * page keeps its raw pixels, a consistent state). Exports call this first so
+ * a document shared straight after scanning is never un-enhanced.
+ *
+ * Resolves 'done' (also right away when nothing is pending) or 'timeout';
+ * rejects with BakeWaitAborted when `signal` fires.
+ */
+export function waitForPendingBakes(docId: string, options: WaitForBakesOptions = {}): Promise<'done' | 'timeout'> {
+  const { signal, timeoutMs = 120_000, onProgress } = options;
+  if (signal?.aborted) return Promise.reject(new BakeWaitAborted());
+  if (!hasPendingBakes(docId)) return Promise.resolve('done');
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      unsubscribe();
+      signal?.removeEventListener?.('abort', onAbort);
+      fn();
+    };
+    const onAbort = () => finish(() => reject(new BakeWaitAborted()));
+    const check = () => {
+      const remaining = pendingBakeCount(docId);
+      if (remaining === 0) finish(() => resolve('done'));
+      else onProgress?.(remaining);
+    };
+    const unsubscribe = subscribeBakeChanges(changed => {
+      if (changed === docId) check();
+    });
+    const timer = setTimeout(() => finish(() => resolve('timeout')), timeoutMs);
+    (timer as { unref?: () => void }).unref?.();
+    signal?.addEventListener?.('abort', onAbort);
+    check();
+  });
+}
+
 const changeListeners = new Set<(docId: string) => void>();
 
 /**
@@ -317,9 +378,9 @@ export async function bakePreviews(docId: string, pageIndex: number): Promise<st
   const src = await withDocLock(docId, () => ensureOriginal(docId, pageIndex));
   const opsList = PREVIEW_FILTERS.map(f => combinedFilterRN(f, undefined) ?? []);
   const reply = await enqueueBake(
-    // The tiles show the whole page at about 90 pt wide; 360 px keeps them sharp on
-    // a 3x screen, and is large enough that the document filters (which work on
-    // the page's structure, not single pixels) look as they will on the page.
+    // Each tile shows the top of the page's content, about 80 pt wide: 360 px
+    // keeps it sharp on a 3x screen. The filters run on the whole page at twice
+    // that width (see buildPreviewHtml), so they look as they will on the page.
     { docId, pageIndex, src, ops: [], previews: opsList, previewWidth: 360 },
     { priority: 'high' },
   );

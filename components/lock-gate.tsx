@@ -31,6 +31,16 @@
 //     FullWindowOverlay instead — a view added to the window above everything,
 //     presented controllers included — so nothing is presented or dismissed.
 //     After unlocking the user is back in the camera or picker where they were.
+//     If the picker closes while still locked (its promise settles late, or
+//     "Open in Scan Kit" dismissed it), the overlay hands over to the /lock
+//     route: it stays until /lock is on screen, so there is no uncovered frame,
+//     and a modal presented afterwards can't draw above an overlay that is
+//     still in the window.
+//   - Work that finishes while locked must not navigate over the lock:
+//     replace would swap /lock itself out for the viewer, push would present
+//     the viewer above it. Every post-await navigation goes through
+//     lib/nav-guard.ts navigateWhenUnlocked(), which this gate feeds; the
+//     viewer also draws the lock itself while locked, as a last line of defence.
 //
 // App-switcher privacy: when the app goes 'inactive' (app switcher, Control
 // Center, a call) with App Lock on, a plain cover is drawn in the same kind of
@@ -60,18 +70,25 @@ import { PrimaryButton } from '@/components/primary-button';
 import { authenticate, biometricKind, BiometricKind, isAuthenticating } from '@/lib/biometrics';
 import { getAppLockEnabled, subscribeAppLock } from '@/lib/storage';
 import { installAlertGuard } from '@/lib/alert-guard';
-import { isSystemUIOpen } from '@/lib/system-ui';
+import { isSystemUIOpen, subscribeSystemUI } from '@/lib/system-ui';
+import { isAppLocked, pickerHandoffStep, setNavLockState } from '@/lib/nav-guard';
 import { BrandMark } from '@/components/brand-mark';
 import { Spacing, Type } from '@/lib/theme';
 
 const LOCK_ROUTE = '/lock';
 /** Shows the lock screen itself while locked (app/import.tsx). */
 const IMPORT_ROUTE = '/import';
+/** Routes that show the lock screen themselves. */
+const LOCK_SCREEN_ROUTES: readonly string[] = [LOCK_ROUTE, IMPORT_ROUTE];
 
 // Read synchronously by the alert guard at the moment a button is pressed, so it
 // is set together with the `locked` state, without waiting for a render.
-let lockedNow = false;
-installAlertGuard(() => lockedNow);
+installAlertGuard(isAppLocked);
+
+/** How long a closing picker gets to finish its dismissal before /lock is presented over it. */
+const PICKER_HANDOFF_DELAY_MS = 350;
+/** How long the overlay stays once /lock is in the stack: its fade-in has to finish. */
+const OVERLAY_RELEASE_DELAY_MS = 500;
 
 type LockState = { locked: boolean; kind: BiometricKind; tryUnlock: () => void };
 
@@ -144,7 +161,7 @@ export function LockGate({ children }: { children: React.ReactNode }) {
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [locked, setLockedState] = useState(false);
   const setLocked = useCallback((next: boolean) => {
-    lockedNow = next;
+    setNavLockState({ locked: next });
     setLockedState(next);
   }, []);
   const [kind, setKind] = useState<BiometricKind>('passcode');
@@ -156,10 +173,21 @@ export function LockGate({ children }: { children: React.ReactNode }) {
     overPickerRef.current = next;
     setOverPickerState(next);
   }, []);
+  // A tracked system picker is on screen (lib/system-ui).
+  const [pickerOpen, setPickerOpen] = useState(isSystemUIOpen);
+  // The /lock route has been pushed to take over from the picker overlay.
+  const handoffRef = useRef(false);
   // App switcher / Control Center: hide the content without locking.
   const [privacy, setPrivacy] = useState(false);
   // The /lock route is on screen: it takes the touches, not the overlay below.
   const routeShown = pathname === LOCK_ROUTE;
+
+  // Held navigations (lib/nav-guard) also wait for the lock route to close.
+  useEffect(() => {
+    setNavLockState({ lockRouteShown: routeShown });
+  }, [routeShown]);
+
+  useEffect(() => subscribeSystemUI(setPickerOpen), []);
 
   // Prevents concurrent authenticate() prompts.
   const authingRef = useRef(false);
@@ -261,6 +289,38 @@ export function LockGate({ children }: { children: React.ReactNode }) {
   }, [enabled, tryUnlock, router, setLocked, setOverPicker]);
 
   const isLocked = enabled === true && locked;
+
+  // The last picker closed while the app is still locked over it: present the
+  // /lock route and keep the overlay until it is on screen (no uncovered frame).
+  // /import draws the lock itself, so it needs no route.
+  useEffect(() => {
+    if (!overPicker) {
+      handoffRef.current = false;
+      return;
+    }
+    const step = pickerHandoffStep({ overPicker, locked: isLocked, pickerOpen, pathname, lockRoutes: LOCK_SCREEN_ROUTES });
+    if (step === 'none') return;
+    if (step === 'clear-overlay') {
+      // The route is in the stack now, but still fading in: keep the overlay
+      // until it is fully on screen.
+      const t = setTimeout(() => setOverPicker(false), OVERLAY_RELEASE_DELAY_MS);
+      return () => clearTimeout(t);
+    }
+    if (handoffRef.current) return;
+    handoffRef.current = true;
+    // Let the picker finish its own dismissal first: presenting over a
+    // controller that is still going away fails silently. Should the push fail
+    // anyway, the overlay simply stays until the user unlocks.
+    // Not cleared when the effect re-runs (the pathname may change meanwhile);
+    // it re-checks the state itself.
+    setTimeout(() => {
+      if (!overPickerRef.current || !lockedRef.current || isSystemUIOpen()) {
+        handoffRef.current = false;
+        return;
+      }
+      if (!LOCK_SCREEN_ROUTES.includes(pathnameRef.current)) router.push(LOCK_ROUTE);
+    }, PICKER_HANDOFF_DELAY_MS);
+  }, [overPicker, isLocked, pickerOpen, pathname, router, setOverPicker]);
   const value: LockState = { locked: isLocked, kind, tryUnlock };
 
   return (

@@ -49,6 +49,11 @@ jest.mock('../lib/bake', () => ({
   runPageEdit: (id: string, edit: any, fn: () => unknown) => { mockEdits.push([id, edit]); return Promise.resolve().then(fn); },
 }));
 
+const mockIndexDocText = jest.fn(async (_id: string, _pages: string[]) => {});
+jest.mock('../lib/save-scan', () => ({
+  indexDocText: (id: string, pages: string[]) => mockIndexDocText(id, pages),
+}));
+
 import { combinePageMeta, copyPagesWithOriginals, extractPages, mergeInto, mergeIntoNew, reorderDocumentPages } from '../lib/doc-ops';
 import { withDocLock } from '../lib/bake';
 import { Document } from '../types/document';
@@ -179,11 +184,31 @@ describe('extractPages (critique L3)', () => {
     expect(created.filters).toEqual(['enhanced']);
   });
 
+  test('indexes the new document so content search finds it (r5 L4)', async () => {
+    mockIndexDocText.mockClear();
+    const src = doc('src', 3);
+    mockStored.src = { ...src };
+    const created = await extractPages(src, [1, 2]);
+    expect(mockIndexDocText).toHaveBeenCalledWith('new-id', created.pages);
+  });
+
+  test('an indexing failure does not fail the extract', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    mockIndexDocText.mockRejectedValueOnce(new Error('vision'));
+    const src = doc('src', 2);
+    mockStored.src = { ...src };
+    await expect(extractPages(src, [0])).resolves.toMatchObject({ id: 'new-id' });
+    await new Promise(r => setImmediate(r));
+    warn.mockRestore();
+  });
+
   test('refuses, leaving nothing behind, when the page count changed meanwhile', async () => {
+    mockIndexDocText.mockClear();
     const stale = doc('src', 3);
     mockStored.src = { ...stale, pages: stale.pages.slice(0, 2) };
     await expect(extractPages(stale, [2])).rejects.toThrow('changed');
     expect(mockSaved).toEqual([]);
+    expect(mockIndexDocText).not.toHaveBeenCalled();
     expect(Object.keys(mockFiles).some(k => k.includes('/new-id/'))).toBe(false);
   });
 

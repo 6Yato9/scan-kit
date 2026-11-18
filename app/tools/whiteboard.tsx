@@ -7,6 +7,7 @@ import { useScan } from '@/contexts/scan-context';
 import { PrimaryButton } from '@/components/primary-button';
 import { ToolIntro, ToolScreen } from '@/components/tool-ui';
 import { alertScanError, deleteTempFiles, pickPhotos, scanWithCamera } from '@/lib/tool-scan';
+import { navigateWhenUnlocked } from '@/lib/nav-guard';
 
 export default function WhiteboardScreen() {
   const { saveAndOpen } = useScan();
@@ -30,7 +31,7 @@ export default function WhiteboardScreen() {
       if (!pages?.length) return;
       if (source === 'photos') picked = pages;
       const id = await saveAndOpen({ pages, defaultFilter: 'enhanced' });
-      if (id) router.replace({ pathname: '/viewer', params: { id } });
+      if (id) navigateWhenUnlocked(() => router.replace({ pathname: '/viewer', params: { id } }));
     } finally {
       deleteTempFiles(picked);
       busyRef.current = false;

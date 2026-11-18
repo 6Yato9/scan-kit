@@ -23,8 +23,8 @@ export default function AboutScreen() {
       </View>
 
       <SettingsGroup title="Your data">
-        <SettingsRow icon="phone-portrait-outline" label="Stored on this device" description="Scans never leave your phone unless you share them." />
-        <SettingsRow icon="cloud-offline-outline" label="Works offline" description="Scanning, text recognition and export need no connection." last />
+        <SettingsRow icon="phone-portrait-outline" label="Stored on this device" description={'Scans never leave your phone unless you share\u00A0them.'} />
+        <SettingsRow icon="cloud-offline-outline" label="Works offline" description={'Scanning, text recognition and export need no\u00A0connection.'} last />
       </SettingsGroup>
     </ToolScreen>
   );

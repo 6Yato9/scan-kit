@@ -2,6 +2,7 @@
 // Every empty list uses this, with an action wherever one makes sense.
 import { StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { AppIcon, type AppIconName } from '@/components/app-icon';
 import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';
 import { Spacing, Type } from '@/lib/theme';
@@ -19,10 +20,12 @@ type Props = {
   /** Optional second, quieter action (e.g. "Import file"). */
   onSecondaryAction?: () => void;
   secondaryLabel?: string;
+  /** Icon for the second action; give it one whenever the primary has one. */
+  secondaryIcon?: IconName;
   /** Override the variant's copy. */
   title?: string;
   subtitle?: string;
-  icon?: IconName;
+  icon?: AppIconName;
 };
 
 const COPY: Record<Variant, { title: string; subtitle: string; icon: IconName }> = {
@@ -40,6 +43,7 @@ export function EmptyState({
   actionIcon,
   onSecondaryAction,
   secondaryLabel,
+  secondaryIcon,
   title,
   subtitle,
   icon,
@@ -53,7 +57,7 @@ export function EmptyState({
   return (
     <View style={styles.container}>
       <View style={[styles.iconCircle, { backgroundColor: colors.accentLight }]}>
-        <Ionicons name={icon ?? copy.icon} size={36} color={colors.accent} />
+        <AppIcon name={icon ?? copy.icon} size={36} color={colors.accent} />
       </View>
       <Text style={[Type.title, styles.title, { color: colors.text }]}>{heading}</Text>
       <Text style={[Type.callout, styles.subtitle, { color: colors.muted }]}>{body}</Text>
@@ -61,7 +65,7 @@ export function EmptyState({
         <View style={styles.actions}>
           <PrimaryButton title={actionLabel} icon={actionIcon} onPress={onAction} />
           {onSecondaryAction && secondaryLabel ? (
-            <PrimaryButton title={secondaryLabel} variant="secondary" onPress={onSecondaryAction} />
+            <PrimaryButton title={secondaryLabel} icon={secondaryIcon} variant="secondary" onPress={onSecondaryAction} />
           ) : null}
         </View>
       ) : null}
@@ -74,7 +78,9 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: Spacing.xxxl + Spacing.sm,
+    // Buttons sit at the standard 24pt inset; the text is held a little
+    // narrower so it wraps into a comfortable measure.
+    paddingHorizontal: Spacing.xxl,
     paddingVertical: Spacing.xxxl,
   },
   iconCircle: {
@@ -85,7 +91,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: Spacing.xl,
   },
-  title: { marginBottom: Spacing.sm, textAlign: 'center' },
-  subtitle: { textAlign: 'center', lineHeight: 21 },
+  title: { marginBottom: Spacing.sm, textAlign: 'center', paddingHorizontal: Spacing.lg },
+  subtitle: { textAlign: 'center', lineHeight: 21, paddingHorizontal: Spacing.lg },
   actions: { marginTop: Spacing.xxl, alignSelf: 'stretch', gap: Spacing.sm },
 });

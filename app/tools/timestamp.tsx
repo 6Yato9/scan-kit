@@ -8,20 +8,17 @@ import { useRouter } from 'expo-router';
 import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
 import {
-  DocGroup,
-  DocRow,
   NoDocumentsScreen,
   OptionList,
   PagePreview,
   Segmented,
-  SectionRow,
   ToolNote,
   ToolProgress,
   ToolScreen,
   useImageAspect,
   useToolDocuments,
 } from '@/components/tool-ui';
-import { ToolDocHeader, useToolDoc } from '@/components/tool-doc';
+import { ToolDocPicker, useToolDoc } from '@/components/tool-doc';
 import { FilterBaker } from '@/components/filter-baker';
 import { generatePdf } from '@/lib/pdf';
 import { copyPdfToStorage, deleteDocumentFiles } from '@/lib/files';
@@ -37,6 +34,7 @@ import {
   type TimestampFormat,
 } from '@/lib/stamp';
 import { Ink, Spacing } from '@/lib/theme';
+import { navigateWhenUnlocked } from '@/lib/nav-guard';
 
 type When = 'scanned' | 'now';
 
@@ -88,7 +86,7 @@ export default function TimestampScreen() {
       });
       notifySuccess();
       // The viewer shows the toast: it covers the app-wide toast host.
-      router.replace({ pathname: '/viewer', params: { id, notice: 'Timestamped copy saved. The original is unchanged.' } });
+      navigateWhenUnlocked(() => router.replace({ pathname: '/viewer', params: { id, notice: 'Timestamped copy saved. The original is unchanged.' } }));
     } catch {
       try { deleteDocumentFiles(id); } catch {}
       notifyError();
@@ -103,12 +101,14 @@ export default function TimestampScreen() {
     return (
       <NoDocumentsScreen
         toolTitle="Timestamp"
+        icon="time-outline"
         subtitle="Timestamp prints the date on every page of a scan. Scan or import a document first."
       />
     );
   }
 
-  const previewW = Math.min(screenW * 0.62, 260);
+  // Small enough that the date choice stays above the fold.
+  const previewW = Math.min(screenW * 0.5, 220);
 
   return (
     <ToolScreen
@@ -128,53 +128,36 @@ export default function TimestampScreen() {
     >
       {/* Presented over the viewer: a baker underneath would never run (see FilterBaker). */}
       {fromViewer ? <FilterBaker /> : null}
-      {fixed && doc ? (
-        <ToolDocHeader doc={doc} />
-      ) : doc ? (
-        // Chosen: collapse the list so the preview and options sit right below.
-        <>
-          <SectionRow label="Document" action="Change" onAction={() => !progress && setDocId(null)} />
-          <ToolDocHeader doc={doc} flush />
-        </>
-      ) : (
-        <>
-          <SectionLabel>Document</SectionLabel>
-          <DocGroup>
-            {docs.map(d => (
-              <DocRow key={d.id} doc={d} selected={false} onPress={() => !progress && setDocId(d.id)} />
-            ))}
-          </DocGroup>
-        </>
-      )}
+      <ToolDocPicker docs={docs} doc={doc} fixed={fixed} disabled={!!progress} onPick={d => setDocId(d.id)} />
 
-      {doc ? (
-        <View style={styles.previewWrap}>
-          <PagePreview uri={`${doc.pages[0]}?v=${doc.updatedAt}`} aspect={aspect} width={previewW}>
-            {({ width }) => {
-              const fontSize = TIMESTAMP_FONT_FRACTION * width;
-              const inset = CORNER_INSET * width;
-              const [v, h] = corner.split('-') as ['top' | 'bottom', 'left' | 'right'];
-              return (
-                <View
-                  style={{
-                    position: 'absolute',
-                    [v]: inset,
-                    [h]: inset,
-                    paddingVertical: fontSize * 0.35,
-                    paddingHorizontal: fontSize * 0.6,
-                    borderRadius: fontSize * 0.3,
-                    backgroundColor: Ink.stampBg,
-                  }}
-                >
-                  <Text style={{ fontSize, fontWeight: '500', color: Ink.stampText }} numberOfLines={1}>
-                    {stamp}
-                  </Text>
-                </View>
-              );
-            }}
-          </PagePreview>
-        </View>
-      ) : null}
+      {/* Live preview: the first page (a sample page until one is chosen) with
+          the stamp where the PDF will get it. */}
+      <View style={styles.previewWrap}>
+        <PagePreview uri={doc ? `${doc.pages[0]}?v=${doc.updatedAt}` : null} aspect={aspect} width={previewW}>
+          {({ width }) => {
+            const fontSize = TIMESTAMP_FONT_FRACTION * width;
+            const inset = CORNER_INSET * width;
+            const [v, h] = corner.split('-') as ['top' | 'bottom', 'left' | 'right'];
+            return (
+              <View
+                style={{
+                  position: 'absolute',
+                  [v]: inset,
+                  [h]: inset,
+                  paddingVertical: fontSize * 0.35,
+                  paddingHorizontal: fontSize * 0.6,
+                  borderRadius: fontSize * 0.3,
+                  backgroundColor: Ink.stampBg,
+                }}
+              >
+                <Text style={{ fontSize, fontWeight: '500', color: Ink.stampText }} numberOfLines={1}>
+                  {stamp}
+                </Text>
+              </View>
+            );
+          }}
+        </PagePreview>
+      </View>
 
       <SectionLabel>Date</SectionLabel>
       <OptionList

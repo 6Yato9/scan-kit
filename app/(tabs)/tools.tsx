@@ -2,19 +2,17 @@
 // The Tools tab: every entry opens a working flow. Labels match the title of
 // the screen they open and fit on one line.
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
 import { useRouter, type Href } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/theme-context';
 import { SectionLabel } from '@/components/section-label';
 import { LargeTitle } from '@/components/screen-header';
+import { AppIcon, type AppIconName } from '@/components/app-icon';
 import { Radius, Spacing, TAB_BAR_CLEARANCE } from '@/lib/theme';
-
-type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
 type Tool = {
   id: string;
-  icon: IconName;
+  icon: AppIconName;
   label: string;
   href: Href;
 };
@@ -36,7 +34,7 @@ const TOOL_SECTIONS: { title: string; tools: Tool[] }[] = [
   {
     title: 'Convert',
     tools: [
-      { id: 'extract-text', icon: 'document-text-outline', label: 'Extract text', href: '/tools/extract-text' },
+      { id: 'extract-text', icon: 'reader-outline', label: 'Extract text', href: '/tools/extract-text' },
       { id: 'extract', icon: 'cut-outline', label: 'Extract pages', href: '/tools/extract' },
       { id: 'long-image', icon: 'image-outline', label: 'Long image', href: '/tools/long-image' },
       { id: 'compress', icon: 'contract-outline', label: 'Compress', href: '/tools/compress' },
@@ -45,7 +43,7 @@ const TOOL_SECTIONS: { title: string; tools: Tool[] }[] = [
   {
     title: 'Edit',
     tools: [
-      { id: 'sign', icon: 'create-outline', label: 'Sign', href: '/tools/sign' },
+      { id: 'sign', icon: 'signature', label: 'Sign', href: '/tools/sign' },
       { id: 'watermark', icon: 'water-outline', label: 'Watermark', href: '/tools/watermark' },
       { id: 'timestamp', icon: 'time-outline', label: 'Timestamp', href: '/tools/timestamp' },
       { id: 'erase-marks', icon: 'color-wand-outline', label: 'Erase marks', href: '/tools/erase-marks' },
@@ -64,7 +62,7 @@ function ToolTile({ tool }: { tool: Tool }) {
       accessibilityLabel={tool.label}
     >
       <View style={[styles.iconWrap, { backgroundColor: colors.accentLight }]}>
-        <Ionicons name={tool.icon} size={26} color={colors.accent} />
+        <AppIcon name={tool.icon} size={26} color={colors.accent} />
       </View>
       <Text
         style={[styles.label, { color: colors.text }]}

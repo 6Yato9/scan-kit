@@ -104,11 +104,20 @@ export async function saveScan(input: SaveScanInput): Promise<SaveScanResult> {
  * this from inside withDocLock / runPageEdit for the same document: it would
  * wait for itself.
  */
+// Index passes per document, latest last. Only the newest pass may write.
+const indexPasses = new Map<string, number>();
+
 export async function indexDocText(id: string, pages: string[]): Promise<void> {
   if (!ocrAvailable()) return;
+  const pass = (indexPasses.get(id) ?? 0) + 1;
+  indexPasses.set(id, pass);
   const text = await extractDocText(pages);
   if (!text) return;
   await withDocLock(id, () => updateDocumentWith(id, current => {
+    // A newer pass was started meanwhile (Undo right after a retake re-indexes
+    // the restored page): it read the pages after this one began, so this
+    // older text may describe pages that are gone. Leave the write to it.
+    if (indexPasses.get(id) !== pass) return null;
     const patch: Partial<Document> = { ocrText: text };
     if (current.defaultName && current.name === current.defaultName) {
       const title = titleFromText(text);

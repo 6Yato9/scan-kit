@@ -8,7 +8,8 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
-import { DocGroup, DocRow, NoDocumentsScreen, ToolNote, ToolScreen, isImageDoc, useToolDocuments } from '@/components/tool-ui';
+import { NoDocumentsScreen, ToolNote, ToolScreen, isImageDoc, useToolDocuments } from '@/components/tool-ui';
+import { ToolDocPicker, useToolDoc } from '@/components/tool-doc';
 import { buildLongImageHtml, planLongImage, type LongImagePlan } from '@/lib/long-image';
 import { deleteQuietly, exportFileName, makeExportDir, shareFile } from '@/lib/share';
 import { notifyError, notifySuccess } from '@/lib/haptics';
@@ -32,14 +33,13 @@ export default function LongImageScreen() {
   const { width: screenW } = useWindowDimensions();
   // One page has nothing to join: only documents with two or more pages.
   const { docs, loaded } = useToolDocuments(isMultiPageImageDoc);
-  const [docId, setDocId] = useState<string | null>(null);
   const [job, setJob] = useState<{ html: string; plan: LongImagePlan; doc: Document } | null>(null);
   const [output, setOutput] = useState<Output | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const outputRef = useRef<Output | null>(null);
   outputRef.current = output;
 
-  const doc = docs.find(d => d.id === docId) ?? null;
+  const { doc, docId, setDocId, fixed } = useToolDoc(docs);
   const working = job !== null;
 
   // Remove the rendered file when leaving the screen.
@@ -107,6 +107,7 @@ export default function LongImageScreen() {
     return (
       <NoDocumentsScreen
         toolTitle="Long image"
+        icon="image-outline"
         title="No multi-page documents"
         subtitle="Long image joins a document’s pages into one tall picture. Scan or import a document with two or more pages first."
       />
@@ -132,6 +133,14 @@ export default function LongImageScreen() {
         )
       }
     >
+      <ToolDocPicker
+        docs={docs}
+        doc={doc}
+        fixed={fixed}
+        disabled={working}
+        note="Documents with two or more pages."
+        onPick={d => setDocId(d.id)}
+      />
       {shown ? (
         <>
           <SectionLabel>Preview</SectionLabel>
@@ -144,19 +153,9 @@ export default function LongImageScreen() {
             />
           </View>
           <ToolNote>{`${shown.plan.width} × ${shown.plan.totalHeight} pixels, ${shown.plan.heights.length} pages.`}</ToolNote>
-          <View style={styles.gap} />
-          <PrimaryButton title="Choose another document" variant="secondary" onPress={() => { setDocId(null); }} />
         </>
       ) : (
-        <>
-          <SectionLabel>Document</SectionLabel>
-          <DocGroup>
-            {docs.map(d => (
-              <DocRow key={d.id} doc={d} selected={d.id === docId} onPress={() => !working && setDocId(d.id)} />
-            ))}
-          </DocGroup>
-          <ToolNote>All pages are stacked top to bottom into a single JPEG you can share or save to Photos.</ToolNote>
-        </>
+        <ToolNote>All pages are stacked top to bottom into a single JPEG you can share or save to Photos.</ToolNote>
       )}
 
       {job ? (
@@ -181,7 +180,6 @@ export default function LongImageScreen() {
 
 const styles = StyleSheet.create({
   preview: { borderRadius: Radius.md, overflow: 'hidden', alignItems: 'center', borderWidth: StyleSheet.hairlineWidth },
-  gap: { height: Spacing.lg },
   // Same host trick as components/filter-baker.tsx: WKWebView only runs its
   // JavaScript when it is really laid out, so it is kept on screen at 1%
   // opacity in a 2pt strip rather than hidden or sized to nothing.

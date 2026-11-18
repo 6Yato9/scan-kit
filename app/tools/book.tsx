@@ -10,6 +10,7 @@ import { ToolIntro, ToolScreen } from '@/components/tool-ui';
 import { splitSpreads } from '@/lib/book-split';
 import { notifyError } from '@/lib/haptics';
 import { alertScanError, deleteTempFiles, pickPhotos, scanWithCamera } from '@/lib/tool-scan';
+import { navigateWhenUnlocked } from '@/lib/nav-guard';
 
 export default function BookScreen() {
   const { saveAndOpen } = useScan();
@@ -46,7 +47,7 @@ export default function BookScreen() {
       }
       // saveAndOpen copies the pages into storage before it resolves.
       const id = await saveAndOpen({ pages });
-      if (id) router.replace({ pathname: '/viewer', params: { id } });
+      if (id) navigateWhenUnlocked(() => router.replace({ pathname: '/viewer', params: { id } }));
     } finally {
       deleteTempFiles(temps);
       busyRef.current = false;

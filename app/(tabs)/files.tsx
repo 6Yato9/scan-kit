@@ -460,6 +460,7 @@ export default function FilesScreen() {
             actionIcon="images-outline"
             onAction={handleImportImages}
             secondaryLabel="Import file"
+            secondaryIcon="folder-open-outline"
             onSecondaryAction={handleImportFiles}
           />
         )}</View>

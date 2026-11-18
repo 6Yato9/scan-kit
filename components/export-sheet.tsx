@@ -7,14 +7,16 @@
 // waits on the share sheet: `shareFile` returns as soon as the sheet is up, so
 // the UI can't get stuck if expo-sharing never settles. Work in progress shows a
 // progress state with Cancel, and closing the sheet cancels it too.
-import { Alert, Image, Linking, StyleSheet, Text, View } from 'react-native';
+import { Alert, Image, Linking, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { File } from 'expo-file-system';
 import * as MediaLibrary from 'expo-media-library';
 import JSZip from 'jszip';
 import {
+  canProtectPdf,
   estimatePdfBytes,
   generatePdf,
+  MIN_PDF_PASSWORD,
   PageSize,
   PageStat,
   paperLabel as paperName,
@@ -22,10 +24,14 @@ import {
   PdfError,
   PdfQuality,
   PdfProgressPhase,
+  PdfProtectError,
+  protectPdf,
+  roundUpEstimate,
 } from '@/lib/pdf';
 import {
   cleanFileUri,
   clearExportCache,
+  deleteQuietly,
   exportFileName,
   makeExportDir,
   placeExportFile,
@@ -34,6 +40,7 @@ import {
   ShareError,
 } from '@/lib/share';
 import { ocrAvailable } from '@/lib/ocr';
+import { pendingBakeCount, waitForPendingBakes } from '@/lib/bake';
 import { BottomSheet, SheetGroup, SheetHeader, SheetRow } from '@/components/bottom-sheet';
 import { SectionLabel } from '@/components/section-label';
 import { PrimaryButton } from '@/components/primary-button';
@@ -52,7 +59,7 @@ type Props = {
   onClose: () => void;
 };
 
-type Action = 'pdf' | 'small' | 'images' | 'photos' | 'print';
+type Action = 'pdf' | 'small' | 'protected' | 'images' | 'photos' | 'print';
 
 type Busy = { title: string; label: string; progress: number };
 
@@ -94,6 +101,9 @@ function pdfPhaseLabel(phase: PdfProgressPhase, done: number, total: number): st
 function errorMessage(err: unknown, action: Action): { title: string; body: string } {
   const title = action === 'print' ? 'Couldn’t print' : 'Couldn’t export';
   if (err instanceof ShareError) return { title, body: err.message };
+  if (err instanceof PdfProtectError) {
+    return { title: 'Couldn’t add the password', body: 'The PDF couldn’t be protected. Try again.' };
+  }
   if (err instanceof PdfError) {
     if (err.kind === 'read') return { title, body: `${err.message} Try again, or remove that page from the document.` };
     if (err.kind === 'timeout') {
@@ -108,7 +118,7 @@ function errorMessage(err: unknown, action: Action): { title: string; body: stri
 }
 
 export function ExportSheet({ visible, document, onClose }: Props) {
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
   const toast = useToast();
   const [busy, setBusy] = useState<Busy | null>(null);
   const [pageSize, setPageSize] = useState<PageSize>('A4');
@@ -118,6 +128,13 @@ export function ExportSheet({ visible, document, onClose }: Props) {
   const quality: PdfQuality = 'standard';
   const [bytes, setBytes] = useState<number | null>(null);
   const [stats, setStats] = useState<PageStat[] | null>(null);
+  // "Password-protected PDF" asks for the password inside the sheet (an Alert
+  // can't be presented over it). The password lives only in this state and is
+  // cleared as soon as the PDF is protected or the sheet closes.
+  const [pwMode, setPwMode] = useState(false);
+  const [pw, setPw] = useState('');
+  const [pw2, setPw2] = useState('');
+  const confirmRef = useRef<TextInput>(null);
   const abortRef = useRef<AbortController | null>(null);
   // Bumped on every open/close so a late share-sheet callback can't close a
   // sheet the user has since reopened.
@@ -129,6 +146,9 @@ export function ExportSheet({ visible, document, onClose }: Props) {
       abortRef.current?.abort();
       abortRef.current = null;
       setBusy(null);
+      setPwMode(false);
+      setPw('');
+      setPw2('');
       return;
     }
     let cancelled = false;
@@ -161,6 +181,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
   const isPdfDoc = !!document.pdfUri;
   const pageCount = document.pages.length;
   const canSearchable = !isPdfDoc && pageCount > 0 && ocrAvailable();
+  const canProtect = canProtectPdf() && (isPdfDoc || pageCount > 0);
 
   const cancelWork = useCallback(() => {
     abortRef.current?.abort();
@@ -221,6 +242,23 @@ export function ExportSheet({ visible, document, onClose }: Props) {
 
   const runningRef = useRef(false);
 
+  /** Waits for this document's queued or running filter bakes, with progress. */
+  async function finishEnhancements(signal: AbortSignal): Promise<void> {
+    const total = pendingBakeCount(document.id);
+    if (total === 0) return;
+    const show = (remaining: number) => {
+      if (signal.aborted) return;
+      setBusy({
+        title: 'Finishing enhancements…',
+        label: remaining === 1 ? '1 page left' : `${remaining} pages left`,
+        progress: (total - remaining) / total,
+      });
+    };
+    show(total);
+    // A timeout exports what is there: raw pixels are still a valid page.
+    await waitForPendingBakes(document.id, { signal, onProgress: show });
+  }
+
   /** Saves every page to the photo library (add-only permission). */
   async function saveToPhotos(signal: AbortSignal): Promise<boolean> {
     let perm = await MediaLibrary.getPermissionsAsync(true);
@@ -248,7 +286,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
     return true;
   }
 
-  async function run(action: Action) {
+  async function run(action: Action, password?: string) {
     if (busy || runningRef.current) return;
     runningRef.current = true;
     const controller = new AbortController();
@@ -261,6 +299,10 @@ export function ExportSheet({ visible, document, onClose }: Props) {
 
     try {
       await clearExportCache();
+      check();
+      // A scan shared straight away may still be getting its default filter
+      // (lib/bake.ts): export the enhanced pages, never the raw ones.
+      if (!isPdfDoc) await finishEnhancements(signal);
       check();
 
       if (action === 'print') {
@@ -295,7 +337,28 @@ export function ExportSheet({ visible, document, onClose }: Props) {
 
       const dir = await makeExportDir();
       let file: BuiltFile;
-      if (isPdfDoc) {
+      if (action === 'protected') {
+        // The normal PDF first (the imported file itself for a PDF document),
+        // then a protected copy under the document's name. The unprotected
+        // temp file is deleted straight away; only the protected one is shared.
+        const title = 'Creating protected PDF';
+        let raw: string | null = null;
+        try {
+          if (!isPdfDoc) {
+            raw = await buildPdf(quality, canSearchable, signal, title);
+            check();
+          }
+          setBusy({ title, label: 'Adding the password', progress: 0.95 });
+          const out = `${dir}${encodeURIComponent(exportFileName(document.name, 'pdf'))}`;
+          const uri = await protectPdf(raw ?? document.pdfUri!, out, password ?? '');
+          file = { uri, ...PDF_FILE };
+        } finally {
+          await deleteQuietly(raw);
+        }
+        setPw('');
+        setPw2('');
+        setPwMode(false);
+      } else if (isPdfDoc) {
         setBusy({ title: 'Preparing PDF', label: 'Preparing PDF', progress: 0.5 });
         const uri = await placeExportFile(document.pdfUri!, dir, exportFileName(document.name, 'pdf'), 'copy');
         file = { uri, ...PDF_FILE };
@@ -340,13 +403,30 @@ export function ExportSheet({ visible, document, onClose }: Props) {
   const pagesLabel = `${pageCount} ${pageCount === 1 ? 'page' : 'pages'}`;
   const sizeLabel = bytes ? formatBytes(bytes) : null;
   const subtitle = [isPdfDoc ? 'PDF' : pagesLabel, sizeLabel].filter(Boolean).join(', ');
-  const estimate = (q: PdfQuality) => (stats ? `about ${formatBytes(estimatePdfBytes(stats, q, canSearchable))}` : null);
+  // Leans high and rounds up (lib/pdf): the file should never be bigger than promised.
+  const estimate = (q: PdfQuality) =>
+    stats ? `about ${formatBytes(roundUpEstimate(estimatePdfBytes(stats, q, canSearchable)))}` : null;
   const sentence = (parts: (string | null)[]) => {
     const text = parts.filter(Boolean).join(', ');
     return text.charAt(0).toUpperCase() + text.slice(1);
   };
   const pdfDetail = sentence([canSearchable ? 'Text can be searched and copied' : pagesLabel, estimate(quality)]);
   const smallDetail = sentence(['Lower resolution for email', estimate('small')]);
+  const protectedDetail = sentence([
+    'Needs a password to open',
+    isPdfDoc ? (sizeLabel ? `about ${sizeLabel}` : null) : estimate(quality),
+  ]);
+  const pwTooShort = pw.length > 0 && pw.length < MIN_PDF_PASSWORD;
+  const pwMismatch = pw2.length > 0 && pw2 !== pw;
+  const pwReady = pw.length >= MIN_PDF_PASSWORD && pw2 === pw;
+  const pwHint = pwTooShort
+    ? `Use at least ${MIN_PDF_PASSWORD} characters.`
+    : pwMismatch
+      ? 'The passwords don’t match.'
+      : 'Anyone opening the PDF will need this password. Scan Kit doesn’t keep it, so it can’t be recovered.';
+  const submitPassword = () => {
+    if (pwReady) run('protected', pw);
+  };
   const printDetail = pageSize === 'Auto' || isPdfDoc ? 'Send to an AirPrint printer' : `Send to an AirPrint printer, ${paperName(pageSize)}`;
 
   return (
@@ -372,18 +452,88 @@ export function ExportSheet({ visible, document, onClose }: Props) {
             <PrimaryButton title="Cancel" variant="secondary" onPress={cancelWork} style={styles.cancelBtn} />
           </View>
         </SheetGroup>
+      ) : pwMode ? (
+        <>
+          <SectionLabel style={styles.label}>Password-protected PDF</SectionLabel>
+          <SheetGroup style={styles.pwGroup}>
+            <TextInput
+              style={[Type.body, styles.pwInput, styles.pwDivider, { color: colors.text, borderBottomColor: colors.border }]}
+              value={pw}
+              onChangeText={setPw}
+              placeholder="Password"
+              placeholderTextColor={colors.muted}
+              secureTextEntry
+              autoFocus
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoComplete="off"
+              textContentType="none"
+              keyboardAppearance={isDark ? 'dark' : 'light'}
+              returnKeyType="next"
+              submitBehavior="submit"
+              onSubmitEditing={() => confirmRef.current?.focus()}
+              accessibilityLabel="Password"
+            />
+            <TextInput
+              ref={confirmRef}
+              style={[Type.body, styles.pwInput, { color: colors.text }]}
+              value={pw2}
+              onChangeText={setPw2}
+              placeholder="Confirm password"
+              placeholderTextColor={colors.muted}
+              secureTextEntry
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoComplete="off"
+              textContentType="none"
+              keyboardAppearance={isDark ? 'dark' : 'light'}
+              returnKeyType="go"
+              onSubmitEditing={submitPassword}
+              accessibilityLabel="Confirm password"
+            />
+          </SheetGroup>
+          <Text
+            style={[Type.footnote, styles.pwHint, { color: pwTooShort || pwMismatch ? colors.danger : colors.muted }]}
+            accessibilityLiveRegion="polite"
+          >
+            {pwHint}
+          </Text>
+          <View style={styles.pwActions}>
+            <PrimaryButton title="Share protected PDF" icon="lock-closed-outline" onPress={submitPassword} disabled={!pwReady} />
+            <PrimaryButton
+              title="Back"
+              variant="secondary"
+              onPress={() => {
+                setPwMode(false);
+                setPw('');
+                setPw2('');
+              }}
+            />
+          </View>
+        </>
       ) : (
         <>
           <SectionLabel style={styles.label}>Share as</SectionLabel>
           <SheetGroup>
             {isPdfDoc ? (
-              <SheetRow
-                icon="document-text-outline"
-                label="PDF"
-                detail={sizeLabel ? `The original file, ${sizeLabel}` : 'The original file'}
-                onPress={() => run('pdf')}
-                last
-              />
+              <>
+                <SheetRow
+                  icon="document-text-outline"
+                  label="PDF"
+                  detail={sizeLabel ? `The original file, ${sizeLabel}` : 'The original file'}
+                  onPress={() => run('pdf')}
+                  last={!canProtect}
+                />
+                {canProtect ? (
+                  <SheetRow
+                    icon="lock-closed-outline"
+                    label="Password-protected PDF"
+                    detail={protectedDetail}
+                    onPress={() => setPwMode(true)}
+                    last
+                  />
+                ) : null}
+              </>
             ) : (
               <>
                 <SheetRow
@@ -398,6 +548,14 @@ export function ExportSheet({ visible, document, onClose }: Props) {
                   detail={smallDetail}
                   onPress={() => run('small')}
                 />
+                {canProtect ? (
+                  <SheetRow
+                    icon="lock-closed-outline"
+                    label="Password-protected PDF"
+                    detail={protectedDetail}
+                    onPress={() => setPwMode(true)}
+                  />
+                ) : null}
                 <SheetRow
                   icon="image-outline"
                   label={pageCount === 1 ? 'JPEG image' : 'JPEG images'}
@@ -442,4 +600,9 @@ const styles = StyleSheet.create({
   track: { height: 6, borderRadius: Radius.pill, overflow: 'hidden' },
   fill: { height: 6, borderRadius: Radius.pill },
   cancelBtn: { marginTop: Spacing.xs },
+  pwGroup: { marginBottom: Spacing.sm },
+  pwInput: { minHeight: 50, paddingHorizontal: Spacing.lg },
+  pwDivider: { borderBottomWidth: StyleSheet.hairlineWidth },
+  pwHint: { marginHorizontal: Spacing.xs, lineHeight: 18, minHeight: 36 },
+  pwActions: { gap: Spacing.sm, marginTop: Spacing.lg },
 });

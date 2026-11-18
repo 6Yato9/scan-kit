@@ -1,0 +1,149 @@
+// __tests__/ocr-cache.test.ts
+// Searchable PDF export reuses the text index's OCR instead of running Vision
+// on every page again (r5 code review M3), and export cancel doesn't wait for
+// Vision to finish.
+
+type Fake = { size: number; mtime: number; text?: string };
+const mockFs: Record<string, Fake> = {};
+
+jest.mock('expo-file-system', () => {
+  const join = (parts: any[]) => parts.map(p => (p && typeof p === 'object' ? p.uri : p)).join('/');
+  class MockFile {
+    uri: string;
+    constructor(...parts: any[]) { this.uri = join(parts); }
+    get exists() { return !!mockFs[this.uri]; }
+    get size() { return mockFs[this.uri]?.size ?? 0; }
+    get modificationTime() { return mockFs[this.uri]?.mtime ?? null; }
+    textSync() {
+      const f = mockFs[this.uri];
+      if (!f || f.text === undefined) throw new Error('ENOENT');
+      return f.text;
+    }
+    create() { mockFs[this.uri] = mockFs[this.uri] ?? { size: 0, mtime: Date.now() }; }
+    write(text: string) { mockFs[this.uri] = { size: text.length, mtime: Date.now(), text }; }
+    delete() { delete mockFs[this.uri]; }
+  }
+  class MockDirectory {
+    uri: string;
+    constructor(...parts: any[]) { this.uri = join(parts); }
+    get exists() { return true; }
+    create() {}
+    list() { return Object.keys(mockFs).filter(u => u.startsWith(`${this.uri}/`)).map(u => new MockFile(u)); }
+  }
+  return { File: MockFile, Directory: MockDirectory, Paths: { cache: 'file:///cache' } };
+});
+
+const mockVision = jest.fn();
+jest.mock('../modules/vision-ocr/src', () => ({
+  VisionOcr: { recognize: (uri: string) => mockVision(uri) },
+}));
+jest.mock('react-native', () => ({ Platform: { OS: 'ios' } }));
+
+import { extractDocText, OcrAbortedError, recognizeLines } from '../lib/ocr';
+import { clearOcrMemoryForTests, fileIdentity } from '../lib/ocr-cache';
+
+const PAGE = 'file:///docs/scan-kit/d1/page-0.jpg';
+const result = (text: string) => ({ text, lines: [{ text, left: 1, top: 2, width: 3, height: 4 }] });
+const cacheEntries = () => Object.keys(mockFs).filter(u => u.startsWith('file:///cache/ocr-lines/'));
+
+beforeEach(() => {
+  for (const k of Object.keys(mockFs)) delete mockFs[k];
+  clearOcrMemoryForTests();
+  mockVision.mockReset();
+});
+
+test('the text index caches each page; a later export reads it without running Vision', async () => {
+  mockFs[PAGE] = { size: 1000, mtime: 111 };
+  mockVision.mockResolvedValue(result('Invoice 42'));
+  expect(await extractDocText([PAGE])).toBe('Invoice 42');
+  expect(mockVision).toHaveBeenCalledTimes(1);
+  expect(cacheEntries()).toHaveLength(1);
+
+  // Fresh session (memory gone): the entry on disk still answers.
+  clearOcrMemoryForTests();
+  const again = await recognizeLines(`${PAGE}?v=9`);
+  expect(again).toEqual(result('Invoice 42'));
+  expect(mockVision).toHaveBeenCalledTimes(1);
+});
+
+test('new pixels (a bake, rotate, retake) change the identity, so OCR runs again', async () => {
+  mockFs[PAGE] = { size: 1000, mtime: 111 };
+  mockVision.mockResolvedValueOnce(result('before'));
+  await recognizeLines(PAGE);
+  mockFs[PAGE] = { size: 1200, mtime: 222 };
+  mockVision.mockResolvedValueOnce(result('after'));
+  expect((await recognizeLines(PAGE)).text).toBe('after');
+  expect(mockVision).toHaveBeenCalledTimes(2);
+});
+
+test('a renamed page (reorder) keeps its identity and still hits', async () => {
+  mockFs[PAGE] = { size: 1000, mtime: 111 };
+  mockVision.mockResolvedValue(result('moved'));
+  await recognizeLines(PAGE);
+  const moved = 'file:///docs/scan-kit/d1/page-3.jpg';
+  mockFs[moved] = mockFs[PAGE];
+  delete mockFs[PAGE];
+  expect((await recognizeLines(moved)).text).toBe('moved');
+  expect(mockVision).toHaveBeenCalledTimes(1);
+});
+
+test('a page replaced while Vision was reading it is not cached under the old identity', async () => {
+  mockFs[PAGE] = { size: 1000, mtime: 111 };
+  mockVision.mockImplementationOnce(async () => {
+    mockFs[PAGE] = { size: 999, mtime: 333 }; // a bake landed mid-OCR
+    return result('stale');
+  });
+  await recognizeLines(PAGE);
+  expect(cacheEntries()).toHaveLength(0);
+});
+
+test('the index and an export reading the same page share one Vision pass', async () => {
+  mockFs[PAGE] = { size: 1000, mtime: 111 };
+  let finish!: (v: unknown) => void;
+  mockVision.mockReturnValue(new Promise(r => { finish = r; }));
+  const a = extractDocText([PAGE]);
+  const b = recognizeLines(PAGE);
+  finish(result('shared'));
+  expect(await a).toBe('shared');
+  expect((await b).text).toBe('shared');
+  expect(mockVision).toHaveBeenCalledTimes(1);
+});
+
+test('cancel rejects at once instead of waiting for Vision; the result still lands in the cache', async () => {
+  mockFs[PAGE] = { size: 1000, mtime: 111 };
+  let finish!: (v: unknown) => void;
+  mockVision.mockReturnValue(new Promise(r => { finish = r; }));
+  const controller = new AbortController();
+  const pending = recognizeLines(PAGE, controller.signal);
+  controller.abort();
+  await expect(pending).rejects.toBeInstanceOf(OcrAbortedError);
+  finish(result('late'));
+  await new Promise(r => setImmediate(r));
+  expect((await recognizeLines(PAGE)).text).toBe('late');
+  expect(mockVision).toHaveBeenCalledTimes(1);
+});
+
+test('an already-aborted signal never starts OCR', async () => {
+  mockFs[PAGE] = { size: 1000, mtime: 111 };
+  const controller = new AbortController();
+  controller.abort();
+  await expect(recognizeLines(PAGE, controller.signal)).rejects.toBeInstanceOf(OcrAbortedError);
+  expect(mockVision).not.toHaveBeenCalled();
+});
+
+test('a missing or unreadable file is never cached (identity null)', async () => {
+  expect(fileIdentity('file:///nope.jpg')).toBeNull();
+  mockVision.mockResolvedValue(result('x'));
+  await recognizeLines('file:///nope.jpg');
+  await recognizeLines('file:///nope.jpg');
+  expect(mockVision).toHaveBeenCalledTimes(2);
+  expect(cacheEntries()).toHaveLength(0);
+});
+
+test('a corrupt cache entry is ignored and OCR runs', async () => {
+  mockFs[PAGE] = { size: 1000, mtime: 111 };
+  mockFs['file:///cache/ocr-lines/1000-111.json'] = { size: 3, mtime: 1, text: '{no' };
+  mockVision.mockResolvedValue(result('fresh'));
+  expect((await recognizeLines(PAGE)).text).toBe('fresh');
+  expect(mockVision).toHaveBeenCalledTimes(1);
+});

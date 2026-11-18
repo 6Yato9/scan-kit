@@ -8,16 +8,15 @@
 // away.
 import { useRef } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
 import { BottomSheet, SheetGroup, SheetHeader, SheetRow } from '@/components/bottom-sheet';
+import { AppIcon, type AppIconName } from '@/components/app-icon';
 import { useTheme } from '@/contexts/theme-context';
 import { Radius, Spacing, Type } from '@/lib/theme';
 
-type IconName = React.ComponentProps<typeof Ionicons>['name'];
-
 export type MoreAction = {
   key: string;
-  icon: IconName;
+  /** Tiles may use AppIcon's extra glyphs (Sign's signature); rows take Ionicons. */
+  icon: AppIconName;
   label: string;
   detail?: string;
   destructive?: boolean;
@@ -67,7 +66,7 @@ export function ViewerMoreSheet({ visible, title, subtitle, tools, groups, onClo
                 accessibilityLabel={t.label}
                 style={({ pressed }) => [styles.tool, { backgroundColor: colors.card }, pressed && { opacity: 0.6 }]}
               >
-                <Ionicons name={t.icon} size={24} color={colors.accent} />
+                <AppIcon name={t.icon} size={24} color={colors.accent} />
                 <Text
                   style={[Type.caption, styles.toolLabel, { color: colors.text }]}
                   numberOfLines={1}
@@ -84,7 +83,7 @@ export function ViewerMoreSheet({ visible, title, subtitle, tools, groups, onClo
             {group.map((a, i) => (
               <SheetRow
                 key={a.key}
-                icon={a.icon}
+                icon={a.icon === 'signature' ? 'create-outline' : a.icon}
                 label={a.label}
                 detail={a.detail}
                 destructive={a.destructive}

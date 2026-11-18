@@ -10,18 +10,15 @@ import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
 import { useToast } from '@/components/toast';
 import {
-  DocGroup,
-  DocRow,
   NoDocumentsScreen,
   OptionList,
-  SectionRow,
   ToolNote,
   ToolProgress,
   ToolScreen,
   formatBytes,
   useToolDocuments,
 } from '@/components/tool-ui';
-import { ToolDocHeader, useToolDoc } from '@/components/tool-doc';
+import { ToolDocPicker, useToolDoc } from '@/components/tool-doc';
 import { FilterBaker } from '@/components/filter-baker';
 import { compressDocument, documentSize, type CompressLevel, type CompressResult } from '@/lib/compress';
 import { invalidateDocPreviews } from '@/lib/bake';
@@ -83,6 +80,7 @@ export default function CompressScreen() {
     return (
       <NoDocumentsScreen
         toolTitle="Compress"
+        icon="contract-outline"
         subtitle="Compress makes scanned documents smaller. Scan or import a document first."
       />
     );
@@ -126,34 +124,17 @@ export default function CompressScreen() {
     >
       {/* Presented over the viewer: a baker underneath would never run (see FilterBaker). */}
       {fromViewer ? <FilterBaker /> : null}
-      {fixed && doc ? <ToolDocHeader doc={doc} /> : null}
-
-      {fixed ? null : doc ? (
-        // Chosen: collapse the list so the size options sit right below.
-        <>
-          <SectionRow label="Document" action="Change" onAction={() => { if (!running) { setDocId(null); setResult(null); } }} />
-          <ToolDocHeader doc={doc} flush />
-        </>
-      ) : (
-        <>
-          <SectionLabel>Document</SectionLabel>
-          <DocGroup>
-            {docs.map(d => (
-              <DocRow
-                key={d.id}
-                doc={d}
-                selected={false}
-                onPress={() => {
-                  if (running) return;
-                  setDocId(d.id);
-                  setResult(null);
-                }}
-              />
-            ))}
-          </DocGroup>
-          <ToolNote>Works on scanned and imported photos. Imported PDF files can’t be compressed.</ToolNote>
-        </>
-      )}
+      <ToolDocPicker
+        docs={docs}
+        doc={doc}
+        fixed={fixed}
+        disabled={running}
+        note="Imported PDFs can’t be compressed, so they aren’t listed."
+        onPick={d => {
+          setDocId(d.id);
+          setResult(null);
+        }}
+      />
 
       {done ? (
         <View style={[styles.result, { backgroundColor: colors.card }]}>

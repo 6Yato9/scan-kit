@@ -14,6 +14,7 @@ import { useScan } from '@/contexts/scan-context';
 import { documentNameFor, importKindOf, type ImportKind } from '@/lib/incoming-file';
 import { patchDocument } from '@/lib/storage';
 import { withSystemUI } from '@/lib/system-ui';
+import { navigateWhenUnlocked } from '@/lib/nav-guard';
 
 export { importKindOf } from '@/lib/incoming-file';
 export type { ImportKind } from '@/lib/incoming-file';
@@ -23,10 +24,14 @@ export function useImportDocuments() {
   const router = useRouter();
   const busy = useRef(false);
 
+  // Called after a picker and an auto-crop: the app may have been locked
+  // meanwhile, and the viewer must not open above the lock (lib/nav-guard).
   const open = useCallback((id: string | null, replace = false) => {
     if (!id) return;
-    if (replace) router.replace({ pathname: '/viewer', params: { id } });
-    else router.push({ pathname: '/viewer', params: { id } });
+    navigateWhenUnlocked(() => {
+      if (replace) router.replace({ pathname: '/viewer', params: { id } });
+      else router.push({ pathname: '/viewer', params: { id } });
+    });
   }, [router]);
 
   /**

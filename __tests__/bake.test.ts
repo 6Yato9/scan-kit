@@ -54,7 +54,10 @@ jest.mock('../lib/storage', () => ({
 import {
   bakePage,
   bakePages,
+  BakeWaitAborted,
   hasPendingBakes,
+  pendingBakeCount,
+  waitForPendingBakes,
   pendingBakesFor,
   remapForDelete,
   remapForReorder,
@@ -294,4 +297,71 @@ test('runPageEdit waits for an in-progress write and vice versa (no interleaving
   release();
   await Promise.all([done, edit]);
   expect(order).toEqual(['write-start', 'write-end', 'edit']);
+});
+
+describe('waitForPendingBakes (exports wait for enhancements, r5 product #1)', () => {
+  test('resolves at once when nothing is pending', async () => {
+    await expect(waitForPendingBakes('doc1')).resolves.toBe('done');
+  });
+
+  test('waits until every page of the document has been baked, reporting progress', async () => {
+    const all = bakePages('doc1', [0, 1], 'enhanced');
+    expect(pendingBakeCount('doc1')).toBe(2);
+    const progress: number[] = [];
+    let settled = false;
+    const wait = waitForPendingBakes('doc1', { onProgress: n => progress.push(n) }).then(v => { settled = true; return v; });
+    await bakeNext();
+    expect(settled).toBe(false);
+    await bakeNext();
+    await expect(wait).resolves.toBe('done');
+    await all;
+    expect(progress).toEqual([2, 1]);
+    // The pixels were written before the export is let through.
+    expect(mockSetPageBaked).toHaveBeenCalledTimes(2);
+  });
+
+  test("another document's bakes don't hold the export", async () => {
+    const other = bakePage('doc2', 0, 'bw', undefined);
+    await expect(waitForPendingBakes('doc1')).resolves.toBe('done');
+    await bakeNext();
+    await other;
+  });
+
+  test('a failed bake still releases the wait (the page keeps its raw pixels)', async () => {
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const all = bakePages('doc1', [0], 'enhanced');
+    const wait = waitForPendingBakes('doc1');
+    await flush();
+    const job = takeNextJob()!;
+    failJob(job.id, 'decode');
+    await expect(wait).resolves.toBe('done');
+    await all;
+    spy.mockRestore();
+  });
+
+  test('Cancel rejects with BakeWaitAborted and leaves the bake running', async () => {
+    const done = bakePage('doc1', 0, 'bw', undefined);
+    const controller = new AbortController();
+    const wait = waitForPendingBakes('doc1', { signal: controller.signal });
+    controller.abort();
+    await expect(wait).rejects.toBeInstanceOf(BakeWaitAborted);
+    expect(hasPendingBakes('doc1')).toBe(true);
+    await bakeNext();
+    await expect(done).resolves.toBe(true);
+  });
+
+  test('gives up after the timeout so an export is never stuck', async () => {
+    jest.useFakeTimers();
+    try {
+      const done = bakePage('doc1', 0, 'bw', undefined);
+      const wait = waitForPendingBakes('doc1', { timeoutMs: 1000 });
+      jest.advanceTimersByTime(1000);
+      await expect(wait).resolves.toBe('timeout');
+      jest.useRealTimers();
+      await bakeNext();
+      await done;
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 });

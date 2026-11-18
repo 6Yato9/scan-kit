@@ -9,19 +9,16 @@ import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
 import {
   ColorSwatches,
-  DocGroup,
-  DocRow,
   NoDocumentsScreen,
   PagePreview,
   Segmented,
-  SectionRow,
   ToolNote,
   ToolProgress,
   ToolScreen,
   useImageAspect,
   useToolDocuments,
 } from '@/components/tool-ui';
-import { ToolDocHeader, useToolDoc } from '@/components/tool-doc';
+import { ToolDocPicker, useToolDoc } from '@/components/tool-doc';
 import { FilterBaker } from '@/components/filter-baker';
 import { generatePdf } from '@/lib/pdf';
 import { copyPdfToStorage, deleteDocumentFiles } from '@/lib/files';
@@ -38,6 +35,7 @@ import {
   type WatermarkStyle,
 } from '@/lib/stamp';
 import { Radius, Spacing, Type } from '@/lib/theme';
+import { navigateWhenUnlocked } from '@/lib/nav-guard';
 
 const STYLES: { value: WatermarkStyle; label: string }[] = [
   { value: 'diagonal', label: 'Diagonal' },
@@ -90,7 +88,7 @@ export default function WatermarkScreen() {
       });
       notifySuccess();
       // The viewer shows the toast: it covers the app-wide toast host.
-      router.replace({ pathname: '/viewer', params: { id, notice: 'Watermarked copy saved. The original is unchanged.' } });
+      navigateWhenUnlocked(() => router.replace({ pathname: '/viewer', params: { id, notice: 'Watermarked copy saved. The original is unchanged.' } }));
     } catch {
       try { deleteDocumentFiles(id); } catch {}
       notifyError();
@@ -105,12 +103,14 @@ export default function WatermarkScreen() {
     return (
       <NoDocumentsScreen
         toolTitle="Watermark"
+        icon="water-outline"
         subtitle="Watermark stamps text on every page of a scan. Scan or import a document first."
       />
     );
   }
 
-  const previewW = Math.min(screenW * 0.62, 260);
+  // Small enough that the text and style controls stay above the fold.
+  const previewW = Math.min(screenW * 0.5, 220);
   const [r, g, b] = STAMP_RGB[color];
 
   return (
@@ -136,56 +136,37 @@ export default function WatermarkScreen() {
     >
       {/* Presented over the viewer: a baker underneath would never run (see FilterBaker). */}
       {fromViewer ? <FilterBaker /> : null}
-      {fixed && doc ? (
-        <ToolDocHeader doc={doc} />
-      ) : doc ? (
-        // Chosen: collapse the list so the preview and options sit right below.
-        <>
-          <SectionRow label="Document" action="Change" onAction={() => !progress && setDocId(null)} />
-          <ToolDocHeader doc={doc} flush />
-        </>
-      ) : (
-        <>
-          <SectionLabel>Document</SectionLabel>
-          <DocGroup>
-            {docs.map(d => (
-              <DocRow key={d.id} doc={d} selected={false} onPress={() => !progress && setDocId(d.id)} />
-            ))}
-          </DocGroup>
-        </>
-      )}
+      <ToolDocPicker docs={docs} doc={doc} fixed={fixed} disabled={!!progress} onPick={d => setDocId(d.id)} />
 
-      {doc ? (
-        <View style={styles.previewWrap}>
-          <PagePreview uri={`${doc.pages[0]}?v=${doc.updatedAt}`} aspect={aspect} width={previewW}>
-            {({ width }) => {
-              const fontSize = watermarkFontFraction(label, style) * width;
-              const ink = `rgba(${r},${g},${b},${watermarkOpacity(style)})`;
-              const textEl = (
-                <Text
-                  style={{ fontSize, fontWeight: '700', color: ink, letterSpacing: fontSize * 0.04 }}
->
-                  {label}
-                </Text>
-              );
-              return style === 'footer' ? (
-                <View style={[styles.footerStamp, { bottom: width * aspect * 0.03 }]}>{textEl}</View>
-              ) : (
-                <View style={styles.centerStamp}>
-                  <View
-                    style={[
-                      { width: width * 2, alignItems: 'center' },
-                      style === 'diagonal' && { transform: [{ rotate: `${WATERMARK_ANGLE}deg` }] },
-                    ]}
-                  >
-                    {textEl}
-                  </View>
+      {/* Live preview: the first page (a sample page until one is chosen) with
+          the watermark drawn exactly as the PDF will get it. */}
+      <View style={styles.previewWrap}>
+        <PagePreview uri={doc ? `${doc.pages[0]}?v=${doc.updatedAt}` : null} aspect={aspect} width={previewW}>
+          {({ width }) => {
+            const fontSize = watermarkFontFraction(label, style) * width;
+            const ink = `rgba(${r},${g},${b},${watermarkOpacity(style)})`;
+            const textEl = (
+              <Text style={{ fontSize, fontWeight: '700', color: ink, letterSpacing: fontSize * 0.04 }}>
+                {label}
+              </Text>
+            );
+            return style === 'footer' ? (
+              <View style={[styles.footerStamp, { bottom: width * aspect * 0.03 }]}>{textEl}</View>
+            ) : (
+              <View style={styles.centerStamp}>
+                <View
+                  style={[
+                    { width: width * 2, alignItems: 'center' },
+                    style === 'diagonal' && { transform: [{ rotate: `${WATERMARK_ANGLE}deg` }] },
+                  ]}
+                >
+                  {textEl}
                 </View>
-              );
-            }}
-          </PagePreview>
-        </View>
-      ) : null}
+              </View>
+            );
+          }}
+        </PagePreview>
+      </View>
 
       <SectionLabel>Text</SectionLabel>
       <TextInput

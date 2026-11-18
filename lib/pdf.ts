@@ -26,6 +26,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { Image } from 'react-native';
 import { recognizeLines, OcrLine } from './ocr';
+import { VisionOcr } from '../modules/vision-ocr/src';
 
 /** 'Auto' shapes the paper like the scanned pages (a receipt gets a tall, narrow page). */
 export type PageSize = 'Auto' | 'A4' | 'Letter';
@@ -188,6 +189,27 @@ export function fitContain(
   return { left: (1 - w) / 2, top: 0, width: w, height: 1 };
 }
 
+/**
+ * Rounds a size estimate up to two significant figures in the unit it is shown
+ * in (KB below 1 MB, tenths of a MB above), so "about 150 KB" is never less
+ * than the estimate itself: 126 KB → 130 KB, 1.21 MB → 1.3 MB, 9 KB → 9 KB.
+ */
+export function roundUpEstimate(bytes: number): number {
+  if (!Number.isFinite(bytes) || bytes <= 0) return 0;
+  const KB = 1024;
+  const MB = KB * 1024;
+  if (bytes < MB) {
+    const kb = Math.ceil(bytes / KB);
+    const step = kb >= 100 ? 10 : 1;
+    const rounded = Math.ceil(kb / step) * step;
+    return rounded >= 1000 ? MB : rounded * KB;
+  }
+  const mb = bytes / MB;
+  const step = mb >= 10 ? 1 : 0.1;
+  // The epsilon keeps 1.2 MB (exactly) at 1.2 instead of float-rounding to 1.3.
+  return Math.ceil(mb / step - 1e-9) * step * MB;
+}
+
 /** Cap the long edge for big documents so the inlined HTML stays a sane size. */
 function maxEdgeFor(quality: PdfQuality, pageCount: number): number {
   const base = QUALITY[quality].maxEdge;
@@ -200,12 +222,15 @@ function maxEdgeFor(quality: PdfQuality, pageCount: number): number {
  * Output image bytes per stored byte, at the same pixel count. Measured on
  * device: the print renderer re-encodes every image at its own quality, so
  * the preset's JPEG quality barely changes the result — only the resolution
- * does (ratios came out 0.83-1.24 across real scans, mean ~1.0).
+ * does (ratios came out 0.83-1.24 across real scans, mean ~1.0). The
+ * estimate leans high (1.15, then rounded up by roundUpEstimate) so the
+ * number shown never under-promises: a receipt estimated at 126 KB came out
+ * at 139 KB with a ratio of 1.
  */
-const RENDER_RATIO = 1;
+const RENDER_RATIO = 1.15;
 /** Fixed PDF cost per page (page objects, image header) and per searchable page (text layer). */
 const PAGE_OVERHEAD = 2_000;
-const TEXT_OVERHEAD = 3_000;
+const TEXT_OVERHEAD = 4_000;
 
 export type PageStat = { bytes: number; width: number; height: number };
 
@@ -417,7 +442,7 @@ export async function generatePdf(
     if (opts.searchable) {
       onProgress?.(i, pages.length, 'reading-text');
       try {
-        const { lines } = await recognizeLines(uri);
+        const { lines } = await recognizeLines(uri, signal);
         // OCR coordinates are in the original image's pixels; map via the
         // original size (same aspect ratio as the downscaled copy).
         const original = (await getImageSize(uri)) ?? img;
@@ -498,4 +523,33 @@ export async function generateTestPagePdf(size: PageSize = 'A4'): Promise<string
     margins: { left: 0, right: 0, top: 0, bottom: 0 },
   });
   return uri;
+}
+
+// ── Password protection ─────────────────────────────────────────────────────
+
+/** Thrown when a PDF couldn't be password-protected (or protection is missing). */
+export class PdfProtectError extends Error {}
+
+/** Shortest password the export sheet accepts. */
+export const MIN_PDF_PASSWORD = 4;
+
+/** True when this build can write password-protected PDFs (iOS, PDFKit). */
+export function canProtectPdf(): boolean {
+  return typeof VisionOcr?.protectPdf === 'function';
+}
+
+/**
+ * Writes a copy of `inputUri` to `outputUri` that needs `password` to open
+ * (PDFKit, AES; the native side reopens it to check the password works).
+ * Resolves to the output file URI.
+ */
+export async function protectPdf(inputUri: string, outputUri: string, password: string): Promise<string> {
+  const native = VisionOcr?.protectPdf;
+  if (!native) throw new PdfProtectError('Password protection isn’t available on this device.');
+  if (password.length < MIN_PDF_PASSWORD) throw new PdfProtectError('The password is too short.');
+  try {
+    return await native(inputUri.split('?')[0], outputUri.split('?')[0], password);
+  } catch {
+    throw new PdfProtectError('The PDF couldn’t be protected.');
+  }
 }

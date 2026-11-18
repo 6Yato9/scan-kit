@@ -11,6 +11,7 @@ import { Document, PageAdjustment, PageFilter } from '../types/document';
 import { copyDocumentFiles, copyPageWithShadow, copyPdfToStorage, deleteDocumentFiles, reorderPages } from './files';
 import { getDocument, patchDocument, saveDocument } from './storage';
 import { remapForReorder, runPageEdit, withDocLock } from './bake';
+import { indexDocText } from './save-scan';
 
 const DEFAULT_ADJ: PageAdjustment = { brightness: 0, contrast: 0, saturation: 0 };
 
@@ -171,7 +172,7 @@ export async function mergeIntoNew(docs: Document[], name: string): Promise<Docu
 export async function extractPages(source: Document, indices: number[]): Promise<Document> {
   const sorted = [...new Set(indices)].sort((a, b) => a - b);
   const newId = Crypto.randomUUID();
-  return withDocLock(source.id, async () => {
+  const created = await withDocLock(source.id, async () => {
     const fresh = await getDocument(source.id);
     if (!fresh || fresh.pages.length !== source.pages.length) throw new Error('extractPages: document changed');
     if (!sorted.length || sorted[0] < 0 || sorted[sorted.length - 1] >= fresh.pages.length) {
@@ -200,4 +201,9 @@ export async function extractPages(source: Document, indices: number[]): Promise
       throw err;
     }
   });
+  // Indexed like any new document, so content search finds it. In the
+  // background and outside the source's lock; the copies keep their files'
+  // identity, so the OCR cache usually answers without reading them again.
+  indexDocText(created.id, created.pages).catch(err => console.warn('Index extracted pages failed', err));
+  return created;
 }

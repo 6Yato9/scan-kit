@@ -97,8 +97,8 @@ export function shadowOf(pageUri: string): string | null {
  * Rename-only like replacePage: the copy must exist (it lives in Caches, which
  * iOS may purge) or nothing is touched, and both files are copied out before
  * anything stored changes, so a failed copy (disk full) leaves the page as it
- * is. The shadow is staged in Caches rather than beside the page, so the
- * startup sweep can't promote it next to the wrong page. The page's current
+ * is. The shadow is staged in Caches/page-undo rather than beside the page, so
+ * the startup sweep can't promote it next to the wrong page (it just deletes it). The page's current
  * shadow is removed before the page is swapped: an interruption can leave the
  * page without a shadow (harmless), never paired with another image's.
  */
@@ -111,7 +111,14 @@ export function restorePageWithShadow(srcUri: string, docId: string, pageIndex: 
   const dest = new File(dir, `page-${pageIndex}.jpg`);
   const destOrig = new File(dir, `page-${pageIndex}.orig.jpg`);
   const pageSide = new File(dir, `page-${pageIndex}.new.jpg`);
-  const origSide = srcOrig && srcOrig.exists ? new File(Paths.cache, `restore-${Date.now()}.orig.jpg`) : null;
+  // Staged in Caches/page-undo, which the startup sweep clears (TEMP_DIRS), so
+  // an Undo interrupted between the two steps leaves nothing behind for good.
+  let origSide: File | null = null;
+  if (srcOrig && srcOrig.exists) {
+    const staging = new Directory(Paths.cache, 'page-undo');
+    staging.create({ intermediates: true, idempotent: true });
+    origSide = new File(staging, `restore-${Date.now()}.orig.jpg`);
+  }
 
   if (origSide) stage(srcOrig!, origSide);
   try {

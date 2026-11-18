@@ -22,9 +22,11 @@ import { useScan } from '@/contexts/scan-context';
 import { SectionLabel } from '@/components/section-label';
 import { HeaderTextButton, ScreenHeader } from '@/components/screen-header';
 import { EmptyState } from '@/components/empty-state';
+import type { AppIconName } from '@/components/app-icon';
 import { getDocuments } from '@/lib/storage';
 import { HIT, Radius, Spacing, Type } from '@/lib/theme';
 import type { Document } from '@/types/document';
+import { navigateWhenUnlocked } from '@/lib/nav-guard';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
@@ -246,7 +248,8 @@ export function PagePreview({
   children,
   onPress,
 }: {
-  uri: string;
+  /** null draws a blank sample page (faint text lines), so a stamp can be previewed before a document is chosen. */
+  uri: string | null;
   aspect: number;
   width: number;
   children?: (size: { width: number; height: number }) => ReactNode;
@@ -256,7 +259,11 @@ export function PagePreview({
   const height = width * aspect;
   const body = (
     <View style={{ width, height }}>
-      <Image source={{ uri }} style={{ width, height }} resizeMode="stretch" />
+      {uri ? (
+        <Image source={{ uri }} style={{ width, height }} resizeMode="stretch" />
+      ) : (
+        <SamplePage width={width} height={height} />
+      )}
       <View style={StyleSheet.absoluteFill} pointerEvents="none">
         {children?.({ width, height })}
       </View>
@@ -278,6 +285,25 @@ export function PagePreview({
       ) : (
         body
       )}
+    </View>
+  );
+}
+
+/** A blank page with a few faint text lines: the stand-in until a document is chosen. */
+function SamplePage({ width, height }: { width: number; height: number }) {
+  const { colors } = useTheme();
+  const pad = width * 0.1;
+  const line = Math.max(3, width * 0.022);
+  const rows = [0.55, 0.9, 0.82, 0.88, 0.6, 0, 0.92, 0.85, 0.9, 0.7, 0, 0.88, 0.8, 0.45];
+  return (
+    <View style={{ width, height, backgroundColor: colors.paper, paddingHorizontal: pad, paddingTop: pad }}>
+      <View style={{ width: '40%', height: line * 1.8, borderRadius: line, backgroundColor: colors.paperLine, marginBottom: line * 3 }} />
+      {rows.map((w, i) => (
+        <View
+          key={i}
+          style={{ width: `${w * 100}%`, height: line, borderRadius: line / 2, backgroundColor: colors.paperLine, marginBottom: line * 2.2 }}
+        />
+      ))}
     </View>
   );
 }
@@ -347,6 +373,20 @@ export function SelectionMark({ selected, order }: { selected: boolean; order?: 
   );
 }
 
+/**
+ * Single-choice indicator: an empty ring, or an accent ring with a dot. Every
+ * row of a single-choice list shows one, so unchosen rows still read as
+ * choices (multi-select uses SelectionMark's filled disc with a check).
+ */
+export function RadioMark({ selected }: { selected: boolean }) {
+  const { colors } = useTheme();
+  return (
+    <View style={[styles.mark, styles.markEmpty, { borderColor: selected ? colors.accent : colors.ring }]}>
+      {selected ? <View style={[styles.radioDot, { backgroundColor: colors.accent }]} /> : null}
+    </View>
+  );
+}
+
 /** A document's first page at thumbnail size, with a hairline so white pages keep their edge. */
 export function DocThumb({ doc, width = 40, height = 52 }: { doc: Document; width?: number; height?: number }) {
   const { colors } = useTheme();
@@ -361,10 +401,10 @@ export function DocThumb({ doc, width = 40, height = 52 }: { doc: Document; widt
 }
 
 /**
- * One document in a picker. Single choice shows a checkmark on the chosen row,
- * like OptionList and Settings; `multi` shows a ring on every row (filled when
- * chosen), and `order` numbers it for multi-select in a meaningful order. Wrap
- * rows in a DocGroup.
+ * One document in a picker. Single choice shows a radio on every row (filled
+ * on the chosen one), like OptionList; `multi` shows a check ring on every row
+ * (filled when chosen), and `order` numbers it for multi-select in a
+ * meaningful order. Wrap rows in a DocGroup.
  */
 export function DocRow({
   doc,
@@ -401,16 +441,7 @@ export function DocRow({
         </Text>
         <Text style={[Type.footnote, styles.meta, { color: colors.muted }]}>{meta}</Text>
       </View>
-      {multi || order ? (
-        <SelectionMark selected={selected} order={order} />
-      ) : (
-        // Single choice: the app's one idiom, a checkmark on the chosen row
-        // (circles are only for multi-select). The slot keeps its width so the
-        // name never reflows as the choice moves.
-        <View style={styles.checkSlot}>
-          {selected ? <Ionicons name="checkmark" size={22} color={colors.accent} /> : null}
-        </View>
-      )}
+      {multi || order ? <SelectionMark selected={selected} order={order} /> : <RadioMark selected={selected} />}
     </Pressable>
   );
 }
@@ -420,7 +451,18 @@ export function DocRow({
  * state (EmptyState, centred, actions under the text), so a tool with no
  * documents looks exactly like an empty list anywhere else.
  */
-export function NoDocumentsScreen({ toolTitle, title, subtitle }: { toolTitle: string; title?: string; subtitle?: string }) {
+export function NoDocumentsScreen({
+  toolTitle,
+  icon,
+  title,
+  subtitle,
+}: {
+  toolTitle: string;
+  /** The tool's own icon, as on the Tools tab, so the tool keeps one glyph everywhere. */
+  icon: AppIconName;
+  title?: string;
+  subtitle?: string;
+}) {
   const router = useRouter();
   const { triggerScan } = useScan();
   const insets = useSafeAreaInsets();
@@ -428,16 +470,17 @@ export function NoDocumentsScreen({ toolTitle, title, subtitle }: { toolTitle: s
     <ToolScreen title={toolTitle} scroll={false}>
       <View style={[styles.flex, { paddingBottom: insets.bottom + Spacing.xxl }]}>
         <EmptyState
-          icon="documents-outline"
+          icon={icon}
           title={title ?? 'No documents yet'}
           subtitle={subtitle ?? 'Scan or import a document first, then come back to this tool.'}
           actionLabel="Scan a document"
           actionIcon="camera-outline"
           onAction={async () => {
             const id = await triggerScan();
-            if (id) router.push({ pathname: '/viewer', params: { id } });
+            if (id) navigateWhenUnlocked(() => router.push({ pathname: '/viewer', params: { id } }));
           }}
           secondaryLabel="Import photos"
+          secondaryIcon="images-outline"
           onSecondaryAction={() => router.navigate({ pathname: '/(tabs)/files', params: { action: 'importImages' } } as never)}
         />
       </View>
@@ -445,7 +488,7 @@ export function NoDocumentsScreen({ toolTitle, title, subtitle }: { toolTitle: s
   );
 }
 
-/** A grouped list of mutually exclusive options with a checkmark on the chosen one. */
+/** A grouped list of mutually exclusive options, a radio on every row. */
 export function OptionList<T extends string | number>({
   options,
   value,
@@ -465,7 +508,7 @@ export function OptionList<T extends string | number>({
             key={String(opt.value)}
             onPress={() => onChange(opt.value)}
             accessibilityRole="radio"
-            accessibilityState={{ checked: on }}
+            accessibilityState={{ checked: on, selected: on }}
             style={({ pressed }) => [
               styles.option,
               i < options.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
@@ -478,7 +521,7 @@ export function OptionList<T extends string | number>({
                 <Text style={[Type.footnote, styles.meta, { color: colors.muted }]}>{opt.detail}</Text>
               ) : null}
             </View>
-            {on ? <Ionicons name="checkmark" size={22} color={colors.accent} /> : null}
+            <RadioMark selected={on} />
           </Pressable>
         );
       })}
@@ -600,9 +643,9 @@ const styles = StyleSheet.create({
   thumb: { borderRadius: 5, borderWidth: StyleSheet.hairlineWidth },
   thumbIcon: { alignItems: 'center', justifyContent: 'center' },
   meta: { marginTop: 2 },
-  checkSlot: { width: 24, alignItems: 'center' },
   mark: { width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   markEmpty: { borderWidth: 1.5 },
+  radioDot: { width: 12, height: 12, borderRadius: 6 },
   badgeText: { fontSize: 13, fontWeight: '700' },
   swatches: {
     flexDirection: 'row',

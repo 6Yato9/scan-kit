@@ -16,6 +16,7 @@ import { autoName } from '@/lib/auto-name';
 import { notifyError, notifySuccess } from '@/lib/haptics';
 import { alertScanError, deleteTempFiles, pickPhotos, scanWithCamera } from '@/lib/tool-scan';
 import { Radius, Spacing, Type } from '@/lib/theme';
+import { navigateWhenUnlocked } from '@/lib/nav-guard';
 
 type Side = 'front' | 'back';
 const QUALITY = { low: 0.5, medium: 0.75, high: 0.9 } as const;
@@ -93,7 +94,7 @@ export default function IdCardScreen() {
       indexDocText(id, stored).catch(() => {});
       notifySuccess();
       show('ID card saved');
-      router.replace({ pathname: '/viewer', params: { id } });
+      navigateWhenUnlocked(() => router.replace({ pathname: '/viewer', params: { id } }));
     } catch {
       notifyError();
       Alert.alert('Couldn’t save the ID card', 'There may not be enough storage space. Try again.');
@@ -125,7 +126,7 @@ export default function IdCardScreen() {
         ) : (
           <View style={styles.placeholder}>
             <View style={[styles.addIcon, { backgroundColor: colors.accentLight }]}>
-              <Ionicons name={side === 'front' ? 'id-card-outline' : 'card-outline'} size={26} color={colors.accent} />
+              <Ionicons name="id-card-outline" size={26} color={colors.accent} />
             </View>
             <Text style={[Type.subhead, { color: colors.accent }]}>
               {side === 'front' ? 'Add front' : 'Add back'}

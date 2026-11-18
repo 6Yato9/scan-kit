@@ -8,6 +8,7 @@ import {
   buildPdfHtml,
   escapeHtml,
   estimatePdfBytes,
+  roundUpEstimate,
   fitContain,
   generatePdf,
   PAPER_SIZES_PT,
@@ -153,7 +154,7 @@ test('never injects a CSS filter into the exported HTML', async () => {
 
 test('searchable PDF adds an escaped, transparent text layer', async () => {
   await generatePdf(['file:///page0.jpg'], { searchable: true });
-  expect(mockOcr).toHaveBeenCalledWith('file:///page0.jpg');
+  expect(mockOcr).toHaveBeenCalledWith('file:///page0.jpg', undefined);
   const html = htmlOf();
   expect(html).toContain('Total &lt;due&gt; &amp; paid');
   expect(html).not.toContain('<due>');
@@ -277,10 +278,28 @@ test("generatePdf with 'Auto' renders on paper shaped like the pages", async () 
 test('estimatePdfBytes scales stored bytes by the downscale area and adds per-page overhead', () => {
   const page = { bytes: 160_000, width: 1500, height: 2000 };
   const standard = estimatePdfBytes([page], 'standard'); // 1800 / 2000 → 0.81 of the pixels
-  expect(standard).toBeGreaterThan(160_000 * 0.81);
-  expect(standard).toBeLessThan(160_000 * 0.81 + 10_000);
+  // Leans high (never under-promise), but stays in the same ballpark.
+  expect(standard).toBeGreaterThan(160_000 * 0.81 * 1.1);
+  expect(standard).toBeLessThan(160_000 * 0.81 * 1.25);
   const small = estimatePdfBytes([page], 'small'); // 1300 / 2000
   expect(small).toBeLessThan(standard);
   expect(estimatePdfBytes([page], 'standard', true)).toBeGreaterThan(standard);
   expect(estimatePdfBytes([page, page], 'standard')).toBeGreaterThan(standard * 1.9);
+});
+
+test('roundUpEstimate rounds up to two significant figures, never down', () => {
+  const KB = 1024;
+  const MB = KB * 1024;
+  expect(roundUpEstimate(126 * KB + 300)).toBe(130 * KB);
+  expect(roundUpEstimate(139 * KB)).toBe(140 * KB);
+  expect(roundUpEstimate(140 * KB)).toBe(140 * KB);
+  expect(roundUpEstimate(9 * KB + 1)).toBe(10 * KB);
+  expect(roundUpEstimate(1_000 * KB)).toBe(MB);
+  expect(roundUpEstimate(1.21 * MB)).toBeCloseTo(1.3 * MB);
+  expect(roundUpEstimate(1.2 * MB)).toBeCloseTo(1.2 * MB);
+  expect(roundUpEstimate(12.2 * MB)).toBe(13 * MB);
+  expect(roundUpEstimate(0)).toBe(0);
+  for (const b of [1, 5_000, 99_999, 140_000, 1_234_567, 25_000_000]) {
+    expect(roundUpEstimate(b)).toBeGreaterThanOrEqual(b);
+  }
 });

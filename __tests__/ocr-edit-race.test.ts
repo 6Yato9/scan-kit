@@ -36,9 +36,11 @@ jest.mock('../lib/document-detect', () => ({ autoCropDocument: jest.fn(async (ur
 
 // OCR resolves when the test says so.
 let mockFinishOcr: (text: string) => void = () => {};
+// Every pass's resolver, oldest first (for passes that overlap).
+const mockOcrPasses: ((text: string) => void)[] = [];
 jest.mock('../lib/ocr', () => ({
   ocrAvailable: () => true,
-  extractDocText: () => new Promise<string>(resolve => { mockFinishOcr = resolve; }),
+  extractDocText: () => new Promise<string>(resolve => { mockFinishOcr = resolve; mockOcrPasses.push(resolve); }),
 }));
 
 import { getDocument, getDocuments, updateDocument } from '../lib/storage';
@@ -113,4 +115,37 @@ test('a rename the user makes before OCR lands still wins', async () => {
   mockFinishOcr('INVOICE #2026-0417');
   await ocr;
   expect((await getDocument(id))!.name).toBe('My taxes');
+});
+
+describe('overlapping index passes (retake, then Undo; r5 L7)', () => {
+  test('an older pass that finishes last does not overwrite the newer text', async () => {
+    const { id, pages } = await newScan();
+    mockOcrPasses.length = 0;
+    // The retake's pass starts first (it read the new photo)…
+    const retakePass = indexDocText(id, pages);
+    await tick();
+    // …then Undo puts the old page back and re-indexes.
+    const undoPass = indexDocText(id, pages);
+    await tick();
+    const [finishRetake, finishUndo] = mockOcrPasses;
+    finishUndo('Restored page text');
+    await undoPass;
+    finishRetake('Replaced photo text');
+    await retakePass;
+    expect((await getDocument(id))!.ocrText).toBe('Restored page text');
+  });
+
+  test('in order, the newer pass simply wins', async () => {
+    const { id, pages } = await newScan();
+    mockOcrPasses.length = 0;
+    const first = indexDocText(id, pages);
+    await tick();
+    const second = indexDocText(id, pages);
+    await tick();
+    mockOcrPasses[0]('first');
+    await first;
+    mockOcrPasses[1]('second');
+    await second;
+    expect((await getDocument(id))!.ocrText).toBe('second');
+  });
 });

@@ -678,6 +678,18 @@ describe('restorePageWithShadow (retake Undo) never deletes before it has a copy
     expect(leftovers('u1')).toEqual([]);
   });
 
+  test('stages the shadow in Caches/page-undo, which the startup sweep clears (r5 L6)', () => {
+    seedFile('u5', 'page-0.jpg', 'RETAKEN');
+    const uri = stash('OLD', 'OLD-orig');
+    mockCopy.mockClear();
+    restorePageWithShadow(uri, 'u5', 0);
+    const staged = mockCopy.mock.calls.map(c => (c[0] as any).uri).find((u: string) => /restore-\d+\.orig\.jpg$/.test(u));
+    expect(staged).toMatch(/^file:\/\/\/Library\/Caches\/+page-undo\/restore-\d+\.orig\.jpg$/);
+    // Moved into place afterwards: nothing is left in the staging folder.
+    expect(fileContents[staged!]).toBeUndefined();
+    expect(read('u5', 'page-0.orig.jpg')).toBe('OLD-orig');
+  });
+
   test('a saved page without a shadow drops the current shadow', () => {
     seedFile('u2', 'page-0.jpg', 'RETAKEN');
     seedFile('u2', 'page-0.orig.jpg', 'RETAKEN-orig');

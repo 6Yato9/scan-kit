@@ -8,14 +8,14 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';
-import { SectionLabel } from '@/components/section-label';
-import { DocGroup, DocRow, NoDocumentsScreen, SectionRow, ToolNote, ToolScreen, pageCountLabel, useToolDocuments } from '@/components/tool-ui';
-import { ToolDocHeader, useToolDoc } from '@/components/tool-doc';
+import { NoDocumentsScreen, SectionRow, ToolScreen, pageCountLabel, useToolDocuments } from '@/components/tool-ui';
+import { ToolDocPicker, useToolDoc } from '@/components/tool-doc';
 import { FilterBaker } from '@/components/filter-baker';
 import { extractPages } from '@/lib/doc-ops';
 import { notifyError, notifySuccess } from '@/lib/haptics';
 import { Radius, Spacing } from '@/lib/theme';
 import type { Document } from '@/types/document';
+import { navigateWhenUnlocked } from '@/lib/nav-guard';
 
 export default function ExtractScreen() {
   const router = useRouter();
@@ -50,10 +50,10 @@ export default function ExtractScreen() {
       const created = await extractPages(doc, [...pages]);
       notifySuccess();
       // The viewer shows the toast: it covers the app-wide toast host.
-      router.replace({
+      navigateWhenUnlocked(() => router.replace({
         pathname: '/viewer',
         params: { id: created.id, notice: `${pageCountLabel(created.pages.length)} saved as a new document` },
-      });
+      }));
     } catch {
       notifyError();
       Alert.alert('Couldn’t extract pages', 'A page file couldn’t be copied. The original document is unchanged. Try again.');
@@ -66,6 +66,7 @@ export default function ExtractScreen() {
     return (
       <NoDocumentsScreen
         toolTitle="Extract pages"
+        icon="cut-outline"
         title="No multi-page documents"
         subtitle="Extracting pages needs a document with at least two pages. Scan or import one first."
       />
@@ -86,19 +87,14 @@ export default function ExtractScreen() {
     >
       {/* Presented over the viewer: a baker underneath would never run (see FilterBaker). */}
       {fromViewer ? <FilterBaker /> : null}
-      {fixed && doc ? (
-        <ToolDocHeader doc={doc} />
-      ) : (
-        <>
-          <SectionLabel>Document</SectionLabel>
-          <DocGroup>
-            {docs.map(d => (
-              <DocRow key={d.id} doc={d} selected={d.id === docId} onPress={() => pick(d)} />
-            ))}
-          </DocGroup>
-          <ToolNote>Only documents with two or more pages are listed. Imported PDFs can’t be split.</ToolNote>
-        </>
-      )}
+      <ToolDocPicker
+        docs={docs}
+        doc={doc}
+        fixed={fixed}
+        disabled={saving}
+        note="Documents with two or more pages. Imported PDFs can’t be split."
+        onPick={pick}
+      />
 
       {doc ? (
         <>
@@ -130,7 +126,10 @@ export default function ExtractScreen() {
                     <View style={[styles.check, { backgroundColor: colors.accentFill }]}>
                       <Ionicons name="checkmark" size={16} color={colors.onAccent} />
                     </View>
-                  ) : null}
+                  ) : (
+                    // An empty ring on every unchosen page, so the grid reads as selectable.
+                    <View style={[styles.check, styles.checkEmpty, { borderColor: colors.onScrim, backgroundColor: colors.scrimSoft }]} />
+                  )}
                 </Pressable>
               );
             })}
@@ -173,4 +172,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  checkEmpty: { borderWidth: 1.5 },
 });
