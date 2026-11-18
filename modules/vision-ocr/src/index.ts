@@ -14,6 +14,10 @@ type VisionOcrNative = {
   renderPdfPages?: (inputUri: string, outputDirUri: string, maxEdge: number) => Promise<string[]>;
   /** Present only in dev clients built after PDF merging was added. */
   mergePdfs?: (inputUris: string[], outputUri: string) => Promise<string>;
+  /** Embedded text per page; rejects with message "locked" when a password is needed. */
+  pdfPageTexts?: (uri: string, password?: string | null) => Promise<string[]>;
+  /** Unencrypted copy of a protected PDF; rejects with "wrong-password". */
+  unlockPdf?: (inputUri: string, outputUri: string, password: string) => Promise<string>;
 };
 
 /** null on Android, on web, and in a dev client built before this module existed. */

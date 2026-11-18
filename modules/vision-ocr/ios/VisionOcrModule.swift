@@ -71,6 +71,31 @@ public class VisionOcrModule: Module {
       }
     }
 
+    /// Embedded text of each page of a PDF ("" for image-only pages).
+    AsyncFunction("pdfPageTexts") { (uri: String, password: String?, promise: Promise) in
+      DispatchQueue.global(qos: .userInitiated).async {
+        do {
+          let path = URL(string: uri).flatMap { $0.isFileURL ? $0.path : nil } ?? uri
+          promise.resolve(try PdfTools.pageTexts(path: path, password: password))
+        } catch {
+          promise.reject("ERR_PDF_TEXT", error.localizedDescription)
+        }
+      }
+    }
+
+    /// Write an unencrypted copy of a password-protected PDF.
+    AsyncFunction("unlockPdf") { (inputUri: String, outputUri: String, password: String, promise: Promise) in
+      DispatchQueue.global(qos: .userInitiated).async {
+        do {
+          func path(_ u: String) -> String { URL(string: u).flatMap { $0.isFileURL ? $0.path : nil } ?? u }
+          try PdfTools.unlock(inputPath: path(inputUri), outputPath: path(outputUri), password: password)
+          promise.resolve(URL(fileURLWithPath: path(outputUri)).absoluteString)
+        } catch {
+          promise.reject("ERR_PDF_UNLOCK", error.localizedDescription)
+        }
+      }
+    }
+
     /// Detect a document in a photo and return a perspective-corrected copy.
     /// Resolves to { uri, detected }. When nothing confident is found, resolves
     /// with the input uri and detected: false.

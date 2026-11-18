@@ -10,6 +10,7 @@ public class PdfDocumentView: ExpoView {
   let onPageChange = EventDispatcher()
   let onLoadError = EventDispatcher()
   private var loadedPath: String?
+  private var lastFitScale: CGFloat = 0
 
   public required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
@@ -18,7 +19,8 @@ public class PdfDocumentView: ExpoView {
     pdfView.displayMode = .singlePageContinuous
     pdfView.displayDirection = .vertical
     pdfView.pageShadowsEnabled = true
-    pdfView.pageBreakMargins = UIEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
+    // Same breathing room around a page as scanned pages get in the viewer.
+    pdfView.pageBreakMargins = UIEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
     addSubview(pdfView)
     NotificationCenter.default.addObserver(
       self, selector: #selector(pageChanged), name: .PDFViewPageChanged, object: pdfView)
@@ -28,8 +30,14 @@ public class PdfDocumentView: ExpoView {
 
   public override func layoutSubviews() {
     super.layoutSubviews()
+    let wasFitted = pdfView.document != nil && abs(pdfView.scaleFactor - lastFitScale) < 0.001
     pdfView.frame = bounds
-    if pdfView.document != nil { pdfView.scaleFactor = pdfView.scaleFactorForSizeToFit }
+    // Keep a user's zoom across relayouts (banner dismissed, rotation); only
+    // refit when the page was at fit-to-width.
+    if pdfView.document != nil && (wasFitted || lastFitScale == 0) {
+      pdfView.scaleFactor = pdfView.scaleFactorForSizeToFit
+    }
+    lastFitScale = pdfView.scaleFactorForSizeToFit
   }
 
   func setSource(_ uri: String) {
@@ -48,6 +56,7 @@ public class PdfDocumentView: ExpoView {
     }
     pdfView.document = doc
     pdfView.scaleFactor = pdfView.scaleFactorForSizeToFit
+    lastFitScale = pdfView.scaleFactor
     pageChanged()
   }
 
