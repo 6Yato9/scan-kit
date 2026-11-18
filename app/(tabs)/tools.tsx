@@ -1,46 +1,94 @@
 // app/(tabs)/tools.tsx
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+// The Tools tab: every entry opens a working flow. Labels match the title of
+// the screen they open.
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useRouter, type Href } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/theme-context';
+import { SectionLabel } from '@/components/section-label';
+import { Radius, Spacing } from '@/lib/theme';
+
+type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
 type Tool = {
   id: string;
-  icon: string;
+  icon: IconName;
   label: string;
-  color: string;
-  soon?: boolean;
-  action?: () => void;
+  href: Href;
 };
 
-function ToolItem({ tool }: { tool: Tool }) {
-  const { colors, isDark } = useTheme();
-  const bg = tool.color + (isDark ? '28' : '1A');
+const TOOL_SECTIONS: { title: string; tools: Tool[] }[] = [
+  {
+    title: 'Scan',
+    tools: [
+      { id: 'whiteboard', icon: 'easel-outline', label: 'Whiteboard', href: '/tools/whiteboard' },
+      { id: 'book', icon: 'book-outline', label: 'Book mode', href: '/tools/book' },
+      { id: 'id-card', icon: 'id-card-outline', label: 'ID card', href: '/tools/id-card' },
+      { id: 'extract-text', icon: 'text-outline', label: 'Extract text', href: '/tools/extract-text' },
+      { id: 'qr', icon: 'qr-code-outline', label: 'QR code', href: '/tools/qr' },
+    ],
+  },
+  {
+    title: 'Import',
+    tools: [
+      {
+        id: 'import-photos',
+        icon: 'images-outline',
+        label: 'Import photos',
+        href: { pathname: '/(tabs)/files', params: { action: 'importImages' } } as Href,
+      },
+      {
+        id: 'import-files',
+        icon: 'folder-open-outline',
+        label: 'Import files',
+        href: { pathname: '/(tabs)/files', params: { action: 'importFiles' } } as Href,
+      },
+    ],
+  },
+  {
+    title: 'Organize',
+    tools: [
+      { id: 'merge', icon: 'layers-outline', label: 'Merge documents', href: '/tools/merge' },
+      { id: 'extract', icon: 'cut-outline', label: 'Extract pages', href: '/tools/extract' },
+      { id: 'reorder', icon: 'swap-vertical-outline', label: 'Reorder pages', href: '/tools/reorder' },
+      { id: 'compress', icon: 'contract-outline', label: 'Compress', href: '/tools/compress' },
+    ],
+  },
+  {
+    title: 'Edit',
+    tools: [
+      { id: 'sign', icon: 'create-outline', label: 'Sign', href: '/tools/sign' },
+      { id: 'watermark', icon: 'water-outline', label: 'Watermark', href: '/tools/watermark' },
+      { id: 'timestamp', icon: 'time-outline', label: 'Timestamp', href: '/tools/timestamp' },
+      { id: 'erase-marks', icon: 'color-wand-outline', label: 'Erase marks', href: '/tools/erase-marks' },
+    ],
+  },
+  {
+    title: 'Share',
+    tools: [
+      { id: 'long-image', icon: 'image-outline', label: 'Long image', href: '/tools/long-image' },
+      { id: 'save-images', icon: 'file-tray-stacked-outline', label: 'Save as images', href: '/tools/save-images' },
+      { id: 'print', icon: 'print-outline', label: 'Print', href: '/tools/print' },
+    ],
+  },
+];
 
+function ToolTile({ tool }: { tool: Tool }) {
+  const { colors } = useTheme();
+  const router = useRouter();
+  const isTab = typeof tool.href === 'object';
   return (
     <Pressable
-      style={styles.toolItem}
-      onPress={!tool.soon && tool.action ? tool.action : undefined}
+      style={({ pressed }) => [styles.tile, pressed && { opacity: 0.6 }]}
+      onPress={() => (isTab ? router.navigate(tool.href) : router.push(tool.href))}
       accessibilityRole="button"
       accessibilityLabel={tool.label}
     >
-      <View style={[styles.iconWrap, { backgroundColor: bg }, tool.soon && styles.iconSoon]}>
-        <MaterialCommunityIcons
-          name={tool.icon as any}
-          size={26}
-          color={tool.soon ? '#555' : tool.color}
-        />
-        {tool.soon && (
-          <View style={styles.soonBadge}>
-            <Text allowFontScaling={false} style={styles.soonText}>Soon</Text>
-          </View>
-        )}
+      <View style={[styles.iconWrap, { backgroundColor: colors.accentLight }]}>
+        <Ionicons name={tool.icon} size={26} color={colors.accent} />
       </View>
-      <Text
-        style={[styles.toolLabel, { color: tool.soon ? colors.faint : colors.text }]}
-        numberOfLines={2}
-      >
+      <Text style={[styles.label, { color: colors.text }]} numberOfLines={2}>
         {tool.label}
       </Text>
     </Pressable>
@@ -50,267 +98,70 @@ function ToolItem({ tool }: { tool: Tool }) {
 export default function ToolsScreen() {
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
-  const router = useRouter();
-
-  const sections: { title: string; tools: Tool[] }[] = [
-    {
-      title: 'Scan',
-      tools: [
-        {
-          id: 'idcard',
-          icon: 'card-account-details-outline',
-          label: 'ID Card',
-          color: '#26C6A6',
-          action: () => router.push('/tools/id-card'),
-        },
-        {
-          id: 'ocr',
-          icon: 'text-recognition',
-          label: 'Extract Text',
-          color: '#66BB6A',
-          action: () => router.push('/tools/extract-text'),
-        },
-        {
-          id: 'qr',
-          icon: 'qrcode-scan',
-          label: 'QR / Barcode',
-          color: '#42A5F5',
-          action: () => router.push('/tools/qr'),
-        },
-        {
-          id: 'timestamp',
-          icon: 'calendar-clock',
-          label: 'Timestamp',
-          color: '#CE93D8',
-          action: () => router.push('/tools/timestamp'),
-        },
-        {
-          id: 'whiteboard',
-          icon: 'presentation',
-          label: 'Whiteboard',
-          color: '#4FC3F7',
-          action: () => router.push('/tools/whiteboard'),
-        },
-        {
-          id: 'book',
-          icon: 'book-open-page-variant',
-          label: 'Book Mode',
-          color: '#FFA726',
-          action: () => router.push('/tools/book'),
-        },
-      ],
-    },
-    {
-      title: 'Import',
-      tools: [
-        {
-          id: 'import-images',
-          icon: 'image-multiple-outline',
-          label: 'Import Images',
-          color: '#26C6A6',
-          action: () =>
-            router.navigate({
-              pathname: '/(tabs)/files',
-              params: { action: 'importImages' },
-            } as any),
-        },
-        {
-          id: 'import-files',
-          icon: 'file-import-outline',
-          label: 'Import Files',
-          color: '#42A5F5',
-          action: () =>
-            router.navigate({
-              pathname: '/(tabs)/files',
-              params: { action: 'importFiles' },
-            } as any),
-        },
-      ],
-    },
-    {
-      title: 'Convert',
-      tools: [
-        {
-          id: 'pdf-to-images',
-          icon: 'file-image-outline',
-          label: 'PDF to Images',
-          color: '#FFA726',
-          action: () =>
-            Alert.alert(
-              'PDF to Images',
-              'Open a document and tap Export → Export as ZIP to save all pages as JPEG images.',
-            ),
-        },
-        {
-          id: 'pdf-to-long',
-          icon: 'arrow-expand-vertical',
-          label: 'PDF to Long Image',
-          color: '#AB47BC',
-          action: () => router.push('/tools/long-image'),
-        },
-      ],
-    },
-    {
-      title: 'Edit',
-      tools: [
-        {
-          id: 'sign',
-          icon: 'draw',
-          label: 'Sign',
-          color: '#CE93D8',
-          action: () => router.push('/tools/sign'),
-        },
-        {
-          id: 'watermark',
-          icon: 'watermark',
-          label: 'Add Watermark',
-          color: '#42A5F5',
-          action: () => router.push('/tools/watermark'),
-        },
-        {
-          id: 'merge',
-          icon: 'merge',
-          label: 'Merge Files',
-          color: '#26C6A6',
-          action: () => router.push('/tools/merge'),
-        },
-        {
-          id: 'extract',
-          icon: 'content-cut',
-          label: 'Extract Pages',
-          color: '#FFA726',
-          action: () => router.push('/tools/extract'),
-        },
-        {
-          id: 'reorder',
-          icon: 'reorder-horizontal',
-          label: 'Reorder Pages',
-          color: '#66BB6A',
-          action: () =>
-            Alert.alert(
-              'Reorder Pages',
-              'Open a document in the viewer and tap the reorder icon to drag and rearrange pages.',
-            ),
-        },
-        {
-          id: 'compress',
-          icon: 'zip-box-outline',
-          label: 'Compress PDF',
-          color: '#90A4AE',
-          action: () => router.push('/tools/compress'),
-        },
-        {
-          id: 'lock',
-          icon: 'file-lock-outline',
-          label: 'Lock PDF',
-          color: '#90A4AE',
-          action: () =>
-            Alert.alert(
-              'Lock PDF',
-              'PDF password protection is not supported natively on iOS. Export your PDF and use a PDF editor app to add a password.',
-            ),
-        },
-        {
-          id: 'erase-marks',
-          icon: 'eraser-variant',
-          label: 'Erase Marks',
-          color: '#FF8A65',
-          action: () => router.push('/tools/erase-marks'),
-        },
-      ],
-    },
-    {
-      title: 'Utilities',
-      tools: [
-        {
-          id: 'print',
-          icon: 'printer-outline',
-          label: 'Print',
-          color: '#90A4AE',
-          action: () =>
-            Alert.alert('Print', 'Open a document and tap Export → Print to send to a printer.'),
-        },
-      ],
-    },
-  ];
 
   return (
-    <View style={{ flex: 1, backgroundColor: colors.bg }}>
-    <ScrollView
-      style={[styles.container, { backgroundColor: colors.bg }]}
-      contentContainerStyle={[
-        styles.content,
-        { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 110 },
-      ]}
-    >
-      <Text style={[styles.screenTitle, { color: colors.text }]}>Tools</Text>
+    <View style={[styles.container, { backgroundColor: colors.bg }]}>
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={{ paddingTop: insets.top + 14, paddingBottom: insets.bottom + 110 }}
+      >
+        <Text style={[styles.screenTitle, { color: colors.text }]} accessibilityRole="header">
+          Tools
+        </Text>
 
-      {sections.map(section => (
-        <View key={section.title} style={styles.section}>
-          <Text style={[styles.sectionTitle, { color: colors.text }]}>{section.title}</Text>
-          <View style={styles.grid}>
-            {section.tools.map(tool => (
-              <ToolItem key={tool.id} tool={tool} />
-            ))}
+        {TOOL_SECTIONS.map(section => (
+          <View key={section.title} style={styles.section}>
+            <SectionLabel style={styles.sectionLabel}>{section.title}</SectionLabel>
+            <View style={[styles.card, { backgroundColor: colors.card }]}>
+              {section.tools.map(tool => (
+                <ToolTile key={tool.id} tool={tool} />
+              ))}
+            </View>
           </View>
-        </View>
-      ))}
-    </ScrollView>
-      {/* Opaque mask over the status bar. This screen scrolls its whole content,
-          including its title, so without it text passes under the clock and
-          battery — the section headers visibly collided with them mid-scroll. */}
-    <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: insets.top, backgroundColor: colors.bg }} pointerEvents="none" />
+        ))}
+      </ScrollView>
+      {/* Opaque mask over the status bar so the scrolling title and section
+          labels never pass under the clock and battery. */}
+      <View
+        style={[styles.statusMask, { height: insets.top, backgroundColor: colors.bg }]}
+        pointerEvents="none"
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  content: { paddingHorizontal: 16 },
   screenTitle: {
     fontSize: 30,
     fontWeight: '800',
     letterSpacing: -0.5,
-    marginBottom: 20,
+    paddingHorizontal: 20,
+    marginBottom: Spacing.xs,
   },
-  section: { marginBottom: 28 },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    marginBottom: 16,
-  },
-  grid: {
+  section: { paddingHorizontal: Spacing.gutter },
+  sectionLabel: { marginHorizontal: Spacing.xs },
+  card: {
     flexDirection: 'row',
     flexWrap: 'wrap',
+    borderRadius: Radius.lg,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.xs,
   },
-  toolItem: {
+  tile: {
     width: '25%',
     alignItems: 'center',
-    marginBottom: 20,
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.xxs,
   },
   iconWrap: {
-    width: 60,
-    height: 60,
-    borderRadius: 18,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 8,
+    marginBottom: Spacing.sm,
   },
-  iconSoon: { opacity: 0.45 },
-  toolLabel: {
-    fontSize: 11,
-    textAlign: 'center',
-    lineHeight: 15,
-    paddingHorizontal: 2,
-  },
-  soonBadge: {
-    position: 'absolute',
-    top: -5,
-    end: -5,
-    backgroundColor: '#FFA726',
-    borderRadius: 5,
-    paddingHorizontal: 4,
-    paddingVertical: 1,
-  },
-  soonText: { fontSize: 8, fontWeight: '800', color: '#000' },
+  label: { fontSize: 12, lineHeight: 15, textAlign: 'center', fontWeight: '500' },
+  statusMask: { position: 'absolute', top: 0, left: 0, right: 0 },
 });

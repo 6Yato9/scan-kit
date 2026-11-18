@@ -1,321 +1,193 @@
 // app/tools/long-image.tsx
-import { useCallback, useRef, useState } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  FlatList,
-  Image,
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+// Stacks every page of a document into one tall image, previews it, and shares
+// it. Rendering happens in an off-screen WebView canvas (lib/long-image.ts).
+import { useEffect, useRef, useState } from 'react';
+import { Alert, Image, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { WebView } from 'react-native-webview';
 import * as FileSystem from 'expo-file-system/legacy';
-import { File, Paths } from 'expo-file-system';
-import * as Sharing from 'expo-sharing';
-import { Ionicons } from '@expo/vector-icons';
-import { useFocusEffect, useRouter } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/theme-context';
-import { getDocuments } from '@/lib/storage';
+import { PrimaryButton } from '@/components/primary-button';
+import { SectionLabel } from '@/components/section-label';
+import { useToast } from '@/components/toast';
+import { DocRow, NoDocuments, ToolNote, ToolScreen, useToolDocuments } from '@/components/tool-ui';
+import { buildLongImageHtml, planLongImage, type LongImagePlan } from '@/lib/long-image';
+import { deleteQuietly, exportFileName, makeExportDir, shareFile } from '@/lib/share';
+import { notifyError, notifySuccess } from '@/lib/haptics';
+import { Radius, Spacing } from '@/lib/theme';
 import type { Document } from '@/types/document';
 
+const TIMEOUT_MS = 45_000;
+
+function imageSize(uri: string): Promise<{ width: number; height: number }> {
+  return new Promise(resolve => {
+    Image.getSize(uri, (width, height) => resolve({ width, height }), () => resolve({ width: 0, height: 0 }));
+  });
+}
+
+type Output = { uri: string; dir: string; plan: LongImagePlan; docName: string; docId: string };
+
 export default function LongImageScreen() {
-  const router = useRouter();
-  const insets = useSafeAreaInsets();
   const { colors } = useTheme();
-  const [docs, setDocs] = useState<Document[]>([]);
-  const [selected, setSelected] = useState<string | null>(null);
-  const [processing, setProcessing] = useState(false);
-  const [webviewHtml, setWebviewHtml] = useState<string | null>(null);
-  const [query, setQuery] = useState('');
-  const selectedDocRef = useRef<Document | null>(null);
-  const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { show } = useToast();
+  const { width: screenW } = useWindowDimensions();
+  const { docs, loaded } = useToolDocuments();
+  const [docId, setDocId] = useState<string | null>(null);
+  const [job, setJob] = useState<{ html: string; plan: LongImagePlan; doc: Document } | null>(null);
+  const [output, setOutput] = useState<Output | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const outputRef = useRef<Output | null>(null);
+  outputRef.current = output;
 
-  const clearWatchdog = () => {
-    if (watchdogRef.current) {
-      clearTimeout(watchdogRef.current);
-      watchdogRef.current = null;
-    }
+  const doc = docs.find(d => d.id === docId) ?? null;
+  const working = job !== null;
+
+  // Remove the rendered file when leaving the screen.
+  useEffect(
+    () => () => {
+      if (timer.current) clearTimeout(timer.current);
+      deleteQuietly(outputRef.current?.dir);
+    },
+    [],
+  );
+
+  const fail = () => {
+    if (timer.current) clearTimeout(timer.current);
+    setJob(null);
+    notifyError();
+    Alert.alert(
+      'Couldn’t create the long image',
+      'This document may have too many pages for one image. Try extracting fewer pages first.',
+    );
   };
 
-  useFocusEffect(useCallback(() => {
-    let cancelled = false;
-    getDocuments()
-      .then(all => { if (!cancelled) setDocs(all.filter(d => d.pages.length > 0 && !d.pdfUri)); })
-      .catch(console.error);
-    return () => { cancelled = true; };
-  }, []));
+  const start = async () => {
+    if (!doc || working) return;
+    deleteQuietly(output?.dir);
+    setOutput(null);
+    const srcs = doc.pages.map(p => p.split('?')[0]);
+    const sizes: { width: number; height: number }[] = [];
+    for (const s of srcs) sizes.push(await imageSize(s));
+    const plan = planLongImage(sizes);
+    setJob({ html: buildLongImageHtml(srcs, plan), plan, doc });
+    timer.current = setTimeout(fail, TIMEOUT_MS);
+  };
 
-  const selectedDoc = docs.find(d => d.id === selected) ?? null;
-  const q = query.trim().toLowerCase();
-  const filteredDocs = q ? docs.filter(d => d.name.toLowerCase().includes(q)) : docs;
-
-  const handleGenerate = async () => {
-    if (!selectedDoc) return;
-    selectedDocRef.current = selectedDoc;
-    setProcessing(true);
-
+  const onMessage = async (e: { nativeEvent: { data: string } }) => {
+    const current = job;
+    if (!current) return;
+    if (timer.current) clearTimeout(timer.current);
+    const data = e.nativeEvent.data;
+    if (!data.startsWith('data:image/jpeg')) {
+      fail();
+      return;
+    }
     try {
-      const pagesB64 = await Promise.all(
-        selectedDoc.pages.map(uri =>
-          FileSystem.readAsStringAsync(uri, { encoding: 'base64' as const }),
-        ),
-      );
-
-      const html = `<!DOCTYPE html><html><body style="margin:0">
-<script>
-(async function() {
-  const pages = ${JSON.stringify(pagesB64)};
-  const imgs = await Promise.all(pages.map(b64 => new Promise(resolve => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = () => resolve(null);
-    img.src = 'data:image/jpeg;base64,' + b64;
-  })));
-  const valid = imgs.filter(Boolean);
-  if (!valid.length) {
-    window.ReactNativeWebView.postMessage(JSON.stringify({ error: 'No images' }));
-    return;
-  }
-  const width = Math.max(...valid.map(i => i.naturalWidth));
-  const totalHeight = valid.reduce((sum, i) => sum + Math.round(i.naturalHeight * width / i.naturalWidth), 0);
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = totalHeight;
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, width, totalHeight);
-  let y = 0;
-  for (const img of valid) {
-    const h = Math.round(img.naturalHeight * width / img.naturalWidth);
-    ctx.drawImage(img, 0, y, width, h);
-    y += h;
-  }
-  const b64 = canvas.toDataURL('image/jpeg', 0.92).split(',')[1];
-  window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'done', data: b64 }));
-})();
-</script>
-</body></html>`;
-
-      setWebviewHtml(html);
-      // Watchdog: if the canvas script silently throws or hangs, recover after 30s.
-      clearWatchdog();
-      watchdogRef.current = setTimeout(() => {
-        setWebviewHtml(null);
-        setProcessing(false);
-        Alert.alert('Timed out', 'Stitching took too long. Try fewer or smaller pages.');
-      }, 30000);
+      const dir = await makeExportDir();
+      const uri = `${dir}${encodeURIComponent(exportFileName(`${current.doc.name} long`, 'jpg'))}`;
+      await FileSystem.writeAsStringAsync(uri, data.slice(data.indexOf(',') + 1), { encoding: 'base64' });
+      setOutput({ uri, dir, plan: current.plan, docName: current.doc.name, docId: current.doc.id });
+      setJob(null);
+      notifySuccess();
     } catch {
-      setProcessing(false);
-      Alert.alert('Error', 'Could not read document pages.');
+      fail();
     }
   };
 
-  const handleWebViewMessage = async (event: { nativeEvent: { data: string } }) => {
-    clearWatchdog();
-    setWebviewHtml(null);
-    const doc = selectedDocRef.current;
-
+  const share = async () => {
+    if (!output) return;
     try {
-      const msg = JSON.parse(event.nativeEvent.data);
-      if (msg.error) {
-        Alert.alert('Error', msg.error);
-        return;
-      }
-      if (msg.type === 'done' && msg.data) {
-        const safeName = (doc?.name ?? 'document').replace(/[^a-z0-9]/gi, '_').slice(0, 40) || 'document';
-        // Include the doc id so two different docs that sanitise to the same
-        // base name don't overwrite each other's cached output.
-        const idSuffix = doc?.id?.slice(0, 8) ?? Math.random().toString(36).slice(2, 10);
-        const uri = `${Paths.cache.uri}${safeName}_${idSuffix}_long.jpg`;
-        await FileSystem.writeAsStringAsync(uri, msg.data, { encoding: 'base64' as const });
-        try {
-          await Sharing.shareAsync(uri, {
-            mimeType: 'image/jpeg',
-            dialogTitle: doc?.name,
-            UTI: 'public.jpeg',
-          });
-        } finally {
-          // Best-effort cleanup so the cache doesn't accumulate stitched images.
-          try { new File(uri.split('?')[0]).delete(); } catch {}
-        }
-      }
+      await shareFile(output.uri, { mimeType: 'image/jpeg', UTI: 'public.jpeg', dialogTitle: output.docName });
     } catch {
-      Alert.alert('Error', 'Could not generate long image.');
-    } finally {
-      setProcessing(false);
+      Alert.alert('Couldn’t open the share sheet', 'Try again in a moment.');
     }
   };
+
+  if (loaded && docs.length === 0) {
+    return (
+      <ToolScreen title="Long image">
+        <NoDocuments subtitle="Long image joins a document’s pages into one tall picture. Scan or import a document first." />
+      </ToolScreen>
+    );
+  }
+
+  const shown = output && output.docId === docId ? output : null;
+  const previewW = screenW - Spacing.gutter * 2;
 
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      style={[styles.container, { backgroundColor: colors.bg }]}
+    <ToolScreen
+      title="Long image"
+      footer={
+        shown ? (
+          <PrimaryButton title="Share image" icon="share-outline" onPress={share} />
+        ) : (
+          <PrimaryButton
+            title={working ? 'Creating long image…' : 'Create long image'}
+            onPress={start}
+            disabled={!doc}
+            loading={working}
+          />
+        )
+      }
     >
-      {/* Header */}
-      <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
-        <Pressable onPress={() => router.back()} hitSlop={12} accessibilityRole="button" accessibilityLabel="Close">
-          <Ionicons name="close" size={24} color={colors.text} />
-        </Pressable>
-        <Text style={[styles.title, { color: colors.text }]}>PDF to Long Image</Text>
-        <View style={{ width: 32 }} />
-      </View>
-
-      {/* Hidden WebView for canvas stitching */}
-      {webviewHtml && (
-        <WebView
-          style={styles.hiddenWebview}
-          source={{ html: webviewHtml }}
-          onMessage={handleWebViewMessage}
-          javaScriptEnabled
-          originWhitelist={['*']}
-        />
-      )}
-
-      {processing ? (
-        <View style={styles.centered}>
-          <ActivityIndicator size="large" color={colors.accent} />
-          <Text style={[styles.loadingText, { color: colors.muted }]}>Stitching pages…</Text>
-        </View>
+      {shown ? (
+        <>
+          <SectionLabel>Preview</SectionLabel>
+          <View style={[styles.preview, { backgroundColor: colors.card }]}>
+            <Image
+              source={{ uri: shown.uri }}
+              style={{ width: previewW, height: (previewW * shown.plan.totalHeight) / shown.plan.width }}
+              resizeMode="contain"
+              accessibilityLabel={`Long image of ${shown.docName}`}
+            />
+          </View>
+          <ToolNote>{`${shown.plan.width} × ${shown.plan.totalHeight} pixels, ${shown.plan.heights.length} pages.`}</ToolNote>
+          <View style={styles.gap} />
+          <PrimaryButton title="Choose another document" variant="secondary" onPress={() => { setDocId(null); }} />
+        </>
       ) : (
         <>
-          <Text style={[styles.sectionLabel, { color: colors.muted }]}>SELECT DOCUMENT</Text>
-          <View style={[styles.searchWrap, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Ionicons name="search" size={16} color={colors.muted} />
-            <TextInput
-              value={query}
-              onChangeText={setQuery}
-              placeholder="Search by name"
-              placeholderTextColor={colors.muted}
-              style={[styles.searchInput, { color: colors.text }]}
-              autoCorrect={false}
-              autoCapitalize="none"
-              returnKeyType="search"
-            />
-            {query.length > 0 && (
-              <Pressable onPress={() => setQuery('')} hitSlop={8}>
-                <Ionicons name="close-circle" size={18} color={colors.muted} />
-              </Pressable>
-            )}
-          </View>
-          <FlatList
-            data={filteredDocs}
-            keyExtractor={d => d.id}
-            contentContainerStyle={styles.listContent}
-            ListEmptyComponent={
-              <Text style={[styles.emptyText, { color: colors.muted }]}>
-                No documents found. Scan some documents first.
-              </Text>
-            }
-            renderItem={({ item }) => {
-              const isSelected = selected === item.id;
-              return (
-                <Pressable
-                  style={[
-                    styles.docRow,
-                    {
-                      backgroundColor: colors.card,
-                      borderColor: isSelected ? colors.accent : 'transparent',
-                    },
-                  ]}
-                  onPress={() => setSelected(isSelected ? null : item.id)}
-                >
-                  <Image source={{ uri: `${item.pages[0]}?v=${item.updatedAt}` }} style={styles.thumb} resizeMode="cover" />
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.docName, { color: colors.text }]} numberOfLines={1}>
-                      {item.name}
-                    </Text>
-                    <Text style={[styles.docMeta, { color: colors.muted }]}>
-                      {item.pages.length} page{item.pages.length !== 1 ? 's' : ''}
-                    </Text>
-                  </View>
-                  {isSelected && (
-                    <Ionicons name="checkmark-circle" size={22} color={colors.accent} />
-                  )}
-                </Pressable>
-              );
-            }}
-          />
-
-          {selectedDoc && (
-            <View
-              style={[
-                styles.footer,
-                { paddingBottom: insets.bottom + 16, borderTopColor: colors.border },
-              ]}
-            >
-              <Pressable
-                style={[styles.generateBtn, { backgroundColor: colors.accent }]}
-                onPress={handleGenerate}
-              >
-                <Text style={styles.generateBtnText}>
-                  Generate Long Image · {selectedDoc.pages.length} pages
-                </Text>
-              </Pressable>
-            </View>
-          )}
+          <SectionLabel>Document</SectionLabel>
+          {docs.map(d => (
+            <DocRow key={d.id} doc={d} selected={d.id === docId} onPress={() => !working && setDocId(d.id)} />
+          ))}
+          <ToolNote>All pages are stacked top to bottom into a single JPEG you can share or save to Photos.</ToolNote>
         </>
       )}
-    </KeyboardAvoidingView>
+
+      {job ? (
+        <View style={styles.host} pointerEvents="none">
+          <WebView
+            source={{ html: job.html, baseUrl: 'file:///' }}
+            style={styles.web}
+            onMessage={onMessage}
+            onError={fail}
+            onContentProcessDidTerminate={fail}
+            originWhitelist={['*']}
+            allowFileAccess
+            allowFileAccessFromFileURLs
+            allowUniversalAccessFromFileURLs
+            javaScriptEnabled
+          />
+        </View>
+      ) : null}
+    </ToolScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  topBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingBottom: 12,
+  preview: { borderRadius: Radius.md, overflow: 'hidden', alignItems: 'center' },
+  gap: { height: Spacing.lg },
+  // Same host trick as components/filter-baker.tsx: WKWebView only runs its
+  // JavaScript when it is really laid out, so it is kept on screen at 1%
+  // opacity in a 2pt strip rather than hidden or sized to nothing.
+  host: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: 320,
+    height: 2,
+    overflow: 'hidden',
+    opacity: 0.01,
   },
-  title: { fontSize: 17, fontWeight: '700' },
-  hiddenWebview: { position: 'absolute', width: 1, height: 1, opacity: 0 },
-  centered: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 16 },
-  loadingText: { fontSize: 16 },
-  sectionLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.8,
-    marginHorizontal: 16,
-    marginBottom: 8,
-  },
-  searchWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginHorizontal: 16,
-    marginBottom: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-  },
-  searchInput: { flex: 1, fontSize: 15, padding: 0 },
-  listContent: { paddingHorizontal: 16, paddingBottom: 16 },
-  emptyText: { fontSize: 14, fontStyle: 'italic' },
-  docRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    padding: 10,
-    borderRadius: 12,
-    marginBottom: 8,
-    borderWidth: 1.5,
-  },
-  thumb: { width: 44, height: 58, borderRadius: 6, backgroundColor: '#333' },
-  docName: { fontSize: 15, fontWeight: '600' },
-  docMeta: { fontSize: 12, marginTop: 2 },
-  footer: {
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    borderTopWidth: StyleSheet.hairlineWidth,
-  },
-  generateBtn: { borderRadius: 14, paddingVertical: 16, alignItems: 'center' },
-  generateBtnText: { color: '#fff', fontWeight: '700', fontSize: 15 },
+  web: { width: 320, height: 480 },
 });

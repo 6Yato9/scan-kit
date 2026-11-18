@@ -67,6 +67,7 @@ jest.mock('expo-file-system', () => {
 import { deleteSinglePage, appendPages, reorderPages, copyDocumentFiles } from '../lib/files';
 import { copyPageWithQuality, copyPdfToStorage } from '../lib/files';
 import { originalUri, ensureOriginal, garbageCollectOrphans } from '../lib/files';
+import { copyPageWithShadow, replaceOriginal, shadowOf } from '../lib/files';
 import { manipulateAsync } from 'expo-image-manipulator';
 
 // The mock caches File/Directory instances by uri and `delete` now clears
@@ -220,6 +221,22 @@ describe('garbageCollectOrphans and .orig.jpg', () => {
   });
 });
 
+describe('garbageCollectOrphans with an empty id list', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('refuses to sweep (an empty list means the index was unreadable)', async () => {
+    const root = new MockDirectory('file:///documents', 'scan-kit');
+    const docDir = new MockDirectory('file:///documents', 'scan-kit', 'some-doc');
+    root.list = jest.fn(() => [docDir]);
+    root.exists = true;
+
+    const deletedCount = await garbageCollectOrphans([]);
+
+    expect(docDir.delete).not.toHaveBeenCalled();
+    expect(deletedCount).toBe(0);
+  });
+});
+
 function pageFileFor(docId: string, i: number, orig = false) {
   return new RawFile(new RawDirectory('file:///documents', 'scan-kit', docId), `page-${i}${orig ? '.orig' : ''}.jpg`) as any;
 }
@@ -287,5 +304,51 @@ describe('.orig shadows stay aligned with their pages', () => {
     // Without this the duplicate has no pristine source, so its first filter
     // change would bake on top of already-filtered pixels.
     expect(readOrig('dst-1', 0)).toBe('A-orig');
+  });
+});
+
+describe('copying pages between documents keeps .orig shadows', () => {
+  const stored = (docId: string, i: number) => pageFileFor(docId, i).uri as string;
+
+  test('shadowOf only recognises stored page files', () => {
+    expect(shadowOf('file:///documents/scan-kit/d/page-3.jpg?v=12')).toBe('file:///documents/scan-kit/d/page-3.orig.jpg');
+    expect(shadowOf('file:///tmp/scanner/IMG_0001.jpg')).toBeNull();
+    expect(shadowOf('file:///documents/scan-kit/d/page-3.orig.jpg')).toBeNull();
+  });
+
+  test('appendPages (merge) carries each source .orig to the new index', () => {
+    seedPage('m-src', 0, 'A'); seedOrig('m-src', 0, 'A-orig');
+    seedPage('m-src', 1, 'B'); seedOrig('m-src', 1, 'B-orig');
+
+    appendPages([stored('m-src', 0), `${stored('m-src', 1)}?v=99`], 'm-dst', 3);
+
+    expect(readPage('m-dst', 3)).toBe('A');
+    expect(readOrig('m-dst', 3)).toBe('A-orig');
+    expect(readPage('m-dst', 4)).toBe('B');
+    expect(readOrig('m-dst', 4)).toBe('B-orig');
+  });
+
+  test('copyPageWithShadow clears a stale destination .orig when the source has none', () => {
+    seedPage('x-src', 2, 'C');
+    (pageFileFor('x-src', 2, true) as any).exists = false;
+    seedOrig('x-dst', 0, 'STALE');
+
+    copyPageWithShadow(stored('x-src', 2), 'x-dst', 0);
+
+    expect(readPage('x-dst', 0)).toBe('C');
+    expect(existsOrig('x-dst', 0)).toBe(false);
+  });
+
+  test('replaceOriginal swaps the shadow and is a no-op without one', () => {
+    seedOrig('r-doc', 0, 'OLD');
+    const tmp: any = new RawFile('file:///tmp/compressed-orig.jpg');
+    fileContents[tmp.uri] = 'NEW';
+
+    expect(replaceOriginal(tmp.uri, 'r-doc', 0)).toBe(true);
+    expect(readOrig('r-doc', 0)).toBe('NEW');
+
+    (pageFileFor('r-doc', 1, true) as any).exists = false;
+    expect(replaceOriginal(tmp.uri, 'r-doc', 1)).toBe(false);
+    expect(existsOrig('r-doc', 1)).toBe(false);
   });
 });

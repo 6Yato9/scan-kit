@@ -1,135 +1,94 @@
 // app/tools/book.tsx
+// Photograph open book spreads; each spread is split down the middle into its
+// left and right page and saved as one document (all captures, in order).
 import { useRef, useState } from 'react';
-import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
-import DocumentScanner from 'react-native-document-scanner-plugin';
 import { useScan } from '@/contexts/scan-context';
-import { useTheme } from '@/contexts/theme-context';
-import { getScanSettings } from '@/lib/storage';
+import { PrimaryButton } from '@/components/primary-button';
+import { ToolIntro, ToolScreen } from '@/components/tool-ui';
+import { splitSpreads } from '@/lib/book-split';
+import { notifyError } from '@/lib/haptics';
+import { alertScanError, deleteTempFiles, pickPhotos, scanWithCamera } from '@/lib/tool-scan';
 
 export default function BookScreen() {
   const { saveAndOpen } = useScan();
   const router = useRouter();
-  const insets = useSafeAreaInsets();
-  const { colors } = useTheme();
-  const [scanning, setScanning] = useState(false);
-  const scanningRef = useRef(false);
+  const [busy, setBusy] = useState<'camera' | 'photos' | null>(null);
+  const busyRef = useRef(false);
 
-  const handleScan = async () => {
-    if (scanningRef.current) return;
-    scanningRef.current = true;
-    setScanning(true);
+  const run = async (source: 'camera' | 'photos') => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy(source);
+    let temps: string[] = [];
     try {
-      const settings = await getScanSettings();
-      const { scannedImages } = await DocumentScanner.scanDocument({
-        croppedImageQuality: 90,
-        maxNumDocuments: 1,
-        letUserAdjustCrop: settings.autoCrop,
-      } as any);
-      if (!scannedImages?.length) return;
-      const uri = scannedImages[0];
+      let shots: string[] | null;
+      try {
+        // No auto-crop: page detection would pick one page out of a two-page spread.
+        shots = source === 'camera' ? await scanWithCamera() : await pickPhotos(true, { autoCrop: false });
+      } catch (err) {
+        alertScanError(err);
+        return;
+      }
+      if (!shots?.length) return;
+      if (source === 'photos') temps.push(...shots);
 
-      const normalized = await manipulateAsync(uri, [], {
-        compress: 1,
-        format: SaveFormat.JPEG,
-      });
-      const { width, height, uri: normalizedUri } = normalized;
-      const halfWidth = Math.floor(width / 2);
-
-      const [leftResult, rightResult] = await Promise.all([
-        manipulateAsync(
-          normalizedUri,
-          [{ crop: { originX: 0, originY: 0, width: halfWidth, height } }],
-          { compress: 0.9, format: SaveFormat.JPEG }
-        ),
-        manipulateAsync(
-          normalizedUri,
-          [{ crop: { originX: halfWidth, originY: 0, width: width - halfWidth, height } }],
-          { compress: 0.9, format: SaveFormat.JPEG }
-        ),
-      ]);
-
-      const id = await saveAndOpen({ pages: [leftResult.uri, rightResult.uri] });
+      let pages: string[];
+      try {
+        const split = await splitSpreads(shots);
+        pages = split.pages;
+        temps = temps.concat(split.temps);
+      } catch {
+        notifyError();
+        Alert.alert('Couldn’t split the pages', 'The photo couldn’t be processed. Try again with a clearer shot.');
+        return;
+      }
+      // saveAndOpen copies the pages into storage before it resolves.
+      const id = await saveAndOpen({ pages });
       if (id) router.replace({ pathname: '/viewer', params: { id } });
-    } catch {
-      Alert.alert('Scan failed', 'Could not process book scan. Please try again.');
     } finally {
-      scanningRef.current = false;
-      setScanning(false);
+      deleteTempFiles(temps);
+      busyRef.current = false;
+      setBusy(null);
     }
   };
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.bg }]}>
-      <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
-        <Pressable onPress={() => router.back()} style={styles.backBtn} accessibilityRole="button" accessibilityLabel="Back">
-          <MaterialCommunityIcons name="arrow-left" size={24} color={colors.text} />
-        </Pressable>
-        <Text style={[styles.title, { color: colors.text }]}>Book Mode</Text>
-        <View style={styles.backBtn} />
+    <ToolScreen
+      title="Book mode"
+      scroll={false}
+      footer={
+        <>
+          <PrimaryButton
+            title="Scan spreads"
+            icon="camera-outline"
+            onPress={() => run('camera')}
+            disabled={busy !== null}
+            loading={busy === 'camera'}
+          />
+          <PrimaryButton
+            title="Choose photos"
+            icon="images-outline"
+            variant="secondary"
+            onPress={() => run('photos')}
+            disabled={busy !== null}
+            loading={busy === 'photos'}
+          />
+        </>
+      }
+    >
+      <View style={styles.center}>
+        <ToolIntro
+          icon="book-outline"
+          title="Scan a book"
+          text="Capture an open book, one spread at a time. Each spread is split down the middle into a left and a right page."
+        />
       </View>
-
-      <View style={styles.body}>
-        <View style={[styles.iconWrap, { backgroundColor: '#FFA72628' }]}>
-          <MaterialCommunityIcons name="book-open-page-variant" size={48} color="#FFA726" />
-        </View>
-        <Text style={[styles.heading, { color: colors.text }]}>Scan a Book Spread</Text>
-        <Text style={[styles.sub, { color: colors.faint }]}>
-          Point the camera at two open pages. The image is automatically split at the centre into two separate pages.
-        </Text>
-        <Pressable
-          style={[styles.btn, { opacity: scanning ? 0.6 : 1 }]}
-          onPress={handleScan}
-          disabled={scanning}
-        >
-          <MaterialCommunityIcons name="camera" size={20} color="#fff" />
-          <Text style={styles.btnText}>{scanning ? 'Processing…' : 'Scan Spread'}</Text>
-        </Pressable>
-      </View>
-    </View>
+    </ToolScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-  },
-  backBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-  title: { fontSize: 18, fontWeight: '700' },
-  body: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 32,
-    gap: 16,
-  },
-  iconWrap: {
-    width: 96,
-    height: 96,
-    borderRadius: 28,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 8,
-  },
-  heading: { fontSize: 22, fontWeight: '700', textAlign: 'center' },
-  sub: { fontSize: 15, textAlign: 'center', lineHeight: 22 },
-  btn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: '#FFA726',
-    paddingHorizontal: 28,
-    paddingVertical: 14,
-    borderRadius: 14,
-    marginTop: 8,
-  },
-  btnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  center: { flex: 1, justifyContent: 'center' },
 });

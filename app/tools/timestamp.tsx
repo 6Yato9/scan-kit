@@ -1,214 +1,189 @@
 // app/tools/timestamp.tsx
-import { useCallback, useState } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+// Print the scan date (or today's date) in a corner of every page and save
+// the result as a new PDF.
+import { useState } from 'react';
+import { Alert, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import * as Crypto from 'expo-crypto';
-import * as FileSystem from 'expo-file-system/legacy';
-import * as Print from 'expo-print';
-import { Ionicons } from '@expo/vector-icons';
-import { useFocusEffect, useRouter } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useTheme } from '@/contexts/theme-context';
-import { getDocuments, saveDocument } from '@/lib/storage';
+import { useRouter } from 'expo-router';
+import { PrimaryButton } from '@/components/primary-button';
+import { SectionLabel } from '@/components/section-label';
+import { useToast } from '@/components/toast';
+import {
+  DocRow,
+  NoDocuments,
+  OptionList,
+  PagePreview,
+  Segmented,
+  ToolNote,
+  ToolProgress,
+  ToolScreen,
+  useImageAspect,
+  useToolDocuments,
+} from '@/components/tool-ui';
+import { generatePdf } from '@/lib/pdf';
 import { copyPdfToStorage, deleteDocumentFiles } from '@/lib/files';
-import { notifySuccess, notifyError } from '@/lib/haptics';
-import type { Document } from '@/types/document';
+import { deleteQuietly } from '@/lib/share';
+import { getDocSettings, saveDocument } from '@/lib/storage';
+import { notifyError, notifySuccess } from '@/lib/haptics';
+import {
+  CORNER_INSET,
+  TIMESTAMP_FONT_FRACTION,
+  formatStamp,
+  timestampOverlay,
+  type Corner,
+  type TimestampFormat,
+} from '@/lib/stamp';
+import { Spacing } from '@/lib/theme';
 
-const FORMATS = [
-  { id: 'date', label: 'Date only', example: () => new Date().toLocaleDateString() },
-  { id: 'datetime', label: 'Date & time', example: () => `${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}` },
-  { id: 'iso', label: 'ISO format', example: () => new Date().toISOString().replace('T', ' ').slice(0, 19) },
-];
+type When = 'scanned' | 'now';
 
-const POSITIONS = [
-  { id: 'bottom-right', label: 'Bottom right', css: 'position:absolute;bottom:16px;right:16px;text-align:right;' },
-  { id: 'bottom-left', label: 'Bottom left', css: 'position:absolute;bottom:16px;left:16px;' },
-  { id: 'top-right', label: 'Top right', css: 'position:absolute;top:16px;right:16px;text-align:right;' },
+const CORNERS: { value: Corner; label: string }[] = [
+  { value: 'top-left', label: 'Top left' },
+  { value: 'top-right', label: 'Top right' },
+  { value: 'bottom-left', label: 'Bottom left' },
+  { value: 'bottom-right', label: 'Bottom right' },
 ];
 
 export default function TimestampScreen() {
   const router = useRouter();
-  const insets = useSafeAreaInsets();
-  const { colors } = useTheme();
-  const [docs, setDocs] = useState<Document[]>([]);
-  const [selectedDoc, setSelectedDoc] = useState<Document | null>(null);
-  const [format, setFormat] = useState('datetime');
-  const [positionId, setPositionId] = useState('bottom-right');
-  const [applying, setApplying] = useState(false);
+  const { show } = useToast();
+  const { width: screenW } = useWindowDimensions();
+  const { docs, loaded } = useToolDocuments();
+  const [docId, setDocId] = useState<string | null>(null);
+  const [when, setWhen] = useState<When>('scanned');
+  const [format, setFormat] = useState<TimestampFormat>('datetime');
+  const [corner, setCorner] = useState<Corner>('bottom-right');
+  const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
+  const [now] = useState(() => Date.now());
 
-  useFocusEffect(useCallback(() => {
-    let cancelled = false;
-    getDocuments()
-      .then(all => {
-        if (cancelled) return;
-        const filtered = all.filter(d => d.pages.length > 0 && !d.pdfUri);
-        setDocs(filtered);
-        setSelectedDoc(prev => (prev && filtered.some(d => d.id === prev.id) ? prev : null));
-      })
-      .catch(console.error);
-    return () => { cancelled = true; };
-  }, []));
+  const doc = docs.find(d => d.id === docId) ?? docs[0] ?? null;
+  const aspect = useImageAspect(doc?.pages[0]);
+  const stamp = formatStamp(when === 'scanned' && doc ? doc.createdAt : now, format);
 
-  const getTimestamp = () => FORMATS.find(f => f.id === format)!.example();
-
-  const handleApply = async () => {
-    if (!selectedDoc) return;
-    setApplying(true);
-    // Capture the timestamp once at press time — same value that goes into the PDF
-    // is the value the user "sees" when they tap Apply.
-    const ts = getTimestamp();
+  const apply = async () => {
+    if (!doc || progress) return;
     const id = Crypto.randomUUID();
+    let temp: string | null = null;
+    const text = formatStamp(when === 'scanned' ? doc.createdAt : Date.now(), format);
+    setProgress({ current: 0, total: doc.pages.length });
     try {
-      const pos = POSITIONS.find(p => p.id === positionId)!;
-      const imgTags: string[] = [];
-      for (let i = 0; i < selectedDoc.pages.length; i++) {
-        const uri = selectedDoc.pages[i];
-        const b64 = await FileSystem.readAsStringAsync(uri, { encoding: 'base64' });
-        const overlay = `<div style="${pos.css}font-size:12px;color:rgba(0,0,0,0.6);background:rgba(255,255,255,0.75);padding:3px 8px;border-radius:4px;font-family:monospace;white-space:nowrap;">${ts}</div>`;
-        imgTags.push(`<div style="position:relative;page-break-after:always;margin:0;padding:0;"><img src="data:image/jpeg;base64,${b64}" style="width:100%;display:block;" />${overlay}</div>`);
-      }
-
-      const html = `<html><body style="margin:0;padding:0;">${imgTags.join('')}</body></html>`;
-      const { uri: pdfUri } = await Print.printToFileAsync({ html });
-
-      const now = Date.now();
-      const stored = copyPdfToStorage(pdfUri, id);
+      const { pdfPageSize } = await getDocSettings();
+      temp = await generatePdf(doc.pages, {
+        pageSize: pdfPageSize,
+        overlayHtml: (_i, size) => timestampOverlay(text, corner, size.width),
+        onProgress: done => setProgress({ current: done, total: doc.pages.length }),
+      });
+      const stored = copyPdfToStorage(temp, id);
+      const ts = Date.now();
       await saveDocument({
         id,
-        name: `${selectedDoc.name} (Timestamped)`,
+        name: `${doc.name} (timestamped)`,
         pages: [],
         pdfUri: stored,
-        folder: selectedDoc.folder,
-        createdAt: now,
-        updatedAt: now,
+        folder: doc.folder,
+        createdAt: ts,
+        updatedAt: ts,
       });
-
       notifySuccess();
-      Alert.alert('Done', 'Timestamped PDF saved to your documents.', [
-        { text: 'OK', onPress: () => router.back() },
-      ]);
+      show('Timestamped PDF saved');
+      router.replace({ pathname: '/viewer', params: { id } });
     } catch {
       try { deleteDocumentFiles(id); } catch {}
       notifyError();
-      Alert.alert('Error', 'Could not apply timestamp.');
+      Alert.alert('Couldn’t add the timestamp', 'The PDF couldn’t be created. Try again, or try with fewer pages.');
     } finally {
-      setApplying(false);
+      deleteQuietly(temp);
+      setProgress(null);
     }
   };
 
+  if (loaded && docs.length === 0) {
+    return (
+      <ToolScreen title="Timestamp">
+        <NoDocuments subtitle="Timestamp prints the date on every page of a scan. Scan or import a document first." />
+      </ToolScreen>
+    );
+  }
+
+  const previewW = Math.min(screenW * 0.62, 260);
+
   return (
-    <View style={[styles.container, { backgroundColor: colors.bg }]}>
-      <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
-        <Pressable onPress={() => router.back()} hitSlop={12} accessibilityRole="button" accessibilityLabel="Close">
-          <Ionicons name="close" size={24} color={colors.text} />
-        </Pressable>
-        <Text style={[styles.title, { color: colors.text }]}>Timestamp</Text>
-        <View style={{ width: 32 }} />
-      </View>
-
-      <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 24 }]}>
-        {/* Preview */}
-        <View style={[styles.previewBox, { backgroundColor: colors.card }]}>
-          <Text style={[styles.previewLabel, { color: colors.muted }]}>Preview</Text>
-          <Text style={[styles.previewValue, { color: colors.text }]}>{getTimestamp()}</Text>
+    <ToolScreen
+      title="Timestamp"
+      footer={
+        <>
+          {progress ? (
+            <ToolProgress
+              label={`Stamping page ${Math.min(progress.current + 1, progress.total)} of ${progress.total}…`}
+              current={progress.current}
+              total={progress.total}
+            />
+          ) : null}
+          <PrimaryButton title="Save timestamped PDF" onPress={apply} disabled={!doc} loading={!!progress} />
+        </>
+      }
+    >
+      {doc ? (
+        <View style={styles.previewWrap}>
+          <PagePreview uri={`${doc.pages[0]}?v=${doc.updatedAt}`} aspect={aspect} width={previewW}>
+            {({ width }) => {
+              const fontSize = TIMESTAMP_FONT_FRACTION * width;
+              const inset = CORNER_INSET * width;
+              const [v, h] = corner.split('-') as ['top' | 'bottom', 'left' | 'right'];
+              return (
+                <View
+                  style={{
+                    position: 'absolute',
+                    [v]: inset,
+                    [h]: inset,
+                    paddingVertical: fontSize * 0.35,
+                    paddingHorizontal: fontSize * 0.6,
+                    borderRadius: fontSize * 0.3,
+                    backgroundColor: 'rgba(255,255,255,0.85)',
+                  }}
+                >
+                  <Text style={{ fontSize, fontWeight: '500', color: '#222' }} numberOfLines={1}>
+                    {stamp}
+                  </Text>
+                </View>
+              );
+            }}
+          </PagePreview>
         </View>
+      ) : null}
 
-        {/* Format */}
-        <Text style={[styles.sectionLabel, { color: colors.muted, marginTop: 20 }]}>FORMAT</Text>
-        <View style={[styles.optionCard, { backgroundColor: colors.card }]}>
-          {FORMATS.map((f, i) => (
-            <Pressable
-              key={f.id}
-              style={[styles.optionRow, i < FORMATS.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }]}
-              onPress={() => setFormat(f.id)}
-            >
-              <Text style={[styles.optionLabel, { color: colors.text }]}>{f.label}</Text>
-              {format === f.id && <Ionicons name="checkmark" size={20} color={colors.accent} />}
-            </Pressable>
-          ))}
-        </View>
+      <SectionLabel>Date</SectionLabel>
+      <OptionList
+        options={[
+          { value: 'scanned' as When, label: 'Date scanned', detail: doc ? formatStamp(doc.createdAt, format) : undefined },
+          { value: 'now' as When, label: 'Current date', detail: formatStamp(now, format) },
+        ]}
+        value={when}
+        onChange={setWhen}
+      />
 
-        {/* Position */}
-        <Text style={[styles.sectionLabel, { color: colors.muted, marginTop: 20 }]}>POSITION</Text>
-        <View style={[styles.optionCard, { backgroundColor: colors.card }]}>
-          {POSITIONS.map((p, i) => (
-            <Pressable
-              key={p.id}
-              style={[styles.optionRow, i < POSITIONS.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }]}
-              onPress={() => setPositionId(p.id)}
-            >
-              <Text style={[styles.optionLabel, { color: colors.text }]}>{p.label}</Text>
-              {positionId === p.id && <Ionicons name="checkmark" size={20} color={colors.accent} />}
-            </Pressable>
-          ))}
-        </View>
+      <SectionLabel>Format</SectionLabel>
+      <Segmented
+        options={[
+          { value: 'datetime' as TimestampFormat, label: 'Date and time' },
+          { value: 'date' as TimestampFormat, label: 'Date only' },
+        ]}
+        value={format}
+        onChange={setFormat}
+      />
 
-        {/* Document list */}
-        <Text style={[styles.sectionLabel, { color: colors.muted, marginTop: 20 }]}>SELECT DOCUMENT</Text>
-        {docs.length === 0 ? (
-          <Text style={[styles.emptyText, { color: colors.muted }]}>No documents found. Scan a document first.</Text>
-        ) : (
-          docs.map(doc => (
-            <Pressable
-              key={doc.id}
-              style={[styles.docRow, { backgroundColor: colors.card, borderColor: selectedDoc?.id === doc.id ? colors.accent : 'transparent' }]}
-              onPress={() => setSelectedDoc(doc)}
-            >
-              <Ionicons name="document-text-outline" size={22} color={colors.muted} />
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.docName, { color: colors.text }]} numberOfLines={1}>{doc.name}</Text>
-                <Text style={[styles.docMeta, { color: colors.muted }]}>{doc.pages.length} page{doc.pages.length !== 1 ? 's' : ''}</Text>
-              </View>
-              {selectedDoc?.id === doc.id && <Ionicons name="checkmark-circle" size={22} color={colors.accent} />}
-            </Pressable>
-          ))
-        )}
+      <SectionLabel>Position</SectionLabel>
+      <OptionList options={CORNERS} value={corner} onChange={setCorner} />
 
-        {selectedDoc && (
-          <Pressable
-            style={[styles.applyBtn, { backgroundColor: colors.accent, opacity: applying ? 0.6 : 1, marginTop: 24 }]}
-            onPress={handleApply}
-            disabled={applying}
-          >
-            {applying
-              ? <ActivityIndicator color="#fff" />
-              : <Text style={styles.applyBtnText}>Apply Timestamp</Text>
-            }
-          </Pressable>
-        )}
-
-        <Text style={[styles.footnote, { color: colors.muted }]}>
-          A new PDF with the timestamp visible on each page will be saved. Your original is unchanged.
-        </Text>
-      </ScrollView>
-    </View>
+      <SectionLabel>Document</SectionLabel>
+      {docs.map(d => (
+        <DocRow key={d.id} doc={d} selected={d.id === doc?.id} onPress={() => !progress && setDocId(d.id)} />
+      ))}
+      <ToolNote>A new PDF is saved with the date on every page. The original document is kept.</ToolNote>
+    </ToolScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 12 },
-  title: { fontSize: 17, fontWeight: '700' },
-  content: { paddingHorizontal: 16 },
-  previewBox: { borderRadius: 12, padding: 16, alignItems: 'center', gap: 4 },
-  previewLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.8 },
-  previewValue: { fontSize: 16, fontFamily: 'monospace' },
-  sectionLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.8, marginBottom: 8 },
-  optionCard: { borderRadius: 12, overflow: 'hidden' },
-  optionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 14 },
-  optionLabel: { fontSize: 15 },
-  emptyText: { fontSize: 14, fontStyle: 'italic' },
-  docRow: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, borderRadius: 12, marginBottom: 8, borderWidth: 1.5 },
-  docName: { fontSize: 15, fontWeight: '600' },
-  docMeta: { fontSize: 12, marginTop: 2 },
-  applyBtn: { borderRadius: 14, paddingVertical: 16, alignItems: 'center' },
-  applyBtnText: { color: '#fff', fontWeight: '700', fontSize: 16 },
-  footnote: { fontSize: 12, marginTop: 12, textAlign: 'center', fontStyle: 'italic' },
+  previewWrap: { marginTop: Spacing.lg },
 });

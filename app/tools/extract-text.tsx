@@ -1,73 +1,71 @@
 // app/tools/extract-text.tsx
+// Recognise text from a fresh scan or from photos, then copy or share it.
+// OCR goes through lib/ocr (Apple Vision on iOS, ML Kit on Android).
 import { useRef, useState } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  Pressable,
-  ScrollView,
-  Share,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
-import { useRouter } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { Alert, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
-import DocumentScanner from 'react-native-document-scanner-plugin';
 import { useTheme } from '@/contexts/theme-context';
 import { useToast } from '@/components/toast';
-import { tapLight } from '@/lib/haptics';
-import { getScanSettings } from '@/lib/storage';
-
-let TextRecognition: { recognize: (uri: string) => Promise<{ text: string }> } | null = null;
-try {
-  // Lazily required so the screen still loads when the native module is absent
-  // (e.g. Expo Go). Must stay a require — a static import would fail at load.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  TextRecognition = require('@react-native-ml-kit/text-recognition').default;
-} catch {
-  TextRecognition = null;
-}
+import { PrimaryButton } from '@/components/primary-button';
+import { HeaderIconButton } from '@/components/screen-header';
+import { ToolIntro, ToolProgress, ToolScreen } from '@/components/tool-ui';
+import { EmptyState } from '@/components/empty-state';
+import { notifyError, notifySuccess, tapLight } from '@/lib/haptics';
+import { ocrAvailable, recognizeLines } from '@/lib/ocr';
+import { alertScanError, deleteTempFiles, pickPhotos, scanWithCamera } from '@/lib/tool-scan';
+import { Radius, Spacing, Type } from '@/lib/theme';
 
 export default function ExtractTextScreen() {
-  const router = useRouter();
-  const insets = useSafeAreaInsets();
   const { colors } = useTheme();
   const { show } = useToast();
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
   const [text, setText] = useState<string | null>(null);
   const busyRef = useRef(false);
+  const available = ocrAvailable();
 
-  const ocrAvailable = TextRecognition !== null;
-
-  const runScanAndOcr = async () => {
-    if (busyRef.current) return;
-    if (!TextRecognition) {
-      Alert.alert(
-        'OCR not available',
-        'Rebuild your dev client after installing @react-native-ml-kit/text-recognition.'
-      );
-      return;
+  const recognize = async (uris: string[]) => {
+    const parts: string[] = [];
+    for (let i = 0; i < uris.length; i++) {
+      setProgress({ current: i, total: uris.length });
+      const { text: t } = await recognizeLines(uris[i]);
+      if (t.trim()) parts.push(t.trim());
     }
+    setProgress({ current: uris.length, total: uris.length });
+    return parts.join('\n\n');
+  };
+
+  const run = async (source: 'camera' | 'photos') => {
+    if (busyRef.current) return;
     busyRef.current = true;
     setBusy(true);
+    let temp: string[] = [];
     try {
-      const settings = await getScanSettings();
-      const { scannedImages } = await DocumentScanner.scanDocument({
-        croppedImageQuality: 90,
-        maxNumDocuments: 1,
-        letUserAdjustCrop: settings.autoCrop,
-      } as any);
-      if (!scannedImages?.length) return;
-      const result = await TextRecognition.recognize(scannedImages[0]);
-      setText(result.text?.trim() || '');
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      Alert.alert('Failed', msg || 'Could not extract text. Please try again.');
+      let uris: string[] | null = null;
+      if (source === 'camera') {
+        try {
+          uris = await scanWithCamera();
+        } catch (err) {
+          alertScanError(err);
+          return;
+        }
+      } else {
+        uris = await pickPhotos(true);
+      }
+      if (!uris?.length) return;
+      temp = uris;
+      const result = await recognize(uris);
+      setText(result);
+      if (result) notifySuccess();
+    } catch {
+      notifyError();
+      Alert.alert('Couldn’t read the text', 'Text recognition failed on this image. Try a sharper, well-lit photo.');
     } finally {
+      // Captures and picked photos are temporary copies; nothing is saved.
+      deleteTempFiles(temp);
       busyRef.current = false;
       setBusy(false);
+      setProgress(null);
     }
   };
 
@@ -75,7 +73,7 @@ export default function ExtractTextScreen() {
     if (!text) return;
     await Clipboard.setStringAsync(text);
     tapLight();
-    show('Copied to clipboard');
+    show('Text copied');
   };
 
   const handleShare = async () => {
@@ -83,172 +81,110 @@ export default function ExtractTextScreen() {
     try {
       await Share.share({ message: text });
     } catch {
-      // user cancelled
+      // dismissed
     }
   };
 
-  const reset = () => setText(null);
-
-  return (
-    <View style={[styles.container, { backgroundColor: colors.bg }]}>
-      <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
-        <Pressable onPress={() => router.back()} style={styles.iconBtn} accessibilityRole="button" accessibilityLabel="Back">
-          <MaterialCommunityIcons name="arrow-left" size={24} color={colors.text} />
-        </Pressable>
-        <Text style={[styles.title, { color: colors.text }]}>Extract Text</Text>
-        <View style={styles.iconBtn} />
-      </View>
-
-      {text === null ? (
-        <View style={styles.body}>
-          <View style={[styles.iconWrap, { backgroundColor: '#66BB6A28' }]}>
-            <MaterialCommunityIcons name="text-recognition" size={48} color="#66BB6A" />
-          </View>
-          <Text style={[styles.heading, { color: colors.text }]}>Quick Text Scan</Text>
-          <Text style={[styles.sub, { color: colors.faint }]}>
-            {ocrAvailable
-              ? 'Point the camera at any page. The text is recognised automatically and ready to copy or share.'
-              : 'OCR is not available in this build. Rebuild your dev client after installing @react-native-ml-kit/text-recognition.'}
-          </Text>
-          <Pressable
-            style={[styles.btn, { opacity: busy || !ocrAvailable ? 0.6 : 1 }]}
-            onPress={runScanAndOcr}
-            disabled={busy || !ocrAvailable}
-          >
-            {busy ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <>
-                <MaterialCommunityIcons name="camera" size={20} color="#fff" />
-                <Text style={styles.btnText}>Scan & Extract</Text>
-              </>
-            )}
-          </Pressable>
-        </View>
-      ) : (
-        <View style={styles.resultWrap}>
-          <ScrollView
-            contentContainerStyle={[styles.resultScroll, { paddingBottom: insets.bottom + 120 }]}
-          >
-            {text.length === 0 ? (
-              <Text style={[styles.empty, { color: colors.faint }]}>No text found on this page.</Text>
-            ) : (
-              <Text style={[styles.resultText, { color: colors.text }]} selectable>
+  // ── Result ────────────────────────────────────────────────────────────────
+  if (text !== null) {
+    const empty = text.length === 0;
+    return (
+      <ToolScreen
+        title="Extract text"
+        scroll={false}
+        right={
+          !empty ? <HeaderIconButton icon="copy-outline" label="Copy text" onPress={handleCopy} /> : undefined
+        }
+        footer={
+          empty ? (
+            <PrimaryButton title="Try another image" icon="refresh-outline" onPress={() => setText(null)} />
+          ) : (
+            <View style={styles.actions}>
+              <PrimaryButton
+                title="Scan again"
+                variant="secondary"
+                onPress={() => setText(null)}
+                style={styles.flex}
+              />
+              <PrimaryButton title="Share" icon="share-outline" onPress={handleShare} style={styles.flex} />
+            </View>
+          )
+        }
+      >
+        {empty ? (
+          <EmptyState
+            icon="text-outline"
+            title="No text found"
+            subtitle="We couldn’t find any readable text. Make sure the page is in focus and well lit."
+          />
+        ) : (
+          <ScrollView contentContainerStyle={styles.resultScroll}>
+            <View style={[styles.resultCard, { backgroundColor: colors.card }]}>
+              <Text style={[Type.body, styles.resultText, { color: colors.text }]} selectable>
                 {text}
               </Text>
-            )}
+            </View>
+            <Text style={[Type.footnote, styles.hint, { color: colors.muted }]}>
+              Touch and hold the text to select part of it.
+            </Text>
           </ScrollView>
+        )}
+      </ToolScreen>
+    );
+  }
 
-          <View
-            style={[
-              styles.actionBar,
-              { paddingBottom: insets.bottom + 16, borderTopColor: colors.border, backgroundColor: colors.bg },
-            ]}
-          >
-            <Pressable
-              style={[styles.smallBtn, { backgroundColor: colors.card }]}
-              onPress={reset}
-            >
-              <MaterialCommunityIcons name="camera-retake" size={18} color={colors.text} />
-              <Text style={[styles.smallBtnText, { color: colors.text }]}>Rescan</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.smallBtn, { backgroundColor: colors.card, opacity: text.length === 0 ? 0.4 : 1 }]}
-              onPress={handleCopy}
-              disabled={text.length === 0}
-            >
-              <MaterialCommunityIcons name="content-copy" size={18} color={colors.text} />
-              <Text style={[styles.smallBtnText, { color: colors.text }]}>Copy</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.primaryBtn, { opacity: text.length === 0 ? 0.4 : 1 }]}
-              onPress={handleShare}
-              disabled={text.length === 0}
-            >
-              <MaterialCommunityIcons name="share-variant" size={18} color="#fff" />
-              <Text style={styles.primaryBtnText}>Share</Text>
-            </Pressable>
-          </View>
-        </View>
-      )}
-    </View>
+  // ── Start ─────────────────────────────────────────────────────────────────
+  return (
+    <ToolScreen
+      title="Extract text"
+      scroll={false}
+      footer={
+        <>
+          {progress ? (
+            <ToolProgress
+              label={progress.total > 1 ? `Reading image ${Math.min(progress.current + 1, progress.total)} of ${progress.total}…` : 'Reading text…'}
+              current={progress.current}
+              total={progress.total}
+            />
+          ) : null}
+          <PrimaryButton
+            title="Scan a page"
+            icon="camera-outline"
+            onPress={() => run('camera')}
+            disabled={!available || busy}
+            loading={busy && !progress}
+          />
+          <PrimaryButton
+            title="Choose photos"
+            icon="images-outline"
+            variant="secondary"
+            onPress={() => run('photos')}
+            disabled={!available || busy}
+          />
+        </>
+      }
+    >
+      <View style={styles.center}>
+        <ToolIntro
+          icon="text-outline"
+          title="Extract text"
+          text={
+            available
+              ? 'Scan a page or pick photos. The text is recognized on your device, ready to copy or share.'
+              : 'Text recognition isn’t available on this device.'
+          }
+        />
+      </View>
+    </ToolScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-  },
-  iconBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-  title: { fontSize: 18, fontWeight: '700' },
-  body: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 32,
-    gap: 16,
-  },
-  iconWrap: {
-    width: 96,
-    height: 96,
-    borderRadius: 28,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 8,
-  },
-  heading: { fontSize: 22, fontWeight: '700', textAlign: 'center' },
-  sub: { fontSize: 15, textAlign: 'center', lineHeight: 22 },
-  btn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: '#66BB6A',
-    paddingHorizontal: 28,
-    paddingVertical: 14,
-    borderRadius: 14,
-    marginTop: 8,
-    minWidth: 200,
-    justifyContent: 'center',
-  },
-  btnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
-  resultWrap: { flex: 1 },
-  resultScroll: { padding: 20 },
-  resultText: { fontSize: 15, lineHeight: 22 },
-  empty: { fontSize: 15, fontStyle: 'italic', textAlign: 'center', marginTop: 40 },
-  actionBar: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    flexDirection: 'row',
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    borderTopWidth: StyleSheet.hairlineWidth,
-  },
-  smallBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderRadius: 12,
-  },
-  smallBtnText: { fontSize: 14, fontWeight: '600' },
-  primaryBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 12,
-    borderRadius: 12,
-    backgroundColor: '#66BB6A',
-  },
-  primaryBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
+  flex: { flex: 1 },
+  center: { flex: 1, justifyContent: 'center' },
+  actions: { flexDirection: 'row', gap: Spacing.md },
+  resultScroll: { padding: Spacing.gutter },
+  resultCard: { borderRadius: Radius.md, padding: Spacing.lg },
+  resultText: { lineHeight: 23 },
+  hint: { textAlign: 'center', marginTop: Spacing.md },
 });

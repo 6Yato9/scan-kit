@@ -1,205 +1,163 @@
 // app/tools/compress.tsx
-import { useCallback, useState } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
-import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
-import { Ionicons } from '@expo/vector-icons';
-import { useRouter, useFocusEffect } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+// Shrinks a scanned document's page images in place (lib/compress.ts) and
+// reports the size before and after. Imported PDFs are not supported — their
+// pages aren't images this app can re-encode — so they aren't listed.
+import { useMemo, useState } from 'react';
+import { Alert, StyleSheet, Text, View } from 'react-native';
+import { useRouter } from 'expo-router';
 import { useTheme } from '@/contexts/theme-context';
-import { getDocuments, updateDocument } from '@/lib/storage';
-import { replacePage } from '@/lib/files';
-import { notifySuccess, notifyError } from '@/lib/haptics';
-import type { Document } from '@/types/document';
+import { PrimaryButton } from '@/components/primary-button';
+import { SectionLabel } from '@/components/section-label';
+import { useToast } from '@/components/toast';
+import {
+  DocRow,
+  NoDocuments,
+  OptionList,
+  ToolNote,
+  ToolProgress,
+  ToolScreen,
+  formatBytes,
+  useToolDocuments,
+} from '@/components/tool-ui';
+import { compressDocument, documentSize, type CompressLevel, type CompressResult } from '@/lib/compress';
+import { invalidateDocPreviews } from '@/lib/bake';
+import { notifyError, notifySuccess } from '@/lib/haptics';
+import { Radius, Spacing, Type } from '@/lib/theme';
 
-const QUALITY_OPTIONS = [
-  { label: 'Low', value: 0.4, desc: 'Smallest size, lower quality' },
-  { label: 'Medium', value: 0.65, desc: 'Good balance of size and quality' },
-  { label: 'High', value: 0.85, desc: 'Near-original quality, moderate size saving' },
+const LEVELS: { value: CompressLevel; label: string; detail: string }[] = [
+  { value: 'small', label: 'Smallest file', detail: 'Good for email. Fine print may soften.' },
+  { value: 'balanced', label: 'Balanced', detail: 'Clear text at a much smaller size.' },
+  { value: 'sharp', label: 'Sharp', detail: 'Near-original detail, smaller saving.' },
 ];
 
 export default function CompressScreen() {
   const router = useRouter();
-  const insets = useSafeAreaInsets();
   const { colors } = useTheme();
-  const [docs, setDocs] = useState<Document[]>([]);
-  const [selectedDoc, setSelectedDoc] = useState<Document | null>(null);
-  const [quality, setQuality] = useState(0.65);
-  const [compressing, setCompressing] = useState(false);
+  const { show } = useToast();
+  const { docs, loaded, reload } = useToolDocuments();
+  const [docId, setDocId] = useState<string | null>(null);
+  const [level, setLevel] = useState<CompressLevel>('balanced');
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
+  const [result, setResult] = useState<(CompressResult & { docId: string }) | null>(null);
 
-  useFocusEffect(useCallback(() => {
-    let cancelled = false;
-    getDocuments()
-      .then(all => {
-        if (cancelled) return;
-        const filtered = all.filter(d => d.pages.length > 0 && !d.pdfUri);
-        setDocs(filtered);
-        setSelectedDoc(prev => (prev && filtered.some(d => d.id === prev.id) ? prev : null));
-      })
-      .catch(console.error);
-    return () => { cancelled = true; };
-  }, []));
+  const doc = docs.find(d => d.id === docId) ?? null;
+  const currentSize = useMemo(() => (doc ? documentSize(doc) : 0), [doc]);
+  const running = progress !== null;
 
-  const handleCompress = async () => {
-    if (!selectedDoc) return;
+  const run = async () => {
+    if (!doc) return;
+    setResult(null);
+    setProgress({ current: 0, total: doc.pages.length });
+    try {
+      const r = await compressDocument(doc, level, (done, total) => setProgress({ current: done, total }));
+      invalidateDocPreviews(doc.id);
+      setResult({ ...r, docId: doc.id });
+      notifySuccess();
+      show(r.after < r.before ? `Saved ${formatBytes(r.before - r.after)}` : 'Already as small as it gets');
+      reload();
+    } catch {
+      notifyError();
+      Alert.alert('Couldn’t compress this document', 'Some pages may not have been compressed. Try again.');
+      reload();
+    } finally {
+      setProgress(null);
+    }
+  };
+
+  const handleCompress = () => {
+    if (!doc || running) return;
     Alert.alert(
-      'Compress Document',
-      `This will replace the images in "${selectedDoc.name}" with compressed versions. This cannot be undone.`,
+      'Compress this document?',
+      `The page images in “${doc.name}” will be replaced with smaller versions. This can’t be undone.`,
       [
         { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Compress',
-          style: 'destructive',
-          onPress: async () => {
-            setCompressing(true);
-            setProgress({ current: 0, total: selectedDoc.pages.length });
-            try {
-              const newPages: string[] = [];
-              for (let i = 0; i < selectedDoc.pages.length; i++) {
-                setProgress({ current: i + 1, total: selectedDoc.pages.length });
-                // Strip any cache-bust suffix before handing to manipulateAsync.
-                const sourceUri = selectedDoc.pages[i].split('?')[0];
-                const result = await manipulateAsync(
-                  sourceUri,
-                  [],
-                  { compress: quality, format: SaveFormat.JPEG }
-                );
-                const stored = replacePage(result.uri, selectedDoc.id, i);
-                newPages.push(stored);
-              }
-              await updateDocument({ ...selectedDoc, pages: newPages, updatedAt: Date.now() });
-              notifySuccess();
-              Alert.alert('Done', `"${selectedDoc.name}" has been compressed.`, [
-                { text: 'OK', onPress: () => router.back() },
-              ]);
-            } catch {
-              notifyError();
-              Alert.alert('Error', 'Compression failed. Some pages may be unchanged.');
-            } finally {
-              setCompressing(false);
-              setProgress(null);
-            }
-          },
-        },
-      ]
+        { text: 'Compress', onPress: run },
+      ],
     );
   };
 
+  if (loaded && docs.length === 0) {
+    return (
+      <ToolScreen title="Compress">
+        <NoDocuments subtitle="Compress makes scanned documents smaller. Scan or import a document first." />
+      </ToolScreen>
+    );
+  }
+
+  const done = result && result.docId === docId ? result : null;
+
   return (
-    <View style={[styles.container, { backgroundColor: colors.bg }]}>
-      {/* Header */}
-      <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
-        <Pressable onPress={() => router.back()} hitSlop={12} accessibilityRole="button" accessibilityLabel="Close">
-          <Ionicons name="close" size={24} color={colors.text} />
-        </Pressable>
-        <Text style={[styles.title, { color: colors.text }]}>Compress</Text>
-        <View style={{ width: 32 }} />
-      </View>
-
-      <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 24 }]}>
-        {/* Quality picker */}
-        <Text style={[styles.sectionLabel, { color: colors.muted }]}>QUALITY</Text>
-        <View style={[styles.qualityCard, { backgroundColor: colors.card }]}>
-          {QUALITY_OPTIONS.map((opt, i) => (
-            <Pressable
-              key={opt.label}
-              style={[
-                styles.qualityRow,
-                i < QUALITY_OPTIONS.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
-              ]}
-              onPress={() => setQuality(opt.value)}
-            >
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.qualityLabel, { color: colors.text }]}>{opt.label}</Text>
-                <Text style={[styles.qualityDesc, { color: colors.muted }]}>{opt.desc}</Text>
-              </View>
-              {quality === opt.value && <Ionicons name="checkmark" size={20} color={colors.accent} />}
-            </Pressable>
-          ))}
+    <ToolScreen
+      title="Compress"
+      footer={
+        <>
+          {progress ? (
+            <ToolProgress
+              label={`Compressing page ${Math.min(progress.current + 1, progress.total)} of ${progress.total}…`}
+              current={progress.current}
+              total={progress.total}
+            />
+          ) : null}
+          {done ? (
+            <PrimaryButton
+              title="Open document"
+              icon="open-outline"
+              onPress={() => router.replace({ pathname: '/viewer', params: { id: done.docId } })}
+            />
+          ) : (
+            <PrimaryButton
+              title={doc ? `Compress document (${formatBytes(currentSize)})` : "Select a document"}
+              onPress={handleCompress}
+              disabled={!doc}
+              loading={running}
+            />
+          )}
+        </>
+      }
+    >
+      {done ? (
+        <View style={[styles.result, { backgroundColor: colors.card }]}>
+          <View style={styles.resultCol}>
+            <Text style={[Type.footnote, { color: colors.muted }]}>Before</Text>
+            <Text style={[Type.title, { color: colors.text }]}>{formatBytes(done.before)}</Text>
+          </View>
+          <View style={[styles.divider, { backgroundColor: colors.border }]} />
+          <View style={styles.resultCol}>
+            <Text style={[Type.footnote, { color: colors.muted }]}>After</Text>
+            <Text style={[Type.title, { color: colors.accent }]}>{formatBytes(done.after)}</Text>
+          </View>
         </View>
+      ) : null}
 
-        {/* Document list */}
-        <Text style={[styles.sectionLabel, { color: colors.muted, marginTop: 24 }]}>SELECT DOCUMENT</Text>
-        {docs.length === 0 ? (
-          <Text style={[styles.emptyText, { color: colors.muted }]}>No scanned documents found. Scan a document first.</Text>
-        ) : (
-          docs.map(doc => (
-            <Pressable
-              key={doc.id}
-              style={[styles.docRow, { backgroundColor: colors.card, borderColor: selectedDoc?.id === doc.id ? colors.accent : 'transparent' }]}
-              onPress={() => setSelectedDoc(doc)}
-            >
-              <Ionicons name="document-text-outline" size={22} color={colors.muted} />
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.docName, { color: colors.text }]} numberOfLines={1}>{doc.name}</Text>
-                <Text style={[styles.docMeta, { color: colors.muted }]}>{doc.pages.length} page{doc.pages.length !== 1 ? 's' : ''}</Text>
-              </View>
-              {selectedDoc?.id === doc.id && <Ionicons name="checkmark-circle" size={22} color={colors.accent} />}
-            </Pressable>
-          ))
-        )}
+      <SectionLabel>Size</SectionLabel>
+      <OptionList options={LEVELS} value={level} onChange={v => { setLevel(v); setResult(null); }} />
 
-        {selectedDoc && (
-          <Pressable
-            style={[styles.applyBtn, { backgroundColor: colors.accent, opacity: compressing ? 0.6 : 1, marginTop: 24 }]}
-            onPress={handleCompress}
-            disabled={compressing}
-          >
-            {compressing ? (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                <ActivityIndicator color="#fff" />
-                {progress && (
-                  <Text style={styles.applyBtnText}>
-                    Compressing {progress.current}/{progress.total}…
-                  </Text>
-                )}
-              </View>
-            ) : (
-              <Text style={styles.applyBtnText}>Compress Document</Text>
-            )}
-          </Pressable>
-        )}
-      </ScrollView>
-    </View>
+      <SectionLabel>Document</SectionLabel>
+      {docs.map(d => (
+        <DocRow
+          key={d.id}
+          doc={d}
+          selected={d.id === docId}
+          onPress={() => {
+            if (running) return;
+            setDocId(d.id);
+            setResult(null);
+          }}
+        />
+      ))}
+      <ToolNote>Works on scanned and imported photos. Imported PDF files can’t be compressed.</ToolNote>
+    </ToolScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  topBar: {
+  result: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingBottom: 12,
+    borderRadius: Radius.md,
+    paddingVertical: Spacing.lg,
+    marginTop: Spacing.lg,
   },
-  title: { fontSize: 17, fontWeight: '700' },
-  content: { paddingHorizontal: 16 },
-  sectionLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.8, marginBottom: 8 },
-  qualityCard: { borderRadius: 12, overflow: 'hidden' },
-  qualityRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, gap: 12 },
-  qualityLabel: { fontSize: 15, fontWeight: '600', marginBottom: 2 },
-  qualityDesc: { fontSize: 12 },
-  emptyText: { fontSize: 14, fontStyle: 'italic' },
-  docRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    padding: 14,
-    borderRadius: 12,
-    marginBottom: 8,
-    borderWidth: 1.5,
-  },
-  docName: { fontSize: 15, fontWeight: '600' },
-  docMeta: { fontSize: 12, marginTop: 2 },
-  applyBtn: { borderRadius: 14, paddingVertical: 16, alignItems: 'center' },
-  applyBtnText: { color: '#fff', fontWeight: '700', fontSize: 16 },
+  resultCol: { flex: 1, alignItems: 'center', gap: Spacing.xs },
+  divider: { width: StyleSheet.hairlineWidth, alignSelf: 'stretch' },
 });

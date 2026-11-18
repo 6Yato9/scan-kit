@@ -47,20 +47,83 @@ export function replacePage(newUri: string, docId: string, pageIndex: number): s
   return dest.uri;
 }
 
-/** Copies an array of temp URIs into a doc's storage, starting at startIndex. */
+/**
+ * Overwrites a page's `.orig` shadow with a new file (e.g. after compression),
+ * using the same copy-then-swap as replacePage. No-op when the page has no
+ * shadow. Returns true when a shadow was replaced.
+ */
+export function replaceOriginal(newUri: string, docId: string, pageIndex: number): boolean {
+  const dir = new Directory(Paths.document, 'scan-kit', docId);
+  const dest = new File(dir, `page-${pageIndex}.orig.jpg`);
+  if (!dest.exists) return false;
+  const side = new File(dir, `page-${pageIndex}.orig.new.jpg`);
+  if (side.exists) {
+    try { side.delete(); } catch {}
+  }
+  new File(stripQuery(newUri)).copy(side);
+  try { dest.delete(); } catch {}
+  side.copy(dest);
+  try { side.delete(); } catch {}
+  return true;
+}
+
+/** Removes the `?v=` cache-bust suffix the UI appends to page URIs. */
+function stripQuery(uri: string): string {
+  return uri.split('?')[0];
+}
+
+/**
+ * The `.orig` shadow that belongs to a stored page URI, or null when the URI
+ * is not a stored page (e.g. a scanner or picker temp file).
+ */
+export function shadowOf(pageUri: string): string | null {
+  const clean = stripQuery(pageUri);
+  if (!/\/page-\d+\.jpg$/.test(clean)) return null;
+  return clean.replace(/\.jpg$/, '.orig.jpg');
+}
+
+/**
+ * Copies one page into `destDocId` at `destIndex`, carrying its unfiltered
+ * `.orig` shadow along when the source has one.
+ *
+ * Every tool that copies pages between documents must go through this: the
+ * startup migration treats "no .orig" as "filter never baked", so a page copied
+ * without its shadow but with its filter metadata gets the filter applied a
+ * second time on the next launch, and its real original is lost for good.
+ *
+ * A stale `.orig` already sitting at the destination index is removed when the
+ * source has none — otherwise the copied page would be paired with the wrong
+ * image the next time a filter is baked.
+ */
+export function copyPageWithShadow(srcUri: string, destDocId: string, destIndex: number): string {
+  const dir = new Directory(Paths.document, 'scan-kit', destDocId);
+  dir.create({ intermediates: true, idempotent: true });
+  const dest = new File(dir, `page-${destIndex}.jpg`);
+  const destOrig = new File(dir, `page-${destIndex}.orig.jpg`);
+  const src = new File(stripQuery(srcUri));
+  if (dest.exists) dest.delete();
+  src.copy(dest);
+
+  const shadowUri = shadowOf(srcUri);
+  const srcOrig = shadowUri ? new File(shadowUri) : null;
+  if (destOrig.exists) {
+    try { destOrig.delete(); } catch {}
+  }
+  if (srcOrig && srcOrig.exists) srcOrig.copy(destOrig);
+  return dest.uri;
+}
+
+/**
+ * Copies page URIs into a doc's storage, starting at startIndex. Accepts both
+ * temp files (fresh scans) and another document's stored pages (merge), whose
+ * `.orig` shadows are carried across — see copyPageWithShadow.
+ */
 export function appendPages(
   tempUris: string[],
   docId: string,
   startIndex: number
 ): string[] {
-  const dir = new Directory(Paths.document, 'scan-kit', docId);
-  dir.create({ intermediates: true, idempotent: true });
-  return tempUris.map((uri, i) => {
-    const dest = new File(dir, `page-${startIndex + i}.jpg`);
-    const src = new File(uri);
-    src.copy(dest);
-    return dest.uri;
-  });
+  return tempUris.map((uri, i) => copyPageWithShadow(uri, docId, startIndex + i));
 }
 
 /**
@@ -290,6 +353,10 @@ const STALE_TEMP = [/\.tmp\.jpg$/, /\.new\.jpg$/, /\.shifting\.jpg$/, /^page-tmp
 export async function garbageCollectOrphans(validDocIds: string[]): Promise<number> {
   let deleted = 0;
   const valid = new Set(validDocIds);
+  // An empty list almost always means the document index could not be read,
+  // not that the user has no documents (deleting a document already removes
+  // its folder). Sweeping against it would delete the whole library.
+  if (valid.size === 0) return 0;
   let children: (Directory | File)[];
   try {
     const root = new Directory(Paths.document, 'scan-kit');

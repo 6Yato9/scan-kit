@@ -1,259 +1,134 @@
 // app/tools/erase-marks.tsx
-import { useCallback, useState } from 'react';
+// Whitens light pencil and pen marks by baking a high-contrast black-and-white
+// filter into every page's pixels (lib/bake.ts). Bakes run from each page's
+// pristine .orig copy, so the viewer's "Original" filter can still undo it.
+import { useState } from 'react';
+import { Alert } from 'react-native';
+import { useRouter } from 'expo-router';
+import { PrimaryButton } from '@/components/primary-button';
+import { SectionLabel } from '@/components/section-label';
+import { useToast } from '@/components/toast';
 import {
-  Alert,
-  FlatList,
-  Image,
-  Modal,
-  Platform,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
-import { useRouter, useFocusEffect } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useTheme } from '@/contexts/theme-context';
-import { getDocuments, updateDocument } from '@/lib/storage';
+  DocRow,
+  NoDocuments,
+  ToolIntro,
+  ToolNote,
+  ToolProgress,
+  ToolScreen,
+  pageCountLabel,
+  useToolDocuments,
+} from '@/components/tool-ui';
+import { bakePage, invalidateDocPreviews } from '@/lib/bake';
+import { notifyError, notifySuccess } from '@/lib/haptics';
 import type { Document, PageAdjustment, PageFilter } from '@/types/document';
 
 const ERASE_FILTER: PageFilter = 'bw';
 const ERASE_ADJUSTMENT: PageAdjustment = { brightness: 30, contrast: 30, saturation: 0 };
 
 export default function EraseMarksScreen() {
-  const { colors, isDark } = useTheme();
   const router = useRouter();
-  const insets = useSafeAreaInsets();
+  const { show } = useToast();
+  const { docs, loaded } = useToolDocuments();
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
 
-  const [documents, setDocuments] = useState<Document[]>([]);
-  const [selectedDoc, setSelectedDoc] = useState<Document | null>(null);
-  const [pickerVisible, setPickerVisible] = useState(false);
-  const [applying, setApplying] = useState(false);
-  const [done, setDone] = useState(false);
+  const selected = docs.find(d => d.id === selectedId) ?? null;
+  const running = progress !== null;
 
-  useFocusEffect(
-    useCallback(() => {
-      let cancelled = false;
-      getDocuments()
-        .then(docs => {
-          if (cancelled) return;
-          const filtered = docs.filter(d => d.pages.length > 0 && !d.pdfUri);
-          setDocuments(filtered);
-          setSelectedDoc(prev => (prev && filtered.some(d => d.id === prev.id) ? prev : null));
-        })
-        .catch(console.error);
-      return () => { cancelled = true; };
-    }, [])
-  );
-
-  const handleApply = useCallback(async () => {
-    if (!selectedDoc) return;
-
-    // Erase-marks replaces existing filters AND adjustments. Warn the user if
-    // they had any custom values so they don't silently lose work.
-    const hasCustomFilter = selectedDoc.filters?.some(f => f && f !== 'original');
-    const hasCustomAdj = selectedDoc.adjustments?.some(
-      a => a && (a.brightness !== 0 || a.contrast !== 0 || a.saturation !== 0),
+  const run = async (doc: Document) => {
+    const total = doc.pages.length;
+    setProgress({ current: 0, total });
+    // All pages are requested at once: the bake queue still runs them one at a
+    // time, but each is tracked from the start, so an edit made meanwhile
+    // re-targets the rest instead of baking stale page numbers.
+    let done = 0;
+    const results = await Promise.allSettled(
+      doc.pages.map((_, i) =>
+        bakePage(doc.id, i, ERASE_FILTER, { ...ERASE_ADJUSTMENT }).finally(() => {
+          done++;
+          setProgress({ current: done, total });
+        }),
+      ),
     );
+    const failed = results.filter(r => r.status === 'rejected' || r.value === false).length;
+    invalidateDocPreviews(doc.id);
+    setProgress(null);
 
-    const run = async () => {
-      setApplying(true);
-      setDone(false);
-      try {
-        const pageCount = selectedDoc.pages.length;
-        await updateDocument({
-          ...selectedDoc,
-          filters: Array.from({ length: pageCount }, () => ERASE_FILTER),
-          adjustments: Array.from({ length: pageCount }, () => ({ ...ERASE_ADJUSTMENT })),
-          updatedAt: Date.now(),
-        });
-        setDone(true);
-      } catch {
-        Alert.alert('Error', 'Failed to apply. Please try again.');
-      } finally {
-        setApplying(false);
-      }
-    };
+    if (failed === total) {
+      notifyError();
+      Alert.alert('Couldn’t clean up this document', 'No pages were changed. Try again.');
+      return;
+    }
+    notifySuccess();
+    show(failed ? `Cleaned ${total - failed} of ${total} pages` : 'Marks erased');
+    router.replace({ pathname: '/viewer', params: { id: doc.id } });
+  };
 
-    if (hasCustomFilter || hasCustomAdj) {
+  const handleApply = () => {
+    if (!selected || running) return;
+    const hasEdits =
+      selected.filters?.some(f => f && f !== 'original') ||
+      selected.adjustments?.some(a => a && (a.brightness !== 0 || a.contrast !== 0 || a.saturation !== 0));
+    if (hasEdits) {
       Alert.alert(
-        'Overwrite custom edits?',
-        'This document has filter or adjustment edits that will be replaced. Continue?',
+        'Replace current filters?',
+        'This document already has filters or adjustments. Erase marks will replace them on every page.',
         [
           { text: 'Cancel', style: 'cancel' },
-          { text: 'Overwrite', style: 'destructive', onPress: () => { run(); } },
+          { text: 'Replace', onPress: () => run(selected) },
         ],
       );
       return;
     }
-    await run();
-  }, [selectedDoc]);
+    run(selected);
+  };
 
-  const borderColor = isDark ? '#2a2a2a' : '#e0e0e0';
-  const inputBg = isDark ? '#1a1a1a' : '#f5f5f5';
+  if (loaded && docs.length === 0) {
+    return (
+      <ToolScreen title="Erase marks">
+        <NoDocuments subtitle="Erase marks cleans up scanned pages. Scan or import a document first." />
+      </ToolScreen>
+    );
+  }
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.bg }]}>
-      <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
-        <Pressable onPress={() => router.back()} style={styles.backBtn} accessibilityRole="button" accessibilityLabel="Back">
-          <MaterialCommunityIcons name="arrow-left" size={24} color={colors.text} />
-        </Pressable>
-        <Text style={[styles.title, { color: colors.text }]}>Erase Marks</Text>
-        <View style={styles.backBtn} />
-      </View>
-
-      <View style={styles.body}>
-        <View style={[styles.iconWrap, { backgroundColor: '#FF8A6528' }]}>
-          <MaterialCommunityIcons name="eraser-variant" size={48} color="#FF8A65" />
-        </View>
-        <Text style={[styles.heading, { color: colors.text }]}>Remove Pencil & Light Marks</Text>
-        <Text style={[styles.sub, { color: colors.faint }]}>
-          Applies a high-contrast grayscale filter to make light pencil and pen marks disappear. Affects the document view and PDF exports.
-        </Text>
-
-        <Pressable
-          style={[styles.picker, { borderColor, backgroundColor: inputBg }]}
-          onPress={() => { setDone(false); setPickerVisible(true); }}
-        >
-          {selectedDoc ? (
-            <View style={styles.pickerRow}>
-              <Image source={{ uri: selectedDoc.pages[0] }} style={styles.thumb} />
-              <Text style={[styles.docName, { color: colors.text }]} numberOfLines={1}>
-                {selectedDoc.name}
-              </Text>
-              <MaterialCommunityIcons name="chevron-down" size={20} color={colors.faint} />
-            </View>
-          ) : (
-            <View style={styles.pickerRow}>
-              <MaterialCommunityIcons name="file-document-outline" size={24} color={colors.faint} />
-              <Text style={[styles.placeholder, { color: colors.faint }]}>Select a document</Text>
-              <MaterialCommunityIcons name="chevron-down" size={20} color={colors.faint} />
-            </View>
-          )}
-        </Pressable>
-
-        {done && (
-          <View style={[styles.successRow, { backgroundColor: '#66BB6A20' }]}>
-            <MaterialCommunityIcons name="check-circle" size={18} color="#66BB6A" />
-            <Text style={{ color: '#66BB6A', fontWeight: '600' }}>Applied to all pages</Text>
-          </View>
-        )}
-
-        <Pressable
-          style={[styles.applyBtn, { opacity: !selectedDoc || applying ? 0.5 : 1 }]}
-          onPress={handleApply}
-          disabled={!selectedDoc || applying}
-        >
-          <MaterialCommunityIcons name="eraser-variant" size={20} color="#fff" />
-          <Text style={styles.btnText}>{applying ? 'Applying…' : 'Apply to All Pages'}</Text>
-        </Pressable>
-      </View>
-
-      <Modal visible={pickerVisible} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setPickerVisible(false)}>
-        <View style={[styles.modal, { backgroundColor: colors.bg }]}>
-          <View style={[styles.header, { paddingTop: Platform.OS === 'android' ? insets.top + 16 : 16 }]}>
-            <Text style={[styles.title, { color: colors.text }]}>Select Document</Text>
-            <Pressable onPress={() => setPickerVisible(false)} style={styles.backBtn}>
-              <MaterialCommunityIcons name="close" size={24} color={colors.text} />
-            </Pressable>
-          </View>
-          <FlatList
-            data={documents}
-            keyExtractor={d => d.id}
-            contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 32 }}
-            renderItem={({ item }) => (
-              <Pressable
-                style={[styles.listItem, { borderBottomColor: borderColor }]}
-                onPress={() => { setSelectedDoc(item); setPickerVisible(false); }}
-              >
-                <Image source={{ uri: `${item.pages[0]}?v=${item.updatedAt}` }} style={styles.listThumb} />
-                <Text style={[styles.docName, { color: colors.text, flex: 1 }]} numberOfLines={2}>
-                  {item.name}
-                </Text>
-                {selectedDoc?.id === item.id && (
-                  <MaterialCommunityIcons name="check-circle" size={22} color="#FF8A65" />
-                )}
-              </Pressable>
-            )}
-            ListEmptyComponent={
-              <Text style={[styles.sub, { color: colors.faint, textAlign: 'center', marginTop: 40 }]}>
-                No scanned documents yet.
-              </Text>
-            }
+    <ToolScreen
+      title="Erase marks"
+      footer={
+        <>
+          {progress ? (
+            <ToolProgress
+              label={`Cleaning page ${Math.min(progress.current + 1, progress.total)} of ${progress.total}…`}
+              current={progress.current}
+              total={progress.total}
+            />
+          ) : null}
+          <PrimaryButton
+            title={selected ? `Erase marks on ${pageCountLabel(selected.pages.length)}` : 'Erase marks'}
+            onPress={handleApply}
+            disabled={!selected}
+            loading={running}
           />
-        </View>
-      </Modal>
-    </View>
+        </>
+      }
+    >
+      <ToolIntro
+        icon="color-wand-outline"
+        title="Remove light marks"
+        text="Turns pages into crisp black and white and lifts faint pencil, highlighter and shadow marks."
+      />
+      <SectionLabel>Document</SectionLabel>
+      {docs.map(doc => (
+        <DocRow
+          key={doc.id}
+          doc={doc}
+          selected={doc.id === selectedId}
+          onPress={() => !running && setSelectedId(doc.id)}
+        />
+      ))}
+      <ToolNote>
+        Changes the selected document. To undo, open it and choose the Original filter for each page.
+      </ToolNote>
+    </ToolScreen>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1 },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-  },
-  backBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-  title: { fontSize: 18, fontWeight: '700' },
-  body: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 32,
-    gap: 16,
-  },
-  iconWrap: {
-    width: 96,
-    height: 96,
-    borderRadius: 28,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 8,
-  },
-  heading: { fontSize: 22, fontWeight: '700', textAlign: 'center' },
-  sub: { fontSize: 15, textAlign: 'center', lineHeight: 22 },
-  picker: {
-    width: '100%',
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-  },
-  pickerRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  thumb: { width: 40, height: 40, borderRadius: 6 },
-  docName: { flex: 1, fontSize: 15, fontWeight: '500' },
-  placeholder: { flex: 1, fontSize: 15 },
-  successRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    padding: 12,
-    borderRadius: 10,
-    width: '100%',
-    justifyContent: 'center',
-  },
-  applyBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: '#FF8A65',
-    paddingHorizontal: 28,
-    paddingVertical: 14,
-    borderRadius: 14,
-    marginTop: 4,
-  },
-  btnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
-  modal: { flex: 1 },
-  listItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  listThumb: { width: 48, height: 48, borderRadius: 6 },
-});

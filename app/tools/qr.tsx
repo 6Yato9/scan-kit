@@ -3,7 +3,6 @@ import { useCallback, useRef, useState } from 'react';
 import {
   Alert,
   Linking,
-  Pressable,
   StyleSheet,
   Text,
   View,
@@ -15,7 +14,10 @@ import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/theme-context';
 import { useToast } from '@/components/toast';
+import { ScreenHeader } from '@/components/screen-header';
+import { PrimaryButton } from '@/components/primary-button';
 import { notifySuccess, tapLight } from '@/lib/haptics';
+import { Radius, Spacing, Type } from '@/lib/theme';
 
 type BarcodeResult = {
   type: string;
@@ -46,7 +48,7 @@ function isUrl(text: string): boolean {
 export default function QrScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
   const { show } = useToast();
   const [permission, requestPermission] = useCameraPermissions();
   const [result, setResult] = useState<BarcodeResult | null>(null);
@@ -68,7 +70,7 @@ export default function QrScreen() {
     if (!result) return;
     await Clipboard.setStringAsync(result.data);
     tapLight();
-    show('Copied');
+    show('Copied to clipboard');
   };
 
   const handleOpen = () => {
@@ -86,7 +88,7 @@ export default function QrScreen() {
 
     const openIt = () => {
       Linking.openURL(url).catch(() =>
-        Alert.alert('Cannot open', 'Could not open this URL.'),
+        Alert.alert('Couldn’t open the link', 'No app on this device can open it.'),
       );
     };
 
@@ -106,8 +108,8 @@ export default function QrScreen() {
       return;
     }
     Alert.alert(
-      'Unsupported link',
-      `This QR code points to a non-standard URL. For your safety it won't be opened directly.\n\n${url}`,
+      'Link not opened',
+      `For your safety, this kind of link isn’t opened directly. You can copy it instead.\n\n${url}`,
     );
   };
 
@@ -118,31 +120,28 @@ export default function QrScreen() {
     // permission dialog again — sending them to Settings is the only path.
     const mustGoToSettings = permission.canAskAgain === false;
     return (
-      <View style={[styles.container, styles.centered, { backgroundColor: colors.bg, paddingTop: insets.top }]}>
-        <Pressable onPress={() => router.back()} style={[styles.backBtn, { top: insets.top + 8 }]} accessibilityRole="button" accessibilityLabel="Close">
-          <Ionicons name="close" size={24} color={colors.text} />
-        </Pressable>
-        <Ionicons name="camera-outline" size={56} color={colors.muted} />
-        <Text style={[styles.permTitle, { color: colors.text }]}>Camera Access Needed</Text>
-        <Text style={[styles.permSub, { color: colors.muted }]}>
-          {mustGoToSettings
-            ? 'Camera access is blocked. Open Settings to enable it for this app.'
-            : 'Allow camera access to scan QR codes and barcodes.'}
-        </Text>
-        <Pressable
-          style={[styles.permBtn, { backgroundColor: colors.accent }]}
-          onPress={mustGoToSettings ? () => Linking.openSettings() : requestPermission}
-        >
-          <Text style={styles.permBtnText}>
-            {mustGoToSettings ? 'Open Settings' : 'Allow Camera'}
+      <View style={[styles.container, { backgroundColor: colors.bg }]}>
+        <ScreenHeader title="QR code" onBack={() => router.back()} backIcon="close" />
+        <View style={styles.centered}>
+          <Ionicons name="camera-outline" size={56} color={colors.muted} />
+          <Text style={[Type.title, styles.permTitle, { color: colors.text }]}>Camera access needed</Text>
+          <Text style={[Type.callout, styles.permSub, { color: colors.muted }]}>
+            {mustGoToSettings
+              ? 'Camera access is turned off. Open Settings to allow it for Scan Kit.'
+              : 'Allow camera access to scan QR codes and barcodes.'}
           </Text>
-        </Pressable>
+          <PrimaryButton
+            title={mustGoToSettings ? 'Open Settings' : 'Allow camera'}
+            onPress={mustGoToSettings ? () => Linking.openSettings() : requestPermission}
+            style={styles.permBtn}
+          />
+        </View>
       </View>
     );
   }
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: colors.chrome }]}>
       <CameraView
         style={StyleSheet.absoluteFill}
         facing="back"
@@ -152,53 +151,50 @@ export default function QrScreen() {
         }}
       />
 
-      {/* Top bar */}
-      <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.closeBtn} accessibilityRole="button" accessibilityLabel="Close">
-          <Ionicons name="close" size={24} color="#fff" />
-        </Pressable>
-        <Text style={styles.topTitle}>QR / Barcode</Text>
-        <View style={{ width: 40 }} />
+      {/* Top bar: always-dark chrome over the camera feed */}
+      <View style={styles.topBar}>
+        <ScreenHeader title="QR code" dark onBack={() => router.back()} backIcon="close" />
       </View>
 
       {/* Scan frame */}
       {!result && (
         <View style={styles.frameWrapper}>
           <View style={styles.frame}>
-            <View style={[styles.corner, styles.cornerTL]} />
-            <View style={[styles.corner, styles.cornerTR]} />
-            <View style={[styles.corner, styles.cornerBL]} />
-            <View style={[styles.corner, styles.cornerBR]} />
+            <View style={[styles.corner, styles.cornerTL, { borderColor: colors.chromeText }]} />
+            <View style={[styles.corner, styles.cornerTR, { borderColor: colors.chromeText }]} />
+            <View style={[styles.corner, styles.cornerBL, { borderColor: colors.chromeText }]} />
+            <View style={[styles.corner, styles.cornerBR, { borderColor: colors.chromeText }]} />
           </View>
-          <Text style={styles.hint}>Align code within the frame</Text>
+          <Text style={[Type.footnote, { color: colors.chromeText }]}>Point the camera at a QR code or barcode</Text>
         </View>
       )}
 
       {/* Result sheet */}
       {result && (
-        <View style={[styles.resultSheet, { backgroundColor: isDark ? '#1c1c1e' : '#fff', paddingBottom: insets.bottom + 16 }]}>
-          <Text style={[styles.resultType, { color: colors.muted }]}>{formatType(result.type)}</Text>
-          <Text style={[styles.resultData, { color: colors.text }]} numberOfLines={4} selectable>
+        <View style={[styles.resultSheet, { backgroundColor: colors.card, paddingBottom: insets.bottom + Spacing.lg }]}>
+          <Text style={[Type.sectionLabel, { color: colors.muted }]}>{formatType(result.type)}</Text>
+          <Text style={[Type.body, styles.resultData, { color: colors.text }]} numberOfLines={4} selectable>
             {result.data}
           </Text>
 
+          {isUrl(result.data) ? (
+            <PrimaryButton title="Open link" icon="open-outline" onPress={handleOpen} />
+          ) : null}
           <View style={styles.resultActions}>
-            <Pressable style={[styles.actionBtn, { backgroundColor: colors.accent }]} onPress={handleCopy}>
-              <Ionicons name="copy-outline" size={18} color="#fff" />
-              <Text style={styles.actionBtnText}>Copy</Text>
-            </Pressable>
-
-            {isUrl(result.data) && (
-              <Pressable style={[styles.actionBtn, { backgroundColor: colors.accent }]} onPress={handleOpen}>
-                <Ionicons name="open-outline" size={18} color="#fff" />
-                <Text style={styles.actionBtnText}>Open</Text>
-              </Pressable>
-            )}
-
-            <Pressable style={[styles.actionBtn, { backgroundColor: colors.secondary }]} onPress={handleRescan}>
-              <Ionicons name="scan-outline" size={18} color={colors.text} />
-              <Text style={[styles.actionBtnText, { color: colors.text }]}>Scan Again</Text>
-            </Pressable>
+            <PrimaryButton
+              title="Copy"
+              icon="copy-outline"
+              variant={isUrl(result.data) ? 'secondary' : 'primary'}
+              onPress={handleCopy}
+              style={styles.flex}
+            />
+            <PrimaryButton
+              title="Scan again"
+              icon="scan-outline"
+              variant="secondary"
+              onPress={handleRescan}
+              style={styles.flex}
+            />
           </View>
         </View>
       )}
@@ -210,59 +206,30 @@ const CORNER = 24;
 const BORDER = 3;
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#000' },
-  centered: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 },
-  topBar: {
-    position: 'absolute',
-    top: 0, left: 0, right: 0,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-  },
-  closeBtn: { width: 40, alignItems: 'flex-start' },
-  topTitle: { color: '#fff', fontSize: 16, fontWeight: '700' },
-  frameWrapper: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 20 },
-  frame: {
-    width: 240,
-    height: 240,
-    position: 'relative',
-  },
-  corner: { position: 'absolute', width: CORNER, height: CORNER, borderColor: '#fff', borderRadius: 4 },
+  container: { flex: 1 },
+  flex: { flex: 1 },
+  centered: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: Spacing.xxxl },
+  topBar: { position: 'absolute', top: 0, left: 0, right: 0 },
+  frameWrapper: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: Spacing.xl },
+  frame: { width: 240, height: 240, position: 'relative' },
+  corner: { position: 'absolute', width: CORNER, height: CORNER, borderRadius: 4 },
   cornerTL: { top: 0, left: 0, borderTopWidth: BORDER, borderLeftWidth: BORDER },
   cornerTR: { top: 0, right: 0, borderTopWidth: BORDER, borderRightWidth: BORDER },
   cornerBL: { bottom: 0, left: 0, borderBottomWidth: BORDER, borderLeftWidth: BORDER },
   cornerBR: { bottom: 0, right: 0, borderBottomWidth: BORDER, borderRightWidth: BORDER },
-  hint: { color: 'rgba(255,255,255,0.7)', fontSize: 13 },
   resultSheet: {
     position: 'absolute',
-    bottom: 0, left: 0, right: 0,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    padding: 20,
-    gap: 12,
-    shadowColor: '#000',
-    shadowOpacity: 0.3,
-    shadowRadius: 20,
-    shadowOffset: { width: 0, height: -4 },
-    elevation: 20,
+    bottom: 0,
+    left: 0,
+    right: 0,
+    borderTopLeftRadius: Radius.xl,
+    borderTopRightRadius: Radius.xl,
+    padding: Spacing.xl,
+    gap: Spacing.md,
   },
-  resultType: { fontSize: 11, fontWeight: '700', letterSpacing: 0.8 },
-  resultData: { fontSize: 15, lineHeight: 22 },
-  resultActions: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
-  actionBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 12,
-  },
-  actionBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 },
-  backBtn: { position: 'absolute', start: 16, zIndex: 10, padding: 8 },
-  permTitle: { fontSize: 20, fontWeight: '700', marginTop: 16, marginBottom: 8, textAlign: 'center' },
-  permSub: { fontSize: 14, textAlign: 'center', lineHeight: 20, marginBottom: 24 },
-  permBtn: { paddingHorizontal: 28, paddingVertical: 14, borderRadius: 14 },
-  permBtnText: { color: '#fff', fontWeight: '700', fontSize: 15 },
+  resultData: { lineHeight: 22 },
+  resultActions: { flexDirection: 'row', gap: Spacing.md },
+  permTitle: { marginTop: Spacing.lg, marginBottom: Spacing.sm, textAlign: 'center' },
+  permSub: { textAlign: 'center', lineHeight: 21, marginBottom: Spacing.xxl },
+  permBtn: { alignSelf: 'stretch' },
 });

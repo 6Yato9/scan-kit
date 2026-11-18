@@ -1,200 +1,198 @@
 // app/tools/watermark.tsx
-import { useCallback, useState } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+// Stamp a text watermark on every page and save the result as a new PDF.
+import { useState } from 'react';
+import { Alert, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import * as Crypto from 'expo-crypto';
-import * as FileSystem from 'expo-file-system/legacy';
-import * as Print from 'expo-print';
-import { Ionicons } from '@expo/vector-icons';
-import { useFocusEffect, useRouter } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
 import { useTheme } from '@/contexts/theme-context';
-import { getDocuments, saveDocument } from '@/lib/storage';
+import { PrimaryButton } from '@/components/primary-button';
+import { SectionLabel } from '@/components/section-label';
+import { useToast } from '@/components/toast';
+import {
+  DocRow,
+  NoDocuments,
+  PagePreview,
+  Segmented,
+  ToolNote,
+  ToolProgress,
+  ToolScreen,
+  useImageAspect,
+  useToolDocuments,
+} from '@/components/tool-ui';
+import { generatePdf } from '@/lib/pdf';
 import { copyPdfToStorage, deleteDocumentFiles } from '@/lib/files';
-import { notifySuccess, notifyError } from '@/lib/haptics';
-import type { Document } from '@/types/document';
+import { deleteQuietly } from '@/lib/share';
+import { getDocSettings, saveDocument } from '@/lib/storage';
+import { notifyError, notifySuccess } from '@/lib/haptics';
+import {
+  STAMP_RGB,
+  WATERMARK_ANGLE,
+  watermarkFontFraction,
+  watermarkOpacity,
+  watermarkOverlay,
+  type StampColor,
+  type WatermarkStyle,
+} from '@/lib/stamp';
+import { Radius, Spacing, Type } from '@/lib/theme';
 
-const POSITIONS = [
-  { id: 'diagonal', label: 'Diagonal', css: 'transform:rotate(-30deg);font-size:42px;opacity:0.15;' },
-  { id: 'center', label: 'Centre', css: 'font-size:32px;opacity:0.18;' },
-  { id: 'bottom', label: 'Bottom', css: 'position:absolute;bottom:24px;right:24px;font-size:16px;opacity:0.5;' },
+const STYLES: { value: WatermarkStyle; label: string }[] = [
+  { value: 'diagonal', label: 'Diagonal' },
+  { value: 'center', label: 'Centered' },
+  { value: 'footer', label: 'Footer' },
+];
+const COLORS: { value: StampColor; label: string }[] = [
+  { value: 'gray', label: 'Gray' },
+  { value: 'red', label: 'Red' },
+  { value: 'blue', label: 'Blue' },
 ];
 
 export default function WatermarkScreen() {
   const router = useRouter();
-  const insets = useSafeAreaInsets();
   const { colors } = useTheme();
-  const [docs, setDocs] = useState<Document[]>([]);
-  const [selectedDoc, setSelectedDoc] = useState<Document | null>(null);
+  const { show } = useToast();
+  const { width: screenW } = useWindowDimensions();
+  const { docs, loaded } = useToolDocuments();
+  const [docId, setDocId] = useState<string | null>(null);
   const [text, setText] = useState('CONFIDENTIAL');
-  const [position, setPosition] = useState('diagonal');
-  const [applying, setApplying] = useState(false);
+  const [style, setStyle] = useState<WatermarkStyle>('diagonal');
+  const [color, setColor] = useState<StampColor>('gray');
+  const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
 
-  useFocusEffect(useCallback(() => {
-    let cancelled = false;
-    getDocuments()
-      .then(all => {
-        if (cancelled) return;
-        const filtered = all.filter(d => d.pages.length > 0 && !d.pdfUri);
-        setDocs(filtered);
-        setSelectedDoc(prev => (prev && filtered.some(d => d.id === prev.id) ? prev : null));
-      })
-      .catch(console.error);
-    return () => { cancelled = true; };
-  }, []));
+  const doc = docs.find(d => d.id === docId) ?? docs[0] ?? null;
+  const aspect = useImageAspect(doc?.pages[0]);
+  const label = text.trim();
 
-  const handleApply = async () => {
-    if (!selectedDoc || !text.trim()) return;
-    setApplying(true);
+  const apply = async () => {
+    if (!doc || !label || progress) return;
     const id = Crypto.randomUUID();
+    let temp: string | null = null;
+    setProgress({ current: 0, total: doc.pages.length });
     try {
-      const pos = POSITIONS.find(p => p.id === position)!;
-      const isAbsolute = pos.css.includes('position:absolute');
-
-      const imgTags: string[] = [];
-      for (let i = 0; i < selectedDoc.pages.length; i++) {
-        const uri = selectedDoc.pages[i];
-        const b64 = await FileSystem.readAsStringAsync(uri, { encoding: 'base64' });
-        const overlay = isAbsolute
-          ? `<div style="${pos.css}color:rgba(0,0,0,0.5);font-weight:bold;white-space:nowrap;">${text}</div>`
-          : `<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;overflow:hidden;"><span style="${pos.css}color:rgba(0,0,0,0.5);font-weight:bold;white-space:nowrap;">${text}</span></div>`;
-        imgTags.push(`<div style="position:relative;page-break-after:always;margin:0;padding:0;"><img src="data:image/jpeg;base64,${b64}" style="width:100%;display:block;" />${overlay}</div>`);
-      }
-
-      const html = `<html><body style="margin:0;padding:0;">${imgTags.join('')}</body></html>`;
-      const { uri: pdfUri } = await Print.printToFileAsync({ html });
-
+      const { pdfPageSize } = await getDocSettings();
+      temp = await generatePdf(doc.pages, {
+        pageSize: pdfPageSize,
+        overlayHtml: (_i, size) => watermarkOverlay(label, style, color, size.width),
+        onProgress: done => setProgress({ current: done, total: doc.pages.length }),
+      });
+      const stored = copyPdfToStorage(temp, id);
       const now = Date.now();
-      const stored = copyPdfToStorage(pdfUri, id);
       await saveDocument({
         id,
-        name: `${selectedDoc.name} (Watermark)`,
+        name: `${doc.name} (watermarked)`,
         pages: [],
         pdfUri: stored,
-        folder: selectedDoc.folder,
+        folder: doc.folder,
         createdAt: now,
         updatedAt: now,
       });
-
       notifySuccess();
-      Alert.alert('Done', 'Watermarked PDF saved to your documents.', [
-        { text: 'OK', onPress: () => router.back() },
-      ]);
+      show('Watermarked PDF saved');
+      router.replace({ pathname: '/viewer', params: { id } });
     } catch {
       try { deleteDocumentFiles(id); } catch {}
       notifyError();
-      Alert.alert('Error', 'Could not apply watermark.');
+      Alert.alert('Couldn’t add the watermark', 'The PDF couldn’t be created. Try again, or try with fewer pages.');
     } finally {
-      setApplying(false);
+      deleteQuietly(temp);
+      setProgress(null);
     }
   };
 
+  if (loaded && docs.length === 0) {
+    return (
+      <ToolScreen title="Watermark">
+        <NoDocuments subtitle="Watermark stamps text on every page of a scan. Scan or import a document first." />
+      </ToolScreen>
+    );
+  }
+
+  const previewW = Math.min(screenW * 0.62, 260);
+  const [r, g, b] = STAMP_RGB[color];
+
   return (
-    <View style={[styles.container, { backgroundColor: colors.bg }]}>
-      <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
-        <Pressable onPress={() => router.back()} hitSlop={12} accessibilityRole="button" accessibilityLabel="Close">
-          <Ionicons name="close" size={24} color={colors.text} />
-        </Pressable>
-        <Text style={[styles.title, { color: colors.text }]}>Watermark</Text>
-        <View style={{ width: 32 }} />
-      </View>
-
-      <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 24 }]}>
-        {/* Text input */}
-        <Text style={[styles.sectionLabel, { color: colors.muted }]}>WATERMARK TEXT</Text>
-        <TextInput
-          style={[styles.textInput, { color: colors.text, backgroundColor: colors.card, borderColor: colors.border }]}
-          value={text}
-          onChangeText={setText}
-          placeholder="e.g. CONFIDENTIAL"
-          placeholderTextColor={colors.muted}
-          returnKeyType="done"
-          maxLength={40}
-        />
-
-        {/* Position */}
-        <Text style={[styles.sectionLabel, { color: colors.muted, marginTop: 20 }]}>POSITION</Text>
-        <View style={[styles.optionCard, { backgroundColor: colors.card }]}>
-          {POSITIONS.map((pos, i) => (
-            <Pressable
-              key={pos.id}
-              style={[
-                styles.optionRow,
-                i < POSITIONS.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
-              ]}
-              onPress={() => setPosition(pos.id)}
-            >
-              <Text style={[styles.optionLabel, { color: colors.text }]}>{pos.label}</Text>
-              {position === pos.id && <Ionicons name="checkmark" size={20} color={colors.accent} />}
-            </Pressable>
-          ))}
+    <ToolScreen
+      title="Watermark"
+      footer={
+        <>
+          {progress ? (
+            <ToolProgress
+              label={`Adding watermark to page ${Math.min(progress.current + 1, progress.total)} of ${progress.total}…`}
+              current={progress.current}
+              total={progress.total}
+            />
+          ) : null}
+          <PrimaryButton
+            title={label ? 'Save watermarked PDF' : 'Enter watermark text'}
+            onPress={apply}
+            disabled={!doc || !label}
+            loading={!!progress}
+          />
+        </>
+      }
+    >
+      {doc ? (
+        <View style={styles.previewWrap}>
+          <PagePreview uri={`${doc.pages[0]}?v=${doc.updatedAt}`} aspect={aspect} width={previewW}>
+            {({ width }) => {
+              const fontSize = watermarkFontFraction(label, style) * width;
+              const ink = `rgba(${r},${g},${b},${watermarkOpacity(style)})`;
+              const textEl = (
+                <Text
+                  style={{ fontSize, fontWeight: '700', color: ink, letterSpacing: fontSize * 0.04 }}
+>
+                  {label}
+                </Text>
+              );
+              return style === 'footer' ? (
+                <View style={[styles.footerStamp, { bottom: width * aspect * 0.03 }]}>{textEl}</View>
+              ) : (
+                <View style={styles.centerStamp}>
+                  <View
+                    style={[
+                      { width: width * 2, alignItems: 'center' },
+                      style === 'diagonal' && { transform: [{ rotate: `${WATERMARK_ANGLE}deg` }] },
+                    ]}
+                  >
+                    {textEl}
+                  </View>
+                </View>
+              );
+            }}
+          </PagePreview>
         </View>
+      ) : null}
 
-        {/* Document list */}
-        <Text style={[styles.sectionLabel, { color: colors.muted, marginTop: 20 }]}>SELECT DOCUMENT</Text>
-        {docs.length === 0 ? (
-          <Text style={[styles.emptyText, { color: colors.muted }]}>No documents found. Scan a document first.</Text>
-        ) : (
-          docs.map(doc => (
-            <Pressable
-              key={doc.id}
-              style={[styles.docRow, { backgroundColor: colors.card, borderColor: selectedDoc?.id === doc.id ? colors.accent : 'transparent' }]}
-              onPress={() => setSelectedDoc(doc)}
-            >
-              <Ionicons name="document-text-outline" size={22} color={colors.muted} />
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.docName, { color: colors.text }]} numberOfLines={1}>{doc.name}</Text>
-                <Text style={[styles.docMeta, { color: colors.muted }]}>{doc.pages.length} page{doc.pages.length !== 1 ? 's' : ''}</Text>
-              </View>
-              {selectedDoc?.id === doc.id && <Ionicons name="checkmark-circle" size={22} color={colors.accent} />}
-            </Pressable>
-          ))
-        )}
+      <SectionLabel>Text</SectionLabel>
+      <TextInput
+        style={[Type.body, styles.input, { color: colors.text, backgroundColor: colors.card }]}
+        value={text}
+        onChangeText={setText}
+        placeholder="For example, CONFIDENTIAL"
+        placeholderTextColor={colors.muted}
+        autoCapitalize="characters"
+        returnKeyType="done"
+        maxLength={40}
+        accessibilityLabel="Watermark text"
+      />
 
-        {selectedDoc && text.trim() && (
-          <Pressable
-            style={[styles.applyBtn, { backgroundColor: colors.accent, opacity: applying ? 0.6 : 1, marginTop: 24 }]}
-            onPress={handleApply}
-            disabled={applying}
-          >
-            {applying
-              ? <ActivityIndicator color="#fff" />
-              : <Text style={styles.applyBtnText}>Apply Watermark</Text>
-            }
-          </Pressable>
-        )}
+      <SectionLabel>Style</SectionLabel>
+      <Segmented options={STYLES} value={style} onChange={setStyle} />
 
-        <Text style={[styles.footnote, { color: colors.muted }]}>
-          A new PDF document with the watermark applied will be saved. Your original document is unchanged.
-        </Text>
-      </ScrollView>
-    </View>
+      <SectionLabel>Color</SectionLabel>
+      <Segmented options={COLORS} value={color} onChange={setColor} />
+
+      <SectionLabel>Document</SectionLabel>
+      {docs.map(d => (
+        <DocRow key={d.id} doc={d} selected={d.id === doc?.id} onPress={() => !progress && setDocId(d.id)} />
+      ))}
+      <ToolNote>A new PDF is saved with the watermark on every page. The original document is kept.</ToolNote>
+    </ToolScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 12 },
-  title: { fontSize: 17, fontWeight: '700' },
-  content: { paddingHorizontal: 16 },
-  sectionLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.8, marginBottom: 8 },
-  textInput: { borderRadius: 12, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 12, fontSize: 16 },
-  optionCard: { borderRadius: 12, overflow: 'hidden' },
-  optionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 14 },
-  optionLabel: { fontSize: 15 },
-  emptyText: { fontSize: 14, fontStyle: 'italic' },
-  docRow: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, borderRadius: 12, marginBottom: 8, borderWidth: 1.5 },
-  docName: { fontSize: 15, fontWeight: '600' },
-  docMeta: { fontSize: 12, marginTop: 2 },
-  applyBtn: { borderRadius: 14, paddingVertical: 16, alignItems: 'center' },
-  applyBtnText: { color: '#fff', fontWeight: '700', fontSize: 16 },
-  footnote: { fontSize: 12, marginTop: 12, textAlign: 'center', fontStyle: 'italic' },
+  previewWrap: { marginTop: Spacing.lg },
+  input: { borderRadius: Radius.md, paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md },
+  centerStamp: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  footerStamp: { position: 'absolute', left: 0, right: 0, alignItems: 'center' },
 });
