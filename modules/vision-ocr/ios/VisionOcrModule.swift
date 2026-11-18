@@ -15,6 +15,12 @@ public class VisionOcrModule: Module {
   public func definition() -> ModuleDefinition {
     Name("VisionOcr")
 
+    View(PdfDocumentView.self) {
+      Events("onPageChange", "onLoadError")
+      Prop("source") { (view: PdfDocumentView, uri: String) in view.setSource(uri) }
+      Prop("backgroundHex") { (view: PdfDocumentView, hex: String) in view.setBackground(hex) }
+    }
+
     AsyncFunction("recognize") { (uri: String, promise: Promise) in
       DispatchQueue.global(qos: .userInitiated).async {
         do {

@@ -19,7 +19,7 @@ enum PdfRasterizer {
     for i in 0..<doc.pageCount {
       guard let page = doc.page(at: i) else { continue }
       try autoreleasepool {
-        let box = page.bounds(for: .mediaBox)
+        let box = page.bounds(for: .cropBox)
         // Respect the page's /Rotate so landscape pages come out upright.
         let rotated = page.rotation % 180 != 0
         let w = rotated ? box.height : box.width
@@ -38,7 +38,7 @@ enum PdfRasterizer {
           // PDF space is bottom-left origin; flip, then let PDFKit apply rotation.
           cg.translateBy(x: 0, y: size.height)
           cg.scaleBy(x: scale, y: -scale)
-          page.draw(with: .mediaBox, to: cg)
+          page.draw(with: .cropBox, to: cg)
           cg.restoreGState()
         }
         guard let data = image.jpegData(compressionQuality: quality) else {
