@@ -3,6 +3,9 @@
 // its unfiltered .orig shadow, when it has one) is copied to a stash in the
 // cache; Undo puts it back at the same position, shadow included, so the page
 // is restored exactly as it was. One stash at a time: a new delete replaces it.
+// A stash is single-use: a successful restore deletes it, so a second Undo
+// can't insert the page twice. Stashes nobody used are removed by the startup
+// sweep (lib/files.ts TEMP_DIRS).
 import { Directory, File, Paths } from 'expo-file-system';
 import { copyPageWithShadow, reorderPages } from './files';
 
@@ -48,6 +51,19 @@ export function stashPage(docId: string, index: number): string {
  * page count. Returns the new page URIs (canonical page-0 … page-n names).
  */
 export function restoreStashedPage(docId: string, stashedUri: string, count: number, index: number): string[] {
+  if (!new File(stashedUri).exists) throw new Error('page-undo: this page was already restored');
   copyPageWithShadow(stashedUri, docId, count);
-  return reorderPages(docId, reinsertOrder(count, index));
+  const pages = reorderPages(docId, reinsertOrder(count, index));
+  discardStash(stashedUri);
+  return pages;
+}
+
+/** Deletes the stash folder holding `stashedUri`. Best effort: the startup sweep catches leftovers. */
+function discardStash(stashedUri: string): void {
+  try {
+    const dir = new Directory(stashedUri.split('?')[0].replace(/\/[^/]*$/, ''));
+    if (dir.exists) dir.delete();
+  } catch {
+    // Harmless; see above.
+  }
 }

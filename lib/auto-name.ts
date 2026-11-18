@@ -1,28 +1,42 @@
 // lib/auto-name.ts
 // Names for new documents: a readable, locale-aware default ("Scan Nov 18, 2026
-// at 12.35 AM"), later replaced by a title read from the page (titleFromText)
+// at 12:35 AM"), later replaced by a title read from the page (titleFromText)
 // unless the user has renamed the document meanwhile (see lib/save-scan.ts).
+//
+// These are DISPLAY names and read like the rest of the app ("01:37", not
+// "01.37"). Characters a file system rejects are dealt with only when a file is
+// actually named after a document — exports and shares (lib/share.ts
+// exportFileName, via safeFileName below).
 import { formatDate, formatTime } from './format';
 
 /** Characters that aren't allowed (or are awkward) in file names on iOS, macOS and Windows. */
 const ILLEGAL_IN_FILE_NAME = /[\\/:*?"<>|\u0000-\u001f]/g;
+const CONTROL = /[\u0000-\u001f\u007f]/g;
 
-/** Makes `s` safe to use as an exported file's name: illegal characters out, spaces tidied. */
-export function safeFileName(s: string): string {
-  return s.replace(ILLEGAL_IN_FILE_NAME, ' ').replace(/\s+/g, ' ').trim();
+/** Tidies text for display as a document name: control characters out, whitespace collapsed. */
+export function cleanDisplayName(s: string): string {
+  return s.replace(CONTROL, ' ').replace(/\s+/g, ' ').trim();
 }
 
 /**
- * Default name for a new document: the prefix, then the date and time in the
- * device's own format. The time's ":" becomes "." (as macOS does for
- * screenshots) so the name can be used as a file name as-is.
+ * Makes `s` safe to use as an exported file's name: a time's ":" becomes "."
+ * (as macOS does for screenshots: "01:37" → "01.37"), other illegal characters
+ * become spaces, and spaces are tidied.
  */
+export function safeFileName(s: string): string {
+  return s
+    .replace(/(\d):(?=\d)/g, '$1.')
+    .replace(ILLEGAL_IN_FILE_NAME, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Default name for a new document: the prefix, then the date and time in the device's own format. */
 export function autoName(date: Date = new Date(), prefix: string = 'Scan', locale?: string): string {
   const trimmed = prefix.trim() || 'Scan';
   const resolved = locale ?? Intl.DateTimeFormat().resolvedOptions().locale ?? '';
-  const time = formatTime(date, locale).replace(/:/g, '.');
   const joiner = /^en\b/i.test(resolved) ? ' at ' : ' ';
-  return safeFileName(`${trimmed} ${formatDate(date, locale)}${joiner}${time}`);
+  return cleanDisplayName(`${trimmed} ${formatDate(date, locale)}${joiner}${formatTime(date, locale)}`);
 }
 
 const MAX_TITLE = 40;
@@ -56,13 +70,13 @@ function clip(line: string): string {
  * #2026-0417", "Residential Lease Agreement"), or null when none does. Skips
  * short fragments, lines that are mostly digits or symbols, dates, phone
  * numbers, addresses on the web and "Page 1 of 2" markers. The result is at
- * most 40 characters (cut at a word) and safe as a file name.
+ * most 40 characters (cut at a word).
  */
 export function titleFromText(text: string | null | undefined): string | null {
   if (!text) return null;
   const lines = text.split(/\r?\n/).slice(0, 25);
   for (const raw of lines) {
-    const line = safeFileName(raw).replace(/^[\s\-–—•*·.,;:#]+/, '').trim();
+    const line = cleanDisplayName(raw).replace(/^[\s\-–—•*·.,;:#]+/, '').trim();
     if (line.length < 4) continue;
     const letters = (line.match(LETTER) ?? []).length;
     if (letters < 3) continue;

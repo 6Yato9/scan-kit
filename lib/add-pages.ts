@@ -7,7 +7,7 @@
 import { Directory, File, Paths } from 'expo-file-system';
 import { Document, PageAdjustment, PageFilter } from '../types/document';
 import { copyPageWithQuality, deleteDisposableTemps, isScannerOutput } from './files';
-import { getDocument, updateDocument } from './storage';
+import { getDocument, updateDocumentWith } from './storage';
 import { bakePages, runPageEdit } from './bake';
 import { indexDocText } from './save-scan';
 import { autoCropDocument } from './document-detect';
@@ -67,15 +67,22 @@ export async function addPagesToDocument(
       }
       const pad = <T,>(arr: T[] | undefined, fill: () => T): T[] | undefined =>
         arr ? [...arr, ...stored.map(fill)] : undefined;
-      const doc: Document = {
-        ...current,
+      // Only the fields this edit changes are written, merged onto the stored
+      // record, so nothing else written meanwhile (a rename, the text index)
+      // is replaced by this call's older copy.
+      const patch: Partial<Document> = {
         pages: [...current.pages, ...stored],
         filters: pad<PageFilter>(current.filters, () => 'original'),
         adjustments: pad<PageAdjustment>(current.adjustments, () => ({ brightness: 0, contrast: 0, saturation: 0 })),
         updatedAt: Date.now(),
       };
-      if (!(await updateDocument(doc))) throw new Error('document missing');
-      return { doc, added: stored.map((_, i) => start + i) };
+      let doc: Document | null = null;
+      const written = await updateDocumentWith(docId, latest => {
+        doc = { ...latest, ...patch };
+        return patch;
+      });
+      if (!written || !doc) throw new Error('document missing');
+      return { doc: doc as Document, added: stored.map((_, i) => start + i) };
     } catch (err) {
       for (let i = 0; i < inputs.length; i++) {
         try {

@@ -90,6 +90,9 @@ test('exportFileName keeps readable names and drops path characters', () => {
   expect(exportFileName('Invoice 2026', 'pdf')).toBe('Invoice 2026.pdf');
   expect(exportFileName('a/b:c', '.zip')).toBe('a b c.zip');
   expect(exportFileName('   ', 'jpg')).toBe('Document.jpg');
+  // Display names show the time with a colon; the file gets macOS's "01.37".
+  expect(exportFileName('Scan 18 Nov 2026 at 01:37', 'pdf')).toBe('Scan 18 Nov 2026 at 01.37.pdf');
+  expect(exportFileName('Report: Q3/Q4', 'pdf')).toBe('Report Q3 Q4.pdf');
 });
 
 describe('runAfterDismiss', () => {

@@ -19,6 +19,13 @@ import { documentIdsForCleanup, getOnboarded, getOnboardedSync, pendingBakeMigra
 // First-run gate: after mount, read the onboarding flag and redirect to the
 // onboarding screen if it hasn't been completed. Kept separate from the tabs
 // review effect. Doesn't block render — a brief flash of tabs is acceptable.
+//
+// A first launch through "Open in Scan Kit" lands on /import, which saves the
+// file and becomes the viewer. Replacing either with onboarding would abandon
+// the import half-way and hide the file the user asked to open, so onboarding
+// waits until they leave the viewer for the app itself.
+const ONBOARDING_DEFERRED = ['/import', '/viewer'];
+
 function OnboardingGate() {
   const router = useRouter();
   const pathname = usePathname();
@@ -38,7 +45,12 @@ function OnboardingGate() {
     // finishes onboarding it is still false while pathname has moved to the
     // tabs — which used to bounce them straight back into onboarding, forever.
     // getOnboardedSync() reflects setOnboarded() immediately and breaks that loop.
-    if (onboarded === false && getOnboardedSync() !== true && pathname !== '/onboarding') {
+    if (
+      onboarded === false &&
+      getOnboardedSync() !== true &&
+      pathname !== '/onboarding' &&
+      !ONBOARDING_DEFERRED.includes(pathname)
+    ) {
       router.replace('/onboarding');
     }
   }, [onboarded, pathname, router]);
@@ -98,6 +110,13 @@ function StatusBarSync() {
   return <StatusBar style={style} />;
 }
 
+// Tools opened on a document from the viewer (a `docId` param) must be modals:
+// the viewer is a fullScreenModal, and a card pushed under it never shows.
+const toolOptions = ({ route }: { route: { params?: object } }) => ({
+  headerShown: false,
+  presentation: (route.params as { docId?: string } | undefined)?.docId ? ('fullScreenModal' as const) : ('card' as const),
+});
+
 function ThemedStack() {
   const { colors } = useTheme();
   return (
@@ -136,15 +155,15 @@ function ThemedStack() {
       <Stack.Screen name="settings/about" options={{ title: 'About', presentation: 'card' }} />
       <Stack.Screen name="tools/qr" options={{ headerShown: false, presentation: 'fullScreenModal' }} />
       <Stack.Screen name="tools/id-card" options={{ headerShown: false, presentation: 'card' }} />
-      <Stack.Screen name="tools/compress" options={{ headerShown: false, presentation: 'card' }} />
-      <Stack.Screen name="tools/extract" options={{ headerShown: false, presentation: 'card' }} />
-      <Stack.Screen name="tools/watermark" options={{ headerShown: false, presentation: 'card' }} />
-      <Stack.Screen name="tools/timestamp" options={{ headerShown: false, presentation: 'card' }} />
-      <Stack.Screen name="tools/sign" options={{ headerShown: false, presentation: 'card' }} />
+      <Stack.Screen name="tools/compress" options={toolOptions} />
+      <Stack.Screen name="tools/extract" options={toolOptions} />
+      <Stack.Screen name="tools/watermark" options={toolOptions} />
+      <Stack.Screen name="tools/timestamp" options={toolOptions} />
+      <Stack.Screen name="tools/sign" options={toolOptions} />
       <Stack.Screen name="tools/long-image" options={{ headerShown: false, presentation: 'card' }} />
       <Stack.Screen name="tools/book" options={{ headerShown: false, presentation: 'card' }} />
       <Stack.Screen name="tools/whiteboard" options={{ headerShown: false, presentation: 'card' }} />
-      <Stack.Screen name="tools/erase-marks" options={{ headerShown: false, presentation: 'card' }} />
+      <Stack.Screen name="tools/erase-marks" options={toolOptions} />
       <Stack.Screen name="tools/extract-text" options={{ headerShown: false, presentation: 'card' }} />
     </Stack>
     </LockGate>

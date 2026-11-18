@@ -102,6 +102,8 @@ import {
   garbageCollectOrphans,
   copyPageWithShadow,
   replaceOriginal,
+  originalSideUri,
+  promoteOriginalSide,
   shadowOf,
   replacePage,
   isDisposableTemp,
@@ -398,6 +400,18 @@ describe('copying pages between documents keeps .orig shadows', () => {
     expect(replaceOriginal(tmp.uri, 'r-doc', 1)).toBe(false);
     expect(existsOrig('r-doc', 1)).toBe(false);
   });
+
+  test('a shadow written to originalSideUri replaces the .orig only when promoted (mark up)', () => {
+    seedOrig('m-doc', 0, 'OLD');
+    const side: any = new RawFile(originalSideUri('m-doc', 0));
+    expect(side.uri).toMatch(/\/m-doc\/page-0\.orig\.new\.jpg$/);
+    side.exists = true;
+    fileContents[side.uri] = 'INKED';
+    // Written but not promoted (the app died here): the shadow is untouched.
+    expect(readOrig('m-doc', 0)).toBe('OLD');
+    promoteOriginalSide('m-doc', 0);
+    expect(readOrig('m-doc', 0)).toBe('INKED');
+  });
 });
 
 // ── Crash safety (critique #8), temp files (#10), sweep races (#9) ──────────
@@ -623,5 +637,17 @@ describe('temp files (critique #10)', () => {
     expect(old.exists).toBe(false);
     expect(fresh.exists).toBe(true);
     expect(mine.exists).toBe(true);
+  });
+
+  test('the startup sweep removes a settled page-undo stash, keeps the one an Undo may still use', () => {
+    const now = 10_000_000_000;
+    const oldStash = new MockDirectory({ uri: 'file:///Library/Caches/' }, 'page-undo', '1');
+    const liveStash = new MockDirectory({ uri: 'file:///Library/Caches/' }, 'page-undo', '2');
+    mockMtimes[liveStash.uri] = now - 1000;
+    const root = new MockDirectory({ uri: 'file:///Library/Caches/' }, 'page-undo');
+    root.list = jest.fn(() => [oldStash, liveStash]);
+    expect(sweepTempLeftovers(now)).toBe(1);
+    expect(oldStash.delete).toHaveBeenCalled();
+    expect(liveStash.delete).not.toHaveBeenCalled();
   });
 });

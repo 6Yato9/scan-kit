@@ -17,6 +17,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import * as Sharing from 'expo-sharing';
 import * as Print from 'expo-print';
 import * as FileSystem from 'expo-file-system/legacy';
+import { safeFileName } from './auto-name';
 
 /** Strip any `?v=` cache-bust query (or other query) before handing a URI to native code. */
 export function cleanFileUri(uri: string): string {
@@ -193,13 +194,12 @@ const EXPORT_DIR = `${FileSystem.cacheDirectory ?? 'file:///tmp/'}exports/`;
 /** expo-print writes every generated PDF here with a random UUID name. */
 const PRINT_DIR = `${FileSystem.cacheDirectory ?? 'file:///tmp/'}Print/`;
 
-/** Turn a document name into a safe file name (keeps spaces and letters, drops path characters). */
+/**
+ * Turn a document name into a safe file name: keeps spaces and letters, writes
+ * a time's ":" as "." ("Scan 18 Nov 2026 at 01.37.pdf"), drops path characters.
+ */
 export function exportFileName(docName: string, ext: string): string {
-  const base = docName
-    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 80) || 'Document';
+  const base = safeFileName(docName).slice(0, 80).trim() || 'Document';
   return `${base}.${ext.replace(/^\./, '')}`;
 }
 

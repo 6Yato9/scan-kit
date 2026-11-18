@@ -29,10 +29,17 @@ jest.mock('../lib/files', () => ({
 }));
 
 let mockDoc: any;
-const mockUpdate = jest.fn(async (d: any) => { mockDoc = d; return true; });
+// Merges the patch onto the stored record, like the real updateDocumentWith.
+const mockUpdate = jest.fn(async (_id: string, fn: (cur: any) => any) => {
+  if (!mockDoc) return false;
+  const patch = fn(mockDoc);
+  if (!patch) return false;
+  mockDoc = { ...mockDoc, ...patch };
+  return true;
+});
 jest.mock('../lib/storage', () => ({
   getDocument: jest.fn(async () => mockDoc),
-  updateDocument: (d: any) => mockUpdate(d),
+  updateDocumentWith: (id: string, fn: (cur: any) => any) => mockUpdate(id, fn),
 }));
 jest.mock('../lib/bake', () => ({
   bakePages: jest.fn(async () => {}),
@@ -103,4 +110,11 @@ test('fails cleanly when the document was deleted meanwhile', async () => {
   mockDoc = null;
   await expect(addPagesToDocument('d1', ['x'], 0.9, { autoCrop: false })).rejects.toThrow('document missing');
   expect(mockCopyPage).not.toHaveBeenCalled();
+});
+
+test('writes only the page fields, so a rename or text index stored meanwhile survives', async () => {
+  await addPagesToDocument('d1', ['x'], 0.9, { autoCrop: false });
+  const patch = mockUpdate.mock.calls[0][1]({ ...mockDoc, name: 'Invoice', ocrText: 'text' });
+  expect(Object.keys(patch).sort()).toEqual(['adjustments', 'filters', 'pages', 'updatedAt']);
+  expect(patch.name).toBeUndefined();
 });

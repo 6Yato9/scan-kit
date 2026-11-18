@@ -5,6 +5,7 @@ import { saveDocument, updateDocumentWith } from './storage';
 import { copyPageWithQuality, copyPdfToStorage, deleteDisposableTemps, deleteDocumentFiles } from './files';
 import { ocrAvailable, extractDocText } from './ocr';
 import { titleFromText } from './auto-name';
+import { withDocLock } from './bake';
 
 export type SaveScanInput = {
   pages?: string[];
@@ -94,12 +95,20 @@ export async function saveScan(input: SaveScanInput): Promise<SaveScanResult> {
  * (updateDocumentWith), so this can neither resurrect a deleted document,
  * clobber a concurrent edit with a stale read-modify-write, nor overwrite a
  * name the user typed meanwhile (then `name` no longer equals `defaultName`).
+ *
+ * The write also runs under the per-document page lock (withDocLock), the one
+ * every page edit holds from reading the record to writing it back (rotate,
+ * crop, delete, reorder, add pages, mark up). Otherwise the text and the new
+ * name could land in the middle of such an edit and be overwritten by the
+ * edit's own write, which starts from the record it read before. Never call
+ * this from inside withDocLock / runPageEdit for the same document: it would
+ * wait for itself.
  */
 export async function indexDocText(id: string, pages: string[]): Promise<void> {
   if (!ocrAvailable()) return;
   const text = await extractDocText(pages);
   if (!text) return;
-  await updateDocumentWith(id, current => {
+  await withDocLock(id, () => updateDocumentWith(id, current => {
     const patch: Partial<Document> = { ocrText: text };
     if (current.defaultName && current.name === current.defaultName) {
       const title = titleFromText(text);
@@ -109,5 +118,5 @@ export async function indexDocText(id: string, pages: string[]): Promise<void> {
       }
     }
     return patch;
-  });
+  }));
 }

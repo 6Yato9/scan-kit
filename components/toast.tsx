@@ -46,6 +46,9 @@ export function ToastProvider({
   const opacity = useRef(new Animated.Value(0)).current;
   const translateY = useRef(new Animated.Value(20)).current;
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The action stays on screen (and pressable) while the toast fades out, so a
+  // quick second tap must not run it again — Undo twice would restore twice.
+  const actionUsed = useRef(false);
 
   const hide = useCallback(() => {
     if (hideTimer.current) clearTimeout(hideTimer.current);
@@ -65,6 +68,7 @@ export function ToastProvider({
     if (hideTimer.current) clearTimeout(hideTimer.current);
     setMessage(msg);
     setAction(options?.action ?? null);
+    actionUsed.current = false;
     AccessibilityInfo.announceForAccessibility(msg);
     opacity.setValue(0);
     translateY.setValue(20);
@@ -110,6 +114,8 @@ export function ToastProvider({
             {action && (
               <Pressable
                 onPress={() => {
+                  if (actionUsed.current) return;
+                  actionUsed.current = true;
                   const fn = action.onPress;
                   hide();
                   fn();

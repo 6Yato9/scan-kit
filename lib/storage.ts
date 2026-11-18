@@ -15,6 +15,8 @@ const SCHEMA_VERSION_KEY = '@scan_kit_schema_version';
 // only ever recorded as metadata.
 const CURRENT_SCHEMA_VERSION = '3';
 const SORT_KEY = '@scan_kit_sort';
+/** Removed feature's secret; deleted on every launch (see ensureMigrated). */
+const LEGACY_AI_KEY = '@scan_kit_ai_key';
 const FOLDERS_KEY = '@scan_kit_folders';
 const SCAN_SETTINGS_KEY = '@scan_kit_scan_settings';
 const DOC_SETTINGS_KEY = '@scan_kit_doc_settings';
@@ -93,6 +95,10 @@ function ensureMigrated(): Promise<void> {
   if (!_migrated) {
     _migrated = (async () => {
       try {
+        // Builds that had "Ask AI" kept the user's API key here in plain text.
+        // The feature is gone, so the key must not linger on the device.
+        await AsyncStorage.removeItem(LEGACY_AI_KEY).catch(() => {});
+
         const version = await AsyncStorage.getItem(SCHEMA_VERSION_KEY);
         if (version === CURRENT_SCHEMA_VERSION) return;
 
@@ -867,20 +873,4 @@ export async function setAppLockEnabled(enabled: boolean): Promise<void> {
   for (const l of Array.from(_appLockListeners)) {
     try { l(enabled); } catch {}
   }
-}
-
-// ── AI key ──────────────────────────────────────────────────────────────────
-const AI_KEY_STORAGE = '@scan_kit_ai_key';
-
-export async function getAiKey(): Promise<string | null> {
-  const val = await AsyncStorage.getItem(AI_KEY_STORAGE);
-  return val && val.length > 0 ? val : null;
-}
-
-export async function saveAiKey(key: string): Promise<void> {
-  return AsyncStorage.setItem(AI_KEY_STORAGE, key);
-}
-
-export async function clearAiKey(): Promise<void> {
-  return AsyncStorage.removeItem(AI_KEY_STORAGE);
 }

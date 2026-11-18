@@ -16,7 +16,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { getDocuments, patchDocument } from '@/lib/storage';
-import { originalUri } from '@/lib/files';
+import { originalSideUri, originalUri, pageSideUri, promoteOriginalSide, promotePageSide } from '@/lib/files';
 import { pageFileUri } from '@/lib/image';
 import { bakePage, runPageEdit } from '@/lib/bake';
 import { HIT, Ink, Spacing } from '@/lib/theme';
@@ -257,11 +257,17 @@ export default function AnnotateScreen() {
       const docs = await getDocuments();
       const current = docs.find(d => d.id === docId);
       if (!current || pageIndex >= current.pages.length) throw new Error('page missing');
-      await FileSystem.writeAsStringAsync(pageFileUri(docId, pageIndex), strip(payload.page), { encoding: 'base64' });
+      // Written beside the page and its shadow, then renamed over them: a
+      // crash mid-write leaves a side file the startup sweep discards, never a
+      // truncated page (lib/files.ts: pages are only ever replaced by a rename).
+      await FileSystem.writeAsStringAsync(pageSideUri(docId, pageIndex), strip(payload.page), { encoding: 'base64' });
       const orig = new File(originalUri(docId, pageIndex));
-      if (payload.orig && orig.exists) {
-        await FileSystem.writeAsStringAsync(orig.uri, strip(payload.orig), { encoding: 'base64' });
+      const inkOrig = !!payload.orig && orig.exists;
+      if (inkOrig) {
+        await FileSystem.writeAsStringAsync(originalSideUri(docId, pageIndex), strip(payload.orig!), { encoding: 'base64' });
       }
+      promotePageSide(docId, pageIndex);
+      if (inkOrig) promoteOriginalSide(docId, pageIndex);
       // Touch updatedAt so the viewer's images reload. patchDocument merges onto
       // the stored record, so a filter recorded meanwhile isn't overwritten.
       await patchDocument(docId, { updatedAt: Date.now() });

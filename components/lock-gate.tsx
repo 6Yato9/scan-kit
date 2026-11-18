@@ -11,6 +11,13 @@
 //     already presented (viewer, annotate, tools), which an in-tree overlay or
 //     an RN <Modal> owned by the root cannot do. Bottom sheets hide themselves
 //     while locked (see useAppLocked in BottomSheet).
+//   - The /lock route dismisses ITSELF whenever it is focused while unlocked
+//     (app/lock.tsx). The gate never pops it: something may have been pushed
+//     above it meanwhile ("Open in Scan Kit" lands on /import), and popping
+//     from the gate would then close the wrong screen or none at all, leaving
+//     a dead lock screen behind once the screen above it closes.
+//   - Screens that can appear above /lock while locked (app/import.tsx)
+//     render <LockScreen /> themselves and hold any navigation until unlock.
 //
 // Behaviour:
 //   - Locks on a cold start and whenever the app goes to the BACKGROUND. It
@@ -36,6 +43,8 @@ import { getAppLockEnabled, subscribeAppLock } from '@/lib/storage';
 import { Spacing, Type } from '@/lib/theme';
 
 const LOCK_ROUTE = '/lock';
+/** Shows the lock screen itself while locked (app/import.tsx). */
+const IMPORT_ROUTE = '/import';
 
 type LockState = { locked: boolean; kind: BiometricKind; tryUnlock: () => void };
 
@@ -97,9 +106,9 @@ export function LockGate({ children }: { children: React.ReactNode }) {
   // null = still loading the persisted flag (cover the app so nothing flashes).
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [locked, setLocked] = useState(false);
-  // True while the /lock route is on screen (pushed by us, not yet popped).
-  const [routeShown, setRouteShown] = useState(false);
   const [kind, setKind] = useState<BiometricKind>('passcode');
+  // The /lock route is on screen: it takes the touches, not the overlay below.
+  const routeShown = pathname === LOCK_ROUTE;
 
   // Prevents concurrent authenticate() prompts.
   const authingRef = useRef(false);
@@ -108,16 +117,11 @@ export function LockGate({ children }: { children: React.ReactNode }) {
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
   const pathnameRef = useRef(pathname);
   pathnameRef.current = pathname;
-  const routePushed = useRef(false);
 
+  // The /lock route sees `locked` turn false and dismisses itself.
   const unlock = useCallback(() => {
     setLocked(false);
-    if (routePushed.current) {
-      routePushed.current = false;
-      setRouteShown(false);
-      if (pathnameRef.current === LOCK_ROUTE) router.back();
-    }
-  }, [router]);
+  }, []);
 
   const tryUnlock = useCallback(async () => {
     if (authingRef.current) return;
@@ -168,12 +172,15 @@ export function LockGate({ children }: { children: React.ReactNode }) {
       appStateRef.current = next;
       if (next === 'background') {
         setLocked(true);
-        if (!routePushed.current && pathnameRef.current !== LOCK_ROUTE) {
-          routePushed.current = true;
-          setRouteShown(true);
-          router.push(LOCK_ROUTE);
-        }
+        // Push even when another /lock is lower in the stack (covered by an
+        // import): each one pops itself once it is on top and unlocked.
+        if (pathnameRef.current !== LOCK_ROUTE) router.push(LOCK_ROUTE);
       } else if (next === 'active' && prev === 'background' && lockedRef.current) {
+        // Safety net: if the route was presented while a system sheet (print,
+        // share) was being torn down, native-stack can drop it again. Cover the
+        // app before prompting. A spare /lock is harmless: each one dismisses
+        // itself once unlocked.
+        if (pathnameRef.current !== LOCK_ROUTE && pathnameRef.current !== IMPORT_ROUTE) router.push(LOCK_ROUTE);
         // Only after a real background trip: the Face ID sheet itself makes the
         // app go inactive → active, and re-prompting then would loop.
         tryUnlock();

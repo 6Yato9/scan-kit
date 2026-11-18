@@ -326,6 +326,17 @@ export function promotePageSide(docId: string, pageIndex: number): void {
   swapIn(new File(dir, `page-${pageIndex}.new.jpg`), new File(dir, `page-${pageIndex}.jpg`));
 }
 
+/** Where a direct write of a page's `.orig` shadow goes first (see promoteOriginalSide). */
+export function originalSideUri(docId: string, pageIndex: number): string {
+  return new File(new Directory(Paths.document, 'scan-kit', docId), `page-${pageIndex}.orig.new.jpg`).uri;
+}
+
+/** Renames the fully written shadow side file (originalSideUri) over the page's `.orig`. */
+export function promoteOriginalSide(docId: string, pageIndex: number): void {
+  const dir = new Directory(Paths.document, 'scan-kit', docId);
+  swapIn(new File(dir, `page-${pageIndex}.orig.new.jpg`), new File(dir, `page-${pageIndex}.orig.jpg`));
+}
+
 /** Returns the last path segment of a file:// uri (the basename), or ''. */
 function baseName(uri: string): string {
   const trimmed = uri.replace(/\/+$/, '');
@@ -521,7 +532,9 @@ export function deleteDisposableTemps(uris: (string | null | undefined)[]): void
 }
 
 // Folders whose contents are only ever stepping stones for this app.
-const TEMP_DIRS = ['ImagePicker', 'ImageManipulator', 'DocumentPicker', 'exports', 'Print'];
+// page-undo holds the copy of a deleted page that the viewer's Undo restores
+// (lib/page-undo.ts); one older than the grace period can no longer be used.
+const TEMP_DIRS = ['ImagePicker', 'ImageManipulator', 'DocumentPicker', 'exports', 'Print', 'page-undo'];
 
 /**
  * Removes temp files older than SWEEP_GRACE_MS that earlier sessions left

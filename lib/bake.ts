@@ -314,7 +314,8 @@ export async function bakePreviews(docId: string, pageIndex: number): Promise<st
   const src = await withDocLock(docId, () => ensureOriginal(docId, pageIndex));
   const opsList = PREVIEW_FILTERS.map(f => combinedFilterRN(f, undefined) ?? []);
   const reply = await enqueueBake(
-    { docId, pageIndex, src, ops: [], previews: opsList, previewWidth: 120 },
+    // Wide enough that the picker can show a zoomed-in crop (readable text), not a blur.
+    { docId, pageIndex, src, ops: [], previews: opsList, previewWidth: 480 },
     { priority: 'high' },
   );
   const urls = JSON.parse(reply.replace(/^PREVIEWS:/, '')) as string[];

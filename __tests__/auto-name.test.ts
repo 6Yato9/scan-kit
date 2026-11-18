@@ -1,22 +1,23 @@
 // __tests__/auto-name.test.ts
-import { autoName, safeFileName, titleFromText } from '../lib/auto-name';
+import { autoName, cleanDisplayName, safeFileName, titleFromText } from '../lib/auto-name';
 
 describe('autoName', () => {
   const date = new Date(2026, 10, 18, 0, 35); // Nov 18 2026, 00:35
 
-  test('reads like a date in the device locale (en-US)', () => {
-    expect(autoName(date, 'Scan', 'en-US')).toMatch(/^Scan Nov 18, 2026 at 12\.35\sAM$/);
+  test('reads like a date in the device locale (en-US), time with a colon like the rest of the app', () => {
+    expect(autoName(date, 'Scan', 'en-US')).toMatch(/^Scan Nov 18, 2026 at 12:35\sAM$/);
   });
 
   test('follows a 24-hour locale and drops the English "at" elsewhere', () => {
-    expect(autoName(date, 'Scan', 'en-GB')).toBe('Scan 18 Nov 2026 at 00.35');
-    expect(autoName(date, 'Scan', 'de-DE')).toBe('Scan 18. Nov. 2026 00.35');
+    expect(autoName(date, 'Scan', 'en-GB')).toBe('Scan 18 Nov 2026 at 00:35');
+    expect(autoName(date, 'Scan', 'de-DE')).toBe('Scan 18. Nov. 2026 00:35');
   });
 
-  test('never contains characters that are illegal in file names', () => {
+  test('becomes a valid file name only when exported', () => {
     for (const locale of ['en-US', 'en-GB', 'fr-FR', 'de-DE', 'ja-JP', 'ar']) {
-      expect(autoName(date, 'Scan', locale)).not.toMatch(/[\\/:*?"<>|]/);
+      expect(safeFileName(autoName(date, 'Scan', locale))).not.toMatch(/[\\/:*?"<>|]/);
     }
+    expect(safeFileName(autoName(date, 'Scan', 'en-GB'))).toBe('Scan 18 Nov 2026 at 00.35');
   });
 
   test('uses the prefix, falling back to Scan when it is blank', () => {
@@ -61,8 +62,9 @@ describe('titleFromText', () => {
     expect(title).toBe('Notice of Annual General Meeting of the');
   });
 
-  test('strips characters that are illegal in file names', () => {
-    expect(titleFromText('Report: Q3/Q4 "Final"')).toBe('Report Q3 Q4 Final');
+  test('keeps ordinary punctuation (file names are made safe only on export)', () => {
+    expect(titleFromText('Report: Q3/Q4 "Final"')).toBe('Report: Q3/Q4 "Final"');
+    expect(titleFromText('Statement\tfor\u0007 March')).toBe('Statement for March');
   });
 
   test('returns null when nothing reads like a title', () => {
@@ -74,4 +76,9 @@ describe('titleFromText', () => {
 
 test('safeFileName', () => {
   expect(safeFileName(' a/b:c  d ')).toBe('a b c d');
+  expect(safeFileName('Scan 18 Nov 2026 at 01:37')).toBe('Scan 18 Nov 2026 at 01.37');
+});
+
+test('cleanDisplayName keeps colons and slashes, drops control characters', () => {
+  expect(cleanDisplayName(' Scan 18/11/2026 at 01:37\n')).toBe('Scan 18/11/2026 at 01:37');
 });

@@ -2,7 +2,13 @@
 // Landing screen for "Open in Scan Kit" (see app/+native-intent.tsx): saves the
 // incoming PDF or image as a new document and replaces itself with the viewer.
 // Images are auto-cropped like any other photo import. iOS copies the shared
-// file into Documents/Inbox; that copy is removed once it has been imported.
+// file into Documents/Inbox; that copy is removed once the import has finished
+// (or failed, or this screen was closed before it could finish).
+//
+// App Lock: while the app is locked this screen shows the lock screen instead
+// of the file's name, and it opens the viewer only after the user has
+// unlocked — the viewer is a full-screen modal that would otherwise appear
+// above the lock without any authentication. The file is saved meanwhile.
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
@@ -11,6 +17,7 @@ import { File, Paths } from 'expo-file-system';
 import { useTheme } from '@/contexts/theme-context';
 import { useImportDocuments } from '@/components/use-import';
 import { PrimaryButton } from '@/components/primary-button';
+import { LockScreen, useAppLocked } from '@/components/lock-gate';
 import { displayNameOf, documentNameFor, importKindOf } from '@/lib/incoming-file';
 import { Spacing, Type } from '@/lib/theme';
 
@@ -23,6 +30,15 @@ function stageCopy(uri: string): string {
   const dest = new File(Paths.cache, `incoming-${Date.now()}-${name}`);
   src.copy(dest);
   return dest.uri;
+}
+
+function deleteQuietly(uri: string) {
+  try {
+    const f = new File(uri);
+    if (f.exists) f.delete();
+  } catch {
+    // Cache; cleared by the system eventually.
+  }
 }
 
 function removeInboxCopy(uri: string) {
@@ -41,16 +57,27 @@ export default function ImportScreen() {
   const router = useRouter();
   const { colors } = useTheme();
   const { saveFiles } = useImportDocuments();
+  const locked = useAppLocked();
   const [status, setStatus] = useState<Status>({ state: 'working' });
+  // Set once the document is saved; the viewer opens when the app is unlocked.
+  const [savedId, setSavedId] = useState<string | null>(null);
   const started = useRef(false);
+  const mounted = useRef(true);
   const fileName = uri ? displayNameOf(uri) : 'this file';
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
   useEffect(() => {
     if (started.current) return;
     started.current = true;
     (async () => {
+      const source = uri ? uri.split('?')[0] : null;
       const kind = uri ? importKindOf(uri) : null;
-      if (!uri || !kind) {
+      if (!source || !kind) {
+        if (source) removeInboxCopy(source);
         setStatus({
           state: 'failed',
           title: 'Scan Kit can’t open this file',
@@ -60,9 +87,10 @@ export default function ImportScreen() {
       }
       let staged: string;
       try {
-        staged = stageCopy(uri.split('?')[0]);
+        staged = stageCopy(source);
       } catch (err) {
         console.warn('Stage incoming file failed', err);
+        removeInboxCopy(source);
         setStatus({
           state: 'failed',
           title: 'Couldn’t open the file',
@@ -70,10 +98,21 @@ export default function ImportScreen() {
         });
         return;
       }
-      const id = await saveFiles([staged], kind, documentNameFor(uri)).catch(err => {
+      // We have our own copy now; iOS's Inbox copy is no longer needed whatever happens next.
+      removeInboxCopy(source);
+      // Closed before the slow part started (e.g. replaced by another route): stop here.
+      if (!mounted.current) {
+        deleteQuietly(staged);
+        return;
+      }
+      const id = await saveFiles([staged], kind, documentNameFor(uri!)).catch(err => {
         console.error('Import incoming file failed', err);
         return null;
       });
+      // The document has its own copy now (or the import failed).
+      deleteQuietly(staged);
+      // A finished import that nobody is waiting for stays in Files; just don't navigate.
+      if (!mounted.current) return;
       if (!id) {
         // saveAndOpen has already explained a storage failure.
         setStatus({
@@ -83,19 +122,26 @@ export default function ImportScreen() {
         });
         return;
       }
-      removeInboxCopy(uri.split('?')[0]);
-      // The document has its own copy now.
-      try {
-        const f = new File(staged);
-        if (f.exists) f.delete();
-      } catch {
-        // Cache; cleared by the system eventually.
-      }
-      router.replace({ pathname: '/viewer', params: { id } });
+      setSavedId(id);
     })();
-  }, [uri, saveFiles, router]);
+  }, [uri, saveFiles]);
+
+  // Open the viewer only once the app is unlocked.
+  useEffect(() => {
+    if (!savedId || locked) return;
+    router.replace({ pathname: '/viewer', params: { id: savedId } });
+  }, [savedId, locked, router]);
 
   const goHome = () => router.replace('/');
+
+  if (locked) {
+    return (
+      <>
+        <Stack.Screen options={{ headerShown: false, animation: 'fade', gestureEnabled: false }} />
+        <LockScreen />
+      </>
+    );
+  }
 
   return (
     <View style={[styles.screen, { backgroundColor: colors.bg }]}>

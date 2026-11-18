@@ -889,3 +889,11 @@ describe('subscribeDocumentChanges', () => {
     expect(seen).toEqual(['watch-1']);
   });
 });
+
+test('startup removes the API key older builds stored for the removed Ask AI feature', async () => {
+  await AsyncStorage.setItem('@scan_kit_ai_key', 'sk-test-not-real');
+  await AsyncStorage.setItem('@scan_kit_schema_version', '3');
+  await storage.getDocuments();
+  expect(await AsyncStorage.getItem('@scan_kit_ai_key')).toBeNull();
+  expect('getAiKey' in storage).toBe(false);
+});
