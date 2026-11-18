@@ -22,6 +22,9 @@
 //   docbw   - flattened gray, then a Sauvola adaptive threshold. Optional
 //             `bias` (-1..1, brighter = fewer dark pixels) and `crisp`
 //             (-1..1, edge hardness) come from the Adjust sliders.
+//   All three measure the paper's own grain (paperSpread) and set their
+//   white point under it, then erase isolated specks (despeckle) without
+//   touching punctuation, i-dots or pencil that sit next to real ink.
 // Pixel primitives (CSS filter semantics): grayscale, saturate, contrast,
 // brightness.
 //
@@ -81,6 +84,20 @@ function boxBlur(a, w, h, r) {
   }
 }
 
+// The outermost ring of a block grid is the least reliable part of it: the
+// last row and column of blocks are usually partial (a few pixels wide), and a
+// page's outermost pixels are often an artefact of the crop (a bright or dark
+// 1-2 px line where the warp sampled past the paper). Averaged into a narrow
+// block, that line skews the estimate at the very edge, and dividing by it
+// drew a grey seam down the side of a shadowed page. The ring takes its value
+// from the blocks just inside (lighting changes far too slowly for one block
+// to matter).
+function ringFromInside(a, w, h) {
+  var x, y;
+  if (w >= 4) for (y = 0; y < h; y++) { a[y * w] = a[y * w + 1]; a[y * w + w - 1] = a[y * w + w - 2]; }
+  if (h >= 4) for (x = 0; x < w; x++) { a[x] = a[w + x]; a[(h - 1) * w + x] = a[(h - 2) * w + x]; }
+}
+
 function chromaOf(r, g, b) {
   var mx = r > g ? (r > b ? r : b) : (g > b ? g : b);
   var mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
@@ -112,6 +129,7 @@ function estimateBackground(d, w, h) {
     }
   }
   for (k = 0; k < n; k++) { R[k] /= C[k]; G[k] /= C[k]; B[k] /= C[k]; }
+  ringFromInside(R, gw, gh); ringFromInside(G, gw, gh); ringFromInside(B, gw, gh);
 
   var gmax = gw > gh ? gw : gh;
   var rc = Math.max(1, Math.round(gmax / 40));
@@ -243,14 +261,140 @@ function blackPoint(d, w, h, s) {
 // darkens mid-tones so anti-aliased text edges go solid. Colour uses a gentler
 // curve (gamma 1): a stamp or logo keeps the shade it was printed in.
 var WHITE = 0.94;
-function toneLut(bp, gamma) {
-  var lut = new Float32Array(LUT_SIZE);
+function toneLut(bp, gamma, white) {
+  var lut = new Float32Array(LUT_SIZE), wp = white || WHITE;
   for (var i = 0; i < LUT_SIZE; i++) {
-    var t = (i / LUT_SCALE - bp) / (WHITE - bp);
+    var t = (i / LUT_SCALE - bp) / (wp - bp);
     t = t < 0 ? 0 : (t > 1 ? 1 : t);
     lut[i] = Math.pow(t, gamma);
   }
   return lut;
+}
+
+// Paper grain. On textured or noisy paper (recycled stock, a dim photo's
+// sensor noise) flattened paper is not a flat 1 but a spread around it, and a
+// fixed white point left the darker half of that spread as grey grain all over
+// the page. The spread is measured on the bright side of the paper (no ink is
+// brighter than paper): median and sigma (84th percentile - median) of the
+// flattened luminance above 0.8, sampled. The white point then sits just under
+// the bulk of the paper, median - 2.5 sigma, so grain clips to white with it.
+// Clean paper keeps WHITE; the floor keeps faint pencil (far below the paper's
+// spread) from being lifted away on very rough paper.
+function paperSpread(d, w, h, s) {
+  var hist = new Uint32Array(LUT_SIZE), total = 0, step = Math.max(1, Math.round(Math.sqrt(w * h / 250000)));
+  for (var y = 0; y < h; y += step) {
+    s.row(y);
+    for (var x = 0, i = y * w * 4; x < w; x += step, i += 4 * step) {
+      var v = lumOf(d[i], d[i + 1], d[i + 2]) * s.L[x];
+      if (v >= 0.8) { hist[lutIndex(v)]++; total++; }
+    }
+  }
+  if (!total) return { white: WHITE, median: 1, sigma: 0 };
+  var acc = 0, med = -1, p84 = -1;
+  for (var b = 0; b < LUT_SIZE; b++) {
+    acc += hist[b];
+    if (med < 0 && acc * 2 >= total) med = b;
+    if (acc >= total * 0.84) { p84 = b; break; }
+  }
+  var m = (med + 0.5) / LUT_SCALE, sg = Math.max(0, p84 - med) / LUT_SCALE;
+  var wp = m - 2.5 * sg;
+  return { white: wp < 0.82 ? 0.82 : (wp > WHITE ? WHITE : wp), median: m, sigma: sg };
+}
+
+// Speckle. Whatever survives the white point on grainy paper (the deepest
+// grain, paper fibres, dust) is a scatter of small, isolated marks, while
+// everything worth keeping that is as small (a full stop, an i-dot, a decimal
+// point, the dot of a pencilled i) sits right next to bigger ink. So:
+//  - marked pixels (output < 250) are grouped into 8-connected components by
+//    run-length labelling (memory per run of marked pixels, not per pixel);
+//  - BIG ink is any component of at least SPECK = (long side / 500)^2 px whose
+//    darkest pixel is darker than bigDark;
+//  - a component smaller than SPECK is erased to white when it is isolated (no
+//    big ink within about 1% of the long side) and its darkest pixel is at
+//    least isoDark, or anywhere when even its darkest pixel is at least
+//    lightAny (a faint fleck too light to be ink);
+//  - a faint one (darkest >= lightAny) up to 4 x SPECK goes too when isolated:
+//    a paper fibre is longer than a speck but just as light.
+// "Darkest" is read from depth (the pre-threshold gray, for Black & white) or
+// from the output itself. Pathological pages (millions of runs) are left as
+// they are rather than risk the WebView's memory.
+var MAX_RUNS = 3000000;
+// Enhanced / Grayscale thresholds, on output levels: big ink is darker than
+// SPECK_INK (pencil lands around 110-150); isolated specks lighter than
+// SPECK_ISOLATED go, and any small speck lighter than SPECK_FAINT.
+var SPECK_INK = 170, SPECK_ISOLATED = 90, SPECK_FAINT = 215;
+// Black & white, on the flattened gray before thresholding (paper ~255): a
+// grain speck thresholds to solid black but was light before (200+), while a
+// printed dot (a leader, an ellipsis) was dark, so an isolated speck goes only
+// when it was lighter than BW_ISOLATED.
+var BW_INK = 190, BW_ISOLATED = 120, BW_FAINT = 205;
+function despeckle(d, w, h, depth, isoDark, lightAny, bigDark) {
+  var long = w > h ? w : h, speck = Math.max(4, Math.round((long / 500) * (long / 500)));
+  var cap = 65536, nr = 0;
+  var X0 = new Int32Array(cap), X1 = new Int32Array(cap), RY = new Int32Array(cap), P = new Int32Array(cap), MN = new Uint8Array(cap);
+  function grow() {
+    cap *= 2;
+    var a = new Int32Array(cap); a.set(X0); X0 = a;
+    a = new Int32Array(cap); a.set(X1); X1 = a;
+    a = new Int32Array(cap); a.set(RY); RY = a;
+    a = new Int32Array(cap); a.set(P); P = a;
+    var u = new Uint8Array(cap); u.set(MN); MN = u;
+  }
+  function find(a) { while (P[a] !== a) { P[a] = P[P[a]]; a = P[a]; } return a; }
+  var prevS = 0, prevE = 0, x, y, i, v, j;
+  for (y = 0; y < h; y++) {
+    var rowS = nr, pp = prevS;
+    x = 0; i = y * w * 4; j = y * w;
+    while (x < w) {
+      v = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+      if (v >= 250) { x++; i += 4; j++; continue; }
+      var x0 = x, mn = 255;
+      while (x < w) {
+        v = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+        if (v >= 250) break;
+        if (depth) v = depth[j];
+        if (v < mn) mn = v;
+        x++; i += 4; j++;
+      }
+      if (nr === cap) { if (cap * 2 > MAX_RUNS) return; grow(); }
+      var r = nr++;
+      X0[r] = x0; X1[r] = x - 1; RY[r] = y; P[r] = r; MN[r] = mn;
+      for (var p = pp; p < prevE; p++) {
+        if (X1[p] < x0 - 1) { pp = p + 1; continue; }
+        if (X0[p] > x) break;
+        var ra = find(p), rb = find(r);
+        if (ra !== rb) { if (ra < rb) P[rb] = ra; else P[ra] = rb; }
+      }
+    }
+    prevS = rowS; prevE = nr;
+  }
+  if (!nr) return;
+  // Component size and darkest pixel, gathered on the root (its first run).
+  var A = new Int32Array(nr), k;
+  for (k = 0; k < nr; k++) {
+    var rt = find(k); P[k] = rt;
+    A[rt] += X1[k] - X0[k] + 1;
+    if (MN[k] < MN[rt]) MN[rt] = MN[k];
+  }
+  // Big ink on a coarse grid, grown by the "nearby" radius.
+  var cs = Math.max(2, Math.round(long / 400)), gw = Math.ceil(w / cs), gh = Math.ceil(h / cs);
+  var G = new Float32Array(gw * gh), any = false;
+  for (k = 0; k < nr; k++) {
+    var q = P[k];
+    if (A[q] < speck || MN[q] >= bigDark) continue;
+    var gr = ((RY[k] / cs) | 0) * gw;
+    for (var c = (X0[k] / cs) | 0, ce = (X1[k] / cs) | 0; c <= ce; c++) G[gr + c] = 1;
+    any = true;
+  }
+  if (any) morph(G, gw, gh, Math.max(1, Math.round(long / 100 / cs)), true);
+  for (k = 0; k < nr; k++) {
+    var o = P[k], a = A[o];
+    if (a >= 4 * speck) continue;
+    var near = G[((RY[o] / cs) | 0) * gw + ((X0[o] / cs) | 0)] > 0, m = MN[o];
+    if (a < speck ? (m >= lightAny || (!near && m >= isoDark)) : (!near && m >= lightAny)) {
+      for (x = X0[k], i = (RY[k] * w + x) * 4; x <= X1[k]; x++, i += 4) { d[i] = 255; d[i + 1] = 255; d[i + 2] = 255; }
+    }
+  }
 }
 
 // Stroke guard. Whitening clips everything within a few percent of the paper
@@ -284,6 +428,7 @@ function strokeGuard(d, w, h, s) {
     }
   }
   for (k = 0; k < n; k++) P[k] /= C[k];
+  ringFromInside(P, gw, gh);
   morph(P, gw, gh, 2, true); morph(P, gw, gh, 2, false);
   boxBlur(P, gw, gh, 1);
   morph(MN, gw, gh, 1, false);
@@ -344,17 +489,19 @@ function colourWeight(r, g, b) {
   return c < 0 ? 0 : (c > 1 ? 1 : c);
 }
 
-// Enhanced: luminance and colour are toned separately so hue survives. The
-// output keeps the flattened pixel's opponent colour (r - Y, g - Y, b - Y)
-// exactly, only slightly boosted, so a teal logo stays teal and a highlighter
-// stays highlighter-yellow instead of turning neon; its brightness follows the
-// text curve where the pixel is neutral and the gentle colour curve where it is
-// coloured.
-var SAT = 1.1;
+// Colour keeps more of its own shade than text does: half the black point.
+var COLOUR_BP = 0.5, CHROMA_GAIN = 1.3, CHROMA_KEEP = 0.85;
+
+// Enhanced: luminance and colour are toned separately so hue survives. Neutral
+// pixels follow the text curve; coloured ones keep their own channel ratios
+// (so hue and saturation match the print: measured on the R5 colour invoice,
+// stamp 0.61 printed -> 0.63, teal 0.88 -> 0.90, where adding the opponent
+// colour on top of a darkened luminance gave teal 1.00 and blue ink 0.91) on
+// the gentle colour curve, with pixels in between blended by colour weight.
 function docMagic(d, w, h) {
   var s = makeSampler(estimateBackground(d, w, h), w, h);
-  var bp = blackPoint(d, w, h, s);
-  var lutN = toneLut(bp, 1.7), lutC = toneLut(bp, 1.0);
+  var bp = blackPoint(d, w, h, s), wp = paperSpread(d, w, h, s).white;
+  var lutN = toneLut(bp, 1.7, wp), lutC = toneLut(bp * COLOUR_BP, 1.0, wp);
   var guard = strokeGuard(d, w, h, s);
   for (var y = 0; y < h; y++) {
     s.row(y); guard.row(y);
@@ -363,16 +510,29 @@ function docMagic(d, w, h) {
       var l = 0.299 * r + 0.587 * g + 0.114 * b;
       var k = colourWeight(r, g, b);
       var yn = lutN[lutIndex(l - guard.boost(l, x, 1 - k))];
-      var yo = k > 0 ? yn + (lutC[lutIndex(l)] - yn) * k : yn;
-      k *= SAT;
-      d[i] = 255 * (yo + (r - l) * k); d[i + 1] = 255 * (yo + (g - l) * k); d[i + 2] = 255 * (yo + (b - l) * k);
+      if (k > 0) {
+        // Colour: every channel scaled by the same factor, so hue and
+        // saturation are the flattened pixel's own; then a little chroma back
+        // (the camera's blur mixes thin coloured strokes with the paper),
+        // capped so the weakest channel keeps CHROMA_KEEP of itself: already
+        // vivid colour (a logo) gains almost nothing and never turns neon.
+        var cl = lutC[lutIndex(l)], q = cl / (l > 0.01 ? l : 0.01);
+        var cr = r * q, cg = g * q, cb = b * q, mn = cr < cg ? (cr < cb ? cr : cb) : (cg < cb ? cg : cb);
+        var sg = CHROMA_GAIN;
+        if (cl - mn > 1e-4) { var cap = (cl - CHROMA_KEEP * mn) / (cl - mn); if (cap < sg) sg = cap < 1 ? 1 : cap; }
+        cr = cl + (cr - cl) * sg; cg = cl + (cg - cl) * sg; cb = cl + (cb - cl) * sg;
+        d[i] = 255 * (yn + (cr - yn) * k); d[i + 1] = 255 * (yn + (cg - yn) * k); d[i + 2] = 255 * (yn + (cb - yn) * k);
+      } else {
+        d[i] = d[i + 1] = d[i + 2] = 255 * yn;
+      }
     }
   }
+  despeckle(d, w, h, null, SPECK_ISOLATED, SPECK_FAINT, SPECK_INK);
 }
 
 function docGray(d, w, h) {
   var s = makeSampler(estimateBackground(d, w, h), w, h);
-  var lut = toneLut(blackPoint(d, w, h, s), 1.8);
+  var lut = toneLut(blackPoint(d, w, h, s), 1.8, paperSpread(d, w, h, s).white);
   var guard = strokeGuard(d, w, h, s);
   for (var y = 0; y < h; y++) {
     s.row(y); guard.row(y);
@@ -383,6 +543,7 @@ function docGray(d, w, h) {
       d[i] = v; d[i + 1] = v; d[i + 2] = v;
     }
   }
+  despeckle(d, w, h, null, SPECK_ISOLATED, SPECK_FAINT, SPECK_INK);
 }
 
 // Sauvola threshold T = m * (1 + k * (sd / 128 - 1)) over a square window, on
@@ -393,6 +554,7 @@ function docGray(d, w, h) {
 function docBW(d, w, h, op) {
   var bias = op.bias || 0, crisp = op.crisp || 0;
   var s = makeSampler(estimateBackground(d, w, h), w, h);
+  var sp = paperSpread(d, w, h, s);
   var n = w * h, gray = new Uint8ClampedArray(n), x, y, i, j;
   for (y = 0; y < h; y++) {
     s.row(y);
@@ -421,6 +583,10 @@ function docBW(d, w, h, op) {
   // its neighbourhood: Sauvola alone turns the inside of a large dark area
   // white (its local mean is dark too).
   var dark = 120 - 30 * bias;
+  // Bare paper: always white. On grainy paper the cut follows the paper's
+  // spread down (as Enhanced's white point does), so grain is paper too.
+  var cut = 255 * (sp.median - 2.5 * sp.sigma);
+  cut = cut > 242 ? 242 : (cut < 209 ? 209 : cut);
   var colS = new Float64Array(w), colQ = new Float64Array(w), rows = 0, v;
   // Prime the strip with rows 0..r-1; row y+r is added at the top of each step.
   for (y = 0; y < r && y < h; y++) {
@@ -443,12 +609,13 @@ function docBW(d, w, h, op) {
       T = (T2 < T ? T2 : T) + tShift;
       v = gray[j];
       var o;
-      if (v >= 242) o = 255;                 // bare paper: always white, no speckle
+      if (v >= cut) o = 255;                 // bare paper
       else if (v < dark) o = 0;              // clearly ink: black, so big dark areas never go hollow
       else o = clamp((v - T + half) * (255 / (2 * half)));
       d[i] = o; d[i + 1] = o; d[i + 2] = o;
     }
   }
+  despeckle(d, w, h, gray, BW_ISOLATED, BW_FAINT, BW_INK);
 }
 
 function applyPrimitive(d, key, a) {

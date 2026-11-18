@@ -56,6 +56,28 @@ describe('titleFromText', () => {
     expect(titleFromText('ACME LLC STATEMENT')).toBe('Acme LLC Statement');
   });
 
+  test('tames shouting words in mixed-case lines too, keeping acronyms and codes', () => {
+    const cases: [string, string][] = [
+      ['Northwind INVOICE #4471', 'Northwind Invoice #4471'],
+      ['ACME LLC STATEMENT', 'Acme LLC Statement'],
+      ['UK VAT RETURN', 'UK VAT Return'],
+      ['Order AB-2209 CONFIRMED', 'Order AB-2209 Confirmed'],
+      ['HSBC Bank STATEMENT', 'HSBC Bank Statement'],
+      ['NOTICE OF ANNUAL GENERAL MEETING', 'Notice of Annual General Meeting'],
+      ['W-2 WAGE AND TAX STATEMENT', 'W-2 Wage and Tax Statement'],
+      ['IKEA Receipt', 'IKEA Receipt'],
+      ['NASA Contract SUMMARY', 'NASA Contract Summary'],
+      ['Quote QT2026A for Harbor Bakery', 'Quote QT2026A for Harbor Bakery'],
+      ['Tesco RECEIPT - VAT No. GB220430231', 'Tesco Receipt - VAT No. GB220430231'],
+      ['IBAN Transfer CONFIRMATION', 'IBAN Transfer Confirmation'],
+      ['Report: Q3/Q4 SUMMARY', 'Report: Q3/Q4 Summary'],
+      ['DON\'T FORGET: Dentist', 'Don\'t Forget: Dentist'],
+      ['ÉTAT DES LIEUX', 'État des Lieux'],
+      ['Residential Lease Agreement', 'Residential Lease Agreement'],
+    ];
+    for (const [text, want] of cases) expect([text, titleFromText(text)]).toEqual([text, want]);
+  });
+
   test('caps the length at a word boundary', () => {
     const title = titleFromText('Notice of Annual General Meeting of the Shareholders of Example Holdings');
     expect(title!.length).toBeLessThanOrEqual(40);

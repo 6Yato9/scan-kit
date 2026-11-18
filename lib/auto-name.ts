@@ -51,11 +51,61 @@ const PAGE_MARKER = /^(page|p\.)\s*\d+(\s*(of|\/)\s*\d+)?$/i;
 const DATE_ONLY = /^[\d\s./\-,:]+(am|pm)?$/i;
 const MONTH_DATE = /^(\d{1,2}\s+)?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,4}(,?\s+\d{2,4})?$/i;
 
-/** Title-cases SHOUTING words longer than three letters; short ones (LLC, USA) stay. */
+// Acronyms of four or more letters that would otherwise pass for shouting
+// words (they have vowels). Vowel-less ones (HSBC, HMRC) are kept anyway.
+const ACRONYMS = new Set([
+  'NASA', 'NATO', 'IKEA', 'ASAP', 'FIFA', 'UEFA', 'OPEC', 'UNESCO', 'UNICEF', 'HTML', 'JSON', 'HTTP', 'HTTPS',
+  'IBAN', 'SWIFT', 'PAYE', 'ISBN', 'ISSN', 'GAAP', 'HIPAA', 'OSHA', 'FEMA', 'NOAA', 'DEFRA', 'OFSTED', 'OFCOM',
+  'OFGEM', 'ACAS', 'NAFTA', 'ASEAN', 'EBITDA', 'COVID', 'AIDS', 'SARS', 'INSEAD', 'ESPN', 'AARP', 'CERN', 'NAACP',
+]);
+// Common three-letter words on documents: tamed like longer words (other
+// three-letter capitals are taken for acronyms: VAT, LLC, USA).
+const WORDS3 = new Set([
+  'TAX', 'DUE', 'PAY', 'NEW', 'OLD', 'FEE', 'NET', 'DAY', 'BOX', 'KEY', 'SUM', 'END', 'OUR', 'ALL', 'NOT',
+  'ONE', 'TWO', 'SIX', 'TEN', 'CAR', 'BUS', 'ART', 'LAB', 'JOB', 'MAP', 'LOG', 'BAR', 'TOP',
+]);
+// Small words that read lower-case inside a title once the words around them are tamed.
+const MINOR = new Set([
+  'A', 'AN', 'AND', 'AS', 'AT', 'BY', 'FOR', 'FROM', 'IN', 'OF', 'ON', 'OR', 'THE', 'TO', 'WITH',
+  'DE', 'DES', 'DU', 'LA', 'LE', 'LES', 'ET', 'DER', 'DIE', 'DAS', 'UND', 'VON', 'DEL', 'EL', 'Y',
+]);
+const TOKEN = new RegExp(`[${L}][${L}']*`, 'g');
+const VOWEL = /[AEIOUYÀ-ÖØ-Ý]/;
+
+const isCaps = (w: string) => w === w.toUpperCase() && w !== w.toLowerCase();
+
+/**
+ * Title-cases SHOUTING words, whether the whole line shouts ("ACME LLC
+ * STATEMENT") or only some of it ("Northwind INVOICE #4471"). Conservative:
+ * only all-capital words of four or more letters (and a few common short ones:
+ * TAX, DUE, NEW) change, and not when they are part of a code with digits
+ * (AB-2209, Q3, #4471), have no vowel (HSBC, HMRC) or are a known acronym
+ * (NASA, IBAN). Other short capitals (VAT, LLC, USA) stay, except small words
+ * (of, the, and…) caught between two tamed words.
+ */
 function tameCaps(line: string): string {
-  const letters = line.replace(/[^A-Za-z]/g, '');
-  if (letters.length < 4 || letters !== letters.toUpperCase()) return line;
-  return line.replace(/[A-Z][A-Z']{3,}/g, w => w[0] + w.slice(1).toLowerCase());
+  const tokens: { start: number; end: number; word: string; tamed: boolean }[] = [];
+  for (const m of line.matchAll(TOKEN)) {
+    const word = m[0], start = m.index ?? 0, end = start + word.length;
+    // The whitespace-separated chunk the word sits in: a code if it has a digit.
+    const chunkStart = line.lastIndexOf(' ', start) + 1;
+    const chunkEnd = line.indexOf(' ', end) < 0 ? line.length : line.indexOf(' ', end);
+    const inCode = /\d/.test(line.slice(chunkStart, chunkEnd));
+    const letters = word.replace(/'/g, '');
+    const tamed = !inCode && isCaps(letters) && VOWEL.test(letters) &&
+      (letters.length >= 4 ? !ACRONYMS.has(letters) : WORDS3.has(letters));
+    tokens.push({ start, end, word, tamed });
+  }
+  if (!tokens.some(t => t.tamed)) return line;
+  let out = '', at = 0;
+  tokens.forEach((t, i) => {
+    let w = t.word;
+    if (t.tamed) w = w[0] + w.slice(1).toLowerCase();
+    else if (i > 0 && MINOR.has(w) && tokens[i - 1].tamed && tokens[i + 1]?.tamed) w = w.toLowerCase();
+    out += line.slice(at, t.start) + w;
+    at = t.end;
+  });
+  return out + line.slice(at);
 }
 
 function clip(line: string): string {

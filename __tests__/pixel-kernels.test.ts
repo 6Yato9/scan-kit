@@ -335,3 +335,166 @@ test('a 0.75 MP page runs in linear time (no per-window inner loops)', () => {
     expect(Date.now() - t).toBeLessThan(5000);
   }
 });
+
+// Grainy paper: per-pixel noise plus darker flecks (1-4 px) scattered over the
+// page, on a page with text whose punctuation is as small as the flecks.
+describe('grain and speckle (R6)', () => {
+  const GW = 1000, GH = 1250;
+  const PAPER: RGB = [232, 226, 210];
+  type Mark = 'ink' | 'pencil' | 'dot' | 'pdot' | 'leader' | null;
+  // Glyph rows: 7x10 blocks with a 3x3 full stop 2 px after every 5th glyph and a
+  // 3x3 i-dot 3 px above every 7th; a pencil line (2 px, 28% darker) with a
+  // pencil dot beside it; a dotted leader (3x3 dots every 14 px) far from text.
+  function mark(x: number, y: number): Mark {
+    for (const top of [200, 240, 280, 320]) {
+      if (y >= top && y < top + 10 && x >= 100 && x < 820) {
+        const c = (x - 100) % 12, n = Math.floor((x - 100) / 12);
+        if (c < 7) return 'ink';
+        if (n % 5 === 4 && c >= 8 && c < 11 && y >= top + 7) return 'dot';
+      }
+      if (y >= top - 6 && y < top - 3 && x >= 100 && x < 820) {
+        const c = (x - 100) % 12, n = Math.floor((x - 100) / 12);
+        if (n % 7 === 3 && c >= 2 && c < 5) return 'dot';
+      }
+    }
+    if (y >= 500 && y < 502 && x >= 100 && x < 700) return 'pencil';
+    if (y >= 499 && y < 502 && x >= 705 && x < 708) return 'pdot';
+    if (y >= 700 && y < 703 && x >= 100 && x < 900 && (x - 100) % 14 < 3) return 'leader';
+    return null;
+  }
+  function grainyPage() {
+    const d = new Uint8ClampedArray(GW * GH * 4);
+    let seed = 777;
+    const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+    const fleck = new Uint8Array(GW * GH);
+    for (let k = 0; k < 2500; k++) {
+      const x = 2 + Math.floor(rnd() * (GW - 4)), y = 2 + Math.floor(rnd() * (GH - 4)), s = rnd();
+      fleck[y * GW + x] = 1;
+      if (s > 0.4) fleck[y * GW + x + 1] = 1;
+      if (s > 0.7) fleck[(y + 1) * GW + x] = fleck[(y + 1) * GW + x + 1] = 1;
+    }
+    for (let y = 0; y < GH; y++) for (let x = 0; x < GW; x++) {
+      const m = mark(x, y);
+      // Mottled paper: slow blotches plus fine noise, about 3% either way.
+      let k = 1 + 0.025 * Math.sin(x / 7.3) * Math.sin(y / 5.1) + (rnd() - 0.5) * 0.06;
+      if (fleck[y * GW + x]) k *= 0.8;
+      if (m === 'ink' || m === 'dot' || m === 'leader') k = 0.12;
+      else if (m === 'pencil' || m === 'pdot') k *= 0.72;
+      const light = 1 - 0.3 * (x / GW);
+      const i = (y * GW + x) * 4;
+      d[i] = PAPER[0] * k * light; d[i + 1] = PAPER[1] * k * light; d[i + 2] = PAPER[2] * k * light; d[i + 3] = 255;
+    }
+    return d;
+  }
+  const gat = (d: Uint8ClampedArray, x: number, y: number) => d[(y * GW + x) * 4];
+  /** Darkest output in a mark's own box (marks are tiny; the darkest pixel shows whether it survived). */
+  function darkest(d: Uint8ClampedArray, kind: Mark) {
+    let worst = 0;
+    // Each mark instance: the darkest pixel of its connected 3x3 neighbourhood.
+    for (let y = 1; y < GH - 1; y++) for (let x = 1; x < GW - 1; x++) {
+      if (mark(x, y) !== kind || mark(x - 1, y) === kind || mark(x, y - 1) === kind) continue;
+      let mn = 255;
+      for (let yy = y; yy < y + 3; yy++) for (let xx = x; xx < x + 3; xx++) if (mark(xx, yy) === kind) mn = Math.min(mn, gat(d, xx, yy));
+      worst = Math.max(worst, mn);
+    }
+    return worst;
+  }
+  const isNearMark = (x: number, y: number) => {
+    for (let yy = y - 4; yy <= y + 4; yy += 2) for (let xx = x - 4; xx <= x + 4; xx += 2) if (mark(xx, yy)) return true;
+    return false;
+  };
+  function greyPaper(d: Uint8ClampedArray, below: number) {
+    let n = 0, grey = 0;
+    for (let y = 20; y < GH - 20; y += 1) for (let x = 20; x < GW - 20; x += 1) {
+      if (isNearMark(x, y)) continue;
+      n++; if (gat(d, x, y) < below) grey++;
+    }
+    return grey / n;
+  }
+
+  for (const [label, op] of [['Enhanced', { magic: 1 }], ['Grayscale', { docgray: 1 }]] as [string, Op][]) {
+    test(`${label}: grain clips to white, every small dot and the pencil survive`, () => {
+      const before = grainyPage();
+      const d = Uint8ClampedArray.from(before);
+      applyOps(d, GW, GH, [op]);
+      // Grey grain on bare paper: 0.45% of it before R6, now about 0.05-0.1%
+      // (flecks right next to text are left alone on purpose).
+      expect(greyPaper(d, 235)).toBeLessThan(0.0015);
+      expect(darkest(d, 'dot')).toBeLessThan(100);
+      expect(darkest(d, 'leader')).toBeLessThan(100);
+      expect(gat(d, 300, 500)).toBeLessThan(170);
+      expect(darkest(d, 'pdot')).toBeLessThan(190);
+    });
+  }
+
+  test('Black & white: no pepper on grainy paper, full stops, i-dots, a dotted leader and pencil kept', () => {
+    const d = grainyPage();
+    applyOps(d, GW, GH, [{ docbw: 1 }]);
+    // Black pepper on bare paper: 0.44% before R6, now about 0.03%.
+    expect(greyPaper(d, 128)).toBeLessThan(0.0006);
+    expect(darkest(d, 'dot')).toBeLessThan(60);
+    expect(darkest(d, 'leader')).toBeLessThan(60);
+    expect(gat(d, 300, 500)).toBeLessThan(100);
+    expect(darkest(d, 'pdot')).toBeLessThan(100);
+  });
+
+});
+
+describe('page border (R6)', () => {
+  // A hand shadow over the right half, and the crop's outermost column
+  // resampled brighter than the page (a common 1 px warp artefact). It used to
+  // inflate the lighting estimate at the edge and draw a grey seam.
+  for (const op of [{ magic: 1 }, { docgray: 1 }] as Op[]) {
+    test(`${Object.keys(op)[0]}: no seam along a shadowed edge`, () => {
+      const w = 403, h = 500;   // not a multiple of the block size: the last block is partial
+      const d = new Uint8ClampedArray(w * h * 4);
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        // A soft hand shadow (lighting changes over ~100 px) reaching the edge.
+        const ramp = (t: number) => Math.min(1, Math.max(0, t));
+        const shade = 1 - 0.48 * ramp((x - w * 0.35) / 100) * ramp((y - h * 0.35) / 100);
+        let v = 238 * shade;
+        if (x === w - 1) v = Math.min(255, v * 1.6);
+        const i = (y * w + x) * 4;
+        d[i] = v; d[i + 1] = v * 0.98; d[i + 2] = v * 0.93; d[i + 3] = 255;
+      }
+      applyOps(d, w, h, [op]);
+      for (let x = w - 8; x < w; x++) {
+        let s = 0;
+        for (let y = h * 0.6; y < h; y++) s += d[(Math.floor(y) * w + x) * 4];
+        expect(s / (h * 0.4)).toBeGreaterThan(250);
+      }
+    });
+  }
+});
+
+describe('colour saturation (R6)', () => {
+  // Printed swatches as their reflectance on white paper: Enhanced output must
+  // keep each one's saturation (no fading, no neon) and hue.
+  const swatches: Record<string, RGB> = {
+    stamp: [205, 64, 70], teal: [20, 147, 164], orange: [240, 115, 43], blueInk: [42, 62, 168], highlighter: [255, 236, 60],
+  };
+  const names = Object.keys(swatches);
+  const paint = (x: number, y: number): RGB | null => {
+    if (y < 220 || y >= 300 || x < 20 || x >= 220) return null;
+    const c = swatches[names[Math.floor((x - 20) / 40)]];
+    return [c[0] * 236 / 255, c[1] * 228 / 255, c[2] * 208 / 255];
+  };
+  test('each swatch keeps its printed saturation within 0.08', () => {
+    const { d } = makePage(W, H, { paint, shadow: 0.7 });
+    applyOps(d, W, H, [{ magic: 1 }]);
+    names.forEach((name, k) => {
+      const want = hueSat(swatches[name]), got = hueSat(at(d, 40 + 40 * k, 260));
+      expect([name, Math.abs(got[1] - want[1]) < 0.08]).toEqual([name, true]);
+    });
+  });
+});
+
+test('degenerate sizes do not throw', () => {
+  for (const [w, h] of [[1, 1], [2, 3], [5, 1]]) {
+    for (const op of [{ magic: 1 }, { docgray: 1 }, { docbw: 1 }] as Op[]) {
+      const d = new Uint8ClampedArray(w * h * 4).fill(180);
+      expect(() => applyOps(d, w, h, [op])).not.toThrow();
+      expect(d.every(v => Number.isFinite(v))).toBe(true);
+    }
+  }
+});
