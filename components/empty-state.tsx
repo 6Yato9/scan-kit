@@ -78,9 +78,9 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    // Buttons sit at the standard 24pt inset; the text is held a little
-    // narrower so it wraps into a comfortable measure.
-    paddingHorizontal: Spacing.xxl,
+    // Buttons sit at the screen gutter like every other full-width button;
+    // the text is held narrower so it wraps into a comfortable measure.
+    paddingHorizontal: Spacing.gutter,
     paddingVertical: Spacing.xxxl,
   },
   iconCircle: {
@@ -91,7 +91,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: Spacing.xl,
   },
-  title: { marginBottom: Spacing.sm, textAlign: 'center', paddingHorizontal: Spacing.lg },
-  subtitle: { textAlign: 'center', lineHeight: 21, paddingHorizontal: Spacing.lg },
+  title: { marginBottom: Spacing.sm, textAlign: 'center', paddingHorizontal: Spacing.xxl },
+  subtitle: { textAlign: 'center', lineHeight: 21, paddingHorizontal: Spacing.xxl },
   actions: { marginTop: Spacing.xxl, alignSelf: 'stretch', gap: Spacing.sm },
 });

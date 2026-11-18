@@ -15,6 +15,7 @@ import { useCameraPermissions } from 'expo-camera';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/theme-context';
 import { setOnboarded } from '@/lib/storage';
+import { navigateWhenUnlocked } from '@/lib/nav-guard';
 import { BrandMark } from '@/components/brand-mark';
 import { PrimaryButton } from '@/components/primary-button';
 import { HIT, Radius, Spacing, Type } from '@/lib/theme';
@@ -52,7 +53,7 @@ export default function OnboardingScreen() {
       }
     }
     await setOnboarded();
-    router.replace('/(tabs)');
+    navigateWhenUnlocked(() => router.replace('/(tabs)'));
   }
 
   function goTo(i: number) {

@@ -391,6 +391,11 @@ export function buildPdfHtml(sheets: string[], pageSize: 'A4' | 'Letter' | Paper
   );
 }
 
+/** Deletes a PDF the native renderer finished after its caller had given up on it. */
+export function deleteLateRender(uri: string): Promise<void> {
+  return FileSystem.deleteAsync(cleanUri(uri), { idempotent: true }).catch(() => {});
+}
+
 /**
  * Render page images to a PDF file in the app cache and return its file:// URI.
  *
@@ -481,6 +486,11 @@ export async function generatePdf(
   try {
     uri = await guard(render, signal, opts.timeoutMs ?? 30_000 + 3_000 * pages.length);
   } catch (err) {
+    // Cancelled or timed out: the native render can't be stopped and still
+    // writes its PDF (unprotected, even when a password-protected export was
+    // asked for) into Caches/Print. Nobody will ever receive that file, so
+    // delete it the moment it lands instead of leaving a copy behind.
+    render.then(deleteLateRender, () => {});
     if (err instanceof PdfCancelledError || err instanceof PdfError) throw err;
     throw new PdfError('Couldn’t create the PDF.', 'render');
   }

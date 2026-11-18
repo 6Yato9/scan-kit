@@ -36,7 +36,7 @@ const TOOL_SECTIONS: { title: string; tools: Tool[] }[] = [
     tools: [
       { id: 'extract-text', icon: 'reader-outline', label: 'Extract text', href: '/tools/extract-text' },
       { id: 'extract', icon: 'cut-outline', label: 'Extract pages', href: '/tools/extract' },
-      { id: 'long-image', icon: 'image-outline', label: 'Long image', href: '/tools/long-image' },
+      { id: 'long-image', icon: 'long-image', label: 'Long image', href: '/tools/long-image' },
       { id: 'compress', icon: 'contract-outline', label: 'Compress', href: '/tools/compress' },
     ],
   },

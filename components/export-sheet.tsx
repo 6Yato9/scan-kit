@@ -10,7 +10,6 @@
 import { Alert, Image, Linking, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { File } from 'expo-file-system';
-import * as MediaLibrary from 'expo-media-library';
 import JSZip from 'jszip';
 import {
   canProtectPdf,
@@ -40,6 +39,7 @@ import {
   ShareError,
 } from '@/lib/share';
 import { ocrAvailable } from '@/lib/ocr';
+import { savePagesToPhotos } from '@/lib/photos';
 import { pendingBakeCount, waitForPendingBakes } from '@/lib/bake';
 import { BottomSheet, SheetGroup, SheetHeader, SheetRow } from '@/components/bottom-sheet';
 import { SectionLabel } from '@/components/section-label';
@@ -259,11 +259,18 @@ export function ExportSheet({ visible, document, onClose }: Props) {
     await waitForPendingBakes(document.id, { signal, onProgress: show });
   }
 
-  /** Saves every page to the photo library (add-only permission). */
+  /** Saves every page to the photo library (add-only permission; waits while App Lock is on). */
   async function saveToPhotos(signal: AbortSignal): Promise<boolean> {
-    let perm = await MediaLibrary.getPermissionsAsync(true);
-    if (!perm.granted && perm.canAskAgain) perm = await MediaLibrary.requestPermissionsAsync(true);
-    if (!perm.granted) {
+    const outcome = await savePagesToPhotos(document.pages, {
+      signal,
+      onProgress: i => setBusy({
+        title: 'Saving to Photos',
+        label: pageCount === 1 ? 'Saving the page' : `Saving page ${i + 1} of ${pageCount}`,
+        progress: i / pageCount,
+      }),
+    });
+    if (outcome === 'cancelled') throw new CancelledError();
+    if (outcome === 'denied') {
       Alert.alert(
         'Allow access to Photos',
         'To save pages, let Scan Kit add photos in Settings.',
@@ -273,15 +280,6 @@ export function ExportSheet({ visible, document, onClose }: Props) {
         ],
       );
       return false;
-    }
-    for (let i = 0; i < pageCount; i++) {
-      if (signal.aborted) throw new CancelledError();
-      setBusy({
-        title: 'Saving to Photos',
-        label: pageCount === 1 ? 'Saving the page' : `Saving page ${i + 1} of ${pageCount}`,
-        progress: i / pageCount,
-      });
-      await MediaLibrary.saveToLibraryAsync(cleanFileUri(document.pages[i]));
     }
     return true;
   }
@@ -311,13 +309,15 @@ export function ExportSheet({ visible, document, onClose }: Props) {
           uri = document.pdfUri!;
         } else {
           const raw = await buildPdf('high', false, signal, 'Preparing to print');
+          if (signal.aborted) await deleteQuietly(raw);
           check();
           // Named after the document so the print job isn't called "<uuid>.pdf".
           uri = await placeExportFile(raw, await makeExportDir(), exportFileName(document.name, 'pdf'), 'move');
         }
         check();
         setBusy(null);
-        const outcome = await printFile(uri);
+        // Waits while App Lock is on; skipped if this sheet is closed meanwhile.
+        const outcome = await printFile(uri, { signal });
         if (outcome === 'printed' && sessionRef.current === session) {
           toast.show('Sent to printer');
           onClose();
@@ -370,6 +370,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
         const q: PdfQuality = action === 'small' ? 'small' : quality;
         const title = action === 'small' ? 'Creating smaller PDF' : 'Creating PDF';
         const raw = await buildPdf(q, canSearchable, signal, title);
+        if (signal.aborted) await deleteQuietly(raw);
         check();
         const uri = await placeExportFile(raw, dir, exportFileName(document.name, 'pdf'), 'move');
         file = { uri, ...PDF_FILE };
@@ -377,10 +378,14 @@ export function ExportSheet({ visible, document, onClose }: Props) {
       check();
       setBusy(null);
 
+      // Waits while App Lock is on (an export that finishes behind the lock
+      // screen must not present over it), and presents nothing if this sheet
+      // was closed meanwhile (closing aborts `signal`).
       await shareFile(file.uri, {
         mimeType: file.mimeType,
         UTI: file.UTI,
         dialogTitle: document.name,
+        signal,
         // Close once the share sheet is done, unless the user has moved on.
         onFinish: () => {
           if (sessionRef.current === session) onClose();

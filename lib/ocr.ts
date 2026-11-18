@@ -89,13 +89,13 @@ const inflight = new Map<string, Promise<{ text: string; lines: OcrLine[] }>>();
 function recognizeCached(uri: string): Promise<{ text: string; lines: OcrLine[] }> {
   const identity = fileIdentity(uri);
   if (!identity) return recognize(uri);
-  const hit = readCachedOcr(identity);
+  const hit = readCachedOcr(uri, identity);
   if (hit) return Promise.resolve(hit);
   const running = inflight.get(identity);
   if (running) return running;
   const work = recognize(uri)
     .then(result => {
-      if (fileIdentity(uri) === identity) writeCachedOcr(identity, result);
+      if (fileIdentity(uri) === identity) writeCachedOcr(uri, identity, result);
       return result;
     })
     .finally(() => {

@@ -1,6 +1,8 @@
 // components/multi-share-sheet.tsx
 // Share several documents at once (Files → Select → Share): as one combined
 // PDF, or as separate PDFs packed in a ZIP (iOS share sheets take one file).
+// With `exportAll` (Settings → Storage → Export all documents) it offers just
+// the ZIP: every document as a searchable PDF, ready to save to Files.
 //
 // Like the export sheet, the native share sheet is presented on top of this
 // one (that works; presenting while a modal is dismissing does not), progress
@@ -10,6 +12,7 @@ import { useEffect, useRef, useState } from 'react';
 import { File } from 'expo-file-system';
 import JSZip from 'jszip';
 import { generatePdf, PdfCancelledError, PdfError } from '@/lib/pdf';
+import { ocrAvailable } from '@/lib/ocr';
 import {
   cleanFileUri,
   clearExportCache,
@@ -32,6 +35,8 @@ type Props = {
   visible: boolean;
   documents: Document[];
   onClose: () => void;
+  /** Settings' "Export all documents": the ZIP only, named for the whole library. */
+  exportAll?: boolean;
 };
 
 type Busy = { title: string; label: string; progress: number };
@@ -43,6 +48,12 @@ export function combinedName(docs: { name: string }[]): string {
   if (docs.length === 0) return 'Documents';
   if (docs.length === 1) return docs[0].name;
   return `${docs[0].name} and ${docs.length - 1} more`;
+}
+
+/** "Scan Kit documents 2026-11-18" — the export-all ZIP's name (local date). */
+export function exportAllName(now: Date = new Date()): string {
+  const pad = (v: number) => String(v).padStart(2, '0');
+  return `Scan Kit documents ${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
 
 /** Unique file names inside a ZIP: a second "Scan.pdf" becomes "Scan 2.pdf". */
@@ -58,7 +69,7 @@ export function uniqueNames(names: string[]): string[] {
   });
 }
 
-export function MultiShareSheet({ visible, documents, onClose }: Props) {
+export function MultiShareSheet({ visible, documents, onClose, exportAll = false }: Props) {
   const { colors } = useTheme();
   const [busy, setBusy] = useState<Busy | null>(null);
   const [size, setSize] = useState<number | null>(null);
@@ -86,6 +97,9 @@ export function MultiShareSheet({ visible, documents, onClose }: Props) {
   const totalPages = documents.reduce((sum, d) => sum + d.pages.length, 0);
   const hasImportedPdf = documents.some(d => !!d.pdfUri);
   const canCombine = !hasImportedPdf && totalPages > 0;
+  // Every PDF made here is searchable when text recognition is available, as
+  // in the export sheet: that is what people expect from a scanner's PDFs.
+  const searchable = ocrAvailable();
 
   function cancel() {
     abortRef.current?.abort();
@@ -120,29 +134,48 @@ export function MultiShareSheet({ visible, documents, onClose }: Props) {
         const raw = await generatePdf(pages, {
           pageSize,
           quality,
+          searchable,
           signal,
           onProgress: (done, total, phase) => {
             if (signal.aborted) return;
-            const label = phase === 'rendering' ? 'Finishing up' : `Preparing page ${Math.min(done + 1, total)} of ${total}`;
+            const label =
+              phase === 'rendering'
+                ? 'Finishing up'
+                : phase === 'reading-text'
+                  ? `Reading text on page ${Math.min(done + 1, total)} of ${total}`
+                  : `Preparing page ${Math.min(done + 1, total)} of ${total}`;
             setBusy({ title, label, progress: phase === 'rendering' ? 0.9 : (done / total) * 0.85 });
           },
         });
+        if (signal.aborted) { try { new File(cleanFileUri(raw)).delete(); } catch {} }
         check();
         uri = await placeExportFile(raw, dir, exportFileName(combinedName(documents), 'pdf'), 'move');
         mime = { mimeType: 'application/pdf', UTI: 'com.adobe.pdf' };
       } else {
-        const title = `Creating ${n} PDFs`;
+        const title = exportAll ? `Exporting ${n} ${n === 1 ? 'document' : 'documents'}` : `Creating ${n} PDFs`;
         const zip = new JSZip();
         const names = uniqueNames(documents.map(d => exportFileName(d.name, 'pdf')));
         for (let i = 0; i < n; i++) {
           check();
           const doc = documents[i];
-          setBusy({ title, label: `Preparing “${doc.name}” (${i + 1} of ${n})`, progress: (i / n) * 0.85 });
+          const label = `“${doc.name}” (${i + 1} of ${n})`;
+          setBusy({ title, label, progress: (i / n) * 0.85 });
           let pdf: string;
           if (doc.pdfUri) {
             pdf = doc.pdfUri;
           } else {
-            pdf = await generatePdf(doc.pages, { pageSize, quality, signal });
+            pdf = await generatePdf(doc.pages, {
+              pageSize,
+              quality,
+              searchable,
+              signal,
+              // Progress moves within each document too, not only between them.
+              onProgress: (done, total) => {
+                if (signal.aborted) return;
+                setBusy({ title, label, progress: ((i + Math.min(1, done / Math.max(1, total))) / n) * 0.85 });
+              },
+            });
+            if (signal.aborted) { try { new File(cleanFileUri(pdf)).delete(); } catch {} }
           }
           check();
           const bytes = await new File(cleanFileUri(pdf)).bytes();
@@ -154,7 +187,8 @@ export function MultiShareSheet({ visible, documents, onClose }: Props) {
         // PDFs are already compressed; STORE keeps it fast.
         const data = await zip.generateAsync({ type: 'uint8array', compression: 'STORE' });
         check();
-        uri = `${dir}${encodeURIComponent(exportFileName(`${n} documents`, 'zip'))}`;
+        const zipName = exportAll ? exportAllName() : `${n} documents`;
+        uri = `${dir}${encodeURIComponent(exportFileName(zipName, 'zip'))}`;
         const out = new File(uri);
         out.create({ overwrite: true });
         out.write(data);
@@ -162,9 +196,11 @@ export function MultiShareSheet({ visible, documents, onClose }: Props) {
       }
       check();
       setBusy(null);
+      // Waits while App Lock is on; presents nothing if this sheet was closed meanwhile.
       await shareFile(uri, {
         ...mime,
-        dialogTitle: mode === 'combined' ? combinedName(documents) : `${n} documents`,
+        signal,
+        dialogTitle: mode === 'combined' ? combinedName(documents) : exportAll ? 'All documents' : `${n} documents`,
         onFinish: () => { if (sessionRef.current === session) onClose(); },
       });
     } catch (err) {
@@ -177,7 +213,7 @@ export function MultiShareSheet({ visible, documents, onClose }: Props) {
           : err instanceof PdfError && err.kind === 'timeout'
             ? 'This took too long. Try sharing fewer documents at a time.'
             : 'Something went wrong while preparing the files. Try again.';
-      Alert.alert('Couldn’t share the documents', body);
+      Alert.alert(exportAll ? 'Couldn’t export your documents' : 'Couldn’t share the documents', body);
     } finally {
       runningRef.current = false;
       if (abortRef.current === controller) {
@@ -191,7 +227,7 @@ export function MultiShareSheet({ visible, documents, onClose }: Props) {
 
   return (
     <BottomSheet visible={visible} onClose={() => { cancel(); onClose(); }} variant="grouped">
-      <SheetHeader title="Share" subtitle={subtitle} />
+      <SheetHeader title={exportAll ? 'Export all documents' : 'Share'} subtitle={subtitle} />
       {busy ? (
         <SheetGroup style={styles.lastGroup}>
           <View style={styles.busy} accessibilityLiveRegion="polite">
@@ -207,6 +243,17 @@ export function MultiShareSheet({ visible, documents, onClose }: Props) {
             <Text style={[Type.footnote, { color: colors.muted }]} numberOfLines={1}>{busy.label}</Text>
             <PrimaryButton title="Cancel" variant="secondary" onPress={cancel} style={styles.cancelBtn} />
           </View>
+        </SheetGroup>
+      ) : exportAll ? (
+        <SheetGroup style={styles.lastGroup}>
+          <SheetRow
+            icon="file-tray-full-outline"
+            label="PDFs in a ZIP file"
+            detail={searchable ? 'One searchable PDF per document' : 'One PDF per document'}
+            disabled={n === 0}
+            onPress={() => run('separate')}
+            last
+          />
         </SheetGroup>
       ) : (
         <SheetGroup style={styles.lastGroup}>

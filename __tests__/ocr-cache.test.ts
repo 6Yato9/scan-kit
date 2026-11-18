@@ -8,6 +8,7 @@ const mockFs: Record<string, Fake> = {};
 
 jest.mock('expo-file-system', () => {
   const join = (parts: any[]) => parts.map(p => (p && typeof p === 'object' ? p.uri : p)).join('/');
+  const under = (dir: string) => Object.keys(mockFs).filter(u => u.startsWith(`${dir}/`));
   class MockFile {
     uri: string;
     constructor(...parts: any[]) { this.uri = join(parts); }
@@ -22,15 +23,23 @@ jest.mock('expo-file-system', () => {
     create() { mockFs[this.uri] = mockFs[this.uri] ?? { size: 0, mtime: Date.now() }; }
     write(text: string) { mockFs[this.uri] = { size: text.length, mtime: Date.now(), text }; }
     delete() { delete mockFs[this.uri]; }
+    move(dest: MockFile) { mockFs[dest.uri] = mockFs[this.uri]; delete mockFs[this.uri]; }
   }
   class MockDirectory {
     uri: string;
-    constructor(...parts: any[]) { this.uri = join(parts); }
-    get exists() { return true; }
-    create() {}
-    list() { return Object.keys(mockFs).filter(u => u.startsWith(`${this.uri}/`)).map(u => new MockFile(u)); }
+    constructor(...parts: any[]) { this.uri = join(parts).replace(/\/+$/, ''); }
+    // A folder exists while it holds a file (or a test marked it with "<dir>/.keep").
+    get exists() { return under(this.uri).length > 0; }
+    create() { mockFs[`${this.uri}/.keep`] = { size: 0, mtime: 0 }; }
+    delete() { for (const u of under(this.uri)) delete mockFs[u]; }
+    // Direct children only.
+    list() {
+      return under(this.uri)
+        .filter(u => !u.slice(this.uri.length + 1).includes('/') && !u.endsWith('/.keep'))
+        .map(u => new MockFile(u));
+    }
   }
-  return { File: MockFile, Directory: MockDirectory, Paths: { cache: 'file:///cache' } };
+  return { File: MockFile, Directory: MockDirectory, Paths: { cache: 'file:///cache', document: 'file:///docs' } };
 });
 
 const mockVision = jest.fn();
@@ -40,11 +49,19 @@ jest.mock('../modules/vision-ocr/src', () => ({
 jest.mock('react-native', () => ({ Platform: { OS: 'ios' } }));
 
 import { extractDocText, OcrAbortedError, recognizeLines } from '../lib/ocr';
-import { clearOcrMemoryForTests, fileIdentity } from '../lib/ocr-cache';
+import {
+  clearLegacyOcrCache,
+  clearOcrMemoryForTests,
+  fileIdentity,
+  forgetDocumentOcr,
+  pruneDocumentOcr,
+} from '../lib/ocr-cache';
 
 const PAGE = 'file:///docs/scan-kit/d1/page-0.jpg';
 const result = (text: string) => ({ text, lines: [{ text, left: 1, top: 2, width: 3, height: 4 }] });
-const cacheEntries = () => Object.keys(mockFs).filter(u => u.startsWith('file:///cache/ocr-lines/'));
+const DOC = 'file:///docs/scan-kit/d1';
+// Every OCR entry anywhere on "disk" (doc folders and the legacy Caches folder).
+const cacheEntries = () => Object.keys(mockFs).filter(u => /\/ocr(-lines)?\/[^/]+\.json$/.test(u));
 
 beforeEach(() => {
   for (const k of Object.keys(mockFs)) delete mockFs[k];
@@ -142,8 +159,89 @@ test('a missing or unreadable file is never cached (identity null)', async () =>
 
 test('a corrupt cache entry is ignored and OCR runs', async () => {
   mockFs[PAGE] = { size: 1000, mtime: 111 };
-  mockFs['file:///cache/ocr-lines/1000-111.json'] = { size: 3, mtime: 1, text: '{no' };
+  mockFs[`${DOC}/ocr/1000-111.json`] = { size: 3, mtime: 1, text: '{no' };
   mockVision.mockResolvedValue(result('fresh'));
   expect((await recognizeLines(PAGE)).text).toBe('fresh');
   expect(mockVision).toHaveBeenCalledTimes(1);
+});
+
+// ── r6 code review #3: recognised text must not outlive its document ────────
+
+test('entries live in the document\'s own folder, so deleting the folder deletes the text', async () => {
+  mockFs[PAGE] = { size: 1000, mtime: 111 };
+  mockVision.mockResolvedValue(result('Salary 90,000'));
+  await extractDocText([PAGE]);
+  expect(cacheEntries()).toEqual([`${DOC}/ocr/1000-111.json`]);
+
+  // Delete forever / empty trash / 30-day purge: lib/files deleteDocumentFiles
+  // forgets the memory copy and deletes the folder.
+  forgetDocumentOcr('d1');
+  for (const u of Object.keys(mockFs)) if (u.startsWith(`${DOC}/`)) delete mockFs[u];
+  expect(cacheEntries()).toEqual([]);
+  // Nothing in memory answers for it either: a new file with the same
+  // identity is read by Vision again.
+  mockFs[PAGE] = { size: 1000, mtime: 111 };
+  await recognizeLines(PAGE);
+  expect(mockVision).toHaveBeenCalledTimes(2);
+});
+
+test('a result that lands after its document was deleted is not kept anywhere', async () => {
+  mockFs[PAGE] = { size: 1000, mtime: 111 };
+  let finish!: (v: unknown) => void;
+  mockVision.mockReturnValueOnce(new Promise(r => { finish = r; }));
+  const pending = recognizeLines(PAGE);
+  // Deleted forever while Vision was still reading the page.
+  for (const u of Object.keys(mockFs)) if (u.startsWith(`${DOC}/`)) delete mockFs[u];
+  finish(result('late'));
+  await pending;
+  expect(cacheEntries()).toEqual([]);
+  // Not in memory either: the same pixels restored are read again.
+  mockFs[PAGE] = { size: 1000, mtime: 111 };
+  mockVision.mockResolvedValueOnce(result('again'));
+  expect((await recognizeLines(PAGE)).text).toBe('again');
+});
+
+test('deleting a page prunes its text; the remaining pages keep theirs', async () => {
+  const p0 = `${DOC}/page-0.jpg`;
+  const p1 = `${DOC}/page-1.jpg`;
+  mockFs[p0] = { size: 1000, mtime: 111 };
+  mockFs[p1] = { size: 2000, mtime: 222 };
+  mockVision.mockResolvedValueOnce(result('secret page')).mockResolvedValueOnce(result('keep me'));
+  await extractDocText([p0, p1]);
+  expect(cacheEntries()).toHaveLength(2);
+
+  // lib/files deleteSinglePage(d1, 0): page-1 moves down to page-0 (a rename
+  // keeps its identity), then prunes.
+  mockFs[p0] = mockFs[p1];
+  delete mockFs[p1];
+  pruneDocumentOcr('d1');
+  expect(cacheEntries()).toEqual([`${DOC}/ocr/2000-222.json`]);
+  expect((await recognizeLines(p0)).text).toBe('keep me');
+  expect(mockVision).toHaveBeenCalledTimes(2);
+});
+
+test('text of pixels a page no longer has is pruned once entries outnumber pages', async () => {
+  mockFs[PAGE] = { size: 1000, mtime: 111 };
+  mockVision.mockResolvedValueOnce(result('before markup')).mockResolvedValueOnce(result('after markup'));
+  await recognizeLines(PAGE);
+  mockFs[PAGE] = { size: 1500, mtime: 999 }; // marked up: new pixels
+  await recognizeLines(PAGE);
+  expect(cacheEntries()).toEqual([`${DOC}/ocr/1500-999.json`]);
+});
+
+test('an image outside a document folder is cached in memory only', async () => {
+  const temp = 'file:///cache/ImagePicker/photo.jpg';
+  mockFs[temp] = { size: 500, mtime: 5 };
+  mockVision.mockResolvedValue(result('receipt'));
+  await recognizeLines(temp);
+  await recognizeLines(temp);
+  expect(mockVision).toHaveBeenCalledTimes(1);
+  expect(cacheEntries()).toEqual([]);
+});
+
+test('the pre-r6 shared cache folder is deleted at startup', () => {
+  mockFs['file:///cache/ocr-lines/1000-111.json'] = { size: 10, mtime: 1, text: '{"text":"old","lines":[]}' };
+  mockFs['file:///cache/ocr-lines/2000-222.json'] = { size: 10, mtime: 1, text: '{"text":"old","lines":[]}' };
+  clearLegacyOcrCache();
+  expect(cacheEntries()).toEqual([]);
 });

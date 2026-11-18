@@ -288,10 +288,13 @@ export default function SignScreen() {
     );
   }
 
-  const previewW = Math.min(screenW * 0.6, 260);
-  const buttonTitle = !sig
-    ? saved.length ? 'Choose or draw a signature' : 'Sign in the box above'
-    : !doc ? 'Choose a document' : 'Save signed copy';
+  // Same preview size and place as Watermark and Timestamp.
+  const previewW = Math.min(screenW * 0.5, 220);
+  // Names exactly what is still missing.
+  const sigStep = saved.length ? 'Choose or draw a signature' : 'Draw your signature';
+  const buttonTitle = !doc && !sig
+    ? 'Choose a document and signature'
+    : !doc ? 'Choose a document' : !sig ? sigStep : 'Save signed copy';
 
   return (
     <ToolScreen
@@ -315,7 +318,73 @@ export default function SignScreen() {
       {/* 1. Document (fixed when opened on one from the viewer) */}
       <ToolDocPicker docs={docs} doc={doc} fixed={fixed} disabled={!!progress} onPick={pickDoc} />
 
-      {/* 2. Signature — captured as you draw; no separate confirm step. */}
+      {/* 2. Live preview, always shown like Watermark's and Timestamp's: the
+          chosen page (a sample page until a document is chosen) with the
+          signature where the PDF will get it. Tap it to place the signature. */}
+      {doc && doc.pages.length > 1 ? (
+        <>
+          <SectionLabel>{everyPage ? 'Pages, every page' : `Page ${pageIndex + 1}`}</SectionLabel>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pages}>
+            {doc.pages.map((p, i) => {
+              const on = i === pageIndex;
+              return (
+                <Pressable
+                  key={`${p}-${i}`}
+                  onPress={() => setPageIndex(i)}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: on }}
+                  accessibilityLabel={`Page ${i + 1}`}
+                  style={[styles.pageThumb, { borderColor: on ? colors.accent : colors.bg }]}
+                >
+                  <Image
+                    source={{ uri: `${p}?v=${doc.updatedAt}` }}
+                    style={[styles.pageImg, { backgroundColor: colors.placeholder, borderColor: colors.thumbBorder }]}
+                  />
+                  <Text style={[Type.caption, styles.pageNum, { color: on ? colors.accent : colors.muted }]}>
+                    {i + 1}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+          <View style={[styles.switchRow, { backgroundColor: colors.card }]}>
+            <Text style={[Type.body, styles.flex, { color: colors.text }]}>Sign every page</Text>
+            <Switch
+              value={everyPage}
+              onValueChange={setEveryPage}
+              trackColor={{ true: colors.accentFill, false: colors.border }}
+              accessibilityLabel="Sign every page"
+            />
+          </View>
+        </>
+      ) : null}
+
+      <View style={[styles.previewWrap, !(doc && doc.pages.length > 1) && styles.previewGap]}>
+        <PagePreview
+          uri={doc && pageUri ? `${pageUri}?v=${doc.updatedAt}` : null}
+          aspect={aspect}
+          width={previewW}
+          onPress={sig ? moveTo : undefined}
+        >
+          {({ width, height }) =>
+            sig && place ? (
+              <Image
+                source={{ uri: sig.dataUri }}
+                style={{
+                  position: 'absolute',
+                  left: place.x * width,
+                  top: place.y * height,
+                  width: place.w * width,
+                  height: place.w * width * (sig.height / sig.width),
+                }}
+              />
+            ) : null
+          }
+        </PagePreview>
+      </View>
+      {sig ? <ToolNote>Tap the page where the signature should go.</ToolNote> : null}
+
+      {/* 3. Signature — captured as you draw; no separate confirm step. */}
       <SectionRow label="Signature" action={sig ? 'Clear' : undefined} onAction={clearSignature} />
       {saved.length > 0 ? (
         <>
@@ -379,90 +448,13 @@ export default function SignScreen() {
         />
       </View>
 
-      {/* 3. Live preview and placement: the chosen page (a sample page until
-          a document is chosen) with the signature where the PDF will get it. */}
-      {doc || sig ? (
+      {sig ? (
         <>
-          <SectionLabel>
-            {!doc ? 'Preview' : everyPage ? 'Placement, every page' : `Placement, page ${pageIndex + 1}`}
-          </SectionLabel>
-          {doc && doc.pages.length > 1 ? (
-            <>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pages}>
-                {doc.pages.map((p, i) => {
-                  const on = i === pageIndex;
-                  return (
-                    <Pressable
-                      key={`${p}-${i}`}
-                      onPress={() => setPageIndex(i)}
-                      accessibilityRole="button"
-                      accessibilityState={{ selected: on }}
-                      accessibilityLabel={`Page ${i + 1}`}
-                      style={[styles.pageThumb, { borderColor: on ? colors.accent : colors.bg }]}
-                    >
-                      <Image
-                        source={{ uri: `${p}?v=${doc.updatedAt}` }}
-                        style={[styles.pageImg, { backgroundColor: colors.placeholder, borderColor: colors.thumbBorder }]}
-                      />
-                      <Text style={[Type.caption, styles.pageNum, { color: on ? colors.accent : colors.muted }]}>
-                        {i + 1}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </ScrollView>
-              <View style={[styles.switchRow, { backgroundColor: colors.card }]}>
-                <Text style={[Type.body, styles.flex, { color: colors.text }]}>Sign every page</Text>
-                <Switch
-                  value={everyPage}
-                  onValueChange={setEveryPage}
-                  trackColor={{ true: colors.accentFill, false: colors.border }}
-                  accessibilityLabel="Sign every page"
-                />
-              </View>
-            </>
-          ) : null}
-
-          <View style={styles.previewWrap}>
-            <PagePreview
-              uri={doc && pageUri ? `${pageUri}?v=${doc.updatedAt}` : null}
-              aspect={aspect}
-              width={previewW}
-              onPress={sig ? moveTo : undefined}
-            >
-              {({ width, height }) =>
-                sig && place ? (
-                  <Image
-                    source={{ uri: sig.dataUri }}
-                    style={{
-                      position: 'absolute',
-                      left: place.x * width,
-                      top: place.y * height,
-                      width: place.w * width,
-                      height: place.w * width * (sig.height / sig.width),
-                    }}
-                  />
-                ) : null
-              }
-            </PagePreview>
-          </View>
-          <ToolNote>
-            {!sig
-              ? 'Draw or choose a signature above, then tap the page where it should go.'
-              : !doc
-                ? 'Choose a document to place the signature on its page.'
-                : 'Tap the page where the signature should go.'}
-          </ToolNote>
-
-          {sig ? (
-            <>
-              <SectionLabel>Size</SectionLabel>
-              <Segmented options={SIZES.map(s => ({ value: s.value, label: s.label }))} value={size} onChange={changeSize} />
-            </>
-          ) : null}
-          <ToolNote>A signed copy is saved as a new PDF. The original document is kept.</ToolNote>
+          <SectionLabel>Size</SectionLabel>
+          <Segmented options={SIZES.map(s => ({ value: s.value, label: s.label }))} value={size} onChange={changeSize} />
         </>
       ) : null}
+      <ToolNote>A signed copy is saved as a new PDF. The original document is kept.</ToolNote>
     </ToolScreen>
   );
 }
@@ -497,6 +489,7 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.lg,
   },
   previewWrap: { alignItems: 'center' },
+  previewGap: { marginTop: Spacing.lg },
   savedRow: { flexDirection: 'row', gap: Spacing.sm },
   savedTile: {
     flex: 1,

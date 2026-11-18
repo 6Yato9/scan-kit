@@ -8,6 +8,7 @@ import { saveScan, indexDocText } from '@/lib/save-scan';
 import { autoName } from '@/lib/auto-name';
 import { bakePages } from '@/lib/bake';
 import { withSystemUI } from '@/lib/system-ui';
+import { serialized } from '@/lib/serial';
 import { useTheme } from '@/contexts/theme-context';
 import { Radius, Spacing, Type } from '@/lib/theme';
 
@@ -24,7 +25,11 @@ type ScanContextType = {
   saving: boolean;
   /** Scans, saves, and returns the new document id — or null if cancelled or failed. */
   triggerScan: () => Promise<string | null>;
-  /** Saves imported pages or a PDF, returning the new document id — or null on failure. */
+  /**
+   * Saves imported pages or a PDF, returning the new document id — or null on
+   * failure. Waits for a save already in progress first (never fails because
+   * of it).
+   */
   saveAndOpen: (input: SaveInput) => Promise<string | null>;
   bumpLastSaved: () => void;
 };
@@ -41,13 +46,14 @@ export function ScanProvider({ children }: { children: ReactNode }) {
   const [scanning, setScanning] = useState(false);
   const [saving, setSaving] = useState<number | null>(null); // page count being saved
   const scanningRef = useRef(false);
-  const savingRef = useRef(false);
+  // Saves run one at a time, in the order they were asked for. A save asked
+  // for while another is still writing (a file opened with "Open in Scan Kit"
+  // while a scan is being saved) WAITS for it instead of failing: the incoming
+  // file is the only copy the user handed over. Double taps can't queue a
+  // duplicate: every caller ignores taps while its own call is running.
+  // (saveNow never rejects: failures resolve null after telling the user.)
 
-  const saveAndOpen = useCallback(async (input: SaveInput): Promise<string | null> => {
-    // A second import started while the first is still writing would create a
-    // duplicate document; ignore it.
-    if (savingRef.current) return null;
-    savingRef.current = true;
+  const saveNow = useCallback(async (input: SaveInput): Promise<string | null> => {
     const count = input.pages?.length ?? 0;
     setSaving(Math.max(1, count));
     try {
@@ -82,10 +88,11 @@ export function ScanProvider({ children }: { children: ReactNode }) {
       Alert.alert("Couldn't save the scan", 'There may not be enough free space. Free up some storage and try again.');
       return null;
     } finally {
-      savingRef.current = false;
       setSaving(null);
     }
   }, []);
+
+  const saveAndOpen = useMemo(() => serialized(saveNow), [saveNow]);
 
   const triggerScan = useCallback(async (): Promise<string | null> => {
     if (scanningRef.current) return null;

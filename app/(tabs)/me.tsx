@@ -6,7 +6,10 @@ import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Directory, File, Paths } from 'expo-file-system';
 import { SegmentedControl, SettingsGroup, SettingsRow } from '@/components/settings-list';
-import { getAppLockEnabled, setAppLockEnabled, TRASH_RETENTION_DAYS } from '@/lib/storage';
+import { getAppLockEnabled, getDocuments, setAppLockEnabled, TRASH_RETENTION_DAYS } from '@/lib/storage';
+import { MultiShareSheet } from '@/components/multi-share-sheet';
+import { useToast } from '@/components/toast';
+import type { Document } from '@/types/document';
 import { authenticate, biometricKind, BiometricKind, canAuthenticate } from '@/lib/biometrics';
 import { tapLight } from '@/lib/haptics';
 import { useTheme } from '@/contexts/theme-context';
@@ -52,6 +55,24 @@ export default function SettingsScreen() {
   const [appLock, setAppLock] = useState(false);
   const [lockKind, setLockKind] = useState<BiometricKind>('passcode');
   const { preference, setPreference, colors } = useTheme();
+  const toast = useToast();
+  // Export all: every live document as a PDF, packed in one ZIP.
+  const [exportDocs, setExportDocs] = useState<Document[]>([]);
+  const [exportVisible, setExportVisible] = useState(false);
+
+  const openExportAll = useCallback(() => {
+    getDocuments()
+      .then(docs => {
+        const exportable = docs.filter(d => !!d.pdfUri || d.pages.length > 0);
+        if (exportable.length === 0) {
+          toast.show('There are no documents to export yet');
+          return;
+        }
+        setExportDocs(exportable);
+        setExportVisible(true);
+      })
+      .catch(() => Alert.alert('Couldn’t read your documents', 'Try again.'));
+  }, [toast]);
 
   useEffect(() => { biometricKind().then(setLockKind); }, []);
 
@@ -146,6 +167,13 @@ export default function SettingsScreen() {
               accessory={{ type: 'value', text: storageUsed }}
             />
             <SettingsRow
+              icon="archive-outline"
+              label="Export all documents"
+              description="Searchable PDFs in one ZIP file"
+              accessory={{ type: 'chevron' }}
+              onPress={openExportAll}
+            />
+            <SettingsRow
               icon="trash-outline"
               label="Recently deleted"
               description={`Restore deleted documents for ${TRASH_RETENTION_DAYS} days`}
@@ -161,6 +189,12 @@ export default function SettingsScreen() {
           </SettingsGroup>
         </View>
       </ScrollView>
+      <MultiShareSheet
+        visible={exportVisible}
+        documents={exportDocs}
+        exportAll
+        onClose={() => setExportVisible(false)}
+      />
       {/* Opaque mask over the status bar so the scrolling title and section
           labels never pass under the clock and battery. */}
       <View style={[styles.statusMask, { height: insets.top, backgroundColor: colors.bg }]} pointerEvents="none" />

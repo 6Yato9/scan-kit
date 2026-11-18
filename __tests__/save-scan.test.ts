@@ -172,11 +172,39 @@ describe('indexDocText', () => {
     expect(updateDocumentWith).not.toHaveBeenCalled();
   });
 
-  test('writes nothing when extractDocText returns an empty string', async () => {
+  test('writes nothing when no text is found and the document had none', async () => {
     (extractDocText as jest.Mock).mockResolvedValueOnce('');
 
     await indexDocText('fixed-id', ['file:///docs/fixed-id/page-0.jpg']);
 
-    expect(updateDocumentWith).not.toHaveBeenCalled();
+    expect(mockApplied).toEqual([]);
+  });
+
+  // r6 code review #6: replacing the only text page with a blank one left the
+  // old text in the index, so search still found the document by those words.
+  test('clears the old text when the newest pass finds none', async () => {
+    mockStored = { id: 'fixed-id', name: 'Doc', pages: [], ocrText: 'Invoice 42 Acme' };
+    (extractDocText as jest.Mock).mockResolvedValueOnce('\n\n'); // two blank pages
+
+    await indexDocText('fixed-id', ['p0', 'p1']);
+
+    expect(mockApplied).toEqual([{ ocrText: '' }]);
+    expect(mockStored.ocrText).toBe('');
+    expect(mockStored.name).toBe('Doc');
+  });
+
+  test('an older pass that finds nothing never clears a newer pass\'s text', async () => {
+    mockStored = { id: 'fixed-id', name: 'Doc', pages: [], ocrText: 'old' };
+    let finishOld!: (t: string) => void;
+    (extractDocText as jest.Mock)
+      .mockReturnValueOnce(new Promise<string>(r => { finishOld = r; }))
+      .mockResolvedValueOnce('new text');
+
+    const older = indexDocText('fixed-id', ['p0']);
+    await indexDocText('fixed-id', ['p0']);
+    finishOld('');
+    await older;
+
+    expect(mockStored.ocrText).toBe('new text');
   });
 });

@@ -22,7 +22,7 @@ import { useScan } from '@/contexts/scan-context';
 import { SectionLabel } from '@/components/section-label';
 import { HeaderTextButton, ScreenHeader } from '@/components/screen-header';
 import { EmptyState } from '@/components/empty-state';
-import type { AppIconName } from '@/components/app-icon';
+import { AppIcon, type AppIconName } from '@/components/app-icon';
 import { getDocuments } from '@/lib/storage';
 import { HIT, Radius, Spacing, Type } from '@/lib/theme';
 import type { Document } from '@/types/document';
@@ -161,7 +161,7 @@ export function ToolIntro({
   points,
   compact = false,
 }: {
-  icon: IconName;
+  icon: AppIconName;
   title: string;
   text: string;
   points?: IntroPoint[];
@@ -172,7 +172,7 @@ export function ToolIntro({
     return (
       <View style={[styles.introCompact, { backgroundColor: colors.card }]}>
         <View style={[styles.introCompactIcon, { backgroundColor: colors.accentLight }]}>
-          <Ionicons name={icon} size={24} color={colors.accent} />
+          <AppIcon name={icon} size={24} color={colors.accent} />
         </View>
         <View style={styles.flex}>
           <Text style={[Type.headline, { color: colors.text }]}>{title}</Text>
@@ -185,7 +185,7 @@ export function ToolIntro({
     <View>
       <View style={styles.intro}>
         <View style={[styles.introIcon, { backgroundColor: colors.accentLight }]}>
-          <Ionicons name={icon} size={36} color={colors.accent} />
+          <AppIcon name={icon} size={36} color={colors.accent} />
         </View>
         <Text style={[Type.title, styles.center, { color: colors.text }]} accessibilityRole="header">
           {title}

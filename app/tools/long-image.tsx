@@ -107,7 +107,7 @@ export default function LongImageScreen() {
     return (
       <NoDocumentsScreen
         toolTitle="Long image"
-        icon="image-outline"
+        icon="long-image"
         title="No multi-page documents"
         subtitle="Long image joins a document’s pages into one tall picture. Scan or import a document with two or more pages first."
       />

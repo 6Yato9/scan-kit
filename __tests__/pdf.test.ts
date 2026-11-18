@@ -211,6 +211,37 @@ test('cancelling while the renderer runs rejects right away', async () => {
   await expect(p).rejects.toBeInstanceOf(PdfCancelledError);
 });
 
+// r6 code review #4: the native render can't be stopped. When the export has
+// given up on it (cancel, timeout) its late PDF — unprotected, even for a
+// password-protected export — must be deleted, not left in Caches/Print.
+test('a render that finishes after cancel is deleted as soon as it lands', async () => {
+  let finish!: (v: { uri: string }) => void;
+  mockPrint.mockReturnValueOnce(new Promise(r => { finish = r; }));
+  const c = new AbortController();
+  const p = generatePdf(['file:///a.jpg'], { signal: c.signal, timeoutMs: 60_000 });
+  setTimeout(() => c.abort(), 5);
+  await expect(p).rejects.toBeInstanceOf(PdfCancelledError);
+  expect(FileSystem.deleteAsync).not.toHaveBeenCalled();
+  finish({ uri: 'file:///Caches/Print/late.pdf' });
+  await new Promise(r => setImmediate(r));
+  expect(FileSystem.deleteAsync).toHaveBeenCalledWith('file:///Caches/Print/late.pdf', { idempotent: true });
+});
+
+test('a render that finishes after a timeout is deleted too', async () => {
+  let finish!: (v: { uri: string }) => void;
+  mockPrint.mockReturnValueOnce(new Promise(r => { finish = r; }));
+  await expect(generatePdf(['file:///a.jpg'], { timeoutMs: 20 })).rejects.toMatchObject({ kind: 'timeout' });
+  finish({ uri: 'file:///Caches/Print/slow.pdf' });
+  await new Promise(r => setImmediate(r));
+  expect(FileSystem.deleteAsync).toHaveBeenCalledWith('file:///Caches/Print/slow.pdf', { idempotent: true });
+});
+
+test('a successful render is never deleted by the export itself', async () => {
+  await expect(generatePdf(['file:///a.jpg'])).resolves.toBe('file:///output.pdf');
+  await new Promise(r => setImmediate(r));
+  expect(FileSystem.deleteAsync).not.toHaveBeenCalled();
+});
+
 test('only searchable exports carry the text-fitting script', async () => {
   await generatePdf(['file:///a.jpg'], { searchable: true });
   expect(htmlOf()).toContain('<script>');

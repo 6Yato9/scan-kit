@@ -52,3 +52,28 @@ describe('installAlertGuard', () => {
     expect(onOk).toHaveBeenCalledTimes(1);
   });
 });
+
+// r6: an alert RAISED while locked (an export that failed behind the lock
+// screen) is held until unlock instead of sitting above the lock.
+describe('installAlertGuard with a hold', () => {
+  test('holds an alert raised while locked and shows it later; shows at once otherwise', () => {
+    const native = jest.fn();
+    const target = Alert as unknown as { alert: unknown; __lockGuard?: unknown };
+    delete target.__lockGuard; // a fresh install
+    target.alert = native;
+    let held = true;
+    const later: (() => void)[] = [];
+    installAlertGuard(() => held, { hold: () => held, later: fn => later.push(fn) });
+
+    Alert.alert('Couldn’t export', 'Try again.');
+    expect(native).not.toHaveBeenCalled();
+    expect(later).toHaveLength(1);
+
+    held = false;
+    later[0]();
+    expect(native).toHaveBeenCalledWith('Couldn’t export', 'Try again.', undefined);
+
+    Alert.alert('Now', 'shown');
+    expect(native).toHaveBeenCalledTimes(2);
+  });
+});

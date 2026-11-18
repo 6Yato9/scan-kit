@@ -3,6 +3,7 @@
 // from outside (its promise never settles) can be settled as cancelled and the
 // caller's busy flag reset (critique H1).
 import { abandonSystemUI, isSystemUIOpen, subscribeSystemUI, withSystemUI } from '../lib/system-ui';
+import { FLUSH_DELAY_MS, resetNavGuardForTests, setNavLockState } from '../lib/nav-guard';
 
 function deferred<T>() {
   let resolve!: (v: T) => void;
@@ -74,4 +75,26 @@ test('counts nested pickers; open until the last one closes', async () => {
 
 test('abandon with nothing open is a no-op', () => {
   expect(abandonSystemUI()).toBe(0);
+});
+
+// r6: a picker requested after slow work while App Lock is up must not open
+// above the lock screen; it waits for the unlock.
+test('a picker requested while locked opens only after unlock', async () => {
+  jest.useFakeTimers();
+  try {
+    resetNavGuardForTests();
+    setNavLockState({ locked: true });
+    const present = jest.fn().mockResolvedValue('picked');
+    const result = withSystemUI(present, () => 'cancelled');
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(present).not.toHaveBeenCalled();
+    expect(isSystemUIOpen()).toBe(false);
+    setNavLockState({ locked: false });
+    jest.advanceTimersByTime(FLUSH_DELAY_MS);
+    await expect(result).resolves.toBe('picked');
+    expect(present).toHaveBeenCalledTimes(1);
+  } finally {
+    resetNavGuardForTests();
+    jest.useRealTimers();
+  }
 });

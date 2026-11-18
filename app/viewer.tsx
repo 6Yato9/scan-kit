@@ -10,14 +10,12 @@ import {
   Platform,
   Pressable,
   ScrollView,
-  Share,
   StyleSheet,
   Text,
   useWindowDimensions,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import { WebView } from 'react-native-webview';
 import * as Clipboard from 'expo-clipboard';
@@ -55,6 +53,7 @@ import { withSystemUI } from '@/lib/system-ui';
 import { insertAt, restoreStashedPage, stashPage } from '@/lib/page-undo';
 import { notifySuccess, notifyError } from '@/lib/haptics';
 import { ocrAvailable, recognizeLines, extractDocText } from '@/lib/ocr';
+import { navigateWhenUnlocked } from '@/lib/nav-guard';
 import {
   exportFileName,
   makeExportDir,
@@ -62,6 +61,7 @@ import {
   printFile,
   shareFile,
   ShareError,
+  shareText,
 } from '@/lib/share';
 import { Document, PageAdjustment, PageFilter } from '@/types/document';
 import { DarkThemeScope, useTheme } from '@/contexts/theme-context';
@@ -69,8 +69,9 @@ import { QUALITY_MAP, SCAN_QUALITY_MAP, useScan } from '@/contexts/scan-context'
 import { HIT, Radius, Spacing, Type } from '@/lib/theme';
 import { ExportSheet } from '@/components/export-sheet';
 import { EditTab, FILTER_LABELS, PageEditPanel } from '@/components/page-actions-sheet';
-import { ThumbnailStrip } from '@/components/thumbnail-strip';
+import { movedOrder, ThumbnailStrip } from '@/components/thumbnail-strip';
 import { ViewerToolbar } from '@/components/viewer-toolbar';
+import { AppIcon } from '@/components/app-icon';
 import { MoreAction, ViewerMoreSheet } from '@/components/viewer-more-sheet';
 import { ToastProvider, useToast } from '@/components/toast';
 import { ReorderModal } from '@/components/reorder-modal';
@@ -380,7 +381,7 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
       flushAdjust();
       await trashDocument(id);
       notifySuccess();
-      router.back();
+      navigateWhenUnlocked(() => router.back());
       rootToast.show('Moved to Recently deleted', {
         action: {
           label: 'Undo',
@@ -429,14 +430,15 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
     }
   }, [editDocument, reload, screenWidth]);
 
-  const handleDeletePage = useCallback(async () => {
+  const handleDeletePage = useCallback(async (at?: number) => {
     const doc = docRef.current;
     if (!doc) return;
     if (doc.pages.length <= 1) {
       await deleteDocAndExit();
       return;
     }
-    const page = pageRef.current;
+    const page = at ?? pageRef.current;
+    if (page < 0 || page >= doc.pages.length) return;
     let undo: { stash: string; filter: PageFilter; adjustment: PageAdjustment } | null = null;
     try {
       const next = await editDocument({ remap: remapForDelete(page) }, async fresh => {
@@ -481,9 +483,15 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
     }
   }, [editDocument, deleteDocAndExit, reload, screenWidth, toast, restorePage]);
 
-  const handleReorder = useCallback(async (newOrder: number[]) => {
-    setReorderSaving(true);
+  /**
+   * Puts the pages in `newOrder` (old indices, new positions) through the one
+   * reorder path, which moves each page's unfiltered .orig with it and
+   * re-targets pending bakes. `focus` is the old index of the page to show
+   * afterwards. Resolves false when nothing changed.
+   */
+  const applyOrder = useCallback(async (newOrder: number[], focus: number): Promise<boolean> => {
     try {
+      flushAdjust();
       await editDocument({ remap: remapForReorder(newOrder) }, async fresh => {
         if (newOrder.length !== fresh.pages.length) throw new Error('page count changed');
         const pages = reorderPages(fresh.id, newOrder);
@@ -491,18 +499,36 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
         const adjustments = fresh.adjustments ? newOrder.map(i => fresh.adjustments![i] ?? { ...DEFAULT_ADJ }) : undefined;
         return { pages, filters, adjustments };
       });
-      setReorderVisible(false);
-      setCurrentPage(0);
-      flatListRef.current?.scrollToOffset({ offset: 0, animated: false });
+      const shown = Math.max(0, newOrder.indexOf(focus));
+      setCurrentPage(shown);
+      flatListRef.current?.scrollToOffset({ offset: shown * screenWidth, animated: false });
+      return true;
     } catch (err) {
       console.error('Reorder failed', err);
       notifyError();
       Alert.alert("Couldn't reorder the pages", 'Your pages are unchanged. Try again.');
       reload().catch(() => {});
+      return false;
+    }
+  }, [editDocument, reload, flushAdjust, screenWidth]);
+
+  const handleReorder = useCallback(async (newOrder: number[]) => {
+    setReorderSaving(true);
+    try {
+      if (await applyOrder(newOrder, newOrder[0])) setReorderVisible(false);
     } finally {
       setReorderSaving(false);
     }
-  }, [editDocument, reload]);
+  }, [applyOrder]);
+
+  /** A page dragged in the strip, or moved one place from its menu. The page you are reading stays in view. */
+  const movePage = useCallback((from: number, to: number, focus = pageRef.current) => {
+    const doc = docRef.current;
+    if (!doc || from === to) return;
+    applyOrder(movedOrder(doc.pages.length, from, to), focus).then(ok => {
+      if (ok) notifySuccess();
+    });
+  }, [applyOrder]);
 
   // ── Add pages ─────────────────────────────────────────────────────────────
 
@@ -562,6 +588,7 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
           title: 'Add pages',
           options: ['Scan with camera', 'Choose from Photos', 'Cancel'],
           cancelButtonIndex: 2,
+          userInterfaceStyle: 'dark',
         },
         index => {
           if (index === 0) addFrom('camera');
@@ -662,15 +689,15 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
     await applyRetake(doc.id, index, first);
   }, [applyRetake]);
 
-  const handleRetake = useCallback(() => {
+  const handleRetake = useCallback((at?: number) => {
     const doc = docRef.current;
     if (!doc) return;
-    const index = pageRef.current;
+    const index = at ?? pageRef.current;
     const title = doc.pages.length > 1 ? `Retake page ${index + 1}` : 'Retake page';
     const message = 'The new page replaces this one, in the same place.';
     if (Platform.OS === 'ios') {
       ActionSheetIOS.showActionSheetWithOptions(
-        { title, message, options: ['Scan with camera', 'Choose from Photos', 'Cancel'], cancelButtonIndex: 2 },
+        { title, message, options: ['Scan with camera', 'Choose from Photos', 'Cancel'], cancelButtonIndex: 2, userInterfaceStyle: 'dark' },
         i => {
           if (i === 0) retakeFrom('camera', index);
           else if (i === 1) retakeFrom('photos', index);
@@ -777,11 +804,11 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
 
   // No confirmation: the toast offers Undo. A one-page document is deleted as a
   // whole, which does ask (it leaves the viewer).
-  const confirmDeletePage = useCallback(() => {
+  const confirmDeletePage = useCallback((at?: number) => {
     const doc = docRef.current;
     if (!doc) return;
     if (doc.pages.length <= 1) confirmDeleteDocument();
-    else handleDeletePage();
+    else handleDeletePage(at);
   }, [confirmDeleteDocument, handleDeletePage]);
 
   const handleSharePdf = useCallback(async () => {
@@ -862,13 +889,52 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
 
   const handleShareText = useCallback(() => {
     if (!ocrText) return;
-    Share.share({ message: ocrText }).catch(() => {});
+    shareText(ocrText);
   }, [ocrText]);
 
   const handleThumbnailPress = useCallback((index: number) => {
+    if (index !== pageRef.current) flushAdjust();
     setCurrentPage(index);
     flatListRef.current?.scrollToIndex({ index, animated: true });
-  }, []);
+  }, [flushAdjust]);
+
+  /** Touch and hold a thumbnail, let go: that page's actions. */
+  const handlePageMenu = useCallback((index: number) => {
+    const doc = docRef.current;
+    if (!doc || index < 0 || index >= doc.pages.length) return;
+    handleThumbnailPress(index);
+    const n = doc.pages.length;
+    const actions: { label: string; run: () => void; destructive?: boolean }[] = [
+      { label: n > 1 ? `Retake page ${index + 1}` : 'Retake page', run: () => handleRetake(index) },
+    ];
+    if (index > 0) actions.push({ label: 'Move left', run: () => movePage(index, index - 1, index) });
+    if (index < n - 1) actions.push({ label: 'Move right', run: () => movePage(index, index + 1, index) });
+    if (n > 2) actions.push({ label: 'Reorder pages…', run: () => setReorderVisible(true) });
+    actions.push(
+      n > 1
+        ? { label: `Delete page ${index + 1}`, run: () => confirmDeletePage(index), destructive: true }
+        : { label: 'Delete document', run: () => confirmDeletePage(index), destructive: true },
+    );
+    const title = n > 1 ? `Page ${index + 1} of ${n}` : undefined;
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          title,
+          options: [...actions.map(a => a.label), 'Cancel'],
+          cancelButtonIndex: actions.length,
+          destructiveButtonIndex: actions.findIndex(a => a.destructive),
+          // The viewer is always dark; so are the menus it opens.
+          userInterfaceStyle: 'dark',
+        },
+        i => actions[i]?.run(),
+      );
+    } else {
+      Alert.alert(title ?? 'Page', undefined, [
+        ...actions.map(a => ({ text: a.label, style: a.destructive ? ('destructive' as const) : undefined, onPress: a.run })),
+        { text: 'Cancel', style: 'cancel' as const },
+      ]);
+    }
+  }, [handleThumbnailPress, handleRetake, movePage, confirmDeletePage]);
 
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -880,7 +946,6 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
   if (status !== 'ready' || !document) {
     return (
       <View style={[styles.container, { backgroundColor: colors.chrome }]}>
-        <StatusBar style="light" />
         <ScreenHeader dark left={backButton} />
         {status === 'missing' ? (
           <View style={styles.centered}>
@@ -914,7 +979,9 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
         <Text style={[Type.headline, styles.titleText, { color: colors.chromeText }]} numberOfLines={1}>
           {document.name}
         </Text>
-        <Ionicons name="pencil-outline" size={14} color={colors.chromeMuted} style={styles.titlePencil} />
+        <View style={styles.titlePencil}>
+          <AppIcon name="rename" size={14} color={colors.chromeMuted} />
+        </View>
       </Pressable>
     </View>
   );
@@ -952,7 +1019,7 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
   const moreGroups: MoreAction[][] = document.pdfUri
     ? [
         [
-          { key: 'rename', icon: 'pencil-outline', label: 'Rename', onPress: () => setRenameVisible(true) },
+          { key: 'rename', icon: 'rename', label: 'Rename', onPress: () => setRenameVisible(true) },
           { key: 'move', icon: 'folder-outline', label: 'Move to folder', detail: document.folder, onPress: openMove },
           { key: 'duplicate', icon: 'duplicate-outline', label: 'Duplicate', onPress: handleDuplicate },
           { key: 'print', icon: 'print-outline', label: 'Print', onPress: handlePrintPdf },
@@ -961,8 +1028,7 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
       ]
     : [
         [
-          { key: 'rename', icon: 'pencil-outline', label: 'Rename', onPress: () => setRenameVisible(true) },
-          { key: 'add', icon: 'add-circle-outline', label: 'Add pages', onPress: handleAddMore },
+          { key: 'rename', icon: 'rename', label: 'Rename', onPress: () => setRenameVisible(true) },
           ...(pageCount > 1
             ? [{ key: 'reorder', icon: 'reorder-three-outline' as const, label: 'Reorder pages', onPress: () => setReorderVisible(true) }]
             : []),
@@ -971,7 +1037,10 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
         ],
         [
           { key: 'retake', icon: 'camera-reverse-outline', label: `Retake ${pageLabel}`, onPress: handleRetake },
-          { key: 'share-page', icon: 'image-outline', label: `Share ${pageLabel} as image`, onPress: handleSharePage },
+          // A one-page document as an image is Export, JPEG image.
+          ...(pageCount > 1
+            ? [{ key: 'share-page', icon: 'image-outline' as const, label: `Share ${pageLabel} as image`, onPress: handleSharePage }]
+            : []),
         ],
         [
           ...(pageCount > 1
@@ -1016,10 +1085,6 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
   if (document.pdfUri) {
     return (
       <View style={[styles.container, { backgroundColor: colors.chrome }]}>
-        {/* Chrome is always dark here regardless of app theme, so the status bar
-            must be light — the global one in _layout follows the theme and would
-            render black glyphs on this near-black background in light mode. */}
-        <StatusBar style="light" />
         <ScreenHeader
           dark
           fillLeft
@@ -1048,7 +1113,10 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
   // JPEG pager mode
   return (
     <View style={[styles.container, { backgroundColor: colors.chrome }]}>
-      <StatusBar style="light" />
+      {/* The status bar is light here because /viewer is a chrome route in
+          lib/status-bar-style.ts. No <StatusBar> of its own: it would stay
+          mounted under a tool opened from here and keep the bar white over
+          that tool's light screen. */}
       {/* The viewer is a fullScreenModal in its own view controller, so the root
           baker is buried underneath and iOS never runs it. Bakes started while
           this screen is up run in this one. */}
@@ -1156,7 +1224,7 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
               { key: 'markup', icon: 'brush-outline', label: 'Mark up', a11y: 'Mark up page', onPress: handleAnnotate },
               {
                 key: 'text',
-                icon: 'document-text-outline',
+                icon: 'reader-outline',
                 label: 'Text',
                 a11y: 'Recognize text on this page',
                 onPress: handleOcr,
@@ -1168,6 +1236,8 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
             pages={document.pages}
             currentPage={page}
             onPagePress={handleThumbnailPress}
+            onPageMenu={handlePageMenu}
+            onReorder={(from, to) => movePage(from, to)}
             onAddPress={handleAddMore}
             adding={adding}
             bottomInset={insets.bottom}
@@ -1232,7 +1302,7 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
           </>
         ) : (
           <View style={styles.ocrBusy}>
-            <Ionicons name="document-text-outline" size={32} color={colors.muted} />
+            <Ionicons name="reader-outline" size={32} color={colors.muted} />
             <Text style={[Type.subhead, { color: colors.text }]}>No text found on this page</Text>
             <Text style={[Type.footnote, styles.centeredText, { color: colors.muted }]}>
               Try cropping closer to the text, or a sharper scan.

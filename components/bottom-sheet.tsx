@@ -28,9 +28,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/theme-context';
 import { useAppLocked } from '@/components/lock-gate';
+import { AppIcon, type AppIconName } from '@/components/app-icon';
 import { HIT, Radius, Spacing, Type } from '@/lib/theme';
-
-type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
 type Props = {
   visible: boolean;
@@ -228,7 +227,7 @@ export function SheetRow({
   disabled,
   accessibilityLabel,
 }: {
-  icon?: IconName;
+  icon?: AppIconName;
   label: string;
   detail?: string;
   onPress: () => void;
@@ -252,7 +251,11 @@ export function SheetRow({
       accessibilityState={{ selected: !!selected, disabled: !!disabled }}
       style={({ pressed }) => [styles.row, pressed && { backgroundColor: colors.separator }, disabled && { opacity: 0.4 }]}
     >
-      {icon ? <Ionicons name={icon} size={22} color={destructive ? colors.danger : colors.accent} style={styles.rowIcon} /> : null}
+      {icon ? (
+        <View style={styles.rowIcon}>
+          <AppIcon name={icon} size={22} color={destructive ? colors.danger : colors.accent} />
+        </View>
+      ) : null}
       <View style={[styles.rowBody, !last && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }]}>
         <View style={styles.rowText}>
           <Text style={[Type.body, { color: fg }]} numberOfLines={1}>{label}</Text>

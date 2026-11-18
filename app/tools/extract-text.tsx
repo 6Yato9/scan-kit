@@ -2,7 +2,7 @@
 // Recognise text from a fresh scan or from photos, then copy or share it.
 // OCR goes through lib/ocr (Apple Vision on iOS, ML Kit on Android).
 import { useRef, useState } from 'react';
-import { Alert, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
+import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useTheme } from '@/contexts/theme-context';
 import { useToast } from '@/components/toast';
@@ -13,6 +13,7 @@ import { notifyError, notifySuccess, tapLight } from '@/lib/haptics';
 import { ocrAvailable, recognizeLines } from '@/lib/ocr';
 import { alertScanError, deleteTempFiles, pickPhotos, scanWithCamera } from '@/lib/tool-scan';
 import { Radius, Spacing, Type } from '@/lib/theme';
+import { shareText } from '@/lib/share';
 
 export default function ExtractTextScreen() {
   const { colors } = useTheme();
@@ -77,11 +78,7 @@ export default function ExtractTextScreen() {
 
   const handleShare = async () => {
     if (!text) return;
-    try {
-      await Share.share({ message: text });
-    } catch {
-      // dismissed
-    }
+    await shareText(text); // waits while App Lock is on; dismissing isn't an error
   };
 
   // ── Result ────────────────────────────────────────────────────────────────

@@ -23,6 +23,7 @@ import { HIT, Ink, Spacing } from '@/lib/theme';
 import { useTheme } from '@/contexts/theme-context';
 import { HeaderTextButton, ScreenHeader } from '@/components/screen-header';
 import { FilterBaker } from '@/components/filter-baker';
+import { navigateWhenUnlocked } from '@/lib/nav-guard';
 import type { Document, PageAdjustment, PageFilter } from '@/types/document';
 
 // This screen's chrome is always dark (like the viewer): it uses the theme's
@@ -235,7 +236,8 @@ export default function AnnotateScreen() {
       // Defend against bad routing: doc deleted, PDF-only doc, or pageIndex
       // out of range. Bail back rather than crashing on `pages[NaN]`.
       if (!found || found.pdfUri || !Number.isInteger(pageIndex) || pageIndex < 0 || pageIndex >= found.pages.length) {
-        router.back();
+        // After an await: the app may be locked now, and back would close /lock.
+        navigateWhenUnlocked(() => router.back());
         return;
       }
       loadedLook.current = lookOf(found, pageIndex);
@@ -299,7 +301,12 @@ export default function AnnotateScreen() {
     try {
       const payload = JSON.parse(data.slice('RESULT:'.length)) as { page: string; orig: string | null };
       await save(payload);
-      router.back();
+      // The drawing comes back from the WebView on its own time: if the app
+      // was locked meanwhile, /lock is the top screen and back() would close
+      // IT, leaving the editor usable without unlocking. Held until unlocked
+      // (lib/nav-guard); this screen draws the lock itself meanwhile
+      // (app/_layout.tsx lockCoverLayout).
+      navigateWhenUnlocked(() => router.back());
     } catch (err) {
       console.error('Annotate save failed', err);
       Alert.alert("Couldn't save your markup", 'There may not be enough free space. Try again.');

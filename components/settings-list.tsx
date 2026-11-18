@@ -5,10 +5,12 @@ import { ReactNode } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/theme-context';
+import { AppIcon, type AppIconName } from '@/components/app-icon';
 import { SectionLabel } from '@/components/section-label';
 import { HIT, Radius, Spacing, Type } from '@/lib/theme';
 
-type IconName = React.ComponentProps<typeof Ionicons>['name'];
+/** Line height of a row's label; the icon rule below is computed from it. */
+const LABEL_LINE = 22;
 
 /** Section label, a rounded card of rows, and an optional footnote below. */
 export function SettingsGroup({ title, footer, children }: { title?: string; footer?: string; children: ReactNode }) {
@@ -38,7 +40,7 @@ export function SettingsRow({
   last,
   accessibilityLabel,
 }: {
-  icon?: IconName;
+  icon?: AppIconName;
   label: string;
   description?: string;
   accessory?: Accessory;
@@ -53,13 +55,13 @@ export function SettingsRow({
   const body = (
     <>
       {icon ? (
-        <View style={[styles.iconTile, { backgroundColor: colors.accentLight }]}>
-          <Ionicons name={icon} size={18} color={colors.accent} />
+        <View style={[styles.iconTile, description ? styles.iconTileTop : null, { backgroundColor: colors.accentLight }]}>
+          <AppIcon name={icon} size={18} color={colors.accent} />
         </View>
       ) : null}
       <View style={[styles.inner, !last && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }]}>
         <View style={styles.text}>
-          <Text style={[Type.body, { color: colors.text }]}>{label}</Text>
+          <Text style={[Type.body, styles.label, { color: colors.text }]}>{label}</Text>
           {description ? (
             <Text style={[Type.footnote, styles.desc, { color: colors.muted }]}>{description}</Text>
           ) : null}
@@ -89,7 +91,7 @@ export function SettingsRow({
   if (!onPress || isSwitch) {
     return (
       <View
-        style={styles.row}
+        style={[styles.row, description ? styles.rowTop : null]}
         accessible={!isSwitch}
         accessibilityLabel={accessibilityLabel ?? (accessory.type === 'value' ? `${label}, ${accessory.text ?? 'calculating'}` : description ? `${label}. ${description}` : label)}
       >
@@ -104,7 +106,7 @@ export function SettingsRow({
       accessibilityRole={isCheck ? 'radio' : 'button'}
       accessibilityState={isCheck ? { selected: accessory.selected, checked: accessory.selected } : undefined}
       accessibilityLabel={accessibilityLabel ?? (description ? `${label}, ${description}` : label)}
-      style={({ pressed }) => [styles.row, pressed && { backgroundColor: colors.separator }]}
+      style={({ pressed }) => [styles.row, description ? styles.rowTop : null, pressed && { backgroundColor: colors.separator }]}
     >
       {body}
     </Pressable>
@@ -114,12 +116,21 @@ export function SettingsRow({
 /** The app's one segmented control, re-exported for settings screens. */
 export { SegmentedControl } from '@/components/segmented-control';
 
+/** Top offset that centres the 30pt icon tile on a row's first (label) line. */
+export const ICON_TOP = Spacing.sm + Math.round((LABEL_LINE - 30) / 2);
+
 const styles = StyleSheet.create({
   spacer: { height: Spacing.xxl },
   group: { borderRadius: Radius.md, overflow: 'hidden' },
   footer: { marginTop: Spacing.sm, marginHorizontal: Spacing.xs, lineHeight: 18 },
   row: { flexDirection: 'row', alignItems: 'center', paddingLeft: Spacing.lg },
   iconTile: { width: 30, height: 30, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginRight: Spacing.md },
+  // One rule for every row: the icon is centred on the label's line. A
+  // one-line row is simply centred; a row with a description keeps its icon
+  // beside the label instead of floating in the middle of the paragraph
+  // (inner padding 8 + half the 21pt label line - half the 30pt tile).
+  rowTop: { alignItems: 'flex-start' },
+  iconTileTop: { marginTop: ICON_TOP },
   inner: {
     flex: 1,
     flexDirection: 'row',
@@ -130,5 +141,6 @@ const styles = StyleSheet.create({
     gap: Spacing.sm,
   },
   text: { flex: 1 },
+  label: { lineHeight: LABEL_LINE },
   desc: { marginTop: 2, lineHeight: 18 },
 });

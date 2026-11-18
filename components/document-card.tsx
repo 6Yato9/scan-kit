@@ -9,6 +9,7 @@ import { useTheme } from '@/contexts/theme-context';
 import { formatDocDate, formatPageCount } from '@/lib/format';
 import { highlightRuns } from '@/lib/highlight';
 import { compactMeta } from '@/lib/doc-list';
+import { WordClampText } from '@/components/word-clamp-text';
 import { Radius, Spacing, Type } from '@/lib/theme';
 
 type Props = {
@@ -114,7 +115,7 @@ export function DocumentCard({
         <View style={styles.cardClip}>
           <Thumb document={document} iconSize={32} style={styles.thumbnail} />
           <View style={styles.info}>
-            <Text style={[Type.footnote, styles.name, { color: colors.text }]} numberOfLines={2} maxFontSizeMultiplier={1.3}>{document.name}</Text>
+            <WordClampText style={[Type.footnote, styles.name, { color: colors.text }]} numberOfLines={2} maxFontSizeMultiplier={1.3}>{document.name}</WordClampText>
             <Text style={[Type.caption, { color: colors.muted }]} numberOfLines={1}>
               {columns >= 3 ? compactMeta(document) : documentMeta(document)}
             </Text>

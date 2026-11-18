@@ -9,6 +9,7 @@ import {
   pickerHandoffStep,
   resetNavGuardForTests,
   setNavLockState,
+  whenUnlocked,
 } from '../lib/nav-guard';
 
 beforeEach(() => {
@@ -129,5 +130,64 @@ describe('pickerHandoffStep (r5 M2)', () => {
     expect(pickerHandoffStep({ ...base, pickerOpen: true })).toBe('none');
     expect(pickerHandoffStep({ ...base, locked: false })).toBe('none');
     expect(pickerHandoffStep({ ...base, overPicker: false })).toBe('none');
+  });
+});
+
+// r6 code review #1: one gate for "about to present or navigate after slow work".
+describe('whenUnlocked', () => {
+  const flush = async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); };
+
+  test('resolves at once while unlocked', async () => {
+    const done = jest.fn();
+    whenUnlocked().then(done);
+    await flush();
+    expect(done).toHaveBeenCalledTimes(1);
+  });
+
+  test('waits for the unlock AND for the lock screen to have gone', async () => {
+    setNavLockState({ locked: true, lockRouteShown: true });
+    const done = jest.fn();
+    whenUnlocked().then(done);
+    jest.advanceTimersByTime(60_000);
+    await flush();
+    expect(done).not.toHaveBeenCalled();
+
+    setNavLockState({ locked: false }); // Face ID ok, /lock still on top
+    jest.advanceTimersByTime(60_000);
+    await flush();
+    expect(done).not.toHaveBeenCalled();
+
+    setNavLockState({ lockRouteShown: false });
+    jest.advanceTimersByTime(FLUSH_DELAY_MS);
+    await flush();
+    expect(done).toHaveBeenCalledTimes(1);
+  });
+
+  test('keeps waiting when the app locks again during the hand-over', async () => {
+    setNavLockState({ locked: true });
+    const done = jest.fn();
+    whenUnlocked().then(done);
+    setNavLockState({ locked: false });
+    jest.advanceTimersByTime(FLUSH_DELAY_MS);
+    // The flush resolved the inner wait, but the app locked again before the
+    // waiter's continuation ran.
+    setNavLockState({ locked: true });
+    await flush();
+    expect(done).not.toHaveBeenCalled();
+    setNavLockState({ locked: false });
+    jest.advanceTimersByTime(FLUSH_DELAY_MS);
+    await flush();
+    expect(done).toHaveBeenCalledTimes(1);
+  });
+
+  test('queues behind held navigations, so a share never jumps ahead of a route change', async () => {
+    setNavLockState({ locked: true });
+    const order: string[] = [];
+    navigateWhenUnlocked(() => order.push('nav'));
+    whenUnlocked().then(() => order.push('present'));
+    setNavLockState({ locked: false });
+    jest.advanceTimersByTime(FLUSH_DELAY_MS);
+    await flush();
+    expect(order).toEqual(['nav', 'present']);
   });
 });

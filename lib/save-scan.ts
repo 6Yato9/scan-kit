@@ -111,13 +111,18 @@ export async function indexDocText(id: string, pages: string[]): Promise<void> {
   if (!ocrAvailable()) return;
   const pass = (indexPasses.get(id) ?? 0) + 1;
   indexPasses.set(id, pass);
-  const text = await extractDocText(pages);
-  if (!text) return;
+  const raw = await extractDocText(pages);
+  // Pages are joined with blank lines, so blank pages alone still give "\n\n".
+  const text = raw.trim() ? raw : '';
   await withDocLock(id, () => updateDocumentWith(id, current => {
     // A newer pass was started meanwhile (Undo right after a retake re-indexes
     // the restored page): it read the pages after this one began, so this
     // older text may describe pages that are gone. Leave the write to it.
     if (indexPasses.get(id) !== pass) return null;
+    // The newest pass found no text at all (the only text page was replaced by
+    // a blank one): clear the old text, or search would keep finding the
+    // document by words it no longer contains. Nothing to clear: no write.
+    if (!text) return current.ocrText ? { ocrText: '' } : null;
     const patch: Partial<Document> = { ocrText: text };
     if (current.defaultName && current.name === current.defaultName) {
       const title = titleFromText(text);

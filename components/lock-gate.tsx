@@ -18,6 +18,9 @@
 //     a dead lock screen behind once the screen above it closes.
 //   - Screens that can appear above /lock while locked (app/import.tsx)
 //     render <LockScreen /> themselves and hold any navigation until unlock.
+//   - Every other screen of the root stack is wrapped in LockCoverScreen
+//     (app/_layout.tsx screenLayout) and draws the lock over itself while
+//     locked, so even a screen uncovered by a stray back() stays locked.
 //   - System UI shown over the top screen when the app goes to the background
 //     (share sheet, print dialog, action sheet) is dismissed by native-stack
 //     before it presents /lock, so it never stays above the lock.
@@ -36,11 +39,14 @@
 //     route: it stays until /lock is on screen, so there is no uncovered frame,
 //     and a modal presented afterwards can't draw above an overlay that is
 //     still in the window.
-//   - Work that finishes while locked must not navigate over the lock:
-//     replace would swap /lock itself out for the viewer, push would present
-//     the viewer above it. Every post-await navigation goes through
-//     lib/nav-guard.ts navigateWhenUnlocked(), which this gate feeds; the
-//     viewer also draws the lock itself while locked, as a last line of defence.
+//   - Work that finishes while locked must not navigate or present over the
+//     lock: replace would swap /lock itself out for the viewer, push would
+//     present the viewer above it, a share sheet or print dialog would open
+//     above it. Every post-await navigation goes through lib/nav-guard.ts
+//     navigateWhenUnlocked(), and every native presenter awaits
+//     whenUnlocked() (lib/share.ts, lib/photos.ts, lib/system-ui.ts, alerts
+//     raised while locked via lib/alert-guard.ts) — all fed by this gate.
+//     ESLint (eslint-rules/lock-safe.js) rejects code that bypasses them.
 //
 // App-switcher privacy: when the app goes 'inactive' (app switcher, Control
 // Center, a call) with App Lock on, a plain cover is drawn in the same kind of
@@ -71,7 +77,7 @@ import { authenticate, biometricKind, BiometricKind, isAuthenticating } from '@/
 import { getAppLockEnabled, subscribeAppLock } from '@/lib/storage';
 import { installAlertGuard } from '@/lib/alert-guard';
 import { isSystemUIOpen, subscribeSystemUI } from '@/lib/system-ui';
-import { isAppLocked, pickerHandoffStep, setNavLockState } from '@/lib/nav-guard';
+import { isAppLocked, isNavigationHeld, navigateWhenUnlocked, pickerHandoffStep, setNavLockState } from '@/lib/nav-guard';
 import { BrandMark } from '@/components/brand-mark';
 import { Spacing, Type } from '@/lib/theme';
 
@@ -83,7 +89,9 @@ const LOCK_SCREEN_ROUTES: readonly string[] = [LOCK_ROUTE, IMPORT_ROUTE];
 
 // Read synchronously by the alert guard at the moment a button is pressed, so it
 // is set together with the `locked` state, without waiting for a render.
-installAlertGuard(isAppLocked);
+// An alert raised while locked (an export that failed behind the lock
+// screen) is held and shown once the app is unlocked.
+installAlertGuard(isAppLocked, { hold: isNavigationHeld, later: navigateWhenUnlocked });
 
 /** How long a closing picker gets to finish its dismissal before /lock is presented over it. */
 const PICKER_HANDOFF_DELAY_MS = 350;
@@ -138,6 +146,45 @@ export function LockScreen() {
           onPress={tryUnlock}
         />
       </View>
+    </View>
+  );
+}
+
+/** Routes that never need the self-drawn lock (see LockCoverScreen). */
+const NO_SELF_LOCK: readonly string[] = [
+  'lock', // is the lock
+  'import', // draws the lock itself and holds its navigation (app/import.tsx)
+  '(tabs)', // under the in-tree cover LockGate draws over the navigator
+];
+
+/** True for every route LockCoverScreen should wrap (app/_layout.tsx screenLayout). */
+export function selfLockingRoute(routeName: string): boolean {
+  return !NO_SELF_LOCK.includes(routeName);
+}
+
+/**
+ * Wraps a screen so it draws the lock screen over itself while the app is
+ * locked. Used for every screen of the root stack (app/_layout.tsx
+ * screenLayout) except those listed in NO_SELF_LOCK.
+ *
+ * Why: presented screens (viewer, annotate, tools opened from the viewer, QR)
+ * are separate native controllers, so LockGate's in-tree cover can't reach
+ * them; normally the /lock route sits above them. If anything ever removes
+ * /lock while still locked — a router.back() that ran after slow work, which
+ * closes the TOP screen — the screen below must still not be usable. This is
+ * the second line of defence behind lib/nav-guard; nothing has to remember to
+ * add it to a new screen.
+ */
+export function LockCoverScreen({ children }: { children: React.ReactNode }) {
+  const locked = useAppLocked();
+  return (
+    <View style={styles.root}>
+      {children}
+      {locked && (
+        <View style={StyleSheet.absoluteFill} testID="screen-lock-cover">
+          <LockScreen />
+        </View>
+      )}
     </View>
   );
 }

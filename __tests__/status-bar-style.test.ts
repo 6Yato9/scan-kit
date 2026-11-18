@@ -20,3 +20,13 @@ describe('statusBarStyleFor', () => {
     expect(statusBarStyleFor('/tools/qrcode', false)).toBe('dark');
   });
 });
+
+describe('a tool opened from the viewer', () => {
+  // The viewer draws no <StatusBar> of its own (it would outlive its focus and
+  // keep the bar white over the tool), so the root style alone decides.
+  it('gets the theme style, not the viewer’s light one', () => {
+    expect(statusBarStyleFor('/tools/watermark', false)).toBe('dark');
+    expect(statusBarStyleFor('/tools/sign', false)).toBe('dark');
+    expect(statusBarStyleFor('/tools/timestamp', true)).toBe('light');
+  });
+});

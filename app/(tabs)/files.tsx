@@ -582,7 +582,7 @@ export default function FilesScreen() {
         />
         <SheetGroup>
           <SheetRow
-            icon="pencil-outline"
+            icon="rename"
             label="Rename folder"
             onPress={() => {
               const f = folderActions;

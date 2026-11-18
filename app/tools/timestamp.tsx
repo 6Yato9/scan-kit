@@ -162,7 +162,8 @@ export default function TimestampScreen() {
       <SectionLabel>Date</SectionLabel>
       <OptionList
         options={[
-          { value: 'scanned' as When, label: 'Date scanned', detail: doc ? formatStamp(doc.createdAt, format) : undefined },
+          // Both rows always carry a detail line, so they are the same height.
+          { value: 'scanned' as When, label: 'Date scanned', detail: doc ? formatStamp(doc.createdAt, format) : 'From the document you choose' },
           { value: 'now' as When, label: 'Current date', detail: formatStamp(now, format) },
         ]}
         value={when}

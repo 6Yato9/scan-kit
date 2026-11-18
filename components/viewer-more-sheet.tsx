@@ -15,7 +15,7 @@ import { Radius, Spacing, Type } from '@/lib/theme';
 
 export type MoreAction = {
   key: string;
-  /** Tiles may use AppIcon's extra glyphs (Sign's signature); rows take Ionicons. */
+  /** Ionicons, or one of AppIcon's SF Symbol glyphs (Sign's signature, Rename's pencil). */
   icon: AppIconName;
   label: string;
   detail?: string;
@@ -83,7 +83,7 @@ export function ViewerMoreSheet({ visible, title, subtitle, tools, groups, onClo
             {group.map((a, i) => (
               <SheetRow
                 key={a.key}
-                icon={a.icon === 'signature' ? 'create-outline' : a.icon}
+                icon={a.icon}
                 label={a.label}
                 detail={a.detail}
                 destructive={a.destructive}

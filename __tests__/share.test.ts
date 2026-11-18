@@ -2,6 +2,7 @@
 import * as Sharing from 'expo-sharing';
 import * as Print from 'expo-print';
 import * as FileSystem from 'expo-file-system/legacy';
+import { Share } from 'react-native';
 import {
   cleanFileUri,
   exportFileName,
@@ -10,7 +11,9 @@ import {
   runAfterDismiss,
   shareFile,
   ShareError,
+  shareText,
 } from '../lib/share';
+import { FLUSH_DELAY_MS, resetNavGuardForTests, setNavLockState } from '../lib/nav-guard';
 
 jest.mock('expo-sharing', () => ({
   isAvailableAsync: jest.fn().mockResolvedValue(true),
@@ -30,7 +33,10 @@ jest.mock('expo-file-system/legacy', () => ({
 const mockShare = Sharing.shareAsync as jest.Mock;
 const mockPrint = Print.printAsync as jest.Mock;
 
-beforeEach(() => jest.clearAllMocks());
+beforeEach(() => {
+  jest.clearAllMocks();
+  resetNavGuardForTests();
+});
 
 test('cleanFileUri strips cache-bust queries', () => {
   expect(cleanFileUri('file:///a/page-0.jpg?v=17')).toBe('file:///a/page-0.jpg');
@@ -124,5 +130,75 @@ describe('runAfterDismiss', () => {
     runAfterDismiss(fn, 100).cancel();
     jest.advanceTimersByTime(1000);
     expect(fn).not.toHaveBeenCalled();
+  });
+});
+
+// r6 code review #1: an export that finishes while App Lock is up must not
+// present the share sheet / print dialog above the lock screen.
+describe('App Lock', () => {
+  // Lets pending promise continuations run without advancing fake time.
+  const settle = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
+  const lock = () => setNavLockState({ locked: true, lockRouteShown: true });
+  const unlock = () => {
+    setNavLockState({ locked: false });
+    setNavLockState({ lockRouteShown: false }); // /lock dismissed itself
+    jest.advanceTimersByTime(FLUSH_DELAY_MS);
+  };
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  test('shareFile waits while locked and presents once unlocked and the lock screen is gone', async () => {
+    lock();
+    const done = shareFile('file:///x.pdf', { graceMs: 10 });
+    await settle();
+    jest.advanceTimersByTime(60_000);
+    await settle();
+    expect(mockShare).not.toHaveBeenCalled();
+    unlock();
+    await settle();
+    expect(mockShare).toHaveBeenCalledTimes(1);
+    jest.advanceTimersByTime(10);
+    await expect(done).resolves.toBe('finished');
+  });
+
+  test('shareFile presents nothing when the sheet that started it was closed meanwhile', async () => {
+    lock();
+    const c = new AbortController();
+    const done = shareFile('file:///x.pdf', { signal: c.signal });
+    await settle();
+    c.abort();
+    unlock();
+    await expect(done).resolves.toBe('skipped');
+    expect(mockShare).not.toHaveBeenCalled();
+  });
+
+  test('printFile waits while locked; a closed sheet skips the dialog', async () => {
+    lock();
+    const done = printFile('file:///x.pdf');
+    await settle();
+    expect(mockPrint).not.toHaveBeenCalled();
+    unlock();
+    await expect(done).resolves.toBe('printed');
+    expect(mockPrint).toHaveBeenCalledTimes(1);
+
+    lock();
+    const c = new AbortController();
+    const skipped = printFile('file:///y.pdf', { signal: c.signal });
+    c.abort();
+    unlock();
+    await expect(skipped).resolves.toBe('cancelled');
+    expect(mockPrint).toHaveBeenCalledTimes(1);
+  });
+
+  test('shareText waits while locked and never rejects', async () => {
+    const spy = jest.spyOn(Share, 'share').mockRejectedValue(new Error('dismissed'));
+    lock();
+    const done = shareText('Invoice 42');
+    await settle();
+    expect(spy).not.toHaveBeenCalled();
+    unlock();
+    await expect(done).resolves.toBeUndefined();
+    expect(spy).toHaveBeenCalledWith({ message: 'Invoice 42' });
+    spy.mockRestore();
   });
 });

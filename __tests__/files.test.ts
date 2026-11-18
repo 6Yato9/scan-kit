@@ -90,7 +90,12 @@ jest.mock('expo-file-system', () => {
   };
 });
 
+// The OCR cache is tested on its own (ocr-cache.test.ts); here only that the
+// file operations that remove pages or documents tell it to.
+jest.mock('../lib/ocr-cache', () => ({ forgetDocumentOcr: jest.fn(), pruneDocumentOcr: jest.fn() }));
+
 import {
+  deleteDocumentFiles,
   deleteSinglePage,
   appendPages,
   reorderPages,
@@ -113,6 +118,7 @@ import {
   pageLayoutGeneration,
 } from '../lib/files';
 import { cappedSize, MAX_PAGE_EDGE } from '../lib/image-size';
+import { forgetDocumentOcr as mockForgetOcr, pruneDocumentOcr as mockPruneOcr } from '../lib/ocr-cache';
 import { manipulateAsync } from 'expo-image-manipulator';
 
 // The mock caches File/Directory instances by uri and `delete` now clears
@@ -737,5 +743,20 @@ describe('pageLayoutGeneration (guards index-based Undo, critique M1)', () => {
     deleteSinglePage('lg', 2, 3);
     expect(pageLayoutGeneration('lg')).not.toBe(g1);
     expect(pageLayoutGeneration('other-doc')).toBe(0);
+  });
+});
+
+// r6 code review #3: recognised text must go with the page / document.
+describe('OCR text follows deletions', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  test('deleting a document forgets its cached text (its folder held the entries)', () => {
+    deleteDocumentFiles('gone');
+    expect(mockForgetOcr).toHaveBeenCalledWith('gone');
+  });
+
+  test('deleting a page prunes the cached text of pages the document no longer has', () => {
+    deleteSinglePage('doc9', 0, 2);
+    expect(mockPruneOcr).toHaveBeenCalledWith('doc9');
   });
 });

@@ -8,6 +8,7 @@
 import { Directory, File, Paths } from 'expo-file-system';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { cappedSize, getImageSize } from './image-size';
+import { forgetDocumentOcr, pruneDocumentOcr } from './ocr-cache';
 
 /**
  * Moves `side` into `dest`'s place. The old `dest` is deleted first because
@@ -41,7 +42,13 @@ function bumpLayout(docId: string): void {
   layoutGenerations.set(docId, pageLayoutGeneration(docId) + 1);
 }
 
+/**
+ * Deletes a document's folder: its pages, their shadows and the text
+ * recognised on them (lib/ocr-cache keeps it in the folder's ocr/), plus that
+ * text's in-memory copy.
+ */
 export function deleteDocumentFiles(docId: string): void {
+  forgetDocumentOcr(docId);
   const dir = new Directory(Paths.document, 'scan-kit', docId);
   if (dir.exists) {
     dir.delete();
@@ -219,6 +226,8 @@ export function deleteSinglePage(
 
   shift('');
   shift('.orig');
+  // The deleted page's recognised text must not stay behind in the folder.
+  pruneDocumentOcr(docId);
 }
 
 /** Present in a doc folder while a reorder is promoting its temp copies. */
@@ -537,6 +546,7 @@ export async function garbageCollectOrphans(validDocIds: string[], now: number =
       } else if (isSettled(child, now)) {
         // Orphan directory: its doc record is gone. Remove it entirely.
         child.delete();
+        forgetDocumentOcr(baseName(child.uri));
         handled++;
       }
     } catch {}

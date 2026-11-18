@@ -10,10 +10,11 @@ import { ToastProvider } from '@/components/toast';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { FilterBaker } from '@/components/filter-baker';
 import { BakeIndicator } from '@/components/bake-indicator';
-import { LockGate } from '@/components/lock-gate';
+import { LockCoverScreen, LockGate, selfLockingRoute } from '@/components/lock-gate';
 import { bakePage } from '@/lib/bake';
 import { statusBarStyleFor } from '@/lib/status-bar-style';
 import { garbageCollectOrphans } from '@/lib/files';
+import { clearLegacyOcrCache } from '@/lib/ocr-cache';
 import { documentIdsForCleanup, getOnboarded, getOnboardedSync, pendingBakeMigrations } from '@/lib/storage';
 
 // The tabs are the root of the stack even when the app is cold-started on
@@ -125,6 +126,12 @@ const toolOptions = ({ route }: { route: { params?: object } }) => ({
   presentation: (route.params as { docId?: string } | undefined)?.docId ? ('fullScreenModal' as const) : ('card' as const),
 });
 
+// App Lock, second line of defence: every presented screen draws the lock over
+// itself while locked (components/lock-gate.tsx LockCoverScreen), so a screen
+// can't be usable without unlocking even if the /lock route above it is gone.
+const lockCoverLayout = ({ route, children }: { route: { name: string }; children: React.ReactElement }) =>
+  selfLockingRoute(route.name) ? <LockCoverScreen>{children}</LockCoverScreen> : children;
+
 function ThemedStack() {
   const { colors } = useTheme();
   return (
@@ -134,6 +141,7 @@ function ThemedStack() {
     <FilterBaker />
     <LockGate>
     <Stack
+      screenLayout={lockCoverLayout}
       screenOptions={{
         // One header system: every screen draws components/screen-header.tsx
         // (chevron back, centred title) itself, so the native bar is off app-wide.
@@ -194,6 +202,9 @@ export default function RootLayout() {
     // documentIdsForCleanup returns null when the list can't be trusted (doc
     // records exist that didn't parse), and then nothing is deleted.
     const t = setTimeout(() => {
+      // Recognised text used to be cached outside the documents' folders,
+      // where it outlived deleted documents (lib/ocr-cache.ts).
+      clearLegacyOcrCache();
       documentIdsForCleanup()
         .then(ids => (ids ? garbageCollectOrphans(ids) : 0))
         .catch(() => {});

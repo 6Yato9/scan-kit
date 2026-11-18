@@ -113,7 +113,8 @@ const styles = StyleSheet.create({
   footer: { marginTop: Spacing.sm, marginHorizontal: Spacing.xs, lineHeight: 18 },
   card: { borderRadius: Radius.md, padding: Spacing.lg, gap: Spacing.lg },
   cardHead: { flexDirection: 'row', gap: Spacing.md, alignItems: 'flex-start' },
-  cardText: { flex: 1, lineHeight: 21 },
+  // The icon is centred on the first line, as in every settings row.
+  cardText: { flex: 1, lineHeight: 21, marginTop: Math.round((30 - 21) / 2) },
   // Same tile as every settings row.
   iconTile: {
     width: 30,

@@ -13,9 +13,11 @@ The app must read as a polished, professional product. These rules are not optio
 
 ## Icons
 - Ionicons (`@expo/vector-icons`). Outline style by default; filled only for
-  the active tab or a selected state. The single exception is a glyph Ionicons
-  doesn't have (the signature for Sign): render it with Apple's SF Symbol via
-  `components/app-icon.tsx`, which falls back to an Ionicon off iOS.
+  the active tab or a selected state. The only exceptions are the few glyphs
+  Ionicons lacks or draws at a different weight — the signature (Sign), the
+  pencil (Rename) and the split tall page (Long image): render them with
+  Apple's SF Symbols via `components/app-icon.tsx`, which falls back to an
+  Ionicon off iOS. Text recognition is `reader-outline` everywhere.
 - One glyph per action across the app: share `share-outline`, copy `copy-outline`,
   delete `trash-outline`, more `ellipsis-horizontal`, selected `checkmark`,
   back `chevron-back`, close `close`, add `add`.

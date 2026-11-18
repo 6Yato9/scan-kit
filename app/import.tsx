@@ -2,8 +2,10 @@
 // Landing screen for "Open in Scan Kit" (see app/+native-intent.tsx): saves the
 // incoming PDF or image as a new document and replaces itself with the viewer.
 // Images are auto-cropped like any other photo import. iOS copies the shared
-// file into Documents/Inbox; that copy is removed once the import has finished
-// (or failed, or this screen was closed before it could finish).
+// file into Documents/Inbox; it is copied into our cache first and the Inbox
+// copy removed. Our copy is kept until a document has been saved from it, so
+// a failed save offers "Try again" instead of asking for the file again. A
+// scan still being saved when the file arrives is waited for, not an error.
 //
 // App Lock: while the app is locked this screen shows the lock screen instead
 // of the file's name, and it opens the viewer only after the user has
@@ -22,7 +24,7 @@ import { displayNameOf, documentNameFor, importKindOf } from '@/lib/incoming-fil
 import { abandonSystemUI } from '@/lib/system-ui';
 import { Spacing, Type } from '@/lib/theme';
 
-type Status = { state: 'working' } | { state: 'failed'; title: string; body: string };
+type Status = { state: 'working' } | { state: 'failed'; title: string; body: string; retry?: boolean };
 
 /** Copy into our cache first: the original may live in a location iOS cleans up. */
 function stageCopy(uri: string): string {
@@ -31,6 +33,19 @@ function stageCopy(uri: string): string {
   const dest = new File(Paths.cache, `incoming-${Date.now()}-${name}`);
   src.copy(dest);
   return dest.uri;
+}
+
+/** A fresh copy of a staged file for one import attempt, or null if it can't be made. */
+function copyOf(uri: string): string | null {
+  try {
+    const src = new File(uri);
+    const dest = new File(Paths.cache, `attempt-${Date.now()}-${src.name}`);
+    src.copy(dest);
+    return dest.uri;
+  } catch (err) {
+    console.warn('Copy staged file failed', err);
+    return null;
+  }
 }
 
 function deleteQuietly(uri: string) {
@@ -75,61 +90,99 @@ export default function ImportScreen() {
     return () => { mounted.current = false; };
   }, []);
 
+  // Our own copy of the incoming file. Kept until a document has been saved
+  // from it, so a failed save can be retried without sharing the file again
+  // (iOS's Inbox copy is gone by then); deleted once saved or when the user
+  // leaves this screen.
+  const stagedRef = useRef<string | null>(null);
+  const attemptingRef = useRef(false);
+
+  const dropStaged = () => {
+    if (stagedRef.current) deleteQuietly(stagedRef.current);
+    stagedRef.current = null;
+  };
+
+  /** Saves the staged copy as a document; on failure keeps it for "Try again". */
+  const attempt = async () => {
+    const staged = stagedRef.current;
+    if (!staged || attemptingRef.current) return;
+    attemptingRef.current = true;
+    setStatus({ state: 'working' });
+    // The import consumes the file it is given (auto-crop deletes its input
+    // once it has a cropped copy), so each attempt works on its own copy and
+    // the staged one survives a failure.
+    let work: string | null = null;
+    try {
+      const kind = importKindOf(uri!);
+      work = copyOf(staged);
+      // Waits for a scan that is still being saved (scan-context saveAndOpen).
+      const id = kind && work
+        ? await saveFiles([work], kind, documentNameFor(uri!)).catch(err => {
+            console.error('Import incoming file failed', err);
+            return null;
+          })
+        : null;
+      if (id) {
+        // The document has its own copy now.
+        dropStaged();
+        // A finished import that nobody is waiting for stays in Files; just don't navigate.
+        if (mounted.current) setSavedId(id);
+        return;
+      }
+      if (!mounted.current) {
+        dropStaged();
+        return;
+      }
+      setStatus({
+        state: 'failed',
+        title: 'Couldn’t import the file',
+        body: 'Check that your device has free space, then try again.',
+        retry: true,
+      });
+    } finally {
+      if (work) deleteQuietly(work);
+      attemptingRef.current = false;
+    }
+  };
+
   useEffect(() => {
     if (started.current) return;
     started.current = true;
-    (async () => {
-      const source = uri ? uri.split('?')[0] : null;
-      const kind = uri ? importKindOf(uri) : null;
-      if (!source || !kind) {
-        if (source) removeInboxCopy(source);
-        setStatus({
-          state: 'failed',
-          title: 'Scan Kit can’t open this file',
-          body: 'Only PDFs and images can be imported.',
-        });
-        return;
-      }
-      let staged: string;
-      try {
-        staged = stageCopy(source);
-      } catch (err) {
-        console.warn('Stage incoming file failed', err);
-        removeInboxCopy(source);
-        setStatus({
-          state: 'failed',
-          title: 'Couldn’t open the file',
-          body: 'It may have been moved or deleted. Try sharing it again.',
-        });
-        return;
-      }
-      // We have our own copy now; iOS's Inbox copy is no longer needed whatever happens next.
-      removeInboxCopy(source);
-      // Closed before the slow part started (e.g. replaced by another route): stop here.
-      if (!mounted.current) {
-        deleteQuietly(staged);
-        return;
-      }
-      const id = await saveFiles([staged], kind, documentNameFor(uri!)).catch(err => {
-        console.error('Import incoming file failed', err);
-        return null;
+    const source = uri ? uri.split('?')[0] : null;
+    const kind = uri ? importKindOf(uri) : null;
+    if (!source || !kind) {
+      if (source) removeInboxCopy(source);
+      setStatus({
+        state: 'failed',
+        title: 'Scan Kit can’t open this file',
+        body: 'Only PDFs and images can be imported.',
       });
-      // The document has its own copy now (or the import failed).
-      deleteQuietly(staged);
-      // A finished import that nobody is waiting for stays in Files; just don't navigate.
-      if (!mounted.current) return;
-      if (!id) {
-        // saveAndOpen has already explained a storage failure.
-        setStatus({
-          state: 'failed',
-          title: 'Couldn’t import the file',
-          body: 'Check that your device has free space, then try again.',
-        });
-        return;
-      }
-      setSavedId(id);
-    })();
+      return;
+    }
+    try {
+      stagedRef.current = stageCopy(source);
+    } catch (err) {
+      console.warn('Stage incoming file failed', err);
+      removeInboxCopy(source);
+      setStatus({
+        state: 'failed',
+        title: 'Couldn’t open the file',
+        body: 'It may have been moved or deleted. Try sharing it again.',
+      });
+      return;
+    }
+    // We have our own copy now (kept until the import succeeds); iOS's Inbox
+    // copy is no longer needed whatever happens next.
+    removeInboxCopy(source);
+    attempt();
+    // `attempt` reads refs only; this runs once per incoming file.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uri, saveFiles]);
+
+  // Leaving the screen with a failed import: the staged copy goes too.
+  useEffect(() => () => {
+    if (!attemptingRef.current) dropStaged();
+  }, []);
 
   // Open the viewer only once the app is unlocked.
   useEffect(() => {
@@ -137,7 +190,10 @@ export default function ImportScreen() {
     router.replace({ pathname: '/viewer', params: { id: savedId } });
   }, [savedId, locked, router]);
 
-  const goHome = () => router.replace('/');
+  const goHome = () => {
+    dropStaged();
+    router.replace('/');
+  };
 
   if (locked) {
     return (
@@ -162,7 +218,14 @@ export default function ImportScreen() {
           <Ionicons name="document-outline" size={44} color={colors.muted} />
           <Text style={[Type.headline, styles.text, { color: colors.text }]}>{status.title}</Text>
           <Text style={[Type.footnote, styles.text, { color: colors.muted }]}>{status.body}</Text>
-          <PrimaryButton title="Go to Home" onPress={goHome} style={styles.btn} />
+          {status.retry ? (
+            <>
+              <PrimaryButton title="Try again" onPress={attempt} style={styles.btn} />
+              <PrimaryButton title="Go to Home" variant="secondary" onPress={goHome} style={styles.btnNext} />
+            </>
+          ) : (
+            <PrimaryButton title="Go to Home" onPress={goHome} style={styles.btn} />
+          )}
         </View>
       )}
     </View>
@@ -174,4 +237,5 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: Spacing.sm, padding: Spacing.xxl },
   text: { textAlign: 'center' },
   btn: { alignSelf: 'stretch', marginTop: Spacing.lg },
+  btnNext: { alignSelf: 'stretch' },
 });

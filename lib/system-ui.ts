@@ -15,7 +15,10 @@
 //   tracked call with the caller's "cancelled" value, so its `finally` runs and
 //   the busy flags reset.
 //
-// Wrap every call that presents a picker in withSystemUI().
+// Wrap every call that presents a picker in withSystemUI(). It also waits
+// while App Lock is engaged, so a picker can never open above the lock screen.
+
+import { isNavigationHeld, whenUnlocked } from './nav-guard';
 
 type Entry = { settle: () => void };
 
@@ -47,6 +50,10 @@ export function subscribeSystemUI(fn: (isOpen: boolean) => void): () => void {
  * result that arrives after that is ignored.
  */
 export function withSystemUI<T>(present: () => Promise<T>, cancelled: () => T): Promise<T> {
+  // App Lock: a picker presented while locked would open above the lock screen
+  // (this call ran after slow work). Wait until the app is unlocked and the
+  // lock screen has gone (lib/nav-guard). Unlocked: present synchronously.
+  if (isNavigationHeld()) return whenUnlocked().then(() => withSystemUI(present, cancelled));
   return new Promise<T>((resolve, reject) => {
     let done = false;
     const entry: Entry = {

@@ -11,7 +11,8 @@
 // without anyone having unlocked the app.
 //
 // So every navigation that runs after an await goes through
-// navigateWhenUnlocked(). While the app is locked — or the /lock route is still
+// navigateWhenUnlocked(), and everything that presents native UI after an
+// await (share sheet, print dialog, Photos) first awaits whenUnlocked(). While the app is locked — or the /lock route is still
 // on screen, closing itself after an unlock — the navigation is held; it runs
 // once the app is unlocked and the lock screen has gone, so it acts on the
 // screen that started the work, as intended. A navigation the user triggers by
@@ -100,6 +101,28 @@ export function navigateWhenUnlocked(action: Action): () => void {
     const i = waiting.indexOf(action);
     if (i !== -1) waiting.splice(i, 1);
   };
+}
+
+/**
+ * Resolves once the app is unlocked AND the lock screen has fully gone (the
+ * same moment a held navigation would run). Resolves on the next microtask
+ * when nothing is held. Re-checks after waking, so a lock that engages again
+ * during the hand-over keeps it waiting.
+ *
+ * Await it right before anything that PRESENTS or NAVIGATES after slow work:
+ * a share sheet, the print dialog, a system prompt, a route change. While the
+ * app is locked the top screen is /lock, and a native sheet presented then
+ * appears above it — usable without unlocking. lib/share.ts (shareFile,
+ * printFile) and lib/photos.ts already wait here internally, so their callers
+ * can't forget. ESLint (eslint-rules/lock-safe.js) rejects direct calls to the
+ * native presenters elsewhere, and router calls made after an `await`.
+ */
+export async function whenUnlocked(): Promise<void> {
+  while (blocked() || waiting.length > 0) {
+    await new Promise<void>(resolve => {
+      navigateWhenUnlocked(resolve);
+    });
+  }
 }
 
 export type PickerHandoff = 'none' | 'clear-overlay' | 'push-lock';

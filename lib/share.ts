@@ -13,11 +13,21 @@
 //   silently. Either share from inside the open modal, or close it and use
 //   `runAfterDismiss` / `useCloseThen`.
 // - Native APIs must never see a `?v=` cache-bust suffix.
+// - App Lock: while the app is locked the top screen is the /lock route, and a
+//   sheet presented then appears ABOVE it, usable without unlocking. Both
+//   `shareFile` and `printFile` therefore wait (lib/nav-guard whenUnlocked)
+//   until the app is unlocked and the lock screen has gone before presenting,
+//   and skip presenting altogether if the caller's `signal` was aborted
+//   meanwhile (the sheet that started the export has been closed). This is the
+//   ONLY place allowed to call Sharing.shareAsync / Print.printAsync / RN
+//   Share.share (eslint-rules/lock-safe.js enforces it).
 import { useCallback, useEffect, useRef } from 'react';
+import { Share } from 'react-native';
 import * as Sharing from 'expo-sharing';
 import * as Print from 'expo-print';
 import * as FileSystem from 'expo-file-system/legacy';
 import { safeFileName } from './auto-name';
+import { whenUnlocked } from './nav-guard';
 
 /** Strip any `?v=` cache-bust query (or other query) before handing a URI to native code. */
 export function cleanFileUri(uri: string): string {
@@ -37,13 +47,20 @@ export type ShareOptions = {
   onFinish?: () => void;
   /** How long `shareFile` waits for an early failure before resolving. Default 1200 ms. */
   graceMs?: number;
+  /**
+   * The work's abort signal. Aborted while waiting for the app to be unlocked
+   * (the sheet that started the export was closed): nothing is presented and
+   * the call resolves 'skipped'.
+   */
+  signal?: AbortSignal;
 };
 
 /**
  * `finished`: the user shared or dismissed within the grace period.
  * `presented`: the sheet is still open; the caller can carry on.
+ * `skipped`: `signal` was aborted before the sheet could be shown.
  */
-export type ShareOutcome = 'finished' | 'presented';
+export type ShareOutcome = 'finished' | 'presented' | 'skipped';
 
 /** A failure that is safe to show to the user as-is. */
 export class ShareError extends Error {
@@ -58,6 +75,7 @@ export class ShareError extends Error {
  * Open the native share sheet for a local file. Resolves as soon as the sheet
  * is up (or finished) — never waits for the user — and rejects with a
  * `ShareError` carrying a human-readable message when sharing can't start.
+ * While the app is locked it waits for the unlock first (see file header).
  */
 export async function shareFile(uri: string, options: ShareOptions = {}): Promise<ShareOutcome> {
   const clean = cleanFileUri(uri);
@@ -68,6 +86,10 @@ export async function shareFile(uri: string, options: ShareOptions = {}): Promis
   if (!info?.exists) {
     throw new ShareError('The file to share couldn’t be found. Try exporting again.');
   }
+  // Last await before presenting: nothing can lock the app between this and
+  // the native call below.
+  await whenUnlocked();
+  if (options.signal?.aborted) return 'skipped';
 
   let settled = false;
   const native = Sharing.shareAsync(clean, {
@@ -103,6 +125,20 @@ export async function shareFile(uri: string, options: ShareOptions = {}): Promis
   return outcome;
 }
 
+/**
+ * Share plain text (recognised text) through the system share sheet. Waits
+ * while the app is locked, like shareFile. Dismissing is not an error; never
+ * rejects.
+ */
+export async function shareText(message: string): Promise<void> {
+  await whenUnlocked();
+  try {
+    await Share.share({ message });
+  } catch {
+    // dismissed, or the sheet couldn't open: nothing to tell the user
+  }
+}
+
 /** True for the errors iOS/Android raise when the user simply backs out. */
 export function isCancelError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err ?? '');
@@ -113,10 +149,14 @@ export type PrintOutcome = 'printed' | 'cancelled';
 
 /**
  * Print a local PDF (or image) through the system print dialog. Cancelling is
- * not an error. Rejects with a `ShareError` for real failures.
+ * not an error. Rejects with a `ShareError` for real failures. While the app
+ * is locked it waits for the unlock first; an abort of `options.signal`
+ * meanwhile skips the dialog ('cancelled').
  */
-export async function printFile(uri: string): Promise<PrintOutcome> {
+export async function printFile(uri: string, options: { signal?: AbortSignal } = {}): Promise<PrintOutcome> {
   const clean = cleanFileUri(uri);
+  await whenUnlocked();
+  if (options.signal?.aborted) return 'cancelled';
   try {
     await Print.printAsync({ uri: clean });
     return 'printed';
