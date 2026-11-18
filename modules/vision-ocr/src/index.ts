@@ -8,6 +8,8 @@ type VisionOcrNative = {
   recognize(uri: string): Promise<VisionResult>;
   /** Present only in dev clients built after document detection was added. */
   detectDocument?: (uri: string, quality: number) => Promise<DetectResult>;
+  /** Present only in dev clients built after PDF protection was added. */
+  protectPdf?: (inputUri: string, outputUri: string, password: string) => Promise<string>;
 };
 
 /** null on Android, on web, and in a dev client built before this module existed. */

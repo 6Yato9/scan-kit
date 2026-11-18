@@ -25,6 +25,19 @@ public class VisionOcrModule: Module {
       }
     }
 
+    /// Write a password-protected copy of a PDF. Resolves to the output file URI.
+    AsyncFunction("protectPdf") { (inputUri: String, outputUri: String, password: String, promise: Promise) in
+      DispatchQueue.global(qos: .userInitiated).async {
+        do {
+          func path(_ u: String) -> String { URL(string: u).flatMap { $0.isFileURL ? $0.path : nil } ?? u }
+          try PdfProtector.protect(inputPath: path(inputUri), outputPath: path(outputUri), password: password)
+          promise.resolve(URL(fileURLWithPath: path(outputUri)).absoluteString)
+        } catch {
+          promise.reject("ERR_PDF_PROTECT", error.localizedDescription)
+        }
+      }
+    }
+
     /// Detect a document in a photo and return a perspective-corrected copy.
     /// Resolves to { uri, detected }. When nothing confident is found, resolves
     /// with the input uri and detected: false.
