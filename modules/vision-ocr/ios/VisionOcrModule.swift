@@ -24,6 +24,26 @@ public class VisionOcrModule: Module {
         }
       }
     }
+
+    /// Detect a document in a photo and return a perspective-corrected copy.
+    /// Resolves to { uri, detected }. When nothing confident is found, resolves
+    /// with the input uri and detected: false.
+    AsyncFunction("detectDocument") { (uri: String, quality: Double, promise: Promise) in
+      DispatchQueue.global(qos: .userInitiated).async {
+        do {
+          let input = URL(string: uri).flatMap { $0.isFileURL ? $0.path : nil } ?? uri
+          let out = FileManager.default.temporaryDirectory
+            .appendingPathComponent("doc-\(UUID().uuidString).jpg").path
+          if let corrected = try DocumentDetector.detectAndCorrect(path: input, outputPath: out, quality: quality) {
+            promise.resolve(["uri": URL(fileURLWithPath: corrected).absoluteString, "detected": true])
+          } else {
+            promise.resolve(["uri": uri, "detected": false])
+          }
+        } catch {
+          promise.reject("ERR_DOC_DETECT", error.localizedDescription)
+        }
+      }
+    }
   }
 
   private static func loadImage(_ uri: String) throws -> UIImage {

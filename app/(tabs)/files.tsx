@@ -30,6 +30,7 @@ import {
   getScanSettings,
   SortKey,
 } from '@/lib/storage';
+import { autoCropDocuments } from '@/lib/document-detect';
 import { deleteDocumentFiles } from '@/lib/files';
 import { mergeIntoNew } from '@/lib/doc-ops';
 import { matchesQuery, sortDocuments } from '@/lib/doc-list';
@@ -150,7 +151,10 @@ export default function FilesScreen() {
         quality: qualityMap[settings.quality],
       });
       if (result.canceled || !result.assets.length) return;
-      const id = await saveAndOpen({ pages: result.assets.map(a => a.uri) });
+      // Photos of a page on a desk: find the page and straighten it, like the
+      // in-app scanner does. Falls back to the original photo per image.
+      const pages = await autoCropDocuments(result.assets.map(a => a.uri), qualityMap[settings.quality]);
+      const id = await saveAndOpen({ pages });
       if (id) router.push({ pathname: '/viewer', params: { id } });
     } catch (err) {
       console.error('Import images failed', err);
@@ -172,7 +176,7 @@ export default function FilesScreen() {
       const asset = result.assets[0];
       const id = asset.mimeType === 'application/pdf'
         ? await saveAndOpen({ pdfUri: asset.uri })
-        : await saveAndOpen({ pages: [asset.uri] });
+        : await saveAndOpen({ pages: await autoCropDocuments([asset.uri]) });
       if (id) router.push({ pathname: '/viewer', params: { id } });
     } catch (err) {
       console.error('Import files failed', err);
