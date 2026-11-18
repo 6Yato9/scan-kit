@@ -72,14 +72,18 @@ export function exportAllName(now: Date = new Date()): string {
 
 /** Unique file names inside a ZIP: a second "Scan.pdf" becomes "Scan 2.pdf". */
 export function uniqueNames(names: string[]): string[] {
-  const used = new Map<string, number>();
+  // Every output name is reserved (case-insensitively) as it is produced, and a
+  // generated "Name N" keeps counting until it is free — so an existing
+  // "Receipt 2" can never collide with a generated one.
+  const taken = new Set<string>();
   return names.map(n => {
-    const key = n.toLowerCase();
-    const count = (used.get(key) ?? 0) + 1;
-    used.set(key, count);
-    if (count === 1) return n;
     const dot = n.lastIndexOf('.');
-    return dot > 0 ? `${n.slice(0, dot)} ${count}${n.slice(dot)}` : `${n} ${count}`;
+    const stem = dot > 0 ? n.slice(0, dot) : n;
+    const ext = dot > 0 ? n.slice(dot) : '';
+    let candidate = n;
+    for (let i = 2; taken.has(candidate.toLowerCase()); i++) candidate = `${stem} ${i}${ext}`;
+    taken.add(candidate.toLowerCase());
+    return candidate;
   });
 }
 
