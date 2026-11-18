@@ -16,7 +16,7 @@ type Props = {
   onAction?: () => void;
   actionLabel?: string;
   actionIcon?: IconName;
-  /** Optional second, quieter action (e.g. "Import from Photos"). */
+  /** Optional second, quieter action (e.g. "Import file"). */
   onSecondaryAction?: () => void;
   secondaryLabel?: string;
   /** Override the variant's copy. */

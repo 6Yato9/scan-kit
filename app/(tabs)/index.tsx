@@ -1,6 +1,7 @@
 // app/(tabs)/index.tsx
-// Home: a starting point, not a second library. Shortcuts (import, sign —
-// scanning is the tab bar's camera button, so there's no second Scan card), the
+// Home: a starting point, not a second library. Shortcuts (import, extract
+// text — scanning is the tab bar's camera button, so there's no second Scan
+// card; Sign lives in Tools and in a document's … menu), the
 // few most recent documents, and shortcuts into folders. The full library
 // (every document, grid or list, sort, select, folders) lives in Files.
 // Searching here covers everything, including text inside documents, and a
@@ -80,7 +81,7 @@ export default function HomeScreen() {
         <View style={styles.quickRow}>
           <QuickAction icon="images-outline" label="Import photos" hint="Make a document from photos" onPress={importImages} />
           <QuickAction icon="folder-open-outline" label="Import file" hint="Import a PDF or an image file" onPress={importFile} />
-          <QuickAction icon="create-outline" label="Sign" hint="Sign a document" onPress={() => router.push('/tools/sign')} />
+          <QuickAction icon="document-text-outline" label="Extract text" hint="Copy the text from a photo or a scan" onPress={() => router.push('/tools/extract-text')} />
         </View>
       )}
       {!searching && folders.length > 0 && (

@@ -155,7 +155,7 @@ export default function ExtractTextScreen() {
             loading={busy && !progress}
           />
           <PrimaryButton
-            title="Choose photos"
+            title="Import photos"
             icon="images-outline"
             variant="secondary"
             onPress={() => run('photos')}

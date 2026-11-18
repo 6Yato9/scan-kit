@@ -14,6 +14,7 @@ import {
   DocRow,
   NoDocumentsScreen,
   OptionList,
+  SectionRow,
   ToolNote,
   ToolProgress,
   ToolScreen,
@@ -114,7 +115,7 @@ export default function CompressScreen() {
             )
           ) : (
             <PrimaryButton
-              title={doc ? `Compress document (${formatBytes(currentSize)})` : "Select a document"}
+              title={doc ? `Compress document (${formatBytes(currentSize)})` : 'Choose a document'}
               onPress={handleCompress}
               disabled={!doc}
               loading={running}
@@ -126,6 +127,34 @@ export default function CompressScreen() {
       {/* Presented over the viewer: a baker underneath would never run (see FilterBaker). */}
       {fromViewer ? <FilterBaker /> : null}
       {fixed && doc ? <ToolDocHeader doc={doc} /> : null}
+
+      {fixed ? null : doc ? (
+        // Chosen: collapse the list so the size options sit right below.
+        <>
+          <SectionRow label="Document" action="Change" onAction={() => { if (!running) { setDocId(null); setResult(null); } }} />
+          <ToolDocHeader doc={doc} flush />
+        </>
+      ) : (
+        <>
+          <SectionLabel>Document</SectionLabel>
+          <DocGroup>
+            {docs.map(d => (
+              <DocRow
+                key={d.id}
+                doc={d}
+                selected={false}
+                onPress={() => {
+                  if (running) return;
+                  setDocId(d.id);
+                  setResult(null);
+                }}
+              />
+            ))}
+          </DocGroup>
+          <ToolNote>Works on scanned and imported photos. Imported PDF files can’t be compressed.</ToolNote>
+        </>
+      )}
+
       {done ? (
         <View style={[styles.result, { backgroundColor: colors.card }]}>
           <View style={styles.resultCol}>
@@ -142,27 +171,10 @@ export default function CompressScreen() {
 
       <SectionLabel>Size</SectionLabel>
       <OptionList options={LEVELS} value={level} onChange={v => { setLevel(v); setResult(null); }} />
-
-      {fixed ? null : (
-        <>
-          <SectionLabel>Document</SectionLabel>
-          <DocGroup>
-            {docs.map(d => (
-              <DocRow
-                key={d.id}
-                doc={d}
-                selected={d.id === docId}
-                onPress={() => {
-                  if (running) return;
-                  setDocId(d.id);
-                  setResult(null);
-                }}
-              />
-            ))}
-          </DocGroup>
-          <ToolNote>Works on scanned and imported photos. Imported PDF files can’t be compressed.</ToolNote>
-        </>
-      )}
+      <ToolNote>
+        Compress replaces the page images to free up space on this device. To send a smaller file and keep the pages as
+        they are, share the document and choose Smaller PDF.
+      </ToolNote>
     </ToolScreen>
   );
 }

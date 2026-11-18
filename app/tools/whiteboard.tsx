@@ -51,7 +51,7 @@ export default function WhiteboardScreen() {
             loading={busy === 'camera'}
           />
           <PrimaryButton
-            title="Choose photos"
+            title="Import photos"
             icon="images-outline"
             variant="secondary"
             onPress={() => run('photos')}

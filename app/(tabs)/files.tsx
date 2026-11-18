@@ -38,7 +38,7 @@ import { BottomSheet, SheetGroup, SheetHeader, SheetRow } from '@/components/bot
 import { DocumentCard, DocumentCardSkeleton, DocumentRow, DocumentRowSkeleton } from '@/components/document-card';
 import { FilesLayout, getFilesLayout, saveFilesLayout } from '@/lib/view-pref';
 import { EmptyState } from '@/components/empty-state';
-import { SortSheet } from '@/components/sort-sheet';
+import { SectionLabel } from '@/components/section-label';
 import { MoveFolderSheet } from '@/components/move-folder-sheet';
 import { HeaderIconButton, HeaderTextButton, LargeTitle } from '@/components/screen-header';
 import { PrimaryButton } from '@/components/primary-button';
@@ -57,6 +57,15 @@ function countLabel(n: number): string {
 }
 type FolderPrompt = { mode: 'create' } | { mode: 'rename'; folder: string };
 
+/** One size for every header icon on this screen. */
+const HEADER_ICON = 26;
+
+const SORT_OPTIONS: { key: SortKey; label: string; sub: string; icon: IconName }[] = [
+  { key: 'dateAdded', label: 'Date added', sub: 'Newest first', icon: 'calendar-outline' },
+  { key: 'dateModified', label: 'Last modified', sub: 'Recently edited first', icon: 'time-outline' },
+  { key: 'nameAZ', label: 'Name', sub: 'A to Z', icon: 'text-outline' },
+];
+
 /**
  * Grid columns: three on phones, so a screen shows two full rows of documents
  * instead of one and a half; more on wider screens (iPad, landscape).
@@ -71,7 +80,7 @@ export default function FilesScreen() {
   const [loaded, setLoaded] = useState(false);
   const [activeFolder, setActiveFolder] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>('dateAdded');
-  const [sortSheetVisible, setSortSheetVisible] = useState(false);
+  const [viewSheetVisible, setViewSheetVisible] = useState(false);
   const [addSheetVisible, setAddSheetVisible] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -91,12 +100,9 @@ export default function FilesScreen() {
   const params = useLocalSearchParams<{ action?: string; folder?: string }>();
   const [layout, setLayout] = useState<FilesLayout>('grid');
   useEffect(() => { getFilesLayout().then(setLayout); }, []);
-  const toggleLayout = useCallback(() => {
-    setLayout(prev => {
-      const next = prev === 'grid' ? 'list' : 'grid';
-      saveFilesLayout(next);
-      return next;
-    });
+  const setLayoutTo = useCallback((next: FilesLayout) => {
+    setLayout(next);
+    saveFilesLayout(next);
   }, []);
   const { lastSaved } = useScan();
   const { colors } = useTheme();
@@ -393,16 +399,9 @@ export default function FilesScreen() {
           title="Files"
           right={
             <>
-              <HeaderIconButton icon="checkmark-circle-outline" label="Select documents" color={colors.accent} size={23} onPress={() => enterSelect()} disabled={documents.length === 0} />
-              <HeaderIconButton
-                icon={layout === 'grid' ? 'list-outline' : 'grid-outline'}
-                label={layout === 'grid' ? 'Show as list' : 'Show as grid'}
-                color={colors.accent}
-                size={22}
-                onPress={toggleLayout}
-              />
-              <HeaderIconButton icon="swap-vertical-outline" label="Sort documents" color={colors.accent} size={22} onPress={() => setSortSheetVisible(true)} />
-              <HeaderIconButton icon="add" label="Add documents or a folder" color={colors.accent} size={28} onPress={() => setAddSheetVisible(true)} />
+              <HeaderTextButton title="Select" onPress={() => enterSelect()} disabled={documents.length === 0} />
+              <HeaderIconButton icon="ellipsis-horizontal" label="View and sort" color={colors.accent} size={HEADER_ICON} onPress={() => setViewSheetVisible(true)} />
+              <HeaderIconButton icon="add" label="Add documents or a folder" color={colors.accent} size={HEADER_ICON} onPress={() => setAddSheetVisible(true)} />
             </>
           }
         />
@@ -457,10 +456,10 @@ export default function FilesScreen() {
           <EmptyState
             variant="no-docs"
             subtitle="Import photos or PDFs, or scan a document with the camera button."
-            actionLabel="Import from Photos"
+            actionLabel="Import photos"
             actionIcon="images-outline"
             onAction={handleImportImages}
-            secondaryLabel="Import a file"
+            secondaryLabel="Import file"
             onSecondaryAction={handleImportFiles}
           />
         )}</View>
@@ -520,12 +519,29 @@ export default function FilesScreen() {
         </View>
       )}
 
-      <SortSheet
-        visible={sortSheetVisible}
-        current={sortKey}
-        onSort={handleSort}
-        onClose={() => setSortSheetVisible(false)}
-      />
+      {/* View and sort in one menu. */}
+      <BottomSheet visible={viewSheetVisible} onClose={() => setViewSheetVisible(false)} variant="grouped">
+        <SheetHeader title="View and sort" />
+        <SectionLabel style={styles.sheetLabel}>View as</SectionLabel>
+        <SheetGroup>
+          <SheetRow icon="grid-outline" label="Grid" selected={layout === 'grid'} onPress={() => { setLayoutTo('grid'); setViewSheetVisible(false); }} />
+          <SheetRow icon="list-outline" label="List" selected={layout === 'list'} onPress={() => { setLayoutTo('list'); setViewSheetVisible(false); }} last />
+        </SheetGroup>
+        <SectionLabel style={styles.sheetLabel}>Sort by</SectionLabel>
+        <SheetGroup style={{ marginBottom: 0 }}>
+          {SORT_OPTIONS.map((o, i) => (
+            <SheetRow
+              key={o.key}
+              icon={o.icon}
+              label={o.label}
+              detail={o.sub}
+              selected={sortKey === o.key}
+              last={i === SORT_OPTIONS.length - 1}
+              onPress={() => { handleSort(o.key); setViewSheetVisible(false); }}
+            />
+          ))}
+        </SheetGroup>
+      </BottomSheet>
 
       {/* Add: import or create a folder. Pickers open after the sheet is gone. */}
       <BottomSheet
@@ -540,8 +556,8 @@ export default function FilesScreen() {
       >
         <SheetHeader title="Add to Files" />
         <SheetGroup>
-          <SheetRow icon="images-outline" label="Import from Photos" detail="One or more photos become one document" onPress={afterAddSheet(handleImportImages)} />
-          <SheetRow icon="folder-open-outline" label="Import a file" detail="A PDF or an image from Files" onPress={afterAddSheet(handleImportFiles)} last />
+          <SheetRow icon="images-outline" label="Import photos" detail="One or more photos become one document" onPress={afterAddSheet(handleImportImages)} />
+          <SheetRow icon="folder-open-outline" label="Import file" detail="A PDF or an image from Files" onPress={afterAddSheet(handleImportFiles)} last />
         </SheetGroup>
         <SheetGroup style={{ marginBottom: 0 }}>
           <SheetRow icon="folder-outline" label="New folder" onPress={afterAddSheet(() => openFolderPrompt({ mode: 'create' }))} last />
@@ -740,5 +756,6 @@ const styles = StyleSheet.create({
   barBtn: { flex: 1, height: 64, alignItems: 'center', justifyContent: 'center', gap: 2 },
   sheetInput: { borderRadius: Radius.md, paddingHorizontal: Spacing.lg, minHeight: 50, marginBottom: Spacing.lg },
   sheetRow: { flexDirection: 'row', gap: Spacing.md },
+  sheetLabel: { marginTop: Spacing.xs },
   flex: { flex: 1 },
 });

@@ -114,7 +114,7 @@ export function DocumentCard({
         <View style={styles.cardClip}>
           <Thumb document={document} iconSize={32} style={styles.thumbnail} />
           <View style={styles.info}>
-            <Text style={[Type.footnote, styles.name, { color: colors.text }]} numberOfLines={2}>{document.name}</Text>
+            <Text style={[Type.footnote, styles.name, { color: colors.text }]} numberOfLines={2} maxFontSizeMultiplier={1.3}>{document.name}</Text>
             <Text style={[Type.caption, { color: colors.muted }]} numberOfLines={1}>
               {columns >= 3 ? compactMeta(document) : documentMeta(document)}
             </Text>
@@ -246,7 +246,8 @@ const styles = StyleSheet.create({
   pdfThumb: { alignItems: 'center', justifyContent: 'center', gap: Spacing.xs },
   pdfLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.5 },
   info: { paddingHorizontal: Spacing.md - 2, paddingVertical: Spacing.sm + 2 },
-  name: { fontWeight: '600', marginBottom: 2 },
+  // Two lines reserved so the date lines of neighbouring cards align.
+  name: { fontWeight: '600', marginBottom: 2, lineHeight: 17, minHeight: 34 },
   snippet: { marginTop: Spacing.xs },
   snippetHit: { fontWeight: '700' },
   checkbox: {

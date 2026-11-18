@@ -125,7 +125,7 @@ export default function IdCardScreen() {
         ) : (
           <View style={styles.placeholder}>
             <View style={[styles.addIcon, { backgroundColor: colors.accentLight }]}>
-              <Ionicons name="id-card-outline" size={26} color={colors.accent} />
+              <Ionicons name={side === 'front' ? 'id-card-outline' : 'card-outline'} size={26} color={colors.accent} />
             </View>
             <Text style={[Type.subhead, { color: colors.accent }]}>
               {side === 'front' ? 'Add front' : 'Add back'}

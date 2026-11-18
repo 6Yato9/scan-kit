@@ -90,7 +90,7 @@ export default function WatermarkScreen() {
       });
       notifySuccess();
       // The viewer shows the toast: it covers the app-wide toast host.
-      router.replace({ pathname: '/viewer', params: { id, notice: 'Watermarked copy saved' } });
+      router.replace({ pathname: '/viewer', params: { id, notice: 'Watermarked copy saved. The original is unchanged.' } });
     } catch {
       try { deleteDocumentFiles(id); } catch {}
       notifyError();
@@ -126,7 +126,7 @@ export default function WatermarkScreen() {
             />
           ) : null}
           <PrimaryButton
-            title={!doc ? 'Choose a document' : label ? 'Save watermarked PDF' : 'Enter watermark text'}
+            title={!doc ? 'Choose a document' : label ? 'Save watermarked copy' : 'Enter watermark text'}
             onPress={apply}
             disabled={!doc || !label}
             loading={!!progress}

@@ -8,7 +8,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
-import { DocGroup, DocRow, NoDocumentsScreen, ToolNote, ToolScreen, useToolDocuments } from '@/components/tool-ui';
+import { DocGroup, DocRow, NoDocumentsScreen, ToolNote, ToolScreen, isImageDoc, useToolDocuments } from '@/components/tool-ui';
 import { buildLongImageHtml, planLongImage, type LongImagePlan } from '@/lib/long-image';
 import { deleteQuietly, exportFileName, makeExportDir, shareFile } from '@/lib/share';
 import { notifyError, notifySuccess } from '@/lib/haptics';
@@ -23,12 +23,15 @@ function imageSize(uri: string): Promise<{ width: number; height: number }> {
   });
 }
 
+const isMultiPageImageDoc = (d: Document) => isImageDoc(d) && d.pages.length >= 2;
+
 type Output = { uri: string; dir: string; plan: LongImagePlan; docName: string; docId: string };
 
 export default function LongImageScreen() {
   const { colors } = useTheme();
   const { width: screenW } = useWindowDimensions();
-  const { docs, loaded } = useToolDocuments();
+  // One page has nothing to join: only documents with two or more pages.
+  const { docs, loaded } = useToolDocuments(isMultiPageImageDoc);
   const [docId, setDocId] = useState<string | null>(null);
   const [job, setJob] = useState<{ html: string; plan: LongImagePlan; doc: Document } | null>(null);
   const [output, setOutput] = useState<Output | null>(null);
@@ -104,7 +107,8 @@ export default function LongImageScreen() {
     return (
       <NoDocumentsScreen
         toolTitle="Long image"
-        subtitle="Long image joins a document’s pages into one tall picture. Scan or import a document first."
+        title="No multi-page documents"
+        subtitle="Long image joins a document’s pages into one tall picture. Scan or import a document with two or more pages first."
       />
     );
   }
@@ -120,7 +124,7 @@ export default function LongImageScreen() {
           <PrimaryButton title="Share image" icon="share-outline" onPress={share} />
         ) : (
           <PrimaryButton
-            title={working ? 'Creating long image…' : 'Create long image'}
+            title={working ? 'Creating long image…' : doc ? 'Create long image' : 'Choose a document'}
             onPress={start}
             disabled={!doc}
             loading={working}

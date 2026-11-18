@@ -14,8 +14,13 @@ const FONT = 'Helvetica,Arial,sans-serif';
 export type WatermarkStyle = 'diagonal' | 'center' | 'footer';
 export type StampColor = 'gray' | 'red' | 'blue';
 
+/**
+ * Ink colours. They double as the on-screen swatches, so gray is a true mid
+ * gray: near-black read as "black" on the swatch and vanished on a dark card,
+ * while on the page (at watermark opacity) it printed as light gray anyway.
+ */
 export const STAMP_RGB: Record<StampColor, [number, number, number]> = {
-  gray: [60, 60, 60],
+  gray: [112, 112, 112],
   red: [200, 30, 30],
   blue: [20, 80, 190],
 };
@@ -31,8 +36,9 @@ export function watermarkFontFraction(text: string, style: WatermarkStyle): numb
   return Math.min(0.16, Math.max(0.03, span / (len * 0.62)));
 }
 
+/** Tuned with the mid-gray ink so a gray watermark prints at the same light gray as before. */
 export function watermarkOpacity(style: WatermarkStyle): number {
-  return style === 'footer' ? 0.7 : 0.22;
+  return style === 'footer' ? 0.85 : 0.28;
 }
 
 export const WATERMARK_ANGLE = -35;

@@ -47,10 +47,11 @@ import {
   withDocLock,
 } from '@/lib/bake';
 import { addPagesToDocument, finishAddedPages } from '@/lib/add-pages';
-import { retakePage, undoRetake, type RetakeUndo } from '@/lib/retake-page';
+import { RetakeError, retakePage, undoRetake, type RetakeUndo } from '@/lib/retake-page';
 import { duplicateDocument } from '@/lib/doc-ops';
 import { indexDocText } from '@/lib/save-scan';
 import { alertScanError, deleteTempFiles, pickPhotos, scanWithCamera, ToolScanError } from '@/lib/tool-scan';
+import { withSystemUI } from '@/lib/system-ui';
 import { insertAt, restoreStashedPage, stashPage } from '@/lib/page-undo';
 import { notifySuccess, notifyError } from '@/lib/haptics';
 import { ocrAvailable, recognizeLines, extractDocText } from '@/lib/ocr';
@@ -503,17 +504,23 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
       const settings = await getScanSettings();
       let uris: string[] = [];
       if (source === 'camera') {
-        const { scannedImages } = await DocumentScanner.scanDocument({
-          croppedImageQuality: SCAN_QUALITY_MAP[settings.quality],
-        });
+        // withSystemUI: the app lock covers an open picker instead of closing
+        // it, and an abandoned one resolves as cancelled so `adding` resets.
+        const { scannedImages } = await withSystemUI(
+          () => DocumentScanner.scanDocument({ croppedImageQuality: SCAN_QUALITY_MAP[settings.quality] }),
+          () => ({ scannedImages: [] as string[] }),
+        );
         uris = scannedImages ?? [];
       } else {
-        const result = await ImagePicker.launchImageLibraryAsync({
-          mediaTypes: ['images'],
-          allowsMultipleSelection: true,
-          // Recompressed once, at the user's scan quality, when stored.
-          quality: 1,
-        });
+        const result = await withSystemUI(
+          () => ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ['images'],
+            allowsMultipleSelection: true,
+            // Recompressed once, at the user's scan quality, when stored.
+            quality: 1,
+          }),
+          (): ImagePicker.ImagePickerResult => ({ canceled: true, assets: null }),
+        );
         // addPagesToDocument finds and straightens the page in each photo.
         uris = result.canceled ? [] : result.assets.map(a => a.uri);
       }
@@ -575,8 +582,14 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
       notifySuccess();
       indexDocText(next.id, next.pages).catch(() => {});
     } catch (err) {
-      console.error('Undo retake failed', err);
       notifyError();
+      // Refused because the pages moved since (or the saved copy is gone):
+      // nothing changed, and trying again won't help.
+      if (err instanceof RetakeError) {
+        Alert.alert("Couldn't undo", err.message);
+        return;
+      }
+      console.error('Undo retake failed', err);
       Alert.alert("Couldn't restore the page", 'Try again.');
       reload().catch(() => {});
     }
@@ -925,7 +938,6 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
         ...(pageCount > 1
           ? [{ key: 'extract', icon: 'cut-outline' as const, label: 'Extract', onPress: () => openTool('/tools/extract') }]
           : []),
-        { key: 'compress', icon: 'contract-outline', label: 'Compress', onPress: () => openTool('/tools/compress') },
       ];
   const moreGroups: MoreAction[][] = document.pdfUri
     ? [

@@ -1,9 +1,9 @@
 // app/tools/extract.tsx
-// Copy chosen pages of a document into a new document. Each page travels with
-// its .orig shadow (copyPageWithShadow) so its filter metadata stays truthful.
+// Copy chosen pages of a document into a new document (lib/doc-ops
+// extractPages). Each page travels with its .orig shadow so its filter
+// metadata stays truthful.
 import { useState } from 'react';
 import { Alert, Image, Pressable, StyleSheet, Text, View } from 'react-native';
-import * as Crypto from 'expo-crypto';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/contexts/theme-context';
@@ -12,8 +12,7 @@ import { SectionLabel } from '@/components/section-label';
 import { DocGroup, DocRow, NoDocumentsScreen, SectionRow, ToolNote, ToolScreen, pageCountLabel, useToolDocuments } from '@/components/tool-ui';
 import { ToolDocHeader, useToolDoc } from '@/components/tool-doc';
 import { FilterBaker } from '@/components/filter-baker';
-import { saveDocument } from '@/lib/storage';
-import { copyPageWithShadow, deleteDocumentFiles } from '@/lib/files';
+import { extractPages } from '@/lib/doc-ops';
 import { notifyError, notifySuccess } from '@/lib/haptics';
 import { Radius, Spacing } from '@/lib/theme';
 import type { Document } from '@/types/document';
@@ -46,36 +45,16 @@ export default function ExtractScreen() {
   const handleExtract = async () => {
     if (!doc || pages.size === 0 || saving) return;
     setSaving(true);
-    const newId = Crypto.randomUUID();
     try {
-      const sorted = [...pages].sort((a, b) => a - b);
-      const newPages = sorted.map((src, dest) => copyPageWithShadow(doc.pages[src], newId, dest));
-      const filters = doc.filters ? sorted.map(i => doc.filters![i] ?? 'original') : undefined;
-      const adjustments = doc.adjustments
-        ? sorted.map(i => doc.adjustments![i] ?? { brightness: 0, contrast: 0, saturation: 0 })
-        : undefined;
-      const now = Date.now();
-      await saveDocument({
-        id: newId,
-        name: `${doc.name} (${sorted.length === 1 ? 'page' : 'pages'} ${sorted.map(i => i + 1).join(', ')})`.slice(0, 120),
-        pages: newPages,
-        filters: !filters || filters.every(f => f === 'original') ? undefined : filters,
-        adjustments:
-          !adjustments || adjustments.every(a => !a.brightness && !a.contrast && !a.saturation)
-            ? undefined
-            : adjustments,
-        folder: doc.folder,
-        createdAt: now,
-        updatedAt: now,
-      });
+      // Copies under the document lock from the stored record (lib/doc-ops).
+      const created = await extractPages(doc, [...pages]);
       notifySuccess();
       // The viewer shows the toast: it covers the app-wide toast host.
       router.replace({
         pathname: '/viewer',
-        params: { id: newId, notice: `${pageCountLabel(sorted.length)} saved as a new document` },
+        params: { id: created.id, notice: `${pageCountLabel(created.pages.length)} saved as a new document` },
       });
     } catch {
-      try { deleteDocumentFiles(newId); } catch {}
       notifyError();
       Alert.alert('Couldn’t extract pages', 'A page file couldn’t be copied. The original document is unchanged. Try again.');
     } finally {
@@ -98,7 +77,7 @@ export default function ExtractScreen() {
       title="Extract pages"
       footer={
         <PrimaryButton
-          title={pages.size ? `Extract ${pageCountLabel(pages.size)}` : 'Select pages to extract'}
+          title={!doc ? 'Choose a document' : pages.size ? `Extract ${pageCountLabel(pages.size)}` : 'Select pages to extract'}
           onPress={handleExtract}
           disabled={pages.size === 0}
           loading={saving}

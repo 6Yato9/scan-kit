@@ -19,7 +19,7 @@ import { Radius, Spacing, Type } from '@/lib/theme';
 
 type PageSize = DocSettings['pdfPageSize'];
 
-const PAPER_LABEL: Record<PageSize, string> = { A4: 'A4', Letter: 'US Letter' };
+const PAPER_LABEL: Record<PageSize, string> = { Auto: 'Auto', A4: 'A4', Letter: 'US Letter' };
 
 export default function PrinterScreen() {
   const router = useRouter();
@@ -88,7 +88,7 @@ export default function PrinterScreen() {
       <View style={[styles.card, { backgroundColor: colors.card }]}>
         <View style={styles.cardHead}>
           <View style={[styles.iconTile, { backgroundColor: colors.accentLight }]}>
-            <Ionicons name="print-outline" size={22} color={colors.accent} />
+            <Ionicons name="print-outline" size={18} color={colors.accent} />
           </View>
           <Text style={[Type.callout, styles.cardText, { color: colors.subtext }]}>
             Print a page with a frame and a grayscale strip to check alignment, margins and tone. You choose the printer in the
@@ -97,7 +97,6 @@ export default function PrinterScreen() {
         </View>
         <PrimaryButton
           title="Print a test page"
-          icon="print-outline"
           onPress={printTestPage}
           loading={printing}
           disabled={pageSize === null}
@@ -115,9 +114,10 @@ const styles = StyleSheet.create({
   card: { borderRadius: Radius.md, padding: Spacing.lg, gap: Spacing.lg },
   cardHead: { flexDirection: 'row', gap: Spacing.md, alignItems: 'flex-start' },
   cardText: { flex: 1, lineHeight: 21 },
+  // Same tile as every settings row.
   iconTile: {
-    width: 36,
-    height: 36,
+    width: 30,
+    height: 30,
     borderRadius: Radius.sm,
     alignItems: 'center',
     justifyContent: 'center',

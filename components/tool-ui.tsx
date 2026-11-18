@@ -21,7 +21,7 @@ import { useTheme } from '@/contexts/theme-context';
 import { useScan } from '@/contexts/scan-context';
 import { SectionLabel } from '@/components/section-label';
 import { HeaderTextButton, ScreenHeader } from '@/components/screen-header';
-import { PrimaryButton } from '@/components/primary-button';
+import { EmptyState } from '@/components/empty-state';
 import { getDocuments } from '@/lib/storage';
 import { HIT, Radius, Spacing, Type } from '@/lib/theme';
 import type { Document } from '@/types/document';
@@ -416,64 +416,31 @@ export function DocRow({
 }
 
 /**
- * Empty state for a tool that has no documents to work on, with a way out
- * (importing photos; the Files tab handles the flow). Prefer NoDocumentsScreen,
- * which docks the action at the bottom like every other tool.
- */
-export function NoDocuments({ title, subtitle }: { title?: string; subtitle?: string }) {
-  const router = useRouter();
-  return (
-    <View>
-      <ToolIntro
-        icon="documents-outline"
-        title={title ?? 'No documents yet'}
-        text={subtitle ?? 'Scan or import a document first, then come back to this tool.'}
-      />
-      <View style={styles.inlineAction}>
-        <PrimaryButton
-          title="Import photos"
-          icon="images-outline"
-          onPress={() => router.navigate({ pathname: '/(tabs)/files', params: { action: 'importImages' } } as never)}
-        />
-      </View>
-    </View>
-  );
-}
-
-/**
- * A whole tool screen for "nothing to work on yet": the shared top-aligned
- * hero, with Import photos and Scan docked at the bottom like any tool action.
+ * A whole tool screen for "nothing to work on yet". Uses the app's one empty
+ * state (EmptyState, centred, actions under the text), so a tool with no
+ * documents looks exactly like an empty list anywhere else.
  */
 export function NoDocumentsScreen({ toolTitle, title, subtitle }: { toolTitle: string; title?: string; subtitle?: string }) {
   const router = useRouter();
   const { triggerScan } = useScan();
+  const insets = useSafeAreaInsets();
   return (
-    <ToolScreen
-      title={toolTitle}
-      footer={
-        <>
-          <PrimaryButton
-            title="Scan a document"
-            icon="camera-outline"
-            onPress={async () => {
-              const id = await triggerScan();
-              if (id) router.push({ pathname: '/viewer', params: { id } });
-            }}
-          />
-          <PrimaryButton
-            title="Import photos"
-            icon="images-outline"
-            variant="secondary"
-            onPress={() => router.navigate({ pathname: '/(tabs)/files', params: { action: 'importImages' } } as never)}
-          />
-        </>
-      }
-    >
-      <ToolIntro
-        icon="documents-outline"
-        title={title ?? 'No documents yet'}
-        text={subtitle ?? 'Scan or import a document first, then come back to this tool.'}
-      />
+    <ToolScreen title={toolTitle} scroll={false}>
+      <View style={[styles.flex, { paddingBottom: insets.bottom + Spacing.xxl }]}>
+        <EmptyState
+          icon="documents-outline"
+          title={title ?? 'No documents yet'}
+          subtitle={subtitle ?? 'Scan or import a document first, then come back to this tool.'}
+          actionLabel="Scan a document"
+          actionIcon="camera-outline"
+          onAction={async () => {
+            const id = await triggerScan();
+            if (id) router.push({ pathname: '/viewer', params: { id } });
+          }}
+          secondaryLabel="Import photos"
+          onSecondaryAction={() => router.navigate({ pathname: '/(tabs)/files', params: { action: 'importImages' } } as never)}
+        />
+      </View>
     </ToolScreen>
   );
 }
@@ -617,7 +584,6 @@ const styles = StyleSheet.create({
   pointIcon: { width: 30, height: 30, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginRight: Spacing.md },
   pointBody: { flex: 1, paddingVertical: Spacing.md, paddingRight: Spacing.lg, minHeight: HIT + 4, justifyContent: 'center' },
   pointText: { lineHeight: 20 },
-  inlineAction: { marginTop: Spacing.sm },
   note: { marginTop: Spacing.sm, marginHorizontal: Spacing.xs, lineHeight: 18 },
   row: {
     flexDirection: 'row',

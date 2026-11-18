@@ -120,13 +120,11 @@ export default function SettingsScreen() {
             ]}
           />
 
-          <SettingsGroup
-            title="Security"
-            footer={`When on, Scan Kit asks for ${LOCK_METHOD[lockKind]} each time you return to it.`}
-          >
+          <SettingsGroup title="Security">
             <SettingsRow
               icon="lock-closed-outline"
               label="App lock"
+              description={`Ask for ${LOCK_METHOD[lockKind]} on return`}
               accessory={{ type: 'switch', value: appLock, onChange: handleToggleAppLock }}
               last
             />
@@ -138,18 +136,26 @@ export default function SettingsScreen() {
             <SettingsRow icon="print-outline" label="Printing" accessory={{ type: 'chevron' }} onPress={() => router.push('/settings/printer')} last />
           </SettingsGroup>
 
-          <SettingsGroup title="Storage" footer={`Everything is stored on this device only. Deleted documents stay in Recently deleted for ${TRASH_RETENTION_DAYS} days.`}>
-            <SettingsRow icon="server-outline" label="Space used" accessory={{ type: 'value', text: storageUsed }} />
+          {/* No loose footers: at rest the floating tab bar sits over the end
+              of the list, and a sentence cut by the camera button looks broken.
+              The notes live in the rows instead. */}
+          <SettingsGroup title="Storage">
+            <SettingsRow
+              icon="server-outline"
+              label="Space used on this device"
+              accessory={{ type: 'value', text: storageUsed }}
+            />
             <SettingsRow
               icon="trash-outline"
               label="Recently deleted"
+              description={`Restore deleted documents for ${TRASH_RETENTION_DAYS} days`}
               accessory={{ type: 'chevron' }}
               onPress={() => router.push('/settings/recently-deleted' as never)}
               last
             />
           </SettingsGroup>
 
-          <SettingsGroup title="Support">
+          <SettingsGroup>
             <SettingsRow icon="help-circle-outline" label="Help" accessory={{ type: 'chevron' }} onPress={() => router.push('/settings/help')} />
             <SettingsRow icon="information-circle-outline" label="About Scan Kit" accessory={{ type: 'chevron' }} onPress={() => router.push('/settings/about')} last />
           </SettingsGroup>

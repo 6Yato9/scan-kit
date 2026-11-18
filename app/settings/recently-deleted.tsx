@@ -147,7 +147,7 @@ export default function RecentlyDeletedScreen() {
         <View style={[styles.flex, { paddingBottom: insets.bottom + Spacing.xxxl }]}>
           <EmptyState
             icon="trash-outline"
-            title="Nothing in Recently deleted"
+            title="No deleted documents"
             subtitle={`Documents you delete stay here for ${TRASH_RETENTION_DAYS} days, so you can get them back.`}
           />
         </View>

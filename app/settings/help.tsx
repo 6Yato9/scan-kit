@@ -14,16 +14,17 @@ const SECTIONS: { title: string; tips: Tip[] }[] = [
     title: 'Getting started',
     tips: [
       { icon: 'camera-outline', title: 'Scan a document', text: 'Tap the camera button in the middle of the tab bar. Edges are detected for you, and you can scan several pages in a row.' },
-      { icon: 'images-outline', title: 'Import photos or PDFs', text: 'In Files, tap the add button and choose Import from Photos or Import a file.' },
+      { icon: 'images-outline', title: 'Import photos or PDFs', text: 'On Home, tap Import photos or Import file. The add button in Files offers the same, plus New folder.' },
     ],
   },
   {
     title: 'Working with documents',
     tips: [
       { icon: 'ellipsis-horizontal-circle-outline', title: 'More actions', text: 'Long-press any document to share, rename, duplicate, move, merge or delete it.' },
-      { icon: 'checkmark-circle-outline', title: 'Select several', text: 'In Files, tap the select button to move, merge or delete many documents at once.' },
-      { icon: 'crop-outline', title: 'Edit pages', text: 'Open a document and tap a page to crop, rotate, apply a filter or annotate it.' },
-      { icon: 'share-outline', title: 'Share and export', text: 'Send a document as a PDF, a searchable PDF, images or a ZIP, or print it.' },
+      { icon: 'checkmark-circle-outline', title: 'Select several', text: 'In Files, tap Select to share, move, merge or delete many documents at once.' },
+      { icon: 'crop-outline', title: 'Edit pages', text: 'Open a document and use the toolbar under the page to crop, apply a filter, rotate, mark up or copy its text.' },
+      { icon: 'create-outline', title: 'Sign and stamp', text: 'In a document, tap the more button to sign it or add a watermark or timestamp. These save a copy; the original stays as it is.' },
+      { icon: 'share-outline', title: 'Share and export', text: 'Send a document as a searchable PDF, a smaller PDF or images, save it to Photos, or print it.' },
     ],
   },
   {

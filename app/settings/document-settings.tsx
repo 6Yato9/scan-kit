@@ -15,6 +15,7 @@ import { ToolScreen } from '@/components/tool-ui';
 import { HIT, Spacing, Type } from '@/lib/theme';
 
 const PAGE_SIZE_OPTIONS: { label: string; desc: string; value: DocSettings['pdfPageSize'] }[] = [
+  { label: 'Auto (match page)', desc: 'Receipts and cards fill the page', value: 'Auto' },
   { label: 'A4', desc: '210 × 297 mm', value: 'A4' },
   { label: 'US Letter', desc: '8.5 × 11 in', value: 'Letter' },
 ];
@@ -45,8 +46,8 @@ export default function DocumentSettingsScreen() {
   return (
     <ToolScreen title="Document settings">
       <SettingsGroup
-        title="Name for new scans"
-        footer={`New scans take their title from the text on the page. Until a title is read, or if none is found, they’re named “${example.replace(/ /g, '\u00A0')}”.`}
+        title="Fallback name"
+        footer={`New scans are named from the text on the page, like “Invoice 2041”. When no title can be read, they get this name and the date: “${example.replace(/ /g, '\u00A0')}”.`}
       >
         <Pressable style={styles.inputRow} onPress={() => inputRef.current?.focus()} accessible={false}>
           <TextInput
@@ -60,8 +61,8 @@ export default function DocumentSettingsScreen() {
             placeholderTextColor={colors.muted}
             returnKeyType="done"
             autoCorrect={false}
-            accessibilityLabel="Name for new scans"
-            accessibilityHint="Edits the start of the name new scans get"
+            accessibilityLabel="Fallback name"
+            accessibilityHint="The name a new scan gets when no title can be read from it"
             clearButtonMode="while-editing"
           />
           {/* Edit cue: the row is a text field, not a label. The clear button
@@ -70,7 +71,10 @@ export default function DocumentSettingsScreen() {
         </Pressable>
       </SettingsGroup>
 
-      <SettingsGroup title="Paper size" footer="Used for every PDF you export and everything you print. Each page fits on one sheet.">
+      <SettingsGroup
+        title="Paper size"
+        footer="Used for every PDF you export and everything you print. Auto shapes each PDF like your scans; a scan of a full sheet still gets A4 or Letter."
+      >
         {PAGE_SIZE_OPTIONS.map((opt, i) => (
           <SettingsRow
             key={opt.value}

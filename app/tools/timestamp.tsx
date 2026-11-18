@@ -88,7 +88,7 @@ export default function TimestampScreen() {
       });
       notifySuccess();
       // The viewer shows the toast: it covers the app-wide toast host.
-      router.replace({ pathname: '/viewer', params: { id, notice: 'Timestamped copy saved' } });
+      router.replace({ pathname: '/viewer', params: { id, notice: 'Timestamped copy saved. The original is unchanged.' } });
     } catch {
       try { deleteDocumentFiles(id); } catch {}
       notifyError();
@@ -122,7 +122,7 @@ export default function TimestampScreen() {
               total={progress.total}
             />
           ) : null}
-          <PrimaryButton title={doc ? 'Save timestamped PDF' : 'Choose a document'} onPress={apply} disabled={!doc} loading={!!progress} />
+          <PrimaryButton title={doc ? 'Save timestamped copy' : 'Choose a document'} onPress={apply} disabled={!doc} loading={!!progress} />
         </>
       }
     >

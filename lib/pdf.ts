@@ -2,8 +2,10 @@
 // Page images -> PDF via expo-print (WKWebView print renderer).
 //
 // Layout: every page image becomes one "sheet" that is exactly one sheet of
-// paper (A4 or Letter). The image is scaled to fit inside it (contain,
-// centred), so a page can never spill onto a second sheet.
+// paper (A4, Letter, or with 'Auto' a size shaped like the scans — see
+// autoPaperSize). The image is scaled to fit inside it (contain, centred), so a
+// page can never spill onto a second sheet. expo-print renders every page of
+// one PDF at the same size, so 'Auto' picks one size per export.
 //
 // Units matter here. WebKit's print renderer lays the document out wider than
 // the paper (its minimum shrink factor is 1.25: an A4 page is ~744 CSS px wide)
@@ -25,14 +27,63 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import { Image } from 'react-native';
 import { recognizeLines, OcrLine } from './ocr';
 
-export type PageSize = 'A4' | 'Letter';
+/** 'Auto' shapes the paper like the scanned pages (a receipt gets a tall, narrow page). */
+export type PageSize = 'Auto' | 'A4' | 'Letter';
 export type PdfQuality = 'high' | 'standard' | 'small';
+type Paper = { width: number; height: number };
 
-/** Paper sizes in PostScript points (1 in = 72 pt). */
-export const PAPER_SIZES_PT: Record<PageSize, { width: number; height: number }> = {
+/** Standard paper sizes in PostScript points (1 in = 72 pt). */
+export const PAPER_SIZES_PT: Record<'A4' | 'Letter', Paper> = {
   A4: { width: 595, height: 842 },
   Letter: { width: 612, height: 792 },
 };
+
+/** Auto pages get the long edge of A4, so they look and print at a familiar scale. */
+const AUTO_LONG_EDGE_PT = 842;
+/** A scan within 3% of a standard paper shape gets exactly that paper. */
+const AUTO_SNAP = 0.03;
+/** Narrowest / widest Auto shape; anything more extreme is letterboxed. */
+const AUTO_MIN_RATIO = 0.2;
+
+/**
+ * Paper for 'Auto': the shape of the scanned pages (the median width/height
+ * ratio, so one odd page doesn't decide for the rest), with the long edge of
+ * A4. A scan that is already A4 or Letter shaped (either orientation) gets that
+ * exact size, so a scanned letter still prints as a real letter. No usable
+ * sizes: A4.
+ */
+export function autoPaperSize(sizes: ({ width: number; height: number } | null | undefined)[]): Paper {
+  const ratios = sizes
+    .filter((s): s is Paper => !!s && s.width > 0 && s.height > 0)
+    .map(s => s.width / s.height)
+    .sort((a, b) => a - b);
+  if (ratios.length === 0) return PAPER_SIZES_PT.A4;
+  const ratio = ratios[Math.floor((ratios.length - 1) / 2)];
+
+  let best: Paper | null = null;
+  let bestDiff = AUTO_SNAP;
+  for (const p of [PAPER_SIZES_PT.A4, PAPER_SIZES_PT.Letter]) {
+    for (const cand of [p, { width: p.height, height: p.width }]) {
+      const diff = Math.abs(ratio / (cand.width / cand.height) - 1);
+      if (diff <= bestDiff) {
+        best = cand;
+        bestDiff = diff;
+      }
+    }
+  }
+  if (best) return best;
+
+  const r = Math.min(1 / AUTO_MIN_RATIO, Math.max(AUTO_MIN_RATIO, ratio));
+  return r <= 1
+    ? { width: Math.round(AUTO_LONG_EDGE_PT * r), height: AUTO_LONG_EDGE_PT }
+    : { width: AUTO_LONG_EDGE_PT, height: Math.round(AUTO_LONG_EDGE_PT / r) };
+}
+
+/** Short user-facing name for a paper setting. */
+export function paperLabel(pageSize: PageSize): string {
+  if (pageSize === 'Auto') return 'Auto';
+  return pageSize === 'Letter' ? 'US Letter' : 'A4';
+}
 
 /** Longest image edge (px) and JPEG quality per preset. `reencode: false` keeps smaller originals untouched. */
 const QUALITY: Record<PdfQuality, { maxEdge: number; compress: number; reencode: boolean }> = {
@@ -44,7 +95,7 @@ const QUALITY: Record<PdfQuality, { maxEdge: number; compress: number; reencode:
 export type PdfProgressPhase = 'preparing' | 'reading-text' | 'rendering';
 
 export type GeneratePdfOptions = {
-  /** Paper size. Default 'A4'. Callers normally pass the user's Document settings value. */
+  /** Paper size. Default 'A4'. Callers normally pass the user's Document settings value ('Auto' by default). */
   pageSize?: PageSize;
   /** Image downscale / compression preset. Default 'high'. */
   quality?: PdfQuality;
@@ -143,6 +194,36 @@ function maxEdgeFor(quality: PdfQuality, pageCount: number): number {
   if (pageCount > 40) return Math.min(base, 1500);
   if (pageCount > 20) return Math.min(base, 2000);
   return base;
+}
+
+/**
+ * Output image bytes per stored byte, at the same pixel count. Measured on
+ * device: the print renderer re-encodes every image at its own quality, so
+ * the preset's JPEG quality barely changes the result — only the resolution
+ * does (ratios came out 0.83-1.24 across real scans, mean ~1.0).
+ */
+const RENDER_RATIO = 1;
+/** Fixed PDF cost per page (page objects, image header) and per searchable page (text layer). */
+const PAGE_OVERHEAD = 2_000;
+const TEXT_OVERHEAD = 3_000;
+
+export type PageStat = { bytes: number; width: number; height: number };
+
+/**
+ * Rough size of the PDF generatePdf will produce, from each page's stored file
+ * size and pixel size. Mirrors prepareImage's downscale to the preset's long
+ * edge. Good to within about 25% — enough for "about 1.2 MB" next to an
+ * export option.
+ */
+export function estimatePdfBytes(pages: PageStat[], quality: PdfQuality, searchable = false): number {
+  const maxEdge = maxEdgeFor(quality, pages.length);
+  let total = 1_000;
+  for (const p of pages) {
+    const long = Math.max(p.width, p.height);
+    const scale = long > 0 ? Math.min(1, maxEdge / long) : 1;
+    total += p.bytes * scale * scale * RENDER_RATIO + PAGE_OVERHEAD + (searchable ? TEXT_OVERHEAD : 0);
+  }
+  return Math.round(total);
 }
 
 type PreparedImage = { b64: string; mime: string; width: number; height: number };
@@ -251,8 +332,8 @@ function ocrSpans(lines: OcrLine[], img: { width: number; height: number }, boxH
 }
 
 /** Build the full HTML document for the given (already prepared) sheets. Exported for tests. */
-export function buildPdfHtml(sheets: string[], pageSize: PageSize): string {
-  const paper = PAPER_SIZES_PT[pageSize];
+export function buildPdfHtml(sheets: string[], pageSize: 'A4' | 'Letter' | Paper): string {
+  const paper = typeof pageSize === 'string' ? PAPER_SIZES_PT[pageSize] : pageSize;
   // Sheet height as a % of its width (padding-top trick). Shave a hair off so
   // rounding in the print renderer can never push a sheet past the page
   // boundary and create a blank extra page.
@@ -304,7 +385,14 @@ export async function generatePdf(
   const { signal, onProgress } = opts;
   if (pages.length === 0) throw new PdfError('There are no pages to export.', 'empty');
 
-  const paper = PAPER_SIZES_PT[pageSize];
+  let paper: Paper;
+  if (pageSize === 'Auto') {
+    const sizes = await Promise.all(pages.map(p => getImageSize(cleanUri(p))));
+    throwIfAborted(signal);
+    paper = autoPaperSize(sizes);
+  } else {
+    paper = PAPER_SIZES_PT[pageSize];
+  }
   const maxEdge = maxEdgeFor(quality, pages.length);
   const sheets: string[] = [];
 
@@ -353,7 +441,7 @@ export async function generatePdf(
 
   throwIfAborted(signal);
   onProgress?.(pages.length, pages.length, 'rendering');
-  const html = buildPdfHtml(sheets, pageSize);
+  const html = buildPdfHtml(sheets, paper);
   sheets.length = 0; // let the per-page strings go before the native call
 
   const render = Print.printToFileAsync({
@@ -379,7 +467,9 @@ export async function generatePdf(
  * the paper edge, corner marks and a grey ramp, so the user can check
  * alignment, margins and tone. Returns a PDF file URI.
  */
-export async function generateTestPagePdf(pageSize: PageSize = 'A4'): Promise<string> {
+export async function generateTestPagePdf(size: PageSize = 'A4'): Promise<string> {
+  // A test page has no scan to match: Auto prints on A4.
+  const pageSize = size === 'Letter' ? 'Letter' : 'A4';
   const paper = PAPER_SIZES_PT[pageSize];
   const label = pageSize === 'Letter' ? 'US Letter, 8.5 × 11 in' : 'A4, 210 × 297 mm';
   const mm = 72 / 25.4; // points per millimetre

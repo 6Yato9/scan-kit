@@ -7,12 +7,22 @@
 // waits on the share sheet: `shareFile` returns as soon as the sheet is up, so
 // the UI can't get stuck if expo-sharing never settles. Work in progress shows a
 // progress state with Cancel, and closing the sheet cancels it too.
-import { Alert, Linking, StyleSheet, Text, View } from 'react-native';
+import { Alert, Image, Linking, StyleSheet, Text, View } from 'react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { File } from 'expo-file-system';
 import * as MediaLibrary from 'expo-media-library';
 import JSZip from 'jszip';
-import { generatePdf, PageSize, PdfCancelledError, PdfError, PdfQuality, PdfProgressPhase } from '@/lib/pdf';
+import {
+  estimatePdfBytes,
+  generatePdf,
+  PageSize,
+  PageStat,
+  paperLabel as paperName,
+  PdfCancelledError,
+  PdfError,
+  PdfQuality,
+  PdfProgressPhase,
+} from '@/lib/pdf';
 import {
   cleanFileUri,
   clearExportCache,
@@ -42,13 +52,34 @@ type Props = {
   onClose: () => void;
 };
 
-type Action = 'pdf' | 'searchable' | 'small' | 'images' | 'photos' | 'print';
+type Action = 'pdf' | 'small' | 'images' | 'photos' | 'print';
 
 type Busy = { title: string; label: string; progress: number };
 
 type BuiltFile = { uri: string; mimeType: string; UTI: string };
 
 class CancelledError extends Error {}
+
+function imageSize(uri: string): Promise<{ width: number; height: number }> {
+  return new Promise(resolve => {
+    Image.getSize(uri, (width, height) => resolve({ width, height }), () => resolve({ width: 0, height: 0 }));
+  });
+}
+
+/** Stored bytes and pixel size of every page, for the export size estimates. */
+async function pageStats(pages: string[]): Promise<PageStat[]> {
+  return Promise.all(
+    pages.map(async p => {
+      const uri = cleanFileUri(p);
+      let bytes = 0;
+      try {
+        const f = new File(uri);
+        bytes = f.exists ? f.size ?? 0 : 0;
+      } catch {}
+      return { bytes, ...(await imageSize(uri)) };
+    }),
+  );
+}
 
 const PDF_FILE = { mimeType: 'application/pdf', UTI: 'com.adobe.pdf' };
 
@@ -86,6 +117,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
   // covers size.
   const quality: PdfQuality = 'standard';
   const [bytes, setBytes] = useState<number | null>(null);
+  const [stats, setStats] = useState<PageStat[] | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   // Bumped on every open/close so a late share-sheet callback can't close a
   // sheet the user has since reopened.
@@ -101,8 +133,15 @@ export function ExportSheet({ visible, document, onClose }: Props) {
     }
     let cancelled = false;
     setBytes(null);
+    setStats(null);
     // File stats are synchronous; let the sheet start sliding in first.
-    const sizeTimer = setTimeout(() => { if (!cancelled) setBytes(documentBytes(document)); }, 0);
+    const sizeTimer = setTimeout(() => {
+      if (cancelled) return;
+      setBytes(documentBytes(document));
+      if (!document.pdfUri && document.pages.length > 0) {
+        pageStats(document.pages).then(s => { if (!cancelled) setStats(s); }).catch(() => {});
+      }
+    }, 0);
     getDocSettings()
       .then(s => {
         if (cancelled) return;
@@ -263,9 +302,11 @@ export function ExportSheet({ visible, document, onClose }: Props) {
       } else if (action === 'images') {
         file = await buildImages(signal, dir);
       } else {
+        // Every PDF is searchable when text recognition is available: that is
+        // what people expect from a scanner app's PDF.
         const q: PdfQuality = action === 'small' ? 'small' : quality;
-        const title = action === 'searchable' ? 'Creating searchable PDF' : 'Creating PDF';
-        const raw = await buildPdf(q, action === 'searchable', signal, title);
+        const title = action === 'small' ? 'Creating smaller PDF' : 'Creating PDF';
+        const raw = await buildPdf(q, canSearchable, signal, title);
         check();
         const uri = await placeExportFile(raw, dir, exportFileName(document.name, 'pdf'), 'move');
         file = { uri, ...PDF_FILE };
@@ -296,10 +337,17 @@ export function ExportSheet({ visible, document, onClose }: Props) {
     }
   }
 
-  const paperLabel = pageSize === 'Letter' ? 'US Letter' : 'A4';
   const pagesLabel = `${pageCount} ${pageCount === 1 ? 'page' : 'pages'}`;
   const sizeLabel = bytes ? formatBytes(bytes) : null;
   const subtitle = [isPdfDoc ? 'PDF' : pagesLabel, sizeLabel].filter(Boolean).join(', ');
+  const estimate = (q: PdfQuality) => (stats ? `about ${formatBytes(estimatePdfBytes(stats, q, canSearchable))}` : null);
+  const sentence = (parts: (string | null)[]) => {
+    const text = parts.filter(Boolean).join(', ');
+    return text.charAt(0).toUpperCase() + text.slice(1);
+  };
+  const pdfDetail = sentence([canSearchable ? 'Text can be searched and copied' : pagesLabel, estimate(quality)]);
+  const smallDetail = sentence(['Lower resolution for email', estimate('small')]);
+  const printDetail = pageSize === 'Auto' || isPdfDoc ? 'Send to an AirPrint printer' : `Send to an AirPrint printer, ${paperName(pageSize)}`;
 
   return (
     <BottomSheet visible={visible} onClose={handleClose} variant="grouped">
@@ -341,21 +389,13 @@ export function ExportSheet({ visible, document, onClose }: Props) {
                 <SheetRow
                   icon="document-text-outline"
                   label="PDF"
-                  detail={`${pagesLabel}, ${paperLabel}`}
+                  detail={pdfDetail}
                   onPress={() => run('pdf')}
                 />
-                {canSearchable && (
-                  <SheetRow
-                    icon="search-outline"
-                    label="Searchable PDF"
-                    detail="Text can be selected, copied and searched"
-                    onPress={() => run('searchable')}
-                  />
-                )}
                 <SheetRow
                   icon="contract-outline"
                   label="Smaller PDF"
-                  detail="Lower resolution, good for email"
+                  detail={smallDetail}
                   onPress={() => run('small')}
                 />
                 <SheetRow
@@ -384,7 +424,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
             <SheetRow
               icon="print-outline"
               label="Print"
-              detail={isPdfDoc ? 'Send to an AirPrint printer' : `Send to an AirPrint printer, ${paperLabel}`}
+              detail={printDetail}
               onPress={() => run('print')}
               last
             />

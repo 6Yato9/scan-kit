@@ -4,8 +4,10 @@ import * as Print from 'expo-print';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { Image } from 'react-native';
 import {
+  autoPaperSize,
   buildPdfHtml,
   escapeHtml,
+  estimatePdfBytes,
   fitContain,
   generatePdf,
   PAPER_SIZES_PT,
@@ -227,4 +229,58 @@ test('test page renders one sheet at the requested paper size', async () => {
   expect(call).toMatchObject({ width: 612, height: 792 });
   expect(call.html).toContain('US Letter');
   expect(call.html.match(/class="s"/g)).toHaveLength(1);
+});
+
+// ── Auto paper size ─────────────────────────────────────────────────────────
+
+test('autoPaperSize shapes the page like a tall receipt, long edge 842 pt', () => {
+  expect(autoPaperSize([{ width: 620, height: 1860 }])).toEqual({ width: 281, height: 842 });
+});
+
+test('autoPaperSize gives a landscape ID card a wide page', () => {
+  const p = autoPaperSize([{ width: 1712, height: 1080 }]);
+  expect(p.width).toBe(842);
+  expect(p.height).toBe(Math.round(842 / (1712 / 1080)));
+});
+
+test('autoPaperSize snaps near-A4 and near-Letter scans to the real paper, either way round', () => {
+  expect(autoPaperSize([{ width: 1240, height: 1754 }])).toEqual(PAPER_SIZES_PT.A4);
+  expect(autoPaperSize([{ width: 1700, height: 2200 }])).toEqual(PAPER_SIZES_PT.Letter);
+  expect(autoPaperSize([{ width: 1754, height: 1240 }])).toEqual({ width: 842, height: 595 });
+});
+
+test('autoPaperSize uses the median shape, ignores unreadable pages, falls back to A4', () => {
+  const receipt = { width: 600, height: 1800 };
+  expect(autoPaperSize([receipt, null, receipt, { width: 2000, height: 1000 }])).toEqual(autoPaperSize([receipt]));
+  expect(autoPaperSize([])).toEqual(PAPER_SIZES_PT.A4);
+  expect(autoPaperSize([null, { width: 0, height: 0 }])).toEqual(PAPER_SIZES_PT.A4);
+});
+
+test('autoPaperSize clamps extreme strips so text stays readable', () => {
+  expect(autoPaperSize([{ width: 100, height: 5000 }])).toEqual({ width: Math.round(842 * 0.2), height: 842 });
+});
+
+test("generatePdf with 'Auto' renders on paper shaped like the pages", async () => {
+  imageSize = { width: 620, height: 1860 };
+  await generatePdf(['file:///receipt.jpg'], { pageSize: 'Auto' });
+  expect(mockPrint.mock.calls[0][0]).toMatchObject({ width: 281, height: 842 });
+  expect(htmlOf()).toContain('@page{size:281pt 842pt;margin:0}');
+  // The receipt fills the sheet: no letterboxing either way (within rounding).
+  const m = htmlOf().match(/class="b" style="left:([\d.]+)%;top:([\d.]+)%;width:([\d.]+)%;height:([\d.]+)%/);
+  expect(m).not.toBeNull();
+  expect(parseFloat(m![3])).toBeGreaterThan(99);
+  expect(parseFloat(m![4])).toBeGreaterThan(99);
+});
+
+// ── Size estimate ───────────────────────────────────────────────────────────
+
+test('estimatePdfBytes scales stored bytes by the downscale area and adds per-page overhead', () => {
+  const page = { bytes: 160_000, width: 1500, height: 2000 };
+  const standard = estimatePdfBytes([page], 'standard'); // 1800 / 2000 → 0.81 of the pixels
+  expect(standard).toBeGreaterThan(160_000 * 0.81);
+  expect(standard).toBeLessThan(160_000 * 0.81 + 10_000);
+  const small = estimatePdfBytes([page], 'small'); // 1300 / 2000
+  expect(small).toBeLessThan(standard);
+  expect(estimatePdfBytes([page], 'standard', true)).toBeGreaterThan(standard);
+  expect(estimatePdfBytes([page, page], 'standard')).toBeGreaterThan(standard * 1.9);
 });

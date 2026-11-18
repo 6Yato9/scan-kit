@@ -291,7 +291,7 @@ export default function SignScreen() {
   const previewW = Math.min(screenW - Spacing.gutter * 2 - Spacing.sm * 2, 300);
   const buttonTitle = !sig
     ? saved.length ? 'Choose or draw a signature' : 'Sign in the box above'
-    : !doc ? 'Choose a document' : 'Save signed PDF';
+    : !doc ? 'Choose a document' : 'Save signed copy';
 
   return (
     <ToolScreen
