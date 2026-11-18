@@ -1,6 +1,6 @@
 // app/settings/scan-settings.tsx
 import { useCallback, useState } from 'react';
-import { FILTER_LABELS } from '@/components/page-actions-sheet';
+import { FILTER_CAPTIONS, FILTER_LABELS } from '@/components/page-actions-sheet';
 import { useFocusEffect } from 'expo-router';
 import { PREVIEW_FILTERS } from '@/lib/bake';
 import { getScanSettings, saveScanSettings, ScanSettings } from '@/lib/storage';
@@ -16,17 +16,19 @@ const QUALITY_OPTIONS: { label: string; value: Quality; desc: string }[] = [
   { label: 'Best', value: 'high', desc: 'Sharpest text, about 1.5 MB a page' },
 ];
 
-// Same names and the same order as the viewer's filter tiles.
-const FILTER_DESCRIPTIONS: Record<PageFilter, string> = {
-  original: 'Colors exactly as captured',
-  enhanced: 'Recommended. Clean white paper, no shadows',
-  grayscale: 'Clean white paper, no shadows, in gray',
-  bw: 'Crisp black text on white, best for text',
+// Same names, order and captions as the viewer's filter tiles; the rest of
+// each line says what the filter does to the page (one line each, so
+// "Recommended" never wraps onto a line of its own).
+const FILTER_DETAILS: Record<PageFilter, string> = {
+  original: 'no cleanup',
+  enhanced: 'clean white paper. Recommended',
+  grayscale: 'clean white paper',
+  bw: 'pure black on white',
 };
 const FILTER_OPTIONS: { label: string; value: PageFilter; desc: string }[] = PREVIEW_FILTERS.map(f => ({
   label: FILTER_LABELS[f],
   value: f,
-  desc: FILTER_DESCRIPTIONS[f],
+  desc: `${FILTER_CAPTIONS[f]}, ${FILTER_DETAILS[f]}`,
 }));
 
 export default function ScanSettingsScreen() {

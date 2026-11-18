@@ -1,4 +1,4 @@
-import { BAKE_MAX_PIXELS, buildBakeHtml, buildPreviewHtml } from '../lib/bake-html';
+import { BAKE_MAX_PIXELS, buildBakeHtml, buildPreviewHtml, PREVIEW_ASPECT, PREVIEW_CROP_JS } from '../lib/bake-html';
 
 const SRC = 'file:///docs/d1/page-0.orig.jpg';
 
@@ -20,7 +20,65 @@ function runOps(ops: Record<string, number>[], rgb: [number, number, number]): n
 test('the preview page embeds the same pixel kernels and passes the preview size', () => {
   const html = buildPreviewHtml(SRC, [[], [{ magic: 1 }]], 360);
   expect(html).toContain('function docMagic');
-  expect(html).toContain('applyOps(id.data, W, h, LIST[k])');
+  // The filters run on the whole page, then every tile shows the same crop.
+  expect(html).toContain('applyOps(id.data, pw, ph, LIST[k])');
+  expect(html).toContain('function previewCrop');
+  expect(html).toContain(`var ASPECT = ${PREVIEW_ASPECT}`);
+});
+
+describe('previewCrop (the part of the page a filter tile shows)', () => {
+  type Crop = { x: number; y: number; w: number; h: number };
+  const previewCrop = new Function(`${PREVIEW_CROP_JS}; return previewCrop;`)() as
+    (d: Uint8ClampedArray, w: number, h: number, aspect: number) => Crop;
+
+  /** A white page with dark boxes standing in for lines of text. */
+  function page(w: number, h: number, boxes: [number, number, number, number][]) {
+    const d = new Uint8ClampedArray(w * h * 4).fill(255);
+    for (const [x0, y0, x1, y1] of boxes) {
+      for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+        const i = (y * w + x) * 4; d[i] = d[i + 1] = d[i + 2] = 20;
+      }
+    }
+    return d;
+  }
+
+  test('shows the full width of the text, from the title down', () => {
+    // 400 x 560 page: title at y 60, lines from x 50 to 350.
+    const d = page(400, 560, [[50, 60, 300, 80], [50, 100, 350, 106], [50, 120, 340, 126], [50, 300, 330, 306]]);
+    const c = previewCrop(d, 400, 560, 1.1);
+    expect(c.x).toBeLessThanOrEqual(50);
+    expect(c.x + c.w).toBeGreaterThanOrEqual(350);   // no line is cut at the sides
+    expect(c.w).toBeLessThan(400);                   // but the blank margins are trimmed
+    expect(c.y).toBeLessThanOrEqual(60);
+    expect(c.y).toBeGreaterThan(30);                 // starts at the title, not the top margin
+    expect(c.h).toBe(Math.round(c.w * 1.1));
+  });
+
+  test('a speck of dust in the margin does not widen the crop', () => {
+    const d = page(400, 560, [[60, 60, 340, 80], [60, 100, 340, 106], [385, 400, 386, 401]]);
+    const c = previewCrop(d, 400, 560, 1.1);
+    expect(c.x + c.w).toBeLessThan(380);
+  });
+
+  test('a page with one short word is not zoomed past half its width', () => {
+    const d = page(400, 560, [[180, 200, 220, 210]]);
+    const c = previewCrop(d, 400, 560, 1.1);
+    expect(c.w).toBe(200);
+    expect(c.x).toBeLessThanOrEqual(180);
+    expect(c.x + c.w).toBeGreaterThanOrEqual(220);
+  });
+
+  test('a blank page falls back to the top of the whole page, inside the image', () => {
+    const c = previewCrop(page(300, 200, []), 300, 200, 1.1);
+    expect(c).toEqual({ x: 0, y: 0, w: 300, h: 200 });
+  });
+
+  test('text near the bottom keeps the crop inside the page', () => {
+    const d = page(400, 560, [[50, 500, 350, 520]]);
+    const c = previewCrop(d, 400, 560, 1.1);
+    expect(c.y + c.h).toBeLessThanOrEqual(560);
+    expect(c.y).toBeGreaterThanOrEqual(0);
+  });
 });
 
 test('the bake page runs the document filters with the canvas size', () => {

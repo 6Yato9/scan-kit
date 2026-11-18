@@ -47,7 +47,9 @@ function adjRNParts(adj?: PageAdjustment, filter?: PageFilter): RNFilter[] {
   const parts: RNFilter[] = [];
   if (b !== 0) parts.push({ brightness: (100 + b) / 100 });
   if (c !== 0) parts.push({ contrast: (100 + c) / 100 });
-  if (s !== 0) parts.push({ saturate: (100 + s) / 100 });
+  // Grayscale has no colour either: a stored Saturation (set under another
+  // filter) would only cost a no-op pass. The viewer hides the slider for both.
+  if (s !== 0 && filter !== 'grayscale') parts.push({ saturate: (100 + s) / 100 });
   return parts;
 }
 

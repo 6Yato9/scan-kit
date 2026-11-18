@@ -13,9 +13,12 @@
 //   [{ magic: 1 }, { brightness: 1.1 }]
 // applied in order. Document filters (whole-image, they need w/h):
 //   magic   - "Enhanced": lighting flattened per channel so paper becomes
-//             white and shadows vanish, ink and colour keep their hue, then a
-//             tone curve for crisp text.
+//             white and shadows vanish, then a tone curve for crisp text on
+//             luminance while colour (stamps, logos, highlighter, blue ink)
+//             keeps its hue and printed shade.
 //   docgray - the same flattening on luminance, as gray.
+//   Both run a stroke guard (strokeGuard) so faint pencil, light signature
+//   lines and thin rules are not whitened away with the paper.
 //   docbw   - flattened gray, then a Sauvola adaptive threshold. Optional
 //             `bias` (-1..1, brighter = fewer dark pixels) and `crisp`
 //             (-1..1, edge hardness) come from the Adjust sliders.
@@ -237,36 +240,132 @@ function blackPoint(d, w, h, s) {
 
 // Tone curve for flattened values: black point -> 0, WHITE (just under bare
 // paper, so paper grain clips to clean white) -> 255, with a gamma that
-// darkens mid-tones: anti-aliased text edges go solid and faint pencil stays
-// visible instead of fading into the newly white paper.
+// darkens mid-tones so anti-aliased text edges go solid. Colour uses a gentler
+// curve (gamma 1): a stamp or logo keeps the shade it was printed in.
 var WHITE = 0.94;
 function toneLut(bp, gamma) {
-  var lut = new Uint8ClampedArray(LUT_SIZE);
+  var lut = new Float32Array(LUT_SIZE);
   for (var i = 0; i < LUT_SIZE; i++) {
     var t = (i / LUT_SCALE - bp) / (WHITE - bp);
     t = t < 0 ? 0 : (t > 1 ? 1 : t);
-    lut[i] = Math.round(255 * Math.pow(t, gamma));
+    lut[i] = Math.pow(t, gamma);
   }
   return lut;
 }
 
+// Stroke guard. Whitening clips everything within a few percent of the paper
+// to white, which also erases what is only a little darker than the paper:
+// faint pencil, a light signature line, thin table rules. Shadows and paper
+// texture must still go, so the guard looks at the SHAPE of the darkening:
+//  - a fine "local paper" level (block means at ~1/400 of the long edge, then
+//    a closing, which erases anything narrower than ~5 blocks): leftover
+//    shading and big shapes are part of it, thin strokes are not;
+//  - the noise of the paper around that level (robust MAD), so grain and JPEG
+//    noise stay under the guard's threshold;
+//  - the darkest pixel near each block, so the edges of real (dark) ink are
+//    left alone and printed text does not get bolder.
+// A pixel noticeably darker than its local paper (beyond the noise floor) is
+// then pushed further from it, by at most CAP, before the tone curve: a faint
+// stroke lands in visible grey instead of the clipped white.
+var GUARD_GAIN = 1.6, GUARD_CAP = 0.2;
+function strokeGuard(d, w, h, s) {
+  var long = w > h ? w : h;
+  var b = Math.max(2, Math.round(long / 400));
+  var gw = Math.ceil(w / b), gh = Math.ceil(h / b), n = gw * gh;
+  var P = new Float32Array(n), C = new Float32Array(n), MN = new Float32Array(n), x, y, i, k, v, gb;
+  var cx = new Int32Array(w);
+  for (x = 0; x < w; x++) cx[x] = (x / b) | 0;
+  for (k = 0; k < n; k++) MN[k] = 4;
+  for (y = 0; y < h; y++) {
+    s.row(y); gb = ((y / b) | 0) * gw;
+    for (x = 0, i = y * w * 4; x < w; x++, i += 4) {
+      v = lumOf(d[i], d[i + 1], d[i + 2]) * s.L[x]; k = gb + cx[x];
+      P[k] += v; C[k] += 1; if (v < MN[k]) MN[k] = v;
+    }
+  }
+  for (k = 0; k < n; k++) P[k] /= C[k];
+  morph(P, gw, gh, 2, true); morph(P, gw, gh, 2, false);
+  boxBlur(P, gw, gh, 1);
+  morph(MN, gw, gh, 1, false);
+  // Noise floor: median distance of paper-like pixels from the local paper.
+  var hist = new Uint32Array(200), total = 0, step = Math.max(1, Math.round(Math.sqrt(w * h / 120000)));
+  for (y = 0; y < h; y += step) {
+    s.row(y); gb = ((y / b) | 0) * gw;
+    for (x = 0, i = y * w * 4; x < w; x += step, i += 4 * step) {
+      k = gb + cx[x];
+      var r = Math.abs(P[k] - lumOf(d[i], d[i + 1], d[i + 2]) * s.L[x]);
+      if (r < 0.1 && P[k] > 0.6) { hist[(r * 2000) | 0]++; total++; }
+    }
+  }
+  var acc = 0, med = 0;
+  for (; med < 200 && total; med++) { acc += hist[med]; if (acc * 2 >= total) break; }
+  var sigma = 1.4826 * (med + 0.5) / 2000;
+  var floor = Math.min(0.1, Math.max(0.03, 4 * sigma));
+  var row = new Float32Array(w), x0 = new Int32Array(w), x1 = new Int32Array(w), wx = new Float32Array(w), g;
+  for (x = 0; x < w; x++) {
+    g = (x + 0.5) / b - 0.5; if (g < 0) g = 0; if (g > gw - 1) g = gw - 1;
+    x0[x] = g | 0; x1[x] = Math.min(gw - 1, x0[x] + 1); wx[x] = g - x0[x];
+  }
+  var cur = 0;
+  return {
+    // Local paper level per pixel of row y (bilinear) -> guard.P.
+    P: row,
+    row: function (y) {
+      var gy = (y + 0.5) / b - 0.5; if (gy < 0) gy = 0; if (gy > gh - 1) gy = gh - 1;
+      var a = (gy | 0) * gw, c = Math.min(gh - 1, (gy | 0) + 1) * gw, t = gy - (gy | 0);
+      cur = ((y / b) | 0) * gw;
+      for (var xx = 0; xx < w; xx++) {
+        var p0 = P[a + x0[xx]] + (P[a + x1[xx]] - P[a + x0[xx]]) * wx[xx];
+        var p1 = P[c + x0[xx]] + (P[c + x1[xx]] - P[c + x0[xx]]) * wx[xx];
+        row[xx] = p0 + (p1 - p0) * t;
+      }
+    },
+    // How much to darken flattened luminance v at column x (0 = nothing), for
+    // a pixel whose neutrality is 0..1 (colour is never pushed).
+    boost: function (v, xx, neutral) {
+      var lp = row[xx];
+      if (lp <= 0 || neutral <= 0) return 0;
+      var e = 1 - v / lp - floor;
+      if (e <= 0) return 0;
+      var ink = 1 - MN[cur + cx[xx]] / lp;          // darkest pixel nearby
+      var keep = (ink - 0.5) / 0.2; keep = keep < 0 ? 0 : (keep > 1 ? 1 : keep);
+      e *= GUARD_GAIN; if (e > GUARD_CAP) e = GUARD_CAP;
+      return lp * e * (1 - keep) * neutral;
+    },
+    floor: floor,
+  };
+}
+
+// Colour weight of a flattened pixel (channels relative to paper, 1 = paper):
+// 0 for neutral ink, pencil, grain and faint casts, 1 for real colour.
+function colourWeight(r, g, b) {
+  var mx = r > g ? (r > b ? r : b) : (g > b ? g : b), mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
+  var c = (mx - mn - 0.05) / 0.1;
+  return c < 0 ? 0 : (c > 1 ? 1 : c);
+}
+
+// Enhanced: luminance and colour are toned separately so hue survives. The
+// output keeps the flattened pixel's opponent colour (r - Y, g - Y, b - Y)
+// exactly, only slightly boosted, so a teal logo stays teal and a highlighter
+// stays highlighter-yellow instead of turning neon; its brightness follows the
+// text curve where the pixel is neutral and the gentle colour curve where it is
+// coloured.
+var SAT = 1.1;
 function docMagic(d, w, h) {
   var s = makeSampler(estimateBackground(d, w, h), w, h);
-  var lut = toneLut(blackPoint(d, w, h, s), 1.7);
-  var SAT = 1.25;
+  var bp = blackPoint(d, w, h, s);
+  var lutN = toneLut(bp, 1.7), lutC = toneLut(bp, 1.0);
+  var guard = strokeGuard(d, w, h, s);
   for (var y = 0; y < h; y++) {
-    s.row(y);
+    s.row(y); guard.row(y);
     for (var x = 0, i = y * w * 4; x < w; x++, i += 4) {
-      var r = lut[lutIndex(d[i] * s.R[x])];
-      var g = lut[lutIndex(d[i + 1] * s.G[x])];
-      var b = lut[lutIndex(d[i + 2] * s.B[x])];
-      // Colour: boosted where it is real (stamps, highlighter, photos), cored
-      // to neutral where it is only a faint cast — grey pencil on cream paper
-      // would otherwise come out bluish once the cream is divided away.
+      var r = d[i] * s.R[x], g = d[i + 1] * s.G[x], b = d[i + 2] * s.B[x];
       var l = 0.299 * r + 0.587 * g + 0.114 * b;
-      var mx = r > g ? (r > b ? r : b) : (g > b ? g : b), mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
-      var c = (mx - mn - 10) / 20, k = (c < 0 ? 0 : (c > 1 ? 1 : c)) * SAT;
-      d[i] = l + (r - l) * k; d[i + 1] = l + (g - l) * k; d[i + 2] = l + (b - l) * k;
+      var k = colourWeight(r, g, b);
+      var yn = lutN[lutIndex(l - guard.boost(l, x, 1 - k))];
+      var yo = k > 0 ? yn + (lutC[lutIndex(l)] - yn) * k : yn;
+      k *= SAT;
+      d[i] = 255 * (yo + (r - l) * k); d[i + 1] = 255 * (yo + (g - l) * k); d[i + 2] = 255 * (yo + (b - l) * k);
     }
   }
 }
@@ -274,10 +373,13 @@ function docMagic(d, w, h) {
 function docGray(d, w, h) {
   var s = makeSampler(estimateBackground(d, w, h), w, h);
   var lut = toneLut(blackPoint(d, w, h, s), 1.8);
+  var guard = strokeGuard(d, w, h, s);
   for (var y = 0; y < h; y++) {
-    s.row(y);
+    s.row(y); guard.row(y);
     for (var x = 0, i = y * w * 4; x < w; x++, i += 4) {
-      var v = lut[lutIndex(lumOf(d[i], d[i + 1], d[i + 2]) * s.L[x])];
+      var r = d[i] * s.R[x], g = d[i + 1] * s.G[x], b = d[i + 2] * s.B[x];
+      var l = 0.299 * r + 0.587 * g + 0.114 * b;
+      var v = 255 * lut[lutIndex(l - guard.boost(l, x, 1 - colourWeight(r, g, b)))];
       d[i] = v; d[i + 1] = v; d[i + 2] = v;
     }
   }
@@ -295,7 +397,17 @@ function docBW(d, w, h, op) {
   for (y = 0; y < h; y++) {
     s.row(y);
     for (x = 0, i = y * w * 4, j = y * w; x < w; x++, i += 4, j++) {
-      gray[j] = lumOf(d[i], d[i + 1], d[i + 2]) * s.L[x] * 255;
+      var l = lumOf(d[i], d[i + 1], d[i + 2]) * s.L[x];
+      // A light colour fill (highlighter, a tinted table header) is paper,
+      // not ink: thresholding its luminance left dotted outlines along its
+      // edges. Light coloured pixels take their brightest channel instead;
+      // dark colour (stamps, blue ink, text on the fill) is unaffected.
+      if (l > 0.7) {
+        var cr = d[i] * s.R[x], cg = d[i + 1] * s.G[x], cb = d[i + 2] * s.B[x];
+        var k = colourWeight(cr, cg, cb) * Math.min(1, (l - 0.7) / 0.1);
+        if (k > 0) { var mx = cr > cg ? (cr > cb ? cr : cb) : (cg > cb ? cg : cb); l += (mx - l) * k; }
+      }
+      gray[j] = l * 255;
     }
   }
   var long = w > h ? w : h;

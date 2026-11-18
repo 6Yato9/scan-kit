@@ -11,6 +11,7 @@ import { useEffect, useState } from 'react';
 import { ActivityIndicator, Image, LayoutChangeEvent, Pressable, StyleSheet, Text, View } from 'react-native';
 import { PageFilter, PageAdjustment } from '@/types/document';
 import { bakePreviews, PREVIEW_FILTERS } from '@/lib/bake';
+import { PREVIEW_ASPECT } from '@/lib/bake-html';
 import { ChromeSlider } from '@/components/chrome-slider';
 import { useTheme } from '@/contexts/theme-context';
 import { HIT, Radius, Spacing, Type } from '@/lib/theme';
@@ -23,6 +24,21 @@ export const FILTER_LABELS: Record<PageFilter, string> = {
   enhanced: 'Enhanced',
 };
 
+/**
+ * One-line "what it does" under each filter name, so Enhanced and Grayscale
+ * can be told apart even on a black-and-white page where their tiles look
+ * alike. Shared with Scan settings.
+ */
+export const FILTER_CAPTIONS: Record<PageFilter, string> = {
+  original: 'As captured',
+  enhanced: 'Keeps color',
+  grayscale: 'No color',
+  bw: 'Sharpest text',
+};
+
+/** Filters whose output has no colour, so the Saturation slider does nothing. */
+const NO_COLOR: PageFilter[] = ['grayscale', 'bw'];
+
 export type EditTab = 'filters' | 'adjust';
 
 const DEFAULT_ADJ: PageAdjustment = { brightness: 0, contrast: 0, saturation: 0 };
@@ -32,20 +48,20 @@ const isDefault = (a: PageAdjustment) => a.brightness === 0 && a.contrast === 0 
 const CONTENT_H = 150;
 
 /**
- * Filter tiles show the WHOLE page, as big as the panel allows. The document
- * filters change the page as a whole (shadows gone, paper white, text crisp),
- * which a full-page tile shows at a glance; a zoomed crop used to cut words in
- * half at the tile edges.
+ * Filter tiles show the top of the page's content (title and first lines)
+ * across its full width, rendered by lib/bake-html.ts buildPreviewHtml at
+ * PREVIEW_ASPECT. That is where the filters differ: ink weight, colour, grey.
+ * A whole-page tile made Enhanced, Grayscale and Black & white look like the
+ * same white sheet.
  */
-const PREVIEW_MAX_H = 112;
-/** Ring border + gap around the page in a tile. */
+const PREVIEW_MAX_H = 80;
+/** Ring border + gap around the preview in a tile. */
 const RING = 4;
 
-/** Fits a page of `aspect` (h / w) inside the tile's free area. */
-function fitPage(tileW: number, aspect: number): { w: number; h: number } {
-  const maxW = Math.max(0, tileW - RING * 2);
-  const w = Math.min(maxW, PREVIEW_MAX_H / aspect);
-  return { w, h: w * aspect };
+/** The preview box inside a tile of width `tileW`. */
+function fitPreview(tileW: number): { w: number; h: number } {
+  const w = Math.min(Math.max(0, tileW - RING * 2), PREVIEW_MAX_H / PREVIEW_ASPECT);
+  return { w, h: w * PREVIEW_ASPECT };
 }
 
 type Props = {
@@ -121,7 +137,11 @@ export function PageEditPanel({
     const { width } = e.nativeEvent.layout;
     if (Math.abs(width - tileW) > 0.5) setTileW(width);
   };
-  const page = fitPage(tileW, Math.max(0.4, Math.min(3, aspect)));
+  const box = fitPreview(tileW);
+  // Until the previews arrive, the tile shows the unfiltered page's top at
+  // full width (the same framing, minus the margin trim).
+  const pageH = box.w * Math.max(0.4, Math.min(3, aspect));
+  const noColor = NO_COLOR.includes(filter);
 
   // Left of the tabs: the one secondary action that fits the current tab.
   const secondary =
@@ -208,14 +228,18 @@ export function PageEditPanel({
                   onLayout={i === 0 ? onTileLayout : undefined}
                   onPress={() => onFilter(key)}
                   accessibilityRole="button"
-                  accessibilityLabel={`${FILTER_LABELS[key]} filter`}
+                  accessibilityLabel={`${FILTER_LABELS[key]} filter, ${FILTER_CAPTIONS[key].toLowerCase()}`}
                   accessibilityState={{ selected: active }}
                 >
                   <View style={styles.previewSlot}>
-                    {page.w > 0 && (
+                    {box.w > 0 && (
                       <View style={[styles.previewRing, { borderColor: active ? colors.chromeAccent : 'transparent' }]}>
-                        <View style={[styles.preview, { width: page.w, height: page.h, backgroundColor: colors.paper }]}>
-                          <Image source={{ uri: preview ?? fallback }} style={{ width: page.w, height: page.h }} resizeMode="stretch" />
+                        <View style={[styles.preview, { width: box.w, height: box.h, backgroundColor: colors.paper }]}>
+                          {preview ? (
+                            <Image source={{ uri: preview }} style={{ width: box.w, height: box.h }} resizeMode="stretch" />
+                          ) : (
+                            <Image source={{ uri: fallback }} style={{ width: box.w, height: pageH }} resizeMode="stretch" />
+                          )}
                         </View>
                         {!preview && (
                           <View style={styles.previewBusy} pointerEvents="none">
@@ -231,11 +255,18 @@ export function PageEditPanel({
                     style={[
                       Type.caption,
                       styles.filterLabel,
-                      { color: active ? colors.chromeAccent : colors.chromeMuted },
+                      { color: active ? colors.chromeAccent : colors.chromeText },
                       active && styles.filterLabelActive,
                     ]}
                   >
                     {FILTER_LABELS[key]}
+                  </Text>
+                  <Text
+                    numberOfLines={1}
+                    maxFontSizeMultiplier={1.15}
+                    style={[Type.caption, styles.filterCaption, { color: colors.chromeMuted }]}
+                  >
+                    {FILTER_CAPTIONS[key]}
                   </Text>
                 </Pressable>
               );
@@ -255,12 +286,23 @@ export function PageEditPanel({
               onValueChange={v => onAdjust({ ...adj, contrast: v })}
               onSlidingComplete={onAdjustCommit}
             />
-            <ChromeSlider
-              label="Saturation"
-              value={adj.saturation}
-              onValueChange={v => onAdjust({ ...adj, saturation: v })}
-              onSlidingComplete={onAdjustCommit}
-            />
+            {noColor ? (
+              // Grayscale and Black & white have no colour to saturate; the
+              // slider would move and change nothing.
+              <View style={styles.noSaturation} accessible accessibilityLabel={`Saturation is not available with ${FILTER_LABELS[filter]}`}>
+                <Text style={[Type.footnote, styles.noSaturationLabel, { color: colors.chromeMuted }]}>Saturation</Text>
+                <Text style={[Type.footnote, styles.noSaturationNote, { color: colors.chromeMuted }]} numberOfLines={1}>
+                  {`No color in ${FILTER_LABELS[filter]}`}
+                </Text>
+              </View>
+            ) : (
+              <ChromeSlider
+                label="Saturation"
+                value={adj.saturation}
+                onValueChange={v => onAdjust({ ...adj, saturation: v })}
+                onSlidingComplete={onAdjustCommit}
+              />
+            )}
           </View>
         )}
       </View>
@@ -307,5 +349,10 @@ const styles = StyleSheet.create({
   previewBusy: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
   filterLabel: { marginTop: Spacing.xs + 2 },
   filterLabelActive: { fontWeight: '600' },
+  filterCaption: { marginTop: 1 },
+  // Same row geometry as a ChromeSlider (label column, then the rest).
+  noSaturation: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, minHeight: HIT },
+  noSaturationLabel: { width: 84, fontWeight: '500' },
+  noSaturationNote: { flex: 1 },
   adjust: { gap: Spacing.xxs },
 });
