@@ -12,8 +12,10 @@ The app must read as a polished, professional product. These rules are not optio
   toast (`useToast`) for success and a specific, human error title for failures.
 
 ## Icons
-- Ionicons only (`@expo/vector-icons`). Outline style by default; filled only for
-  the active tab or a selected state.
+- Ionicons (`@expo/vector-icons`). Outline style by default; filled only for
+  the active tab or a selected state. The single exception is a glyph Ionicons
+  doesn't have (the signature for Sign): render it with Apple's SF Symbol via
+  `components/app-icon.tsx`, which falls back to an Ionicon off iOS.
 - One glyph per action across the app: share `share-outline`, copy `copy-outline`,
   delete `trash-outline`, more `ellipsis-horizontal`, selected `checkmark`,
   back `chevron-back`, close `close`, add `add`.
