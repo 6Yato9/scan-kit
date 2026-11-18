@@ -32,29 +32,20 @@ const isDefault = (a: PageAdjustment) => a.brightness === 0 && a.contrast === 0 
 const CONTENT_H = 150;
 
 /**
- * Filter tiles show a zoomed-in crop of the page (the upper middle, where a
- * title or the first lines usually are) rather than the whole page shrunk to a
- * stamp: at this size four whole-page thumbnails look identical, while text
- * at reading size makes Grayscale vs Black & white vs Enhanced obvious.
+ * Filter tiles show the WHOLE page, as big as the panel allows. The document
+ * filters change the page as a whole (shadows gone, paper white, text crisp),
+ * which a full-page tile shows at a glance; a zoomed crop used to cut words in
+ * half at the tile edges.
  */
-const TILE_ZOOM = 2.4;
-/** Centre of the crop, as a fraction of the page height. */
-const TILE_FOCUS_Y = 0.25;
+const PREVIEW_MAX_H = 112;
+/** Ring border + gap around the page in a tile. */
+const RING = 4;
 
-/** A crop of `uri` filling a tile of `w`×`h`, zoomed in on the upper middle of the page. */
-function CropImage({ uri, w, h, aspect, bg }: { uri: string; w: number; h: number; aspect: number; bg: string }) {
-  if (!w || !h) return null;
-  const imgW = w * TILE_ZOOM;
-  const imgH = imgW * aspect;
-  const left = -(imgW - w) / 2;
-  const top = -Math.max(0, Math.min(imgH * TILE_FOCUS_Y - h / 2, imgH - h));
-  return (
-    <Image
-      source={{ uri }}
-      style={{ position: 'absolute', width: imgW, height: imgH, left, top, backgroundColor: bg }}
-      resizeMode="stretch"
-    />
-  );
+/** Fits a page of `aspect` (h / w) inside the tile's free area. */
+function fitPage(tileW: number, aspect: number): { w: number; h: number } {
+  const maxW = Math.max(0, tileW - RING * 2);
+  const w = Math.min(maxW, PREVIEW_MAX_H / aspect);
+  return { w, h: w * aspect };
 }
 
 type Props = {
@@ -97,7 +88,7 @@ export function PageEditPanel({
 }: Props) {
   const { colors } = useTheme();
   const [previews, setPreviews] = useState<string[] | null>(null);
-  const [tile, setTile] = useState({ w: 0, h: 0 });
+  const [tileW, setTileW] = useState(0);
   const [aspect, setAspect] = useState(1.3);
 
   // Real previews: each tile is the page rendered through that filter (RN's
@@ -115,7 +106,7 @@ export function PageEditPanel({
   const adj = adjustment ?? DEFAULT_ADJ;
   const fallback = cacheBust ? `${uri}?v=${cacheBust}` : uri;
 
-  // The crop needs the page's shape (h / w).
+  // The tiles take the page's shape (h / w).
   useEffect(() => {
     let cancelled = false;
     Image.getSize(
@@ -127,9 +118,10 @@ export function PageEditPanel({
   }, [fallback]);
 
   const onTileLayout = (e: LayoutChangeEvent) => {
-    const { width, height } = e.nativeEvent.layout;
-    if (Math.abs(width - tile.w) > 0.5 || Math.abs(height - tile.h) > 0.5) setTile({ w: width, h: height });
+    const { width } = e.nativeEvent.layout;
+    if (Math.abs(width - tileW) > 0.5) setTileW(width);
   };
+  const page = fitPage(tileW, Math.max(0.4, Math.min(3, aspect)));
 
   // Left of the tabs: the one secondary action that fits the current tab.
   const secondary =
@@ -213,18 +205,23 @@ export function PageEditPanel({
                 <Pressable
                   key={key}
                   style={styles.filterTile}
+                  onLayout={i === 0 ? onTileLayout : undefined}
                   onPress={() => onFilter(key)}
                   accessibilityRole="button"
                   accessibilityLabel={`${FILTER_LABELS[key]} filter`}
                   accessibilityState={{ selected: active }}
                 >
-                  <View style={[styles.previewRing, { borderColor: active ? colors.chromeAccent : 'transparent' }]}>
-                    <View style={[styles.preview, { backgroundColor: colors.paper }]} onLayout={i === 0 ? onTileLayout : undefined}>
-                      <CropImage uri={preview ?? fallback} w={tile.w} h={tile.h} aspect={aspect} bg={colors.paper} />
-                    </View>
-                    {!preview && (
-                      <View style={styles.previewBusy} pointerEvents="none">
-                        <ActivityIndicator size="small" color={colors.chromeText} />
+                  <View style={styles.previewSlot}>
+                    {page.w > 0 && (
+                      <View style={[styles.previewRing, { borderColor: active ? colors.chromeAccent : 'transparent' }]}>
+                        <View style={[styles.preview, { width: page.w, height: page.h, backgroundColor: colors.paper }]}>
+                          <Image source={{ uri: preview ?? fallback }} style={{ width: page.w, height: page.h }} resizeMode="stretch" />
+                        </View>
+                        {!preview && (
+                          <View style={styles.previewBusy} pointerEvents="none">
+                            <ActivityIndicator size="small" color={colors.chromeText} />
+                          </View>
+                        )}
                       </View>
                     )}
                   </View>
@@ -293,13 +290,13 @@ const styles = StyleSheet.create({
   content: { height: CONTENT_H, justifyContent: 'center' },
   filterRow: { flexDirection: 'row', gap: Spacing.sm },
   filterTile: { flex: 1, alignItems: 'center' },
+  previewSlot: { height: PREVIEW_MAX_H + RING * 2, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center' },
   previewRing: {
-    width: '100%',
     borderRadius: Radius.sm + 2,
     borderWidth: 2,
     padding: 2,
   },
-  preview: { width: '100%', aspectRatio: 0.78, borderRadius: Radius.sm - 2, overflow: 'hidden' },
+  preview: { borderRadius: Radius.sm - 2, overflow: 'hidden' },
   pillBtn: {
     minHeight: 32,
     justifyContent: 'center',

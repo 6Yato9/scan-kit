@@ -1,4 +1,4 @@
-import { BAKE_MAX_PIXELS, buildBakeHtml } from '../lib/bake-html';
+import { BAKE_MAX_PIXELS, buildBakeHtml, buildPreviewHtml } from '../lib/bake-html';
 
 const SRC = 'file:///docs/d1/page-0.orig.jpg';
 
@@ -13,9 +13,21 @@ function runOps(ops: Record<string, number>[], rgb: [number, number, number]): n
   // maths is exercised under the same rounding the browser applies.
   const data = new Uint8ClampedArray([rgb[0], rgb[1], rgb[2], 255]);
   // eslint-disable-next-line no-new-func
-  const fn = new Function(`${body}; apply(arguments[0]); return arguments[0];`);
+  const fn = new Function(`${body}; applyOps(arguments[0], 1, 1, OPS); return arguments[0];`);
   return Array.from(fn(data) as number[]);
 }
+
+test('the preview page embeds the same pixel kernels and passes the preview size', () => {
+  const html = buildPreviewHtml(SRC, [[], [{ magic: 1 }]], 360);
+  expect(html).toContain('function docMagic');
+  expect(html).toContain('applyOps(id.data, W, h, LIST[k])');
+});
+
+test('the bake page runs the document filters with the canvas size', () => {
+  const html = buildBakeHtml(SRC, [{ docbw: 1 }]);
+  expect(html).toContain('function docBW');
+  expect(html).toContain('applyOps(id.data, w, h, OPS)');
+});
 
 test('embeds the ops and the source', () => {
   const html = buildBakeHtml(SRC, [{ grayscale: 1 }]);

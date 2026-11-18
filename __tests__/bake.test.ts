@@ -112,7 +112,7 @@ test('bakes from .orig, writes the decoded bytes to the right page, and records 
   const job = await bakeNext();
 
   expect(job.src).toBe('file:///documents/scan-kit/doc1/page-0.orig.jpg');
-  expect(job.ops).toEqual([{ grayscale: 1 }]);
+  expect(job.ops).toEqual([{ docgray: 1 }]);
   await expect(done).resolves.toBe(true);
   expect(mockWriteAsStringAsync).toHaveBeenCalledWith(page(0), 'page-0.orig.jpg', { encoding: 'base64' });
   expect(mockSetPageBaked).toHaveBeenCalledWith('doc1', 0, 'grayscale', undefined);
@@ -126,7 +126,7 @@ test('passes adjustments through to the bake ops and setPageBaked', async () => 
   const done = bakePage('doc1', 0, 'enhanced', adjustment);
   const job = await bakeNext();
   await done;
-  expect(job.ops).toEqual([{ contrast: 1.3 }, { saturate: 1.3 }, { brightness: 1.1 }]);
+  expect(job.ops).toEqual([{ magic: 1 }, { brightness: 1.1 }]);
   expect(mockSetPageBaked).toHaveBeenCalledWith('doc1', 0, 'enhanced', adjustment);
 });
 

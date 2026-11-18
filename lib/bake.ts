@@ -198,9 +198,9 @@ export async function bakePage(
   tickets.add(ticket);
 
   try {
-    // combinedFilterRN already yields the primitive list ([{grayscale:1},{contrast:2}]);
-    // the bake canvas applies those with explicit pixel maths, because ctx.filter is
-    // a silent no-op in this WebKit.
+    // combinedFilterRN yields the op list ([{magic:1},{brightness:1.1}]); the bake
+    // canvas applies it with explicit pixel maths (lib/pixel-kernels.ts), because
+    // ctx.filter is a silent no-op in this WebKit.
     const ops = combinedFilterRN(filter, adjustment) ?? [];
 
     for (let round = 0; round < MAX_ROUNDS; round++) {
@@ -269,8 +269,11 @@ export async function bakePages(docId: string, indices: number[], filter: PageFi
   ));
 }
 
-/** Filters offered by the picker, in display order. */
-export const PREVIEW_FILTERS: PageFilter[] = ['original', 'grayscale', 'bw', 'enhanced'];
+/**
+ * Every filter in display order: the viewer's filter tiles and Scan settings'
+ * default-filter list both use it, so the two always match.
+ */
+export const PREVIEW_FILTERS: PageFilter[] = ['original', 'enhanced', 'grayscale', 'bw'];
 
 // Previews derive from page-N.orig.jpg, which only changes when the page's
 // geometry does — not when a filter is applied — so they are cached per page and
@@ -314,8 +317,10 @@ export async function bakePreviews(docId: string, pageIndex: number): Promise<st
   const src = await withDocLock(docId, () => ensureOriginal(docId, pageIndex));
   const opsList = PREVIEW_FILTERS.map(f => combinedFilterRN(f, undefined) ?? []);
   const reply = await enqueueBake(
-    // Wide enough that the picker can show a zoomed-in crop (readable text), not a blur.
-    { docId, pageIndex, src, ops: [], previews: opsList, previewWidth: 480 },
+    // The tiles show the whole page at about 90 pt wide; 360 px keeps them sharp on
+    // a 3x screen, and is large enough that the document filters (which work on
+    // the page's structure, not single pixels) look as they will on the page.
+    { docId, pageIndex, src, ops: [], previews: opsList, previewWidth: 360 },
     { priority: 'high' },
   );
   const urls = JSON.parse(reply.replace(/^PREVIEWS:/, '')) as string[];
