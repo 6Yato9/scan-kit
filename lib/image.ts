@@ -1,6 +1,7 @@
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { Directory, File, Paths } from 'expo-file-system';
-import { replacePage } from './files';
+import { replaceOriginal, replacePage } from './files';
+import { cappedSize, getImageSize } from './image-size';
 
 /**
  * Rotates a stored page JPEG by 90° and overwrites the original file.
@@ -75,12 +76,7 @@ export async function mirrorGeometryToOriginal(
     const resultPath = result.uri.split('?')[0];
     if (resultPath === orig.uri.split('?')[0]) return; // manipulator wrote in place
 
-    const side = new File(dir, `page-${pageIndex}.orig.new.jpg`);
-    if (side.exists) { try { side.delete(); } catch {} }
-    new File(resultPath).copy(side);
-    try { orig.delete(); } catch {}
-    side.copy(orig);
-    try { side.delete(); } catch {}
+    replaceOriginal(resultPath, docId, pageIndex);
     try { new File(resultPath).delete(); } catch {}
   } catch (err) {
     console.error('mirrorGeometryToOriginal failed', err);
@@ -117,4 +113,48 @@ export async function cropPage(
   }
   await mirrorGeometryToOriginal(docId, pageIndex, [{ crop: rect }]);
   return stored;
+}
+
+/**
+ * Shrinks page `pageIndex` of `docId` — and its `.orig` shadow, to exactly the
+ * same size — when it is larger than MAX_PAGE_EDGE on its long edge. Pages
+ * imported before imports were capped can be 24 MP or more, which the filter
+ * bake's WebKit canvas can't hold; bakePage calls this (under the page lock)
+ * before baking. Both files must stay the same shape, or a later crop measured
+ * on the page would be applied to the wrong region of the shadow. Returns true
+ * when something was resized. Never throws: an oversized page still bakes
+ * (lib/bake-html.ts scales the canvas), just with mismatched sizes.
+ */
+export async function capStoredPageSize(docId: string, pageIndex: number): Promise<boolean> {
+  try {
+    const dir = new Directory(Paths.document, 'scan-kit', docId);
+    const page = new File(dir, `page-${pageIndex}.jpg`);
+    const orig = new File(dir, `page-${pageIndex}.orig.jpg`);
+    const source = orig.exists ? orig : page;
+    const size = await getImageSize(source.uri);
+    const capped = size ? cappedSize(size.width, size.height) : null;
+    if (!size || !capped) return false;
+    const longEdge = size.width >= size.height ? { width: capped.width } : { height: capped.height };
+    const first = await manipulateAsync(source.uri, [{ resize: longEdge }], { compress: 0.92, format: SaveFormat.JPEG });
+    const temps = [first.uri];
+    try {
+      if (source === orig) {
+        // The page gets the shadow's exact output size, so the two still match.
+        const second = await manipulateAsync(page.uri, [{ resize: { width: first.width, height: first.height } }], { compress: 0.92, format: SaveFormat.JPEG });
+        temps.push(second.uri);
+        replaceOriginal(first.uri, docId, pageIndex);
+        replacePage(second.uri, docId, pageIndex);
+      } else {
+        replacePage(first.uri, docId, pageIndex);
+      }
+    } finally {
+      for (const uri of temps) {
+        try { new File(uri.split('?')[0]).delete(); } catch {}
+      }
+    }
+    return true;
+  } catch (err) {
+    console.warn('capStoredPageSize failed', err);
+    return false;
+  }
 }

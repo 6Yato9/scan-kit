@@ -6,9 +6,13 @@
 // from compounding JPEG generation loss and keeps "Original" reachable.
 //
 // Ordering matters: the filter is only recorded in storage AFTER the baked
-// pixels have been written to disk. If the bake or the write fails, nothing
-// is recorded, so pixels and metadata never disagree, and a page export
-// racing an in-flight bake yields unenhanced (not wrong) output.
+// pixels have been written to disk (setPageBaked). If the bake or the write
+// fails, nothing is recorded, so pixels and metadata never disagree, and a page
+// export racing an in-flight bake yields unenhanced (not wrong) output. That is
+// why new pages are always saved as 'original' and get their default filter
+// only through a bake (contexts/scan-context.tsx, lib/add-pages.ts). Should the
+// two ever disagree anyway, the startup self-heal finds the page by comparing
+// it with its .orig (lib/storage.ts pendingBakeMigrations).
 //
 // CONCURRENT EDITS. A bake takes a moment, and the user keeps editing while it
 // runs: deleting or reordering pages renames every page file, and rotate, crop
@@ -21,12 +25,13 @@
 // The final write + metadata record happen under the same lock, so an edit can
 // never interleave with them. A newer bake for the same page supersedes an
 // older one, so the user's latest choice always wins.
-import { Directory, File, Paths } from 'expo-file-system';
+import { Directory, Paths } from 'expo-file-system';
 import { writeAsStringAsync } from 'expo-file-system/legacy';
 import { PageAdjustment, PageFilter } from '../types/document';
 import { BakeCancelled, cancelJob, EnqueueOptions, enqueueBake, enqueueBakeWithId } from './bake-queue';
-import { ensureOriginal } from './files';
+import { ensureOriginal, pageSideUri, promotePageSide } from './files';
 import { combinedFilterRN } from './filters';
+import { capStoredPageSize } from './image';
 import { setPageBaked } from './storage';
 
 const DATA_URL_PREFIX = /^data:image\/jpeg;base64,/;
@@ -205,7 +210,13 @@ export async function bakePage(
 
       let dataUrl: string;
       try {
-        const src = await withDocLock(docId, () => ensureOriginal(docId, idx));
+        const src = await withDocLock(docId, async () => {
+          const orig = ensureOriginal(docId, idx);
+          // Pages stored before imports were capped can be too big for the
+          // bake canvas; shrink them (and their shadow) once, first.
+          await capStoredPageSize(docId, idx);
+          return orig;
+        });
         if (ticket.gen !== gen || ticket.superseded) continue;
         const { id, promise } = enqueueBakeWithId({ docId, pageIndex: idx, src, ops }, options);
         ticket.jobId = id;
@@ -222,8 +233,10 @@ export async function bakePage(
         if (ticket.gen !== gen) return 'retry';
         const dir = new Directory(Paths.document, 'scan-kit', docId);
         if (!dir.exists) return 'dropped'; // document deleted mid-bake
-        const dest = new File(dir, `page-${idx}.jpg`);
-        await writeAsStringAsync(dest.uri, dataUrl.replace(DATA_URL_PREFIX, ''), { encoding: 'base64' });
+        // Written beside the page and renamed over it, so a crash mid-write
+        // can't leave a truncated page (the startup sweep finishes the rename).
+        await writeAsStringAsync(pageSideUri(docId, idx), dataUrl.replace(DATA_URL_PREFIX, ''), { encoding: 'base64' });
+        promotePageSide(docId, idx);
         await setPageBaked(docId, idx, filter, adjustment);
         return 'done';
       });

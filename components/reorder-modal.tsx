@@ -2,7 +2,7 @@
 // Drag-to-reorder sheet for the viewer. Uses the always-dark chrome like the
 // viewer it is presented over.
 import { Image, Modal, Pressable, StyleSheet, Text } from 'react-native';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import DraggableFlatList, {
@@ -11,6 +11,7 @@ import DraggableFlatList, {
 } from 'react-native-draggable-flatlist';
 import { useTheme } from '@/contexts/theme-context';
 import { HeaderTextButton, ScreenHeader } from '@/components/screen-header';
+import { useAppLocked } from '@/components/lock-gate';
 import { HIT, Spacing, Type } from '@/lib/theme';
 
 type PageItem = {
@@ -32,6 +33,21 @@ type Props = {
 export function ReorderModal({ visible, pages, cacheBust, saving, onConfirm, onCancel }: Props) {
   const { colors } = useTheme();
   const [items, setItems] = useState<PageItem[]>([]);
+
+  // App lock: pushing /lock makes react-native-screens dismiss this RN Modal
+  // natively while JS still thinks it is open, leaving it impossible to
+  // reopen. Close it properly instead (an unsaved order is dropped; a save
+  // already running still completes) and remount the Modal so its native host
+  // starts fresh.
+  const locked = useAppLocked();
+  const [modalKey, setModalKey] = useState(0);
+  const onCancelRef = useRef(onCancel);
+  onCancelRef.current = onCancel;
+  useEffect(() => {
+    if (!locked || !visible) return;
+    setModalKey(k => k + 1);
+    onCancelRef.current();
+  }, [locked, visible]);
 
   // Re-init whenever the modal becomes visible OR the underlying pages change.
   useEffect(() => {
@@ -85,7 +101,8 @@ export function ReorderModal({ visible, pages, cacheBust, saving, onConfirm, onC
 
   return (
     <Modal
-      visible={visible}
+      key={modalKey}
+      visible={visible && !locked}
       animationType="slide"
       presentationStyle="pageSheet"
       onRequestClose={onCancel}

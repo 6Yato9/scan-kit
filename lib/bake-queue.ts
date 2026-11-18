@@ -146,11 +146,6 @@ export function registerBakeHost(host: BakeHost): () => void {
   };
 }
 
-/** Number of registered hosts (for tests and diagnostics). */
-export function hostCount(): number {
-  return hosts.length;
-}
-
 /** Enqueues a bake job and returns a promise that resolves with the baked JPEG data URL. */
 export function enqueueBake(input: BakeJobInput, options: EnqueueOptions = {}): Promise<string> {
   return enqueueBakeWithId(input, options).promise;
@@ -189,6 +184,9 @@ export function takeNextJob(host?: BakeHost): BakeJob | null {
     entry.attempts++;
     if (host) {
       const timer = setTimeout(() => onLeaseTimeout(id), LEASE_TIMEOUT_MS);
+      // A watchdog, not work: it must never keep a JS runtime alive on its own
+      // (Node/Jest; React Native timers have no unref and ignore this).
+      (timer as { unref?: () => void }).unref?.();
       leases.set(id, { host, timer });
     }
     return entry.job;
@@ -282,16 +280,6 @@ export function releaseJob(job: BakeJob): void {
     insertQueued(job.id, entry.priority, true);
   }
   wakeTop();
-}
-
-/**
- * Legacy single-notifier API, kept for callers that only need a wake-up. It
- * registers a host with no lease handling.
- */
-let legacyUnregister: (() => void) | null = null;
-export function setBakeNotifier(fn: (() => void) | null): void {
-  legacyUnregister?.();
-  legacyUnregister = fn ? registerBakeHost({ pump: fn, revoke: () => {} }) : null;
 }
 
 // ── Activity tracking ────────────────────────────────────────────────────────

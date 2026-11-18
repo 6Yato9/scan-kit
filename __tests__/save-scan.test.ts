@@ -6,21 +6,60 @@ jest.mock('../lib/files', () => ({
     `file:///docs/${docId}/page-${i}.jpg`),
   copyPdfToStorage: jest.fn(() => 'file:///docs/fixed-id/document.pdf'),
   deleteDocumentFiles: jest.fn(),
+  deleteDisposableTemps: jest.fn(),
 }));
+// updateDocumentWith runs the updater against `mockStored` (the current record),
+// like the real one does under the storage lock.
+let mockStored: any = null;
+const mockApplied: any[] = [];
 jest.mock('../lib/storage', () => ({
   saveDocument: jest.fn(async () => {}),
-  patchDocument: jest.fn(async () => {}),
+  updateDocumentWith: jest.fn(async (_id: string, fn: (cur: any) => any) => {
+    if (!mockStored) return false;
+    const patch = fn(mockStored);
+    if (!patch) return false;
+    mockApplied.push(patch);
+    mockStored = JSON.parse(JSON.stringify({ ...mockStored, ...patch }));
+    return true;
+  }),
 }));
 jest.mock('../lib/ocr', () => ({
   ocrAvailable: jest.fn(() => true),
   extractDocText: jest.fn(async () => ''),
 }));
 
-const { saveDocument, patchDocument } = require('../lib/storage');
-const { deleteDocumentFiles, copyPageWithQuality, copyPdfToStorage } = require('../lib/files');
+const { saveDocument, updateDocumentWith } = require('../lib/storage');
+const { deleteDocumentFiles, copyPageWithQuality, copyPdfToStorage, deleteDisposableTemps } = require('../lib/files');
 const { ocrAvailable, extractDocText } = require('../lib/ocr');
 
-beforeEach(() => jest.clearAllMocks());
+beforeEach(() => {
+  jest.clearAllMocks();
+  mockStored = { id: 'fixed-id', name: 'Doc', pages: [] };
+  mockApplied.length = 0;
+});
+
+test('new pages are saved as original — a filter is only recorded by its bake (critique #2)', async () => {
+  await saveScan({ pages: ['a.jpg'], name: 'Doc', quality: 0.9 });
+  const doc = (saveDocument as jest.Mock).mock.calls[0][0];
+  expect(doc.filters).toBeUndefined();
+  expect(doc.adjustments).toBeUndefined();
+});
+
+test('an automatic name is remembered as the default name', async () => {
+  await saveScan({ pages: ['a.jpg'], name: 'Scan Nov 18, 2026 at 12.35 AM', quality: 0.9, nameIsDefault: true });
+  expect((saveDocument as jest.Mock).mock.calls[0][0].defaultName).toBe('Scan Nov 18, 2026 at 12.35 AM');
+  await saveScan({ pages: ['a.jpg'], name: 'ID card', quality: 0.9 });
+  expect((saveDocument as jest.Mock).mock.calls[1][0].defaultName).toBeUndefined();
+});
+
+test('temp inputs are deleted once stored, and kept when the save fails', async () => {
+  await saveScan({ pages: ['file:///tmp/a.jpg'], name: 'Doc', quality: 0.9 });
+  expect(deleteDisposableTemps).toHaveBeenCalledWith(['file:///tmp/a.jpg']);
+  (deleteDisposableTemps as jest.Mock).mockClear();
+  (saveDocument as jest.Mock).mockRejectedValueOnce(new Error('full'));
+  await expect(saveScan({ pages: ['file:///tmp/a.jpg'], name: 'Doc', quality: 0.9 })).rejects.toThrow();
+  expect(deleteDisposableTemps).not.toHaveBeenCalled();
+});
 
 test('saves pages in order and returns the new document id and page uris', async () => {
   const result = await saveScan({ pages: ['a.jpg', 'b.jpg'], name: 'Doc', quality: 0.9 });
@@ -66,25 +105,62 @@ test('cleans up when the pdf branch fails to persist', async () => {
 });
 
 describe('indexDocText', () => {
-  test('merges the recognised text onto the current record via patchDocument', async () => {
+  test('merges the recognised text onto the current record', async () => {
     (extractDocText as jest.Mock).mockResolvedValueOnce('recognized text');
 
     await indexDocText('fixed-id', ['file:///docs/fixed-id/page-0.jpg']);
 
-    expect(patchDocument).toHaveBeenCalledTimes(1);
-    expect(patchDocument).toHaveBeenCalledWith('fixed-id', { ocrText: 'recognized text' });
+    expect(updateDocumentWith).toHaveBeenCalledTimes(1);
+    expect(mockApplied).toEqual([{ ocrText: 'recognized text' }]);
   });
 
-  test('does not fall back to recreating the document when patchDocument no-ops for a deleted document', async () => {
+  test('does not recreate a document that was deleted meanwhile', async () => {
     (extractDocText as jest.Mock).mockResolvedValueOnce('recognized text');
-    // patchDocument itself guarantees this no-op (see storage.test.ts); here we
-    // only need indexDocText not to react to it by re-creating the document.
-    (patchDocument as jest.Mock).mockResolvedValueOnce(undefined);
+    mockStored = null;
 
     await indexDocText('fixed-id', ['file:///docs/fixed-id/page-0.jpg']);
 
-    expect(patchDocument).toHaveBeenCalledWith('fixed-id', { ocrText: 'recognized text' });
+    expect(mockApplied).toEqual([]);
     expect(saveDocument).not.toHaveBeenCalled();
+  });
+
+  test('names a document that still has its automatic name after its first strong line', async () => {
+    mockStored = { id: 'fixed-id', name: 'Scan Nov 18', defaultName: 'Scan Nov 18', pages: [] };
+    (extractDocText as jest.Mock).mockResolvedValueOnce('12/04/2026\nINVOICE #2026-0417\nAcme Supplies');
+
+    await indexDocText('fixed-id', ['p0']);
+
+    expect(mockStored.name).toBe('Invoice #2026-0417');
+    expect(mockStored.defaultName).toBeUndefined();
+    expect(mockStored.ocrText).toContain('Acme Supplies');
+  });
+
+  test('never renames a document the user has renamed', async () => {
+    mockStored = { id: 'fixed-id', name: 'My taxes', defaultName: 'Scan Nov 18', pages: [] };
+    (extractDocText as jest.Mock).mockResolvedValueOnce('INVOICE #2026-0417');
+
+    await indexDocText('fixed-id', ['p0']);
+
+    expect(mockStored.name).toBe('My taxes');
+  });
+
+  test('never renames a document created without an automatic name', async () => {
+    mockStored = { id: 'fixed-id', name: 'ID card Nov 18', pages: [] };
+    (extractDocText as jest.Mock).mockResolvedValueOnce('DRIVER LICENSE');
+
+    await indexDocText('fixed-id', ['p0']);
+
+    expect(mockStored.name).toBe('ID card Nov 18');
+  });
+
+  test('keeps the automatic name (and the chance to rename later) when no line reads like a title', async () => {
+    mockStored = { id: 'fixed-id', name: 'Scan Nov 18', defaultName: 'Scan Nov 18', pages: [] };
+    (extractDocText as jest.Mock).mockResolvedValueOnce('123 456\n$ 12.00');
+
+    await indexDocText('fixed-id', ['p0']);
+
+    expect(mockStored.name).toBe('Scan Nov 18');
+    expect(mockStored.defaultName).toBe('Scan Nov 18');
   });
 
   test('writes nothing when OCR is unavailable', async () => {
@@ -93,7 +169,7 @@ describe('indexDocText', () => {
     await indexDocText('fixed-id', ['file:///docs/fixed-id/page-0.jpg']);
 
     expect(extractDocText).not.toHaveBeenCalled();
-    expect(patchDocument).not.toHaveBeenCalled();
+    expect(updateDocumentWith).not.toHaveBeenCalled();
   });
 
   test('writes nothing when extractDocText returns an empty string', async () => {
@@ -101,6 +177,6 @@ describe('indexDocText', () => {
 
     await indexDocText('fixed-id', ['file:///docs/fixed-id/page-0.jpg']);
 
-    expect(patchDocument).not.toHaveBeenCalled();
+    expect(updateDocumentWith).not.toHaveBeenCalled();
   });
 });

@@ -32,8 +32,18 @@ jest.mock('expo-file-system', () => {
 });
 
 const mockEnsureOriginal = jest.fn((docId: string, i: number) => `file:///documents/scan-kit/${docId}/page-${i}.orig.jpg`);
+const mockPromotePageSide = jest.fn();
 jest.mock('../lib/files', () => ({
   ensureOriginal: (docId: string, i: number) => mockEnsureOriginal(docId, i),
+  // The bake writes beside the page and renames it over; the tests record the
+  // write against the page it ends up as.
+  pageSideUri: (docId: string, i: number) => `file:///documents/scan-kit/${docId}/page-${i}.jpg`,
+  promotePageSide: (...args: any[]) => mockPromotePageSide(...args),
+}));
+
+const mockCapStoredPageSize = jest.fn().mockResolvedValue(false);
+jest.mock('../lib/image', () => ({
+  capStoredPageSize: (...args: any[]) => mockCapStoredPageSize(...args),
 }));
 
 const mockSetPageBaked = jest.fn().mockResolvedValue(undefined);
@@ -77,6 +87,24 @@ beforeEach(async () => {
   mockDirExists = true;
   mockWriteAsStringAsync.mockResolvedValue(undefined);
   mockSetPageBaked.mockResolvedValue(undefined);
+  mockCapStoredPageSize.mockResolvedValue(false);
+});
+
+test('the baked page is renamed into place before the filter is recorded', async () => {
+  const done = bakePage('doc1', 2, 'bw', undefined);
+  await bakeNext();
+  expect(await done).toBe(true);
+  expect(mockPromotePageSide).toHaveBeenCalledWith('doc1', 2);
+  expect(mockPromotePageSide.mock.invocationCallOrder[0]).toBeLessThan(mockSetPageBaked.mock.invocationCallOrder[0]);
+});
+
+test('an oversized page is shrunk (with its shadow) before it is baked', async () => {
+  const done = bakePage('doc1', 0, 'grayscale', undefined);
+  await bakeNext();
+  expect(await done).toBe(true);
+  expect(mockCapStoredPageSize).toHaveBeenCalledWith('doc1', 0);
+  // Shadow first, then the size cap, so both files are capped together.
+  expect(mockEnsureOriginal.mock.invocationCallOrder[0]).toBeLessThan(mockCapStoredPageSize.mock.invocationCallOrder[0]);
 });
 
 test('bakes from .orig, writes the decoded bytes to the right page, and records the filter', async () => {

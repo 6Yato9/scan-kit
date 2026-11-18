@@ -10,21 +10,28 @@ jest.mock('@react-native-async-storage/async-storage', () =>
 // __tests__/bake.test.ts / __tests__/files.test.ts — `mockOrigExists` lives
 // outside the factory so it survives jest.resetModules() in beforeEach below.
 const mockOrigExists: Record<string, boolean> = {};
+// Page/shadow bytes, for the "page is byte-for-byte its .orig" check. A uri with
+// content here exists even if mockOrigExists doesn't say so.
+const mockBytes: Record<string, string> = {};
 jest.mock('expo-file-system', () => {
   class MockFile {
     uri: string;
     constructor(uri: string) { this.uri = uri; }
-    get exists() { return mockOrigExists[this.uri] ?? false; }
+    get exists() { return mockOrigExists[this.uri] ?? (this.uri in mockBytes); }
+    get size() { return (mockBytes[this.uri] ?? '').length; }
+    get md5() { return this.uri in mockBytes ? `md5:${mockBytes[this.uri]}` : null; }
   }
   return { File: MockFile, Paths: { document: { uri: 'file:///CURRENT/Documents/' } } };
 });
 
 // Real lib/files.ts pulls in expo-image-manipulator, which isn't relevant to
-// storage.ts's tests — stub just the one function pendingBakeMigrations needs,
-// with a deterministic, self-consistent uri format.
+// storage.ts's tests — stub just what storage.ts uses, with a deterministic,
+// self-consistent uri format.
+const mockDeletedDirs: string[] = [];
 jest.mock('../lib/files', () => ({
   originalUri: (docId: string, pageIndex: number) =>
     `file:///documents/scan-kit/${docId}/page-${pageIndex}.orig.jpg`,
+  deleteDocumentFiles: (docId: string) => { mockDeletedDirs.push(docId); },
 }));
 
 // storage.ts keeps module-level state (the docs lock + the memoized migration
@@ -57,6 +64,8 @@ beforeEach(() => {
   AsyncStorage = require('@react-native-async-storage/async-storage');
   storage = require('../lib/storage');
   for (const k of Object.keys(mockOrigExists)) delete mockOrigExists[k];
+  for (const k of Object.keys(mockBytes)) delete mockBytes[k];
+  mockDeletedDirs.length = 0;
 });
 
 test('getDocuments returns empty array when nothing stored', async () => {
@@ -258,11 +267,32 @@ describe('pendingBakeMigrations', () => {
     expect(await storage.pendingBakeMigrations()).toEqual([]);
   });
 
-  it('skips a page whose .orig already exists (already baked)', async () => {
+  it('skips a page whose pixels differ from its .orig (already baked)', async () => {
     await storage.saveDocument({
       ...doc, id: 'pbm-3', pages: ['file:///p0.jpg'], filters: ['bw'],
     });
-    mockOrigExists[origUri('pbm-3', 0)] = true;
+    mockBytes[origUri('pbm-3', 0)] = 'raw-photo';
+    mockBytes['file:///p0.jpg'] = 'baked-bw';
+    expect(await storage.pendingBakeMigrations()).toEqual([]);
+  });
+
+  it('reports a page whose bake made the .orig but never wrote the filtered pixels', async () => {
+    // The critique's case: metadata says Enhanced, the shadow exists, but the
+    // page is still the raw photo because the bake failed or was killed.
+    await storage.saveDocument({
+      ...doc, id: 'pbm-half', pages: ['file:///half.jpg?v=3'], filters: ['enhanced'],
+    });
+    mockBytes[origUri('pbm-half', 0)] = 'raw-photo';
+    mockBytes['file:///half.jpg'] = 'raw-photo';
+    expect(await storage.pendingBakeMigrations()).toEqual([
+      { docId: 'pbm-half', pageIndex: 0, filter: 'enhanced', adjustment: undefined },
+    ]);
+  });
+
+  it('skips trashed documents', async () => {
+    await storage.saveDocument({
+      ...doc, id: 'pbm-trash', pages: ['file:///p0.jpg'], filters: ['grayscale'], trashedAt: 5,
+    });
     expect(await storage.pendingBakeMigrations()).toEqual([]);
   });
 
@@ -685,10 +715,137 @@ describe('ghost documents and lost indexes (core #6, #14)', () => {
     expect(await storage.documentIdsForCleanup()).toEqual([]);
   });
 
-  test('documentIdsForCleanup refuses (null) when doc records exist but none can be read', async () => {
+  test('documentIdsForCleanup keeps a record that cannot be read, even when it is the only one', async () => {
     await AsyncStorage.setItem('@scan_kit_schema_version', '3');
     await AsyncStorage.setItem('@scan_kit_doc:A', '{corrupt');
-    expect(await storage.documentIdsForCleanup()).toBeNull();
+    expect(await storage.documentIdsForCleanup()).toEqual(['A']);
+  });
+
+  test('documentIdsForCleanup keeps a corrupt document next to readable ones (critique #7)', async () => {
+    await storage.saveDocument({ ...doc, id: 'good' });
+    await storage.saveDocument({ ...doc, id: 'broken' });
+    await AsyncStorage.setItem('@scan_kit_doc:broken', '{corrupt');
+    // A normal read drops the broken record from the index …
+    expect((await storage.getDocuments()).map(d => d.id)).toEqual(['good']);
+    // … but its folder must still be protected from the orphan sweep.
+    expect((await storage.documentIdsForCleanup())?.sort()).toEqual(['broken', 'good']);
+  });
+
+  test('documentIdsForCleanup keeps trashed documents', async () => {
+    await storage.saveDocument({ ...doc, id: 'A' });
+    await storage.trashDocument('A');
+    expect(await storage.documentIdsForCleanup()).toEqual(['A']);
+  });
+});
+
+describe('Recently deleted (trash)', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+
+  test('trashing hides a document from getDocuments and getDocument but keeps its files', async () => {
+    await storage.saveDocument({ ...doc, id: 'A' });
+    await storage.saveDocument({ ...doc, id: 'B' });
+    expect(await storage.trashDocument('A')).toBe(true);
+    expect((await storage.getDocuments()).map(d => d.id)).toEqual(['B']);
+    expect(await storage.getDocument('A')).toBeNull();
+    expect(await storage.getDocument('B')).not.toBeNull();
+    expect(mockDeletedDirs).toEqual([]);
+    const trashed = await storage.getTrashedDocuments();
+    expect(trashed.map(d => d.id)).toEqual(['A']);
+    expect(typeof trashed[0].trashedAt).toBe('number');
+  });
+
+  test('trashing a missing or already-trashed document reports false', async () => {
+    await storage.saveDocument({ ...doc, id: 'A' });
+    expect(await storage.trashDocument('missing')).toBe(false);
+    expect(await storage.trashDocument('A')).toBe(true);
+    expect(await storage.trashDocument('A')).toBe(false);
+  });
+
+  test('restoring brings the document back unchanged', async () => {
+    await storage.saveDocument({ ...doc, id: 'A', folder: 'Work' });
+    await storage.trashDocuments(['A']);
+    expect(await storage.restoreDocument('A')).toBe(true);
+    const [back] = await storage.getDocuments();
+    expect(back).toEqual({ ...doc, id: 'A', folder: 'Work' });
+    expect(await storage.getTrashedDocuments()).toEqual([]);
+    expect(await storage.restoreDocument('A')).toBe(false);
+  });
+
+  test('bulk trash and restore report counts', async () => {
+    for (const id of ['A', 'B', 'C']) await storage.saveDocument({ ...doc, id });
+    expect(await storage.trashDocuments(['A', 'B', 'missing'])).toBe(2);
+    expect(await storage.restoreDocuments(['A', 'C'])).toBe(1);
+    expect((await storage.getDocuments()).map(d => d.id).sort()).toEqual(['A', 'C']);
+  });
+
+  test('trashed documents are listed most recently trashed first', async () => {
+    await storage.saveDocument({ ...doc, id: 'old', trashedAt: Date.now() - 2 * DAY });
+    await storage.saveDocument({ ...doc, id: 'new', trashedAt: Date.now() - DAY });
+    expect((await storage.getTrashedDocuments()).map(d => d.id)).toEqual(['new', 'old']);
+  });
+
+  test('folder renames and deletions reach trashed documents', async () => {
+    await storage.saveFolder('Old');
+    await storage.saveDocument({ ...doc, id: 'A', folder: 'Old' });
+    await storage.trashDocument('A');
+    await storage.renameFolder('Old', 'New');
+    await storage.restoreDocument('A');
+    expect((await storage.getDocument('A'))?.folder).toBe('New');
+  });
+
+  test('deleteForever removes the record and the files', async () => {
+    await storage.saveDocument({ ...doc, id: 'A' });
+    await storage.trashDocument('A');
+    await storage.deleteForever('A');
+    expect(await storage.getTrashedDocuments()).toEqual([]);
+    expect(await AsyncStorage.getItem('@scan_kit_doc:A')).toBeNull();
+    expect(mockDeletedDirs).toEqual(['A']);
+    expect(await storage.documentIdsForCleanup()).toEqual([]);
+  });
+
+  test('emptyTrash deletes only trashed documents', async () => {
+    for (const id of ['A', 'B', 'C']) await storage.saveDocument({ ...doc, id });
+    await storage.trashDocuments(['A', 'C']);
+    expect(await storage.emptyTrash()).toBe(2);
+    expect(mockDeletedDirs.sort()).toEqual(['A', 'C']);
+    expect((await storage.getDocuments()).map(d => d.id)).toEqual(['B']);
+  });
+
+  test('purgeExpiredTrash deletes documents trashed 30+ days ago and keeps the rest', async () => {
+    const now = Date.now();
+    await storage.saveDocument({ ...doc, id: 'expired', trashedAt: now - 31 * DAY });
+    await storage.saveDocument({ ...doc, id: 'recent', trashedAt: now - 29 * DAY });
+    await storage.saveDocument({ ...doc, id: 'live' });
+    expect(await storage.purgeExpiredTrash(30, now)).toBe(1);
+    expect(mockDeletedDirs).toEqual(['expired']);
+    expect((await storage.getTrashedDocuments(now)).map(d => d.id)).toEqual(['recent']);
+    expect((await storage.getDocuments()).map(d => d.id)).toEqual(['live']);
+  });
+
+  test('the startup sweep purges expired trash before listing ids to keep', async () => {
+    await storage.saveDocument({ ...doc, id: 'expired', trashedAt: Date.now() - 40 * DAY });
+    await storage.saveDocument({ ...doc, id: 'live' });
+    expect(await storage.documentIdsForCleanup()).toEqual(['live']);
+    expect(mockDeletedDirs).toEqual(['expired']);
+  });
+
+  test('trashDaysLeft counts down from 30', () => {
+    const now = 1_000_000_000_000;
+    expect(storage.trashDaysLeft({ trashedAt: now }, now)).toBe(30);
+    expect(storage.trashDaysLeft({ trashedAt: now - 10.5 * DAY }, now)).toBe(20);
+    expect(storage.trashDaysLeft({ trashedAt: now - 45 * DAY }, now)).toBe(0);
+  });
+});
+
+describe('updateDocumentWith', () => {
+  test('computes the patch from the current record and can decline to write', async () => {
+    await storage.saveDocument({ ...doc, id: 'A', name: 'Auto', defaultName: 'Auto' });
+    const rename = (cur: Document) => (cur.name === cur.defaultName ? { name: 'Invoice', defaultName: undefined } : null);
+    expect(await storage.updateDocumentWith('A', rename)).toBe(true);
+    const after = await storage.getDocument('A');
+    expect(after?.name).toBe('Invoice');
+    expect(after && 'defaultName' in after).toBe(false);
+    expect(await storage.updateDocumentWith('A', rename)).toBe(false);
   });
 });
 

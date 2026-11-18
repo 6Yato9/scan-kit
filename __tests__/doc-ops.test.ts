@@ -21,16 +21,26 @@ jest.mock('expo-file-system', () => {
 jest.mock('expo-crypto', () => ({ randomUUID: () => 'new-id' }));
 const mockSaved: any[] = [];
 const mockPatches: [string, any][] = [];
+// What storage holds NOW (may differ from the copies the caller passes in).
+const mockStored: Record<string, any> = {};
 jest.mock('../lib/storage', () => ({
   saveDocument: jest.fn(async (d: any) => { mockSaved.push(d); }),
+  getDocument: jest.fn(async (id: string) => mockStored[id] ?? null),
   patchDocument: jest.fn(async (id: string, p: any) => { mockPatches.push([id, p]); return id !== 'gone'; }),
 }));
+const mockReorderPages = jest.fn((id: string, order: number[]) => order.map((_, i) => `file:///docs/scan-kit/${id}/page-${i}.jpg`));
 jest.mock('../lib/files', () => ({
   copyDocumentFiles: jest.fn(() => []),
   copyPdfToStorage: jest.fn(() => 'file:///docs/scan-kit/new-id/document.pdf'),
+  reorderPages: (id: string, order: number[]) => mockReorderPages(id, order),
+}));
+const mockEdits: any[] = [];
+jest.mock('../lib/bake', () => ({
+  ...jest.requireActual('../lib/bake'),
+  runPageEdit: (id: string, edit: any, fn: () => unknown) => { mockEdits.push([id, edit]); return Promise.resolve().then(fn); },
 }));
 
-import { combinePageMeta, copyPagesWithOriginals, mergeInto, mergeIntoNew } from '../lib/doc-ops';
+import { combinePageMeta, copyPagesWithOriginals, mergeInto, mergeIntoNew, reorderDocumentPages } from '../lib/doc-ops';
 import { Document } from '../types/document';
 
 const dir = (id: string) => `file:///docs/scan-kit/${id}`;
@@ -42,9 +52,13 @@ function doc(id: string, n: number, extra: Partial<Document> = {}): Document {
 
 beforeEach(() => {
   for (const k of Object.keys(mockFiles)) delete mockFiles[k];
+  for (const k of Object.keys(mockStored)) delete mockStored[k];
   mockSaved.length = 0;
   mockPatches.length = 0;
+  mockEdits.length = 0;
+  mockReorderPages.mockClear();
 });
+const stored = (d: Document) => { mockStored[d.id] = d; return d; };
 
 test('copyPagesWithOriginals copies pages and their .orig shadows to the right indices', () => {
   const src = doc('src', 2);
@@ -65,8 +79,8 @@ test('combinePageMeta keeps filters aligned and collapses all-default metadata',
 });
 
 test('mergeInto patches only page fields onto the target', async () => {
-  const target = doc('t', 1, { filters: ['enhanced'] });
-  const source = doc('s', 1);
+  const target = stored(doc('t', 1, { filters: ['enhanced'] }));
+  const source = stored(doc('s', 1));
   const out = await mergeInto(target, source);
   expect(out?.pages).toHaveLength(2);
   const [id, patch] = mockPatches[0];
@@ -77,6 +91,41 @@ test('mergeInto patches only page fields onto the target', async () => {
 
 test('mergeInto returns null when the target was deleted meanwhile', async () => {
   expect(await mergeInto(doc('gone', 1), doc('s', 1))).toBeNull();
+});
+
+test('mergeInto appends after the CURRENT page count, never over a page added meanwhile (critique #6)', async () => {
+  const stale = doc('t2', 1);
+  stored(doc('t2', 2, { filters: ['original', 'bw'] })); // a page was added and baked since
+  stored(doc('s2', 1));
+  const out = await mergeInto(stale, doc('s2', 1));
+  expect(out?.pages).toHaveLength(3);
+  expect(mockFiles[`${dir('t2')}/page-1.jpg`]).toBe('t2-1'); // untouched
+  expect(mockFiles[`${dir('t2')}/page-2.jpg`]).toBe('s2-0');
+  expect(mockPatches[0][1].filters).toEqual(['original', 'bw', 'original']);
+  expect(mockEdits[0][0]).toBe('t2'); // under the target's page lock
+});
+
+test('mergeInto removes its copies when the target vanished before the write', async () => {
+  stored(doc('gone', 1));
+  stored(doc('s3', 1));
+  expect(await mergeInto(doc('gone', 1), doc('s3', 1))).toBeNull();
+  expect(`${dir('gone')}/page-1.jpg` in mockFiles).toBe(false);
+});
+
+test('reorderDocumentPages carries the CURRENT filters with their pages', async () => {
+  stored(doc('r', 3, { filters: ['bw', 'original', 'enhanced'] }));
+  const out = await reorderDocumentPages('r', [2, 0, 1]);
+  expect(mockReorderPages).toHaveBeenCalledWith('r', [2, 0, 1]);
+  expect(out.filters).toEqual(['enhanced', 'bw', 'original']);
+  expect(mockPatches[0][1].filters).toEqual(['enhanced', 'bw', 'original']);
+  expect(typeof mockEdits[0][1].remap).toBe('function');
+});
+
+test('reorderDocumentPages refuses an order built for a different page count', async () => {
+  stored(doc('r2', 3));
+  await expect(reorderDocumentPages('r2', [1, 0])).rejects.toThrow('page count changed');
+  await expect(reorderDocumentPages('r2', [0, 0, 1])).rejects.toThrow('page count changed');
+  expect(mockReorderPages).not.toHaveBeenCalled();
 });
 
 test('mergeIntoNew creates one document with every page in order', async () => {

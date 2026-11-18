@@ -20,4 +20,12 @@ export type Document = {
   // Concatenated OCR text across all pages, used for content search. May go stale
   // after page edits (rotate/crop/delete/reorder); refreshed on the next OCR run.
   ocrText?: string;
+  // Set while the document is in "Recently deleted" (ms timestamp of the move).
+  // Trashed documents keep their files and record but are hidden from every
+  // list, search and tool; they are purged for good after 30 days.
+  trashedAt?: number;
+  // The automatic name the document was created with ("Scan Nov 18, 2026 …").
+  // While `name` still equals it, text recognition may replace the name with a
+  // title read from the page; a user rename makes them differ and stops that.
+  defaultName?: string;
 };

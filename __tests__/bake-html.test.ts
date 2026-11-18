@@ -1,4 +1,4 @@
-import { buildBakeHtml } from '../lib/bake-html';
+import { BAKE_MAX_PIXELS, buildBakeHtml } from '../lib/bake-html';
 
 const SRC = 'file:///docs/d1/page-0.orig.jpg';
 
@@ -67,4 +67,35 @@ test('ops compose in order — bw is grayscale then contrast', () => {
 
 test('an empty op list is a pass-through', () => {
   expect(runOps([], [12, 34, 56]).slice(0, 3)).toEqual([12, 34, 56]);
+});
+
+describe('canvas size cap (critique #1: 24 MP photos)', () => {
+  function runFit(w: number, h: number): { w: number; h: number } {
+    const html = buildBakeHtml(SRC, []);
+    const body = html.slice(html.indexOf('var MAX_PIXELS ='), html.indexOf('function post('));
+    // eslint-disable-next-line no-new-func
+    return new Function(`${body}; return fit(arguments[0], arguments[1]);`)(w, h);
+  }
+
+  test('pages within the WebKit limit bake at full size', () => {
+    expect(runFit(4096, 3072)).toEqual({ w: 4096, h: 3072 });
+  });
+
+  test('a 24 MP photo is scaled to fit under 16 M pixels, keeping its aspect ratio', () => {
+    const { w, h } = runFit(5712, 4284);
+    expect(w * h).toBeLessThanOrEqual(BAKE_MAX_PIXELS);
+    expect(w * h).toBeGreaterThan(BAKE_MAX_PIXELS * 0.99);
+    expect(w / h).toBeCloseTo(5712 / 4284, 2);
+  });
+
+  test('a 48 MP photo fits too', () => {
+    const { w, h } = runFit(8064, 6048);
+    expect(w * h).toBeLessThanOrEqual(16_777_216);
+  });
+
+  test('an over-limit "data:," result is reported as an error, not saved', () => {
+    const html = buildBakeHtml(SRC, []);
+    expect(html).toContain("BAKE_ERROR:encode");
+    expect(html).toContain("BAKE_ERROR:canvas");
+  });
 });

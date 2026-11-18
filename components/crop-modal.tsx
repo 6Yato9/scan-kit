@@ -17,6 +17,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useTheme } from '@/contexts/theme-context';
 import { HeaderTextButton, ScreenHeader } from '@/components/screen-header';
 import { FilterBaker } from '@/components/filter-baker';
+import { useAppLocked } from '@/components/lock-gate';
 import { Spacing, Type } from '@/lib/theme';
 
 type Props = {
@@ -51,6 +52,22 @@ export function CropModal({ visible, uri, cacheBust, onCancel, onDone }: Props) 
   const [rect, setRect] = useState<Rect | null>(null);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
+
+  // App lock: pushing /lock makes react-native-screens dismiss this RN Modal
+  // natively while JS still thinks it is open — after unlocking it would be
+  // gone and impossible to reopen. So close it properly (the user re-opens
+  // Crop after unlocking), and remount the Modal so its native host starts
+  // fresh. The baker goes immediately: a WebView in a dismissed modal never
+  // runs, and as the top bake host it would stall every bake behind it.
+  const locked = useAppLocked();
+  const [modalKey, setModalKey] = useState(0);
+  const onCancelRef = useRef(onCancel);
+  onCancelRef.current = onCancel;
+  useEffect(() => {
+    if (!locked || !visible) return;
+    setModalKey(k => k + 1);
+    onCancelRef.current();
+  }, [locked, visible]);
 
   // The manipulator gets the bare path; the on-screen image and its measured size
   // get a cache-busted one, or RN's image cache can serve the pre-rotate pixels
@@ -162,11 +179,11 @@ export function CropModal({ visible, uri, cacheBust, onCancel, onDone }: Props) 
   };
 
   return (
-    <Modal visible={visible} animationType="slide" onRequestClose={onCancel} transparent={false}>
+    <Modal key={modalKey} visible={visible && !locked} animationType="slide" onRequestClose={onCancel} transparent={false}>
       <View style={[styles.container, { backgroundColor: colors.chrome }]}>
         <StatusBar style="light" />
         {/* This modal covers the viewer, whose baker can't run while buried. */}
-        <FilterBaker />
+        {visible && !locked && <FilterBaker />}
         <ScreenHeader
           dark
           title="Crop"

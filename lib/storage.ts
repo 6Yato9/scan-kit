@@ -2,7 +2,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { File, Paths } from 'expo-file-system';
 import { Document, PageAdjustment, PageFilter } from '../types/document';
-import { originalUri } from './files';
+import { deleteDocumentFiles, originalUri } from './files';
 
 const KEY = '@scan_kit_documents'; // legacy single-blob key — kept as a read-only backup, never written after migration
 const DOC_INDEX_KEY = '@scan_kit_doc_index'; // JSON array of doc ids, newest-first
@@ -217,10 +217,30 @@ async function getDocumentsUnlocked(): Promise<Document[]> {
   return docs;
 }
 
+/**
+ * Every live document. Documents in "Recently deleted" are excluded, so every
+ * list, search and tool that starts from here never sees them.
+ */
 export function getDocuments(): Promise<Document[]> {
   return withDocsLock(async () => {
     await ensureMigrated();
-    return getDocumentsUnlocked();
+    return (await getDocumentsUnlocked()).filter(d => d.trashedAt == null);
+  });
+}
+
+/** One live document by id, or null when it is missing or in the trash. */
+export function getDocument(id: string): Promise<Document | null> {
+  return withDocsLock(async () => {
+    await ensureMigrated();
+    const raw = await AsyncStorage.getItem(docKey(id));
+    if (raw == null) return null;
+    try {
+      const doc = healDocPaths(JSON.parse(raw) as Document);
+      return doc.trashedAt == null ? doc : null;
+    } catch {
+      console.warn(`storage: corrupt doc ${id}`);
+      return null;
+    }
   });
 }
 
@@ -258,6 +278,19 @@ export function updateDocument(doc: Document): Promise<boolean> {
  * document no longer exists (e.g. deleted while a background pass was running).
  */
 export function patchDocument(id: string, patch: Partial<Document>): Promise<boolean> {
+  return updateDocumentWith(id, () => patch);
+}
+
+/**
+ * Like patchDocument, but the patch is computed from the CURRENT stored record
+ * inside the same lock acquisition — for conditional updates such as "rename
+ * only if the user hasn't". Return null from `fn` to write nothing. Keys set to
+ * `undefined` in the patch are removed from the record.
+ */
+export function updateDocumentWith(
+  id: string,
+  fn: (current: Document) => Partial<Document> | null,
+): Promise<boolean> {
   return withDocsLock(async () => {
     await ensureMigrated();
     const raw = await AsyncStorage.getItem(docKey(id));
@@ -269,24 +302,196 @@ export function patchDocument(id: string, patch: Partial<Document>): Promise<boo
       console.warn(`storage: corrupt doc ${id}, skipping patch`);
       return false;
     }
+    const patch = fn(healDocPaths(current));
+    if (!patch) return false;
     await AsyncStorage.setItem(docKey(id), JSON.stringify({ ...current, ...patch }));
     return true;
   });
 }
 
 /**
- * Document ids that the startup orphan sweep may treat as "valid", or null
- * when it is not safe to sweep at all. Sweeping deletes every doc folder not
- * in the list, so an empty answer is only trusted when there are also no
- * per-document records — otherwise a lost index would wipe the library.
+ * Document ids whose folders the startup orphan sweep must keep, or null when
+ * it is not safe to sweep at all. Sweeping deletes every doc folder not in the
+ * list, so the answer is every id that has a stored record — parsed or not, in
+ * the trash or not. A record that fails to parse is dropped from the index but
+ * its key stays, so its files are kept for a later repair instead of swept.
+ *
+ * Expired trash is purged first (see purgeExpiredTrash), so its folders are
+ * swept along with any other orphans.
  */
 export function documentIdsForCleanup(): Promise<string[] | null> {
   return withDocsLock(async () => {
     await ensureMigrated();
-    const ids = (await getDocumentsUnlocked()).map(d => d.id);
-    if (ids.length > 0) return ids;
-    const keys = await AsyncStorage.getAllKeys();
-    return keys.some(k => k.startsWith(DOC_PREFIX)) ? null : [];
+    try {
+      await purgeExpiredTrashUnlocked(TRASH_RETENTION_DAYS, Date.now());
+    } catch (e) {
+      console.warn('storage: trash purge failed', e);
+    }
+    const index = await readIndex();
+    let keys: readonly string[];
+    try {
+      keys = await AsyncStorage.getAllKeys();
+    } catch {
+      return null; // can't see every record — don't sweep anything
+    }
+    const ids = new Set(index);
+    for (const k of keys) if (k.startsWith(DOC_PREFIX)) ids.add(k.slice(DOC_PREFIX.length));
+    return [...ids];
+  });
+}
+
+// ── Recently deleted (trash) ─────────────────────────────────────────────────
+// Deleting a document moves it to the trash: the record and files stay, the
+// record gets `trashedAt`, and getDocuments stops returning it. It can be
+// restored until it is purged — by the user (deleteForever / emptyTrash) or
+// automatically TRASH_RETENTION_DAYS after it was trashed (purgeExpiredTrash,
+// run by the startup sweep). Trashed ids stay in documentIdsForCleanup, so the
+// orphan sweep never touches their files.
+
+/** Days a trashed document is kept before it is purged automatically. */
+export const TRASH_RETENTION_DAYS = 30;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function isExpired(doc: Document, days: number, now: number): boolean {
+  return doc.trashedAt != null && now - doc.trashedAt >= days * DAY_MS;
+}
+
+/** Moves documents to "Recently deleted". Returns how many were moved. */
+export function trashDocuments(ids: string[]): Promise<number> {
+  return withDocsLock(async () => {
+    await ensureMigrated();
+    const now = Date.now();
+    const pairs = await AsyncStorage.multiGet(ids.map(docKey));
+    const changed: [string, string][] = [];
+    for (const [key, raw] of pairs) {
+      if (raw == null) continue;
+      try {
+        const doc = JSON.parse(raw) as Document;
+        if (doc.trashedAt != null) continue;
+        changed.push([key, JSON.stringify({ ...doc, trashedAt: now })]);
+      } catch {
+        console.warn(`storage: corrupt doc ${key}, not trashed`);
+      }
+    }
+    if (changed.length) await AsyncStorage.multiSet(changed);
+    return changed.length;
+  });
+}
+
+/** Moves one document to "Recently deleted". False when it doesn't exist. */
+export async function trashDocument(id: string): Promise<boolean> {
+  return (await trashDocuments([id])) > 0;
+}
+
+/** Brings trashed documents back. Returns how many were restored. */
+export function restoreDocuments(ids: string[]): Promise<number> {
+  return withDocsLock(async () => {
+    await ensureMigrated();
+    const pairs = await AsyncStorage.multiGet(ids.map(docKey));
+    const changed: [string, string][] = [];
+    for (const [key, raw] of pairs) {
+      if (raw == null) continue;
+      try {
+        const { trashedAt, ...doc } = JSON.parse(raw) as Document;
+        if (trashedAt == null) continue;
+        // Folder renames and deletions already reached it while it was in the
+        // trash (they update every record), so it returns to the right place.
+        changed.push([key, JSON.stringify(doc)]);
+      } catch {
+        console.warn(`storage: corrupt doc ${key}, not restored`);
+      }
+    }
+    if (changed.length) await AsyncStorage.multiSet(changed);
+    return changed.length;
+  });
+}
+
+/** Brings one trashed document back. False when it isn't in the trash. */
+export async function restoreDocument(id: string): Promise<boolean> {
+  return (await restoreDocuments([id])) > 0;
+}
+
+/**
+ * Documents in "Recently deleted", most recently trashed first. Ones already
+ * past the retention period (about to be purged) are left out.
+ */
+export function getTrashedDocuments(now: number = Date.now()): Promise<Document[]> {
+  return withDocsLock(async () => {
+    await ensureMigrated();
+    return (await getDocumentsUnlocked())
+      .filter(d => d.trashedAt != null && !isExpired(d, TRASH_RETENTION_DAYS, now))
+      .sort((a, b) => (b.trashedAt ?? 0) - (a.trashedAt ?? 0));
+  });
+}
+
+/** Days left before a trashed document is purged (0 = today). */
+export function trashDaysLeft(doc: Pick<Document, 'trashedAt'>, now: number = Date.now()): number {
+  if (doc.trashedAt == null) return TRASH_RETENTION_DAYS;
+  const left = TRASH_RETENTION_DAYS - (now - doc.trashedAt) / DAY_MS;
+  return Math.min(TRASH_RETENTION_DAYS, Math.max(0, Math.ceil(left)));
+}
+
+// Removes the records and their index entries. Caller holds withDocsLock.
+async function removeRecordsUnlocked(ids: string[]): Promise<void> {
+  if (!ids.length) return;
+  const set = new Set(ids);
+  await AsyncStorage.multiRemove(ids.map(docKey));
+  const index = await readIndex();
+  await writeIndex(index.filter(x => !set.has(x)));
+}
+
+function deleteFilesQuietly(ids: string[]): void {
+  for (const id of ids) {
+    try { deleteDocumentFiles(id); } catch (e) { console.warn(`storage: couldn't delete files of ${id}`, e); }
+  }
+}
+
+/**
+ * Permanently deletes documents — record first, then files — whether or not
+ * they are in the trash. Cannot be undone. A crash between the two steps only
+ * leaves an orphan folder, which the startup sweep removes.
+ */
+export async function deleteForeverMany(ids: string[]): Promise<void> {
+  await withDocsLock(async () => {
+    await ensureMigrated();
+    await removeRecordsUnlocked(ids);
+  });
+  deleteFilesQuietly(ids);
+}
+
+/** Permanently deletes one document and its files. Cannot be undone. */
+export function deleteForever(id: string): Promise<void> {
+  return deleteForeverMany([id]);
+}
+
+/** Permanently deletes everything in "Recently deleted". Returns the count. */
+export async function emptyTrash(): Promise<number> {
+  const ids = await withDocsLock(async () => {
+    await ensureMigrated();
+    const trashed = (await getDocumentsUnlocked()).filter(d => d.trashedAt != null).map(d => d.id);
+    await removeRecordsUnlocked(trashed);
+    return trashed;
+  });
+  deleteFilesQuietly(ids);
+  return ids.length;
+}
+
+async function purgeExpiredTrashUnlocked(days: number, now: number): Promise<string[]> {
+  const expired = (await getDocumentsUnlocked()).filter(d => isExpired(d, days, now)).map(d => d.id);
+  await removeRecordsUnlocked(expired);
+  deleteFilesQuietly(expired);
+  return expired;
+}
+
+/**
+ * Permanently deletes documents that have been in the trash for `days` or
+ * more. Runs at startup as part of documentIdsForCleanup; safe to call any
+ * time. Returns how many were purged.
+ */
+export async function purgeExpiredTrash(days: number = TRASH_RETENTION_DAYS, now: number = Date.now()): Promise<number> {
+  return withDocsLock(async () => {
+    await ensureMigrated();
+    return (await purgeExpiredTrashUnlocked(days, now)).length;
   });
 }
 
@@ -346,23 +551,36 @@ function isDefaultAdjustment(adj: PageAdjustment | undefined): boolean {
 }
 
 /**
- * Sweeps every document for pages that have a non-`original` filter or a
- * non-default adjustment RECORDED but whose pixels were never actually baked
- * — i.e. a page saved by a pre-v3 app version, which only ever wrote the
- * filter/adjustment as metadata and relied on render-time application (now
- * removed; see lib/filters.ts). Returns one entry per page still needing a
- * bake so a caller with a mounted WebView (see app/_layout.tsx) can drain
- * them through bakePage.
+ * True when a page's pixels can't carry a recorded non-original look: there is
+ * no `.orig` (it was never baked), or the page is byte-for-byte its `.orig`
+ * (a bake made the shadow and then failed, timed out or was killed before it
+ * wrote the filtered pixels). A real bake always re-encodes the page, so it
+ * never stays identical to its shadow.
+ */
+function pixelsLackLook(docId: string, pageIndex: number, pageUri: string): boolean {
+  const orig = new File(originalUri(docId, pageIndex));
+  if (!orig.exists) return true;
+  const page = new File(pageUri.split('?')[0]);
+  if (!page.exists) return false; // nothing to bake into; leave it alone
+  if (page.size == null || orig.size == null || page.size !== orig.size) return false;
+  return page.md5 != null && page.md5 === orig.md5;
+}
+
+/**
+ * Self-heal sweep: every page whose metadata records a look (a non-`original`
+ * filter or a non-default adjustment) that its pixels don't actually have.
+ * Two ways to get there:
+ *  - a page saved by a pre-v3 app, which only ever recorded the filter as
+ *    metadata and applied it at render time (now removed; see lib/filters.ts);
+ *  - a page whose metadata was written before a bake that then never finished
+ *    (older builds recorded a new scan's default filter up front).
+ * Detection looks at the files, not a flag (see pixelsLackLook), so the sweep
+ * is idempotent: re-running it after a partial drain only returns the pages
+ * still outstanding. A caller with a mounted WebView (app/_layout.tsx) drains
+ * the result through bakePage; it can't bake here — that needs a WebView.
  *
- * This can't bake directly: it runs during storage reads (via getDocuments)
- * and must not block, and baking needs a mounted WebView this module doesn't
- * have. "Already baked" is detected via the existence of `page-N.orig.jpg`
- * (see lib/files.ts's ensureOriginal/bakePage) rather than any flag, so the
- * sweep is naturally idempotent — re-running it after a partial drain only
- * returns the pages still outstanding.
- *
- * Each document is swept inside its own try/catch, mirroring
- * garbageCollectOrphans, so one malformed record can't abort the rest.
+ * Trashed documents are skipped. Each document is swept inside its own
+ * try/catch so one malformed record can't abort the rest.
  */
 export async function pendingBakeMigrations(): Promise<
   { docId: string; pageIndex: number; filter: PageFilter; adjustment?: PageAdjustment }[]
@@ -380,10 +598,7 @@ export async function pendingBakeMigrations(): Promise<
         const filter: PageFilter = filters?.[i] ?? 'original';
         const adjustment = adjustments?.[i];
         if (filter === 'original' && isDefaultAdjustment(adjustment)) continue;
-
-        const orig = new File(originalUri(doc.id, i));
-        if (orig.exists) continue; // already baked
-
+        if (!pixelsLackLook(doc.id, i, doc.pages[i])) continue; // already baked
         pending.push({ docId: doc.id, pageIndex: i, filter, adjustment });
       }
     } catch (e) {

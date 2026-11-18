@@ -92,30 +92,6 @@ describe('pendingCount', () => {
   });
 });
 
-describe('setBakeNotifier (legacy)', () => {
-  it('wakes the notifier whenever a job is enqueued', () => {
-    const notifier = jest.fn();
-    bakeQueue.setBakeNotifier(notifier);
-    notifier.mockClear(); // registering pumps once, in case work is already waiting
-
-    bakeQueue.enqueueBake({ docId: 'd1', pageIndex: 0, src: 'a', ops: [] }).catch(() => {});
-    bakeQueue.enqueueBake({ docId: 'd1', pageIndex: 1, src: 'b', ops: [] }).catch(() => {});
-
-    expect(notifier).toHaveBeenCalledTimes(2);
-  });
-
-  it('setBakeNotifier(null) stops notifications', () => {
-    const notifier = jest.fn();
-    bakeQueue.setBakeNotifier(notifier);
-    bakeQueue.setBakeNotifier(null);
-    notifier.mockClear();
-
-    bakeQueue.enqueueBake({ docId: 'd1', pageIndex: 0, src: 'a', ops: [] }).catch(() => {});
-
-    expect(notifier).not.toHaveBeenCalled();
-  });
-});
-
 function makeHost() {
   const host = {
     pump: jest.fn(),

@@ -52,19 +52,24 @@ export function ScanProvider({ children }: { children: ReactNode }) {
     try {
       const [scan, docSettings] = await Promise.all([getScanSettings(), getDocSettings()]);
       const filter = input.defaultFilter ?? scan.defaultFilter;
+      // Saved as 'original'; the default filter is recorded only once a bake
+      // has written it into the pixels (see lib/bake.ts), so a failed or
+      // interrupted bake can't leave the picker claiming a look the page lacks.
       const { id, pages } = await saveScan({
         pages: input.pages,
         pdfUri: input.pdfUri,
         name: autoName(new Date(), docSettings.namePrefix),
+        nameIsDefault: true,
         quality: QUALITY_MAP[scan.quality],
-        filters: input.pages ? Array.from({ length: count }, () => filter) : undefined,
       });
       setLastSaved(Date.now());
       notifySuccess();
       // Bake the default filter into the pages' pixels without blocking the
-      // caller (it opens the viewer, which shows progress). Every page is
-      // tracked from the start so edits made meanwhile re-target the bakes;
-      // OCR runs after so the index reflects the final pixels.
+      // caller (it opens the viewer, which shows progress). bakePages registers
+      // every page synchronously, so the viewer already shows the chosen filter
+      // as pending, and edits made meanwhile re-target the bakes. OCR runs
+      // after so the index — and the title it names the document by — reflects
+      // the final pixels.
       (async () => {
         if (pages.length && filter !== 'original') await bakePages(id, pages.map((_, i) => i), filter);
         if (pages.length) await indexDocText(id, pages);

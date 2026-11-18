@@ -4,6 +4,17 @@
 export type BakeOp = Record<string, number>;
 
 /**
+ * Largest canvas the bake draws to, in pixels. iOS WebKit refuses canvases
+ * above 16,777,216 px (4096²): getContext returns null or toDataURL returns
+ * "data:,". A default 24 MP iPhone photo (5712×4284) is well over that, so
+ * bigger images are baked at the largest size that fits — still sharper than
+ * any screen or A4 print needs. New pages are stored at ≤ 4096 px on the long
+ * edge (see lib/files.ts MAX_PAGE_EDGE), so this only bites for pages saved
+ * before that cap existed.
+ */
+export const BAKE_MAX_PIXELS = 16_000_000;
+
+/**
  * HTML that draws `fileSrc` to an offscreen canvas at its natural pixel size with
  * `ops` applied, then posts the result back as a JPEG data URL.
  *
@@ -27,6 +38,12 @@ export function buildBakeHtml(fileSrc: string, ops: BakeOp[]): string {
 <img id="src" src="${fileSrc}" crossorigin="anonymous" style="display:none" />
 <script>
 var OPS = ${JSON.stringify(ops)};
+var MAX_PIXELS = ${BAKE_MAX_PIXELS};
+function fit(w, h) {
+  if (w * h <= MAX_PIXELS) return { w: w, h: h };
+  var k = Math.sqrt(MAX_PIXELS / (w * h));
+  return { w: Math.max(1, Math.floor(w * k)), h: Math.max(1, Math.floor(h * k)) };
+}
 function post(msg) {
   if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(msg);
   else setTimeout(function () { post(msg); }, 30);
@@ -66,18 +83,24 @@ var img = document.getElementById('src');
 img.onerror = function () { post('BAKE_ERROR:load'); };
 img.onload = function () {
   try {
-    var w = img.naturalWidth, h = img.naturalHeight;
-    if (!w || !h) { post('BAKE_ERROR:empty'); return; }
+    if (!img.naturalWidth || !img.naturalHeight) { post('BAKE_ERROR:empty'); return; }
+    var size = fit(img.naturalWidth, img.naturalHeight);
+    var w = size.w, h = size.h;
     var c = document.createElement('canvas');
     c.width = w; c.height = h;
     var ctx = c.getContext('2d');
+    if (!ctx) { post('BAKE_ERROR:canvas'); return; }
+    ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(img, 0, 0, w, h);
     if (OPS.length) {
       var id = ctx.getImageData(0, 0, w, h);
       apply(id.data);
       ctx.putImageData(id, 0, 0);
     }
-    post(c.toDataURL('image/jpeg', 0.92));
+    var out = c.toDataURL('image/jpeg', 0.92);
+    // An over-limit canvas encodes to "data:," instead of throwing.
+    if (out.indexOf('data:image/jpeg') !== 0) { post('BAKE_ERROR:encode'); return; }
+    post(out);
   } catch (e) {
     post('BAKE_ERROR:' + (e && e.message ? e.message : 'unknown'));
   }

@@ -8,7 +8,6 @@ import {
   escapeHtml,
   fitContain,
   generatePdf,
-  generateSearchablePdf,
   PAPER_SIZES_PT,
   PdfCancelledError,
   PdfError,
@@ -157,13 +156,6 @@ test('searchable PDF adds an escaped, transparent text layer', async () => {
   expect(html).toContain('Total &lt;due&gt; &amp; paid');
   expect(html).not.toContain('<due>');
   expect(html).toContain('.t{position:absolute;color:transparent');
-});
-
-test('generateSearchablePdf keeps its old signature', async () => {
-  const progress = jest.fn();
-  await generateSearchablePdf(['file:///a.jpg', 'file:///b.jpg'], 'A4', progress);
-  expect(mockOcr).toHaveBeenCalledTimes(2);
-  expect(progress).toHaveBeenLastCalledWith(2, 2);
 });
 
 test('overlayHtml is called per page with the image box size in points', async () => {

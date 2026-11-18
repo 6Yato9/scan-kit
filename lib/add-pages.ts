@@ -1,55 +1,101 @@
 // lib/add-pages.ts
 //
 // Appends newly scanned or imported pages to an existing document through the
-// same pipeline a new scan goes through: the user's scan quality, their default
-// filter, and a refreshed text index.
+// same pipeline a new scan goes through: auto-crop for library photos, the
+// user's scan quality, their default filter (baked, then recorded), and a
+// refreshed text index.
+import { Directory, File, Paths } from 'expo-file-system';
 import { Document, PageAdjustment, PageFilter } from '../types/document';
-import { copyPageWithQuality } from './files';
-import { getDocuments, updateDocument } from './storage';
+import { copyPageWithQuality, deleteDisposableTemps, isScannerOutput } from './files';
+import { getDocument, updateDocument } from './storage';
 import { bakePages, runPageEdit } from './bake';
 import { indexDocText } from './save-scan';
+import { autoCropDocument } from './document-detect';
 
 export type AddPagesResult = { doc: Document; added: number[] };
 
+export type AddPagesOptions = {
+  /**
+   * Find the page in each photo and straighten it (lib/document-detect). By
+   * default every input except the document scanner's own output is cropped —
+   * the scanner has already done it, with the user's own corner adjustments.
+   */
+  autoCrop?: boolean;
+};
+
 /**
- * Copies `uris` into `docId` as new trailing pages (recompressed at `quality`)
- * and records them on the CURRENT stored document — read fresh under the page
- * lock, so a filter that finished baking a moment ago isn't overwritten with an
- * older in-memory copy. Returns the updated document and the new page indices.
+ * Copies `uris` into `docId` as new trailing pages (recompressed at `quality`,
+ * capped in size) and records them on the CURRENT stored document — read fresh
+ * under the page lock, so a filter that finished baking a moment ago isn't
+ * overwritten with an older in-memory copy. Returns the updated document and
+ * the new page indices.
+ *
+ * All or nothing: if any page fails to copy, the pages already written for this
+ * call are removed again, so a retry starts clean and the document never
+ * gains files it doesn't list. Temp inputs (scanner, picker, auto-crop output)
+ * are deleted once stored.
  *
  * Applying the default filter and re-indexing text are started afterwards and
  * not awaited (see finishAddedPages).
  */
-export async function addPagesToDocument(docId: string, uris: string[], quality: number): Promise<AddPagesResult> {
-  return runPageEdit(docId, {}, async () => {
-    const docs = await getDocuments();
-    const current = docs.find(d => d.id === docId);
+export async function addPagesToDocument(
+  docId: string,
+  uris: string[],
+  quality: number,
+  options: AddPagesOptions = {},
+): Promise<AddPagesResult> {
+  // Auto-crop before taking the page lock: it's slow and touches no stored file.
+  const inputs: string[] = [];
+  for (const uri of uris) {
+    const crop = options.autoCrop ?? !isScannerOutput(uri);
+    inputs.push(crop ? (await autoCropDocument(uri, quality)).uri : uri);
+  }
+
+  const result = await runPageEdit(docId, {}, async () => {
+    const current = await getDocument(docId);
     if (!current) throw new Error('document missing');
     const start = current.pages.length;
+    const dir = new Directory(Paths.document, 'scan-kit', docId);
     const stored: string[] = [];
-    for (let i = 0; i < uris.length; i++) {
-      stored.push(await copyPageWithQuality(uris[i], docId, start + i, quality));
+    try {
+      for (let i = 0; i < inputs.length; i++) {
+        // A shadow left at this index by an older edit would be taken for the
+        // new page's unfiltered original by its first bake.
+        const staleShadow = new File(dir, `page-${start + i}.orig.jpg`);
+        if (staleShadow.exists) staleShadow.delete();
+        stored.push(await copyPageWithQuality(inputs[i], docId, start + i, quality));
+      }
+      const pad = <T,>(arr: T[] | undefined, fill: () => T): T[] | undefined =>
+        arr ? [...arr, ...stored.map(fill)] : undefined;
+      const doc: Document = {
+        ...current,
+        pages: [...current.pages, ...stored],
+        filters: pad<PageFilter>(current.filters, () => 'original'),
+        adjustments: pad<PageAdjustment>(current.adjustments, () => ({ brightness: 0, contrast: 0, saturation: 0 })),
+        updatedAt: Date.now(),
+      };
+      if (!(await updateDocument(doc))) throw new Error('document missing');
+      return { doc, added: stored.map((_, i) => start + i) };
+    } catch (err) {
+      for (let i = 0; i < inputs.length; i++) {
+        try {
+          const f = new File(dir, `page-${start + i}.jpg`);
+          if (f.exists) f.delete();
+        } catch {}
+      }
+      throw err;
     }
-    const pad = <T,>(arr: T[] | undefined, fill: () => T): T[] | undefined =>
-      arr ? [...arr, ...stored.map(fill)] : undefined;
-    const doc: Document = {
-      ...current,
-      pages: [...current.pages, ...stored],
-      filters: pad<PageFilter>(current.filters, () => 'original'),
-      adjustments: pad<PageAdjustment>(current.adjustments, () => ({ brightness: 0, contrast: 0, saturation: 0 })),
-      updatedAt: Date.now(),
-    };
-    await updateDocument(doc);
-    return { doc, added: stored.map((_, i) => start + i) };
   });
+
+  deleteDisposableTemps([...uris, ...inputs]);
+  return result;
 }
 
 /** Bakes the default filter into the new pages, then refreshes the text index. */
 export function finishAddedPages(doc: Document, added: number[], filter: PageFilter | 'original'): void {
   (async () => {
     if (filter !== 'original') await bakePages(doc.id, added, filter);
-    const docs = await getDocuments();
-    const fresh = docs.find(d => d.id === doc.id);
+    const fresh = await getDocument(doc.id);
     if (fresh) await indexDocText(fresh.id, fresh.pages);
   })().catch(err => console.error('finishAddedPages', err));
 }

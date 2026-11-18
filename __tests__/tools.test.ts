@@ -57,8 +57,8 @@ describe('timestamp overlay', () => {
 
   test('formats date and date-time', () => {
     const ts = new Date(2026, 10, 17, 14, 5).getTime();
-    expect(formatStamp(ts, 'date')).toBe('Nov 17, 2026');
-    expect(formatStamp(ts, 'datetime')).toMatch(/^Nov 17, 2026, 2:05\s?PM$/);
+    expect(formatStamp(ts, 'date', 'en-US')).toBe('Nov 17, 2026');
+    expect(formatStamp(ts, 'datetime', 'en-US')).toMatch(/^Nov 17, 2026, 2:05\s?PM$/);
   });
 });
 

@@ -12,6 +12,7 @@ jest.mock('expo-file-system', () => ({
     exists: true,
     delete: jest.fn(),
     copy: jest.fn(),
+    move: jest.fn(),
     uri: 'file:///documents/scan-kit/doc1/page-0.jpg',
   })),
   Directory: jest.fn(),

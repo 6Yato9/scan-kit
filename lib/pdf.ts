@@ -375,24 +375,6 @@ export async function generatePdf(
 }
 
 /**
- * Searchable PDF: same layout as `generatePdf` plus an invisible OCR text layer.
- * Kept for older callers; prefer `generatePdf(pages, { searchable: true })`.
- */
-export async function generateSearchablePdf(
-  pages: string[],
-  pageSize: PageSize = 'A4',
-  onProgress?: (done: number, total: number) => void,
-): Promise<string> {
-  return generatePdf(pages, {
-    pageSize,
-    searchable: true,
-    onProgress: (done, total, phase) => {
-      if (phase === 'reading-text') onProgress?.(done + 1, total);
-    },
-  });
-}
-
-/**
  * A one-page printer test sheet at the given paper size: a frame 10 mm inside
  * the paper edge, corner marks and a grey ramp, so the user can check
  * alignment, margins and tone. Returns a PDF file URI.

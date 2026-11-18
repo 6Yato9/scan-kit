@@ -36,6 +36,37 @@ export type ThemeColors = {
   paper: string;
   /** Faint guide line drawn on `paper`. */
   paperLine: string;
+  /** Secondary buttons: a tinted fill that reads on both `bg` and `card`. */
+  tintFill: string;
+  /** Text and icons on `tintFill` (≥ 4.5:1). */
+  onTint: string;
+  /** Selected segment of a segmented control — raised above the `input` track. */
+  segmentOn: string;
+  /** Outline of an unselected radio / checkbox. */
+  ring: string;
+  /** Hairline around document thumbnails so white pages don't melt into white cards. */
+  thumbBorder: string;
+  /** Drop shadows. */
+  shadow: string;
+  /** Dark wash behind text or badges drawn over images. */
+  scrim: string;
+  /** Lighter wash for unselected checkboxes over images. */
+  scrimSoft: string;
+  /** Text and outlines drawn on `scrim`. */
+  onScrim: string;
+  /** Dimmed backdrop behind sheets. */
+  backdrop: string;
+  /** Hairline edge around sheets (only visible in dark mode). */
+  sheetBorder: string;
+  /** Grabber at the top of a sheet. */
+  handle: string;
+  /** Floating tab bar: material tint for the blur, a fallback fill, and its hairline. */
+  barBlurTint: 'systemChromeMaterialLight' | 'systemChromeMaterialDark';
+  barFill: string;
+  barBorder: string;
+  /** The tab bar's moving selection pill. */
+  barSelector: string;
+  barSelectorBorder: string;
 };
 
 export const Colors: Record<'light' | 'dark', ThemeColors> = {
@@ -67,6 +98,23 @@ export const Colors: Record<'light' | 'dark', ThemeColors> = {
     chromeBorder: '#3a3a3c',
     paper: '#ffffff',
     paperLine: '#c8c8c8',
+    tintFill: '#dcebf1',
+    onTint: '#07698a',
+    segmentOn: '#ffffff',
+    ring: '#c4c4c8',
+    thumbBorder: '#dadade',
+    shadow: '#000000',
+    scrim: 'rgba(0,0,0,0.55)',
+    scrimSoft: 'rgba(0,0,0,0.25)',
+    onScrim: '#ffffff',
+    backdrop: 'rgba(0,0,0,0.4)',
+    sheetBorder: 'transparent',
+    handle: 'rgba(0,0,0,0.18)',
+    barBlurTint: 'systemChromeMaterialLight',
+    barFill: 'rgba(248,248,248,0.72)',
+    barBorder: 'rgba(0,0,0,0.08)',
+    barSelector: 'rgba(0,0,0,0.07)',
+    barSelectorBorder: 'rgba(0,0,0,0.10)',
   },
   dark: {
     bg: '#111111',
@@ -99,8 +147,41 @@ export const Colors: Record<'light' | 'dark', ThemeColors> = {
     chromeBorder: '#3a3a3c',
     paper: '#ffffff',
     paperLine: '#c8c8c8',
+    tintFill: '#1d3a45',
+    onTint: '#6fd3ea',
+    segmentOn: '#4a4a4e',
+    ring: '#5a5a5e',
+    thumbBorder: '#3a3a3c',
+    shadow: '#000000',
+    scrim: 'rgba(0,0,0,0.55)',
+    scrimSoft: 'rgba(0,0,0,0.25)',
+    onScrim: '#ffffff',
+    backdrop: 'rgba(0,0,0,0.6)',
+    sheetBorder: 'rgba(255,255,255,0.08)',
+    handle: 'rgba(255,255,255,0.25)',
+    barBlurTint: 'systemChromeMaterialDark',
+    barFill: 'rgba(30,30,30,0.72)',
+    barBorder: 'rgba(255,255,255,0.12)',
+    barSelector: 'rgba(255,255,255,0.12)',
+    barSelectorBorder: 'rgba(255,255,255,0.18)',
   },
 };
+
+/**
+ * Ink colours are content, not UI: they are what ends up on the page, so they
+ * are the same in both themes. Annotation pens and the stamp previews use them.
+ */
+export const Ink = {
+  black: '#000000',
+  red: '#e53935',
+  blue: '#1565c0',
+  green: '#2e7d32',
+  /** Signature strokes as saved into the PDF. */
+  signature: '#111111',
+  /** Timestamp label as drawn by lib/stamp.ts (kept in sync with its overlay). */
+  stampText: '#222222',
+  stampBg: 'rgba(255,255,255,0.85)',
+} as const;
 
 // ---------------------------------------------------------------------------
 // Layout and type scales. Use these instead of ad-hoc numbers so every screen
@@ -130,6 +211,13 @@ export const Radius = {
 
 /** Minimum hit target (Apple HIG). */
 export const HIT = 44;
+
+/**
+ * Bottom padding a tab screen's scroll content needs so its last row can
+ * scroll fully clear of the floating tab bar (and its raised scan button).
+ * Add the bottom safe-area inset on top of this.
+ */
+export const TAB_BAR_CLEARANCE = 112;
 
 /** iOS-style text styles. Colour is applied by the caller from the theme. */
 export const Type = {

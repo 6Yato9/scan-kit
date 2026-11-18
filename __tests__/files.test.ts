@@ -1,11 +1,13 @@
 const mockFileInstances: Record<string, any> = {};
 const mockDirInstances: Record<string, any> = {};
-// Content-tracking copy/delete. These stay jest.fn spies (existing tests assert
-// on call counts), but they now also move bytes, so a test can prove that the
+// Content-tracking copy/delete/move. These stay jest.fn spies (existing tests
+// assert on call counts), but they also move bytes, so a test can prove that the
 // RIGHT file landed at the right index — which is the whole point of the .orig
 // shadow: if it drifts from its page, the next filter bake re-derives from the
 // wrong image.
 const fileContents: Record<string, string> = {};
+// Last-modified times (ms) by uri; unset = long ago (settled).
+const mockMtimes: Record<string, number> = {};
 const mockCopy = jest.fn(function (this: any, dest: any) {
   fileContents[dest.uri] = fileContents[this.uri];
   dest.exists = true;
@@ -14,10 +16,26 @@ const mockDelete = jest.fn(function (this: any) {
   delete fileContents[this.uri];
   this.exists = false;
 });
+const mockMove = jest.fn(function (this: any, dest: any) {
+  if (!this.exists) throw new Error(`move: ${this.uri} missing`);
+  // FileManager.moveItem refuses an existing destination. (Instances default to
+  // exists = true, so only a destination holding seeded bytes counts here.)
+  if (dest.exists && dest.uri in fileContents) throw new Error(`move: ${dest.uri} exists`);
+  fileContents[dest.uri] = fileContents[this.uri];
+  delete fileContents[this.uri];
+  dest.exists = true;
+  this.exists = false;
+});
 
 jest.mock('expo-image-manipulator', () => ({
   manipulateAsync: jest.fn().mockResolvedValue({ uri: 'file:///tmp/compressed.jpg' }),
   SaveFormat: { JPEG: 'jpeg' },
+}));
+
+const mockGetImageSize = jest.fn().mockResolvedValue({ width: 1000, height: 1400 });
+jest.mock('../lib/image-size', () => ({
+  ...jest.requireActual('../lib/image-size'),
+  getImageSize: (...args: any[]) => mockGetImageSize(...args),
 }));
 
 // Real classes defined INSIDE the factory (not jest.fn().mockImplementation
@@ -30,13 +48,17 @@ jest.mock('expo-image-manipulator', () => ({
 // instance the production code will use (e.g. to pre-set `.exists` or stub
 // `.list()`) by importing { File, Directory } from 'expo-file-system' itself.
 jest.mock('expo-file-system', () => {
+  const part = (p: any) => (p && typeof p === 'object' ? p.uri : p);
   class MockFile {
     uri!: string;
     exists = true;
     copy = mockCopy;
     delete = mockDelete;
+    move = mockMove;
+    create = jest.fn(function (this: any) { this.exists = true; fileContents[this.uri] = ''; });
+    info = jest.fn(function (this: any) { return { exists: this.exists, modificationTime: mockMtimes[this.uri] ?? 1 }; });
     constructor(dirOrUri: any, name?: string) {
-      const uri = name ? `${dirOrUri.uri || dirOrUri}/${name}` : String(dirOrUri);
+      const uri = name ? `${part(dirOrUri)}/${name}` : String(part(dirOrUri));
       if (mockFileInstances[uri]) return mockFileInstances[uri];
       this.uri = uri;
       mockFileInstances[uri] = this;
@@ -48,9 +70,10 @@ jest.mock('expo-file-system', () => {
     create = jest.fn();
     delete = jest.fn();
     list = jest.fn(() => []);
+    info = jest.fn(function (this: any) { return { exists: this.exists, modificationTime: mockMtimes[this.uri] ?? 1 }; });
     exists = true;
-    constructor(...parts: string[]) {
-      const uri = parts.join('/');
+    constructor(...parts: any[]) {
+      const uri = parts.map(part).join('/');
       if (mockDirInstances[uri]) return mockDirInstances[uri];
       this.uri = uri;
       mockDirInstances[uri] = this;
@@ -60,14 +83,32 @@ jest.mock('expo-file-system', () => {
   return {
     File: MockFile,
     Directory: MockDirectory,
-    Paths: { document: 'file:///documents' },
+    Paths: {
+      document: { uri: 'file:///documents' },
+      cache: { uri: 'file:///Library/Caches/' },
+    },
   };
 });
 
-import { deleteSinglePage, appendPages, reorderPages, copyDocumentFiles } from '../lib/files';
-import { copyPageWithQuality, copyPdfToStorage } from '../lib/files';
-import { originalUri, ensureOriginal, garbageCollectOrphans } from '../lib/files';
-import { copyPageWithShadow, replaceOriginal, shadowOf } from '../lib/files';
+import {
+  deleteSinglePage,
+  appendPages,
+  reorderPages,
+  copyDocumentFiles,
+  copyPageWithQuality,
+  copyPdfToStorage,
+  originalUri,
+  ensureOriginal,
+  garbageCollectOrphans,
+  copyPageWithShadow,
+  replaceOriginal,
+  shadowOf,
+  replacePage,
+  isDisposableTemp,
+  deleteDisposableTemps,
+  sweepTempLeftovers,
+} from '../lib/files';
+import { cappedSize, MAX_PAGE_EDGE } from '../lib/image-size';
 import { manipulateAsync } from 'expo-image-manipulator';
 
 // The mock caches File/Directory instances by uri and `delete` now clears
@@ -77,6 +118,8 @@ beforeEach(() => {
   for (const k of Object.keys(mockFileInstances)) delete mockFileInstances[k];
   for (const k of Object.keys(mockDirInstances)) delete mockDirInstances[k];
   for (const k of Object.keys(fileContents)) delete fileContents[k];
+  for (const k of Object.keys(mockMtimes)) delete mockMtimes[k];
+  mockGetImageSize.mockResolvedValue({ width: 1000, height: 1400 });
 });
 // Same mocked classes lib/files.ts uses (see the expo-file-system mock above),
 // so tests can construct the exact File/Directory instances the production
@@ -102,9 +145,10 @@ describe('deleteSinglePage', () => {
 
   it('deletes target file and copies subsequent files down', () => {
     deleteSinglePage('doc1', 1, 3);
-    // page-1 deleted, page-2 copied to page-1, page-2 deleted
+    // page-1 deleted, page-2 renamed to page-1 (no copies, no temp files)
     expect(mockDelete).toHaveBeenCalled();
-    expect(mockCopy).toHaveBeenCalled();
+    expect(mockMove).toHaveBeenCalled();
+    expect(mockCopy).not.toHaveBeenCalled();
   });
 });
 
@@ -148,7 +192,9 @@ describe('copyPageWithQuality', () => {
       [],
       { compress: 0.75, format: 'jpeg' }
     );
-    expect(mockCopy).toHaveBeenCalledTimes(1);
+    // The manipulator's output is renamed into place, not copied and deleted.
+    expect(mockMove).toHaveBeenCalledTimes(1);
+    expect(mockCopy).not.toHaveBeenCalled();
   });
 });
 
@@ -207,9 +253,10 @@ describe('garbageCollectOrphans and .orig.jpg', () => {
     root.list = jest.fn(() => [docDir]);
     root.exists = true;
 
+    const page = new MockFile(docDir, 'page-0.jpg');
     const origFile = new MockFile(docDir, 'page-0.orig.jpg');
     const staleTemp = new MockFile(docDir, 'page-0.tmp.jpg');
-    docDir.list = jest.fn(() => [origFile, staleTemp]);
+    docDir.list = jest.fn(() => [page, origFile, staleTemp]);
 
     const deletedCount = await garbageCollectOrphans(['valid-doc']);
 
@@ -350,5 +397,231 @@ describe('copying pages between documents keeps .orig shadows', () => {
     (pageFileFor('r-doc', 1, true) as any).exists = false;
     expect(replaceOriginal(tmp.uri, 'r-doc', 1)).toBe(false);
     expect(existsOrig('r-doc', 1)).toBe(false);
+  });
+});
+
+// ── Crash safety (critique #8), temp files (#10), sweep races (#9) ──────────
+
+const DOCS = 'file:///documents/scan-kit';
+const docDirOf = (id: string) => new MockDirectory('file:///documents', 'scan-kit', id);
+function seedFile(docId: string, name: string, content: string, mtime?: number) {
+  const f: any = new MockFile(docDirOf(docId), name);
+  f.exists = true;
+  fileContents[f.uri] = content;
+  if (mtime !== undefined) mockMtimes[f.uri] = mtime;
+  return f;
+}
+const read = (docId: string, name: string) => fileContents[`${DOCS}/${docId}/${name}`];
+/** Makes docDir.list() return exactly the files that currently hold bytes. */
+function listFromContents(docId: string) {
+  const dir = docDirOf(docId);
+  dir.list = jest.fn(() => Object.keys(fileContents)
+    .filter(u => u.startsWith(`${DOCS}/${docId}/`))
+    .map(u => new MockFile(u)));
+  return dir;
+}
+function rootWith(...dirs: any[]) {
+  const root = new MockDirectory('file:///documents', 'scan-kit');
+  root.exists = true;
+  root.list = jest.fn(() => dirs);
+  return root;
+}
+
+describe('replacePage is a rename, and an interrupted one is recovered', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  test('replacePage puts the new bytes in place and leaves no side file', () => {
+    seedFile('rp', 'page-0.jpg', 'OLD');
+    const tmp: any = new MockFile('file:///tmp/rotated.jpg');
+    fileContents[tmp.uri] = 'NEW';
+    replacePage('file:///tmp/rotated.jpg?v=2', 'rp', 0);
+    expect(read('rp', 'page-0.jpg')).toBe('NEW');
+    expect(read('rp', 'page-0.new.jpg')).toBeUndefined();
+    expect(mockMove).toHaveBeenCalledTimes(1);
+  });
+
+  test('the sweep promotes a .new file whose page was already deleted (the only copy)', async () => {
+    seedFile('rp2', 'page-0.jpg', 'A');
+    seedFile('rp2', 'page-1.new.jpg', 'B-rotated'); // page-1.jpg gone: crash mid-swap
+    seedFile('rp2', 'page-2.orig.new.jpg', 'C-orig-new');
+    const dir = listFromContents('rp2');
+    rootWith(dir);
+    await garbageCollectOrphans(['rp2']);
+    expect(read('rp2', 'page-1.jpg')).toBe('B-rotated');
+    expect(read('rp2', 'page-1.new.jpg')).toBeUndefined();
+    expect(read('rp2', 'page-2.orig.jpg')).toBe('C-orig-new');
+  });
+
+  test('the sweep deletes a .new file whose page still exists (a duplicate)', async () => {
+    seedFile('rp3', 'page-0.jpg', 'A');
+    seedFile('rp3', 'page-0.new.jpg', 'A-new');
+    rootWith(listFromContents('rp3'));
+    await garbageCollectOrphans(['rp3']);
+    expect(read('rp3', 'page-0.jpg')).toBe('A');
+    expect(read('rp3', 'page-0.new.jpg')).toBeUndefined();
+  });
+
+  test('the sweep restores a legacy .shifting file to the slot it was headed for', async () => {
+    seedFile('sh', 'page-0.jpg', 'A');
+    seedFile('sh', 'page-2.shifting.jpg', 'C'); // was moving to page-1, which is gone
+    rootWith(listFromContents('sh'));
+    await garbageCollectOrphans(['sh']);
+    expect(read('sh', 'page-1.jpg')).toBe('C');
+  });
+
+  test('a side file touched moments ago is left alone (an edit may still be running)', async () => {
+    const now = 10_000_000_000;
+    seedFile('fresh', 'page-0.new.jpg', 'X', now - 5_000);
+    rootWith(listFromContents('fresh'));
+    await garbageCollectOrphans(['fresh'], now);
+    expect(read('fresh', 'page-0.new.jpg')).toBe('X');
+    expect(read('fresh', 'page-0.jpg')).toBeUndefined();
+  });
+});
+
+describe('reorderPages is two-phase and recoverable', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  test('leaves no temp files or commit marker behind', () => {
+    seedFile('ro', 'page-0.jpg', 'A');
+    seedFile('ro', 'page-1.jpg', 'B');
+    seedFile('ro', 'page-2.jpg', 'C');
+    reorderPages('ro', [2, 0, 1]);
+    expect([read('ro', 'page-0.jpg'), read('ro', 'page-1.jpg'), read('ro', 'page-2.jpg')]).toEqual(['C', 'A', 'B']);
+    expect(Object.keys(fileContents).filter(u => /tmp|commit/.test(u))).toEqual([]);
+  });
+
+  test('a crash before the commit is undone: temps deleted, original order kept', async () => {
+    seedFile('ro1', 'page-0.jpg', 'A');
+    seedFile('ro1', 'page-1.jpg', 'B');
+    seedFile('ro1', 'page-tmp-0.jpg', 'B'); // phase 1 copy for new order [1, 0]
+    rootWith(listFromContents('ro1'));
+    await garbageCollectOrphans(['ro1']);
+    expect([read('ro1', 'page-0.jpg'), read('ro1', 'page-1.jpg')]).toEqual(['A', 'B']);
+    expect(read('ro1', 'page-tmp-0.jpg')).toBeUndefined();
+  });
+
+  test('a crash after the commit is finished: remaining temps promoted, nothing lost', async () => {
+    // New order [1, 0]: page-0 already promoted (now B), page-1 still old A,
+    // and A's copy waits in page-tmp-1.
+    seedFile('ro2', 'page-0.jpg', 'B');
+    seedFile('ro2', 'page-1.jpg', 'A-stale');
+    seedFile('ro2', 'page-tmp-1.jpg', 'A');
+    seedFile('ro2', 'reorder.commit', '');
+    rootWith(listFromContents('ro2'));
+    await garbageCollectOrphans(['ro2']);
+    expect([read('ro2', 'page-0.jpg'), read('ro2', 'page-1.jpg')]).toEqual(['B', 'A']);
+    expect(read('ro2', 'reorder.commit')).toBeUndefined();
+  });
+});
+
+describe('ensureOriginal is atomic', () => {
+  test('the shadow appears in one rename, and a half-copied one is cleaned up', async () => {
+    seedFile('eo', 'page-0.jpg', 'RAW');
+    (new MockFile(docDirOf('eo'), 'page-0.orig.jpg') as any).exists = false;
+    ensureOriginal('eo', 0);
+    expect(read('eo', 'page-0.orig.jpg')).toBe('RAW');
+    expect(read('eo', 'page-0.orig.part.jpg')).toBeUndefined();
+
+    seedFile('eo2', 'page-0.jpg', 'RAW');
+    seedFile('eo2', 'page-0.orig.part.jpg', 'RA'); // app died mid-copy
+    rootWith(listFromContents('eo2'));
+    await garbageCollectOrphans(['eo2']);
+    expect(read('eo2', 'page-0.orig.part.jpg')).toBeUndefined();
+    expect(read('eo2', 'page-0.orig.jpg')).toBeUndefined(); // never promoted
+  });
+});
+
+describe('the orphan sweep', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  test('removes a folder with no record once it has settled', async () => {
+    const orphan = docDirOf('gone');
+    rootWith(docDirOf('kept'), orphan);
+    await garbageCollectOrphans(['kept']);
+    expect(orphan.delete).toHaveBeenCalled();
+  });
+
+  test('keeps a folder being written right now — a save that has no record yet (critique #9)', async () => {
+    const now = 10_000_000_000;
+    const saving = docDirOf('saving');
+    mockMtimes[saving.uri] = now - 1_000;
+    rootWith(docDirOf('kept'), saving);
+    await garbageCollectOrphans(['kept'], now);
+    expect(saving.delete).not.toHaveBeenCalled();
+  });
+
+  test('keeps a folder whose age cannot be read', async () => {
+    const unknown = docDirOf('unknown');
+    unknown.info = jest.fn(() => { throw new Error('no attrs'); });
+    rootWith(docDirOf('kept'), unknown);
+    await garbageCollectOrphans(['kept']);
+    expect(unknown.delete).not.toHaveBeenCalled();
+  });
+});
+
+describe('copyPageWithQuality caps the page size (critique #1)', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  test('a 24 MP photo is shrunk to the long-edge cap', async () => {
+    mockGetImageSize.mockResolvedValueOnce({ width: 5712, height: 4284 });
+    await copyPageWithQuality('file:///tmp/big.jpg', 'cap', 0, 1);
+    expect(mockManipulate).toHaveBeenCalledWith('file:///tmp/big.jpg', [{ resize: { width: MAX_PAGE_EDGE } }], { compress: 1, format: 'jpeg' });
+  });
+
+  test('a tall photo is capped on its height', async () => {
+    mockGetImageSize.mockResolvedValueOnce({ width: 3000, height: 9000 });
+    await copyPageWithQuality('file:///tmp/tall.jpg', 'cap', 0, 0.9);
+    expect(mockManipulate).toHaveBeenCalledWith('file:///tmp/tall.jpg', [{ resize: { height: MAX_PAGE_EDGE } }], expect.any(Object));
+  });
+
+  test('replaces a page left behind by an earlier failed attempt (critique #5)', async () => {
+    seedFile('cap2', 'page-3.jpg', 'STALE');
+    const out: any = new MockFile('file:///tmp/compressed.jpg');
+    fileContents[out.uri] = 'FRESH';
+    out.exists = true;
+    await copyPageWithQuality('file:///tmp/new.jpg', 'cap2', 3, 0.75);
+    expect(read('cap2', 'page-3.jpg')).toBe('FRESH');
+  });
+
+  test('cappedSize keeps the aspect ratio and leaves small images alone', () => {
+    expect(cappedSize(5712, 4284)).toEqual({ width: 4000, height: 3000 });
+    expect(cappedSize(4000, 2000)).toBeNull();
+  });
+});
+
+describe('temp files (critique #10)', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  test('isDisposableTemp recognises picker, manipulator, auto-crop and scanner output only', () => {
+    expect(isDisposableTemp('file:///Library/Caches/ImagePicker/A.jpg')).toBe(true);
+    expect(isDisposableTemp('file:///tmp/doc-1234.jpg')).toBe(true);
+    expect(isDisposableTemp('file:///documents/DOCUMENT_SCAN_0_20261118.jpg?v=1')).toBe(true);
+    expect(isDisposableTemp('file:///documents/scan-kit/d/page-0.jpg')).toBe(false);
+    expect(isDisposableTemp('file:///documents/Inbox/contract.pdf')).toBe(false);
+    expect(isDisposableTemp(undefined)).toBe(false);
+  });
+
+  test('deleteDisposableTemps never deletes a stored page', () => {
+    const stored = seedFile('keep', 'page-0.jpg', 'P');
+    const temp: any = new MockFile('file:///Library/Caches/ImagePicker/x.jpg');
+    fileContents[temp.uri] = 'T';
+    deleteDisposableTemps([stored.uri, temp.uri]);
+    expect(read('keep', 'page-0.jpg')).toBe('P');
+    expect(fileContents[temp.uri]).toBeUndefined();
+  });
+
+  test('the startup sweep removes settled scanner output, keeps fresh files', () => {
+    const now = 10_000_000_000;
+    const old: any = new MockFile('file:///documents/DOCUMENT_SCAN_0_old.jpg');
+    const fresh: any = new MockFile('file:///documents/DOCUMENT_SCAN_1_new.jpg');
+    const mine: any = new MockFile('file:///documents/notes.txt');
+    mockMtimes[fresh.uri] = now - 1000;
+    const docsDir = new MockDirectory({ uri: 'file:///documents' });
+    docsDir.list = jest.fn(() => [old, fresh, mine]);
+    expect(sweepTempLeftovers(now)).toBe(1);
+    expect(old.exists).toBe(false);
+    expect(fresh.exists).toBe(true);
+    expect(mine.exists).toBe(true);
   });
 });

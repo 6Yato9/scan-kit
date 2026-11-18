@@ -1,5 +1,6 @@
 // lib/doc-ops.ts
-// Whole-document operations shared by Home and Files: duplicate and merge.
+// Whole-document operations shared by Home, Files and the tools: duplicate,
+// merge and reorder.
 //
 // Merging copies each page's `.orig` shadow alongside it. Without it the next
 // launch's bake migration re-applies the recorded filter on top of pixels that
@@ -7,8 +8,9 @@
 import * as Crypto from 'expo-crypto';
 import { Directory, File, Paths } from 'expo-file-system';
 import { Document, PageAdjustment, PageFilter } from '../types/document';
-import { copyDocumentFiles, copyPdfToStorage } from './files';
-import { patchDocument, saveDocument } from './storage';
+import { copyDocumentFiles, copyPdfToStorage, reorderPages } from './files';
+import { getDocument, patchDocument, saveDocument } from './storage';
+import { remapForReorder, runPageEdit } from './bake';
 
 const DEFAULT_ADJ: PageAdjustment = { brightness: 0, contrast: 0, saturation: 0 };
 
@@ -68,22 +70,74 @@ export async function duplicateDocument(doc: Document): Promise<Document> {
 /**
  * Appends `source`'s pages to `target` (the source is left untouched).
  * Returns the updated target, or null if the target was deleted meanwhile.
+ *
+ * Runs under the target's page lock and re-reads BOTH documents there: the
+ * caller's copies may be stale (a bake finished, a page was added or deleted
+ * since the list was loaded), and appending at a stale page count would
+ * overwrite real pages, while stale filters would undo a finished bake.
  */
 export async function mergeInto(target: Document, source: Document): Promise<Document | null> {
-  const newPages = copyPagesWithOriginals(source, target.id, target.pages.length);
-  const updated: Document = {
-    ...target,
-    pages: [...target.pages, ...newPages],
-    ...combinePageMeta([target, source]),
-    updatedAt: Date.now(),
-  };
-  const ok = await patchDocument(target.id, {
-    pages: updated.pages,
-    filters: updated.filters,
-    adjustments: updated.adjustments,
-    updatedAt: updated.updatedAt,
+  return runPageEdit(target.id, {}, async () => {
+    const current = await getDocument(target.id);
+    if (!current) return null;
+    const from = (await getDocument(source.id)) ?? source;
+    const start = current.pages.length;
+    const newPages = copyPagesWithOriginals(from, current.id, start);
+    const updated: Document = {
+      ...current,
+      pages: [...current.pages, ...newPages],
+      ...combinePageMeta([current, from]),
+      updatedAt: Date.now(),
+    };
+    const ok = await patchDocument(current.id, {
+      pages: updated.pages,
+      filters: updated.filters,
+      adjustments: updated.adjustments,
+      updatedAt: updated.updatedAt,
+    });
+    if (!ok) {
+      // Deleted between the read and the write: don't leave its copies behind.
+      removePageFiles(current.id, start, newPages.length);
+      return null;
+    }
+    return updated;
   });
-  return ok ? updated : null;
+}
+
+function removePageFiles(docId: string, start: number, count: number): void {
+  const dir = docDir(docId);
+  for (let i = start; i < start + count; i++) {
+    for (const name of [`page-${i}.jpg`, `page-${i}.orig.jpg`]) {
+      try {
+        const f = new File(dir, name);
+        if (f.exists) f.delete();
+      } catch {}
+    }
+  }
+}
+
+/**
+ * Reorders `docId`'s pages: `newOrder[newIndex] = oldIndex`. Reads the current
+ * document under the page lock, so per-page filters and adjustments are carried
+ * from what is stored NOW (not from a list loaded earlier, which would revert a
+ * bake that finished meanwhile) and in-flight bakes follow their pages. Throws
+ * when the order no longer matches the document (a page was added or deleted
+ * since it was built) and leaves the pages untouched.
+ */
+export async function reorderDocumentPages(docId: string, newOrder: number[]): Promise<Document> {
+  return runPageEdit(docId, { remap: remapForReorder(newOrder) }, async () => {
+    const current = await getDocument(docId);
+    if (!current) throw new Error('document missing');
+    const n = current.pages.length;
+    const isPermutation = newOrder.length === n && new Set(newOrder).size === n && newOrder.every(i => i >= 0 && i < n);
+    if (!isPermutation) throw new Error('page count changed');
+    const pages = reorderPages(docId, newOrder);
+    const filters = current.filters ? newOrder.map(i => current.filters![i] ?? ('original' as PageFilter)) : undefined;
+    const adjustments = current.adjustments ? newOrder.map(i => current.adjustments![i] ?? { ...DEFAULT_ADJ }) : undefined;
+    const updatedAt = Date.now();
+    await patchDocument(docId, { pages, filters, adjustments, updatedAt });
+    return { ...current, pages, filters, adjustments, updatedAt };
+  });
 }
 
 /** Creates a new document holding every page of `docs`, in order. Sources are kept. */

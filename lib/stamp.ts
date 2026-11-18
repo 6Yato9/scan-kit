@@ -4,6 +4,7 @@
 // that exactly covers one page image, positioned with percentages, sized with
 // the `--pt` CSS variable (one PDF point). The same numbers drive the on-screen
 // previews, so what the user sees is what lands in the PDF.
+import { formatDate, formatDateTime } from './format';
 import { escapeHtml } from './pdf';
 
 const FONT = 'Helvetica,Arial,sans-serif';
@@ -83,12 +84,9 @@ export function timestampOverlay(text: string, corner: Corner, pageWidthPt: numb
 
 export type TimestampFormat = 'date' | 'datetime';
 
-export function formatStamp(ts: number, format: TimestampFormat): string {
-  const d = new Date(ts);
-  const date = d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
-  if (format === 'date') return date;
-  const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-  return `${date}, ${time}`;
+/** The stamp text, in the device's date and time format (see lib/format.ts). */
+export function formatStamp(ts: number, format: TimestampFormat, locale?: string): string {
+  return format === 'date' ? formatDate(ts, locale) : formatDateTime(ts, locale);
 }
 
 // ── Signature ────────────────────────────────────────────────────────────────
