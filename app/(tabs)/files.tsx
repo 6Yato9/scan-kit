@@ -97,7 +97,8 @@ export default function FilesScreen() {
   const pendingAfterSheet = useRef<(() => void) | null>(null);
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const params = useLocalSearchParams<{ action?: string; folder?: string }>();
+  const params = useLocalSearchParams<{ action?: string; folder?: string; search?: string }>();
+  const searchRef = useRef<TextInput>(null);
   const [layout, setLayout] = useState<FilesLayout>('grid');
   useEffect(() => { getFilesLayout().then(setLayout); }, []);
   const setLayoutTo = useCallback((next: FilesLayout) => {
@@ -186,6 +187,16 @@ export default function FilesScreen() {
     setSearchQuery('');
     setActiveFolder(folder || null);
   }, [params.folder, router]);
+
+  // Home's search button: Files is where the library is searched, so it lands
+  // here with the keyboard up, across every folder.
+  useEffect(() => {
+    if (!params.search) return;
+    router.setParams({ search: undefined } as any);
+    setActiveFolder(null);
+    // Not cleared on re-run: clearing the param re-runs this effect at once.
+    setTimeout(() => searchRef.current?.focus(), 350);
+  }, [params.search, router]);
 
   /** Close a sheet, then run `fn` once it is fully gone (native pickers need that). */
   const afterAddSheet = (fn: () => void) => () => {
@@ -408,7 +419,7 @@ export default function FilesScreen() {
       )}
 
       <View style={styles.searchRow}>
-        <SearchField value={searchQuery} onChangeText={setSearchQuery} />
+        <SearchField value={searchQuery} onChangeText={setSearchQuery} inputRef={searchRef} />
       </View>
 
       {/* Folder chips. Long-press a folder to rename or delete it. */}

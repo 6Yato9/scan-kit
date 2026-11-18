@@ -407,18 +407,17 @@ export function ExportSheet({ visible, document, onClose }: Props) {
 
   const pagesLabel = `${pageCount} ${pageCount === 1 ? 'page' : 'pages'}`;
   const sizeLabel = bytes ? formatBytes(bytes) : null;
-  const subtitle = [isPdfDoc ? 'PDF' : pagesLabel, sizeLabel].filter(Boolean).join(', ');
+  const subtitle = [isPdfDoc ? 'PDF' : pagesLabel, sizeLabel].filter(Boolean).join(' · ');
   // Leans high and rounds up (lib/pdf): the file should never be bigger than promised.
   const estimate = (q: PdfQuality) =>
     stats ? `about ${formatBytes(roundUpEstimate(estimatePdfBytes(stats, q, canSearchable)))}` : null;
-  const sentence = (parts: (string | null)[]) => {
-    const text = parts.filter(Boolean).join(', ');
-    return text.charAt(0).toUpperCase() + text.slice(1);
-  };
-  const pdfDetail = sentence([canSearchable ? 'Text can be searched and copied' : pagesLabel, estimate(quality)]);
-  const smallDetail = sentence(['Lower resolution for email', estimate('small')]);
-  const protectedDetail = sentence([
-    'Needs a password to open',
+  // Short enough that the size, the number people check, always fits on the
+  // row: "Searchable · about 240 KB".
+  const detailLine = (parts: (string | null)[]) => parts.filter(Boolean).join(' · ');
+  const pdfDetail = detailLine([canSearchable ? 'Searchable' : pagesLabel, estimate(quality)]);
+  const smallDetail = detailLine(['For email', estimate('small')]);
+  const protectedDetail = detailLine([
+    'Needs a password',
     isPdfDoc ? (sizeLabel ? `about ${sizeLabel}` : null) : estimate(quality),
   ]);
   const pwTooShort = pw.length > 0 && pw.length < MIN_PDF_PASSWORD;
@@ -432,7 +431,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
   const submitPassword = () => {
     if (pwReady) run('protected', pw);
   };
-  const printDetail = pageSize === 'Auto' || isPdfDoc ? 'Send to an AirPrint printer' : `Send to an AirPrint printer, ${paperName(pageSize)}`;
+  const printDetail = detailLine(['Any AirPrint printer', pageSize === 'Auto' || isPdfDoc ? null : paperName(pageSize)]);
 
   return (
     <BottomSheet visible={visible} onClose={handleClose} variant="grouped">
@@ -525,7 +524,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
                 <SheetRow
                   icon="document-text-outline"
                   label="PDF"
-                  detail={sizeLabel ? `The original file, ${sizeLabel}` : 'The original file'}
+                  detail={detailLine(['Original file', sizeLabel])}
                   onPress={() => run('pdf')}
                   last={!canProtect}
                 />
@@ -564,10 +563,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
                 <SheetRow
                   icon="image-outline"
                   label={pageCount === 1 ? 'JPEG image' : 'JPEG images'}
-                  detail={[
-                    pageCount === 1 ? 'The page as an image' : `${pageCount} images in one ZIP file`,
-                    sizeLabel,
-                  ].filter(Boolean).join(', ')}
+                  detail={detailLine([pageCount === 1 ? 'One image' : `${pageCount} images in a ZIP`, sizeLabel])}
                   onPress={() => run('images')}
                   last
                 />
@@ -580,7 +576,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
               <SheetRow
                 icon="download-outline"
                 label="Save to Photos"
-                detail={pageCount === 1 ? 'Adds the page to your photo library' : `Adds all ${pageCount} pages to your photo library`}
+                detail={pageCount === 1 ? 'Adds the page to your library' : `Adds all ${pageCount} pages to your library`}
                 onPress={() => run('photos')}
               />
             )}

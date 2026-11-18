@@ -6,11 +6,12 @@
 // place to reorder, or let go without moving to open the page's menu (Retake,
 // Move, Delete…). The page number sits under each thumbnail, never on it.
 import { useEffect, useRef, useState } from 'react';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import DraggableFlatList, { ScaleDecorator, type RenderItemParams } from 'react-native-draggable-flatlist';
 import { useTheme } from '@/contexts/theme-context';
+import { PageThumb } from '@/components/page-thumb';
 import { tapLight } from '@/lib/haptics';
 import { Radius, Spacing } from '@/lib/theme';
 
@@ -116,11 +117,7 @@ export function ThumbnailStrip({
               isActive && { borderColor: colors.chromeAccent, borderWidth: 2 },
             ]}
           >
-            <Image
-              source={{ uri: cacheBust ? `${item.uri}?v=${cacheBust}` : item.uri }}
-              style={styles.thumbImage}
-              resizeMode="cover"
-            />
+            <PageThumb uri={cacheBust ? `${item.uri}?v=${cacheBust}` : item.uri} style={styles.thumbImage} />
           </View>
           <Text
             allowFontScaling={false}

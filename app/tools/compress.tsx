@@ -12,6 +12,7 @@ import { useToast } from '@/components/toast';
 import {
   NoDocumentsScreen,
   OptionList,
+  ToolIntro,
   ToolNote,
   ToolProgress,
   ToolScreen,
@@ -124,6 +125,11 @@ export default function CompressScreen() {
     >
       {/* Presented over the viewer: a baker underneath would never run (see FilterBaker). */}
       {fromViewer ? <FilterBaker /> : null}
+      <ToolIntro
+        icon="contract-outline"
+        title="Make a document smaller"
+        text="Saves its pages again at a lower size to free up space on this device."
+      />
       <ToolDocPicker
         docs={docs}
         doc={doc}
@@ -153,8 +159,8 @@ export default function CompressScreen() {
       <SectionLabel>Size</SectionLabel>
       <OptionList options={LEVELS} value={level} onChange={v => { setLevel(v); setResult(null); }} />
       <ToolNote>
-        Compress replaces the page images to free up space on this device. To send a smaller file and keep the pages as
-        they are, share the document and choose Smaller PDF.
+        This replaces the page images and can’t be undone. To send a smaller file and keep the pages as they are, share
+        the document and choose Smaller PDF.
       </ToolNote>
     </ToolScreen>
   );

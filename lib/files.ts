@@ -555,6 +555,58 @@ export async function garbageCollectOrphans(validDocIds: string[], now: number =
   return handled;
 }
 
+// ── Files a record no longer references ─────────────────────────────────────
+
+/** What a document's record points at (lib/storage.ts documentFileRefsForCleanup). */
+export type DocFileRefs = { id: string; pages: string[]; pdfUri?: string; updatedAt: number };
+
+const PAGE_FILE = /^page-\d+(?:\.orig)?\.jpg$/;
+
+/**
+ * Startup sweep for what an interrupted "Convert to pages" (lib/convert-pdf.ts)
+ * or its Undo can leave in a document folder:
+ *  - `document.pdf` in a document that is no longer a PDF (killed between the
+ *    record switch and moving the PDF to the Undo stash, or during an Undo
+ *    before its record switch);
+ *  - page files in a document that is still a PDF (killed while the pages were
+ *    being written, before the record switch).
+ * Deliberately narrow and conservative: only those two patterns; never a file
+ * the record references (by name); never a file modified within
+ * SWEEP_GRACE_MS; never anything in a document whose record changed within
+ * SWEEP_GRACE_MS (an edit may be in flight). Returns how many were removed.
+ */
+export function sweepConvertLeftovers(records: DocFileRefs[], now: number = Date.now()): number {
+  let removed = 0;
+  for (const rec of records) {
+    try {
+      if (!rec.updatedAt || now - rec.updatedAt < SWEEP_GRACE_MS) continue;
+      const dir = new Directory(Paths.document, 'scan-kit', rec.id);
+      if (!dir.exists) continue;
+      const referenced = new Set(
+        [...rec.pages, rec.pdfUri].filter((u): u is string => !!u).map(u => baseName(stripQuery(u))),
+      );
+      const isPdfDoc = !!rec.pdfUri && rec.pages.length === 0;
+      let pagesRemoved = false;
+      for (const item of dir.list()) {
+        try {
+          if (!(item instanceof File)) continue;
+          const name = baseName(item.uri);
+          if (referenced.has(name)) continue;
+          const strayPdf = name === 'document.pdf' && !rec.pdfUri;
+          const strayPage = isPdfDoc && PAGE_FILE.test(name);
+          if (!strayPdf && !strayPage) continue;
+          if (!isSettled(item, now)) continue;
+          item.delete();
+          removed++;
+          if (strayPage) pagesRemoved = true;
+        } catch {}
+      }
+      if (pagesRemoved) pruneDocumentOcr(rec.id);
+    } catch {}
+  }
+  return removed;
+}
+
 // ── Temp files ───────────────────────────────────────────────────────────────
 
 function containerRoot(): string {
@@ -609,7 +661,19 @@ export function deleteDisposableTemps(uris: (string | null | undefined)[]): void
 // page-undo holds the copy of a deleted page that the viewer's Undo restores
 // (lib/page-undo.ts); one older than the grace period can no longer be used.
 // pdf-convert: PDF page renders and the PDF an Undo of "Convert to pages" puts back (lib/convert-pdf.ts).
-const TEMP_DIRS = ['ImagePicker', 'ImageManipulator', 'DocumentPicker', 'exports', 'Print', 'page-undo', 'pdf-convert'];
+// incoming: "Open in Scan Kit" staging copies (app/import.tsx).
+const TEMP_DIRS = [
+  'ImagePicker',
+  'ImageManipulator',
+  'DocumentPicker',
+  'exports',
+  'Print',
+  'page-undo',
+  'pdf-convert',
+  'incoming',
+];
+/** Open-in staging files older builds wrote straight into the Caches root. */
+const LEGACY_STAGED = /^(?:incoming|attempt)-\d+-/;
 
 /**
  * Removes temp files older than SWEEP_GRACE_MS that earlier sessions left
@@ -636,6 +700,10 @@ export function sweepTempLeftovers(now: number = Date.now()): number {
   };
   sweep(new Directory(Paths.document), name => SCANNER_OUTPUT.test(name));
   for (const name of TEMP_DIRS) sweep(new Directory(Paths.cache, name), () => true);
+  sweep(new Directory(Paths.cache), name => LEGACY_STAGED.test(name));
+  // The copies iOS makes for "Open in Scan Kit"; app/import.tsx removes each
+  // once staged, so one still here is from an import that never ran.
+  sweep(new Directory(Paths.document, 'Inbox'), () => true);
   const root = containerRoot();
   if (root) sweep(new Directory(`${root}tmp`), name => /^doc-[0-9A-F-]+\.jpg$/i.test(name));
   return removed;

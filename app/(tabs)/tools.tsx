@@ -27,7 +27,7 @@ const TOOL_SECTIONS: { title: string; tools: Tool[] }[] = [
     tools: [
       { id: 'whiteboard', icon: 'easel-outline', label: 'Whiteboard', href: '/tools/whiteboard' },
       { id: 'book', icon: 'book-outline', label: 'Book mode', href: '/tools/book' },
-      { id: 'id-card', icon: 'id-card-outline', label: 'ID card', href: '/tools/id-card' },
+      { id: 'id-card', icon: 'id-card', label: 'ID card', href: '/tools/id-card' },
       { id: 'qr', icon: 'qr-code-outline', label: 'QR code', href: '/tools/qr' },
     ],
   },

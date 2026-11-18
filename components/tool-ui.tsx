@@ -18,6 +18,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/theme-context';
+import { PageThumb } from '@/components/page-thumb';
 import { useScan } from '@/contexts/scan-context';
 import { SectionLabel } from '@/components/section-label';
 import { HeaderTextButton, ScreenHeader } from '@/components/screen-header';
@@ -148,44 +149,29 @@ export function ToolScreen({
 type IntroPoint = { icon: IconName; text: string };
 
 /**
- * The one hero used by tool intros and tool empty states: icon, heading and a
- * short explanation, top-aligned under the header (never vertically centred,
- * so every tool's hero sits at the same height). `points` adds a short "how it
- * works" card under it. `compact` is a single row for screens with content
- * below (Erase marks).
+ * The one intro every tool screen opens with: icon, heading and a short
+ * explanation, top-aligned under the header (never vertically centred, so
+ * every tool's intro sits at the same height). Below it comes either `points`,
+ * a short "how it works" card (Book mode, Whiteboard, Extract text), or the
+ * screen's own controls (Compress, Erase marks).
  */
 export function ToolIntro({
   icon,
   title,
   text,
   points,
-  compact = false,
 }: {
   icon: AppIconName;
   title: string;
   text: string;
   points?: IntroPoint[];
-  compact?: boolean;
 }) {
   const { colors } = useTheme();
-  if (compact) {
-    return (
-      <View style={[styles.introCompact, { backgroundColor: colors.card }]}>
-        <View style={[styles.introCompactIcon, { backgroundColor: colors.accentLight }]}>
-          <AppIcon name={icon} size={24} color={colors.accent} />
-        </View>
-        <View style={styles.flex}>
-          <Text style={[Type.headline, { color: colors.text }]}>{title}</Text>
-          <Text style={[Type.footnote, styles.introCompactText, { color: colors.muted }]}>{text}</Text>
-        </View>
-      </View>
-    );
-  }
   return (
     <View>
       <View style={styles.intro}>
         <View style={[styles.introIcon, { backgroundColor: colors.accentLight }]}>
-          <AppIcon name={icon} size={36} color={colors.accent} />
+          <AppIcon name={icon} size={32} color={colors.accent} />
         </View>
         <Text style={[Type.title, styles.center, { color: colors.text }]} accessibilityRole="header">
           {title}
@@ -392,7 +378,7 @@ export function DocThumb({ doc, width = 40, height = 52 }: { doc: Document; widt
   const { colors } = useTheme();
   const frame = [styles.thumb, { width, height, backgroundColor: colors.placeholder, borderColor: colors.thumbBorder }];
   return doc.pages[0] ? (
-    <Image source={{ uri: `${doc.pages[0]}?v=${doc.updatedAt}` }} style={frame} resizeMode="cover" />
+    <PageThumb uri={`${doc.pages[0]}?v=${doc.updatedAt}`} style={frame} />
   ) : (
     <View style={[frame, styles.thumbIcon]}>
       <Ionicons name="document-text-outline" size={20} color={colors.muted} />
@@ -599,29 +585,19 @@ const styles = StyleSheet.create({
   intro: {
     alignItems: 'center',
     paddingHorizontal: Spacing.xl,
-    paddingTop: Spacing.xxxl,
-    paddingBottom: Spacing.xl,
+    paddingTop: Spacing.xxl,
+    paddingBottom: Spacing.lg,
     gap: Spacing.sm,
   },
   introIcon: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
+    width: 72,
+    height: 72,
+    borderRadius: 36,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: Spacing.md,
   },
   introText: { lineHeight: 21 },
-  introCompact: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.md,
-    padding: Spacing.lg,
-    borderRadius: Radius.md,
-    marginTop: Spacing.lg,
-  },
-  introCompactIcon: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
-  introCompactText: { marginTop: 2, lineHeight: 18 },
   points: { marginTop: Spacing.sm },
   point: { flexDirection: 'row', alignItems: 'center', paddingLeft: Spacing.lg },
   pointIcon: { width: 30, height: 30, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginRight: Spacing.md },

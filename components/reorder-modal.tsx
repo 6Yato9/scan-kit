@@ -1,7 +1,7 @@
 // components/reorder-modal.tsx
 // Drag-to-reorder sheet for the viewer. Uses the always-dark chrome like the
 // viewer it is presented over.
-import { Image, Modal, Pressable, StyleSheet, Text } from 'react-native';
+import { Modal, Pressable, StyleSheet, Text } from 'react-native';
 import { useEffect, useRef, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -10,6 +10,7 @@ import DraggableFlatList, {
   RenderItemParams,
 } from 'react-native-draggable-flatlist';
 import { useTheme } from '@/contexts/theme-context';
+import { PageThumb } from '@/components/page-thumb';
 import { HeaderTextButton, ScreenHeader } from '@/components/screen-header';
 import { useAppLocked } from '@/components/lock-gate';
 import { HIT, Spacing, Type } from '@/lib/theme';
@@ -80,10 +81,9 @@ export function ReorderModal({ visible, pages, cacheBust, saving, onConfirm, onC
           accessibilityLabel={`Page ${position}`}
           accessibilityHint="Touch and hold, then drag to move"
         >
-          <Image
-            source={{ uri: cacheBust ? `${item.uri}?v=${cacheBust}` : item.uri }}
+          <PageThumb
+            uri={cacheBust ? `${item.uri}?v=${cacheBust}` : item.uri}
             style={[styles.thumb, { backgroundColor: colors.chrome }]}
-            resizeMode="cover"
           />
           <Text style={[Type.body, styles.pageLabel, { color: colors.chromeText }]}>Page {position}</Text>
           <Pressable

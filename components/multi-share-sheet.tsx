@@ -9,13 +9,13 @@
 // shows with Cancel, and closing the sheet cancels the work.
 import { Alert, StyleSheet, Text, View } from 'react-native';
 import { useEffect, useRef, useState } from 'react';
-import { File } from 'expo-file-system';
-import JSZip from 'jszip';
+import { File, Paths } from 'expo-file-system';
 import { generatePdf, PdfCancelledError, PdfError } from '@/lib/pdf';
 import { ocrAvailable } from '@/lib/ocr';
 import {
   cleanFileUri,
   clearExportCache,
+  deleteQuietly,
   exportFileName,
   makeExportDir,
   placeExportFile,
@@ -29,6 +29,7 @@ import { Document } from '@/types/document';
 import { useTheme } from '@/contexts/theme-context';
 import { formatBytes } from '@/components/tool-ui';
 import { documentsBytes } from '@/lib/doc-size';
+import { zipFiles, ZipCancelledError, ZipLimitError } from '@/lib/zip-stream';
 import { Radius, Spacing, Type } from '@/lib/theme';
 
 type Props = {
@@ -42,6 +43,19 @@ type Props = {
 type Busy = { title: string; label: string; progress: number };
 
 class CancelledError extends Error {}
+class ExportSpaceError extends Error {}
+
+/** Free space the export needs beyond the archive itself (one PDF in flight, headroom). */
+const SPACE_MARGIN = 50 * 1024 * 1024;
+
+/**
+ * True when there is clearly not enough free space for a ZIP of about `bytes`.
+ * Unknown sizes never block: the write itself still fails cleanly.
+ */
+export function lacksSpaceFor(bytes: number | null, available: number | null | undefined): boolean {
+  if (!bytes || !available || !Number.isFinite(available)) return false;
+  return bytes + SPACE_MARGIN > available;
+}
 
 /** "Invoice and 2 more" — the combined file's name. */
 export function combinedName(docs: { name: string }[]): string {
@@ -115,6 +129,10 @@ export function MultiShareSheet({ visible, documents, onClose, exportAll = false
     const { signal } = controller;
     const session = sessionRef.current;
     const check = () => { if (signal.aborted) throw new CancelledError(); };
+    // The folder holding the file to share. Deleted once the share sheet has
+    // finished with it (or if it is never shown), so a whole-library ZIP
+    // doesn't sit in Caches until the next export or launch.
+    let exportDir: string | null = null;
 
     try {
       await clearExportCache();
@@ -123,6 +141,7 @@ export function MultiShareSheet({ visible, documents, onClose, exportAll = false
       // Standard always: the old "PDF image quality" setting was removed.
       const quality = 'standard' as const;
       const dir = await makeExportDir();
+      exportDir = dir;
       check();
 
       let uri: string;
@@ -153,66 +172,92 @@ export function MultiShareSheet({ visible, documents, onClose, exportAll = false
         mime = { mimeType: 'application/pdf', UTI: 'com.adobe.pdf' };
       } else {
         const title = exportAll ? `Exporting ${n} ${n === 1 ? 'document' : 'documents'}` : `Creating ${n} PDFs`;
-        const zip = new JSZip();
-        const names = uniqueNames(documents.map(d => exportFileName(d.name, 'pdf')));
-        for (let i = 0; i < n; i++) {
-          check();
-          const doc = documents[i];
-          const label = `“${doc.name}” (${i + 1} of ${n})`;
-          setBusy({ title, label, progress: (i / n) * 0.85 });
-          let pdf: string;
-          if (doc.pdfUri) {
-            pdf = doc.pdfUri;
-          } else {
-            pdf = await generatePdf(doc.pages, {
-              pageSize,
-              quality,
-              searchable,
-              signal,
-              // Progress moves within each document too, not only between them.
-              onProgress: (done, total) => {
-                if (signal.aborted) return;
-                setBusy({ title, label, progress: ((i + Math.min(1, done / Math.max(1, total))) / n) * 0.85 });
-              },
-            });
-            if (signal.aborted) { try { new File(cleanFileUri(pdf)).delete(); } catch {} }
-          }
-          check();
-          const bytes = await new File(cleanFileUri(pdf)).bytes();
-          zip.file(names[i], bytes, { binary: true });
-          if (!doc.pdfUri) new File(cleanFileUri(pdf)).delete();
+        let available: number | null = null;
+        try { available = Paths.availableDiskSpace; } catch {}
+        if (lacksSpaceFor(size, available)) {
+          throw new ExportSpaceError();
         }
-        check();
-        setBusy({ title, label: 'Creating ZIP file', progress: 0.9 });
-        // PDFs are already compressed; STORE keeps it fast.
-        const data = await zip.generateAsync({ type: 'uint8array', compression: 'STORE' });
-        check();
+        const names = uniqueNames(documents.map(d => exportFileName(d.name, 'pdf')));
         const zipName = exportAll ? exportAllName() : `${n} documents`;
         uri = `${dir}${encodeURIComponent(exportFileName(zipName, 'zip'))}`;
-        const out = new File(uri);
-        out.create({ overwrite: true });
-        out.write(data);
+        // Streamed straight to the file (lib/zip-stream.ts): each PDF is made,
+        // copied in 1 MB chunks and deleted before the next one, so memory
+        // stays flat however large the library is.
+        await zipFiles(
+          uri,
+          documents.map((doc, i) => ({
+            name: names[i],
+            date: new Date(doc.updatedAt || doc.createdAt || Date.now()),
+            produce: async () => {
+              if (doc.pdfUri) return { uri: doc.pdfUri, temporary: false };
+              const label = `“${doc.name}” (${i + 1} of ${n})`;
+              const pdf = await generatePdf(doc.pages, {
+                pageSize,
+                quality,
+                searchable,
+                signal,
+                // Progress moves within each document too, not only between them.
+                onProgress: (done, total) => {
+                  if (signal.aborted) return;
+                  setBusy({ title, label, progress: ((i + Math.min(1, done / Math.max(1, total))) / n) * 0.95 });
+                },
+              });
+              if (signal.aborted) {
+                try { new File(cleanFileUri(pdf)).delete(); } catch {}
+                throw new CancelledError();
+              }
+              return { uri: pdf, temporary: true };
+            },
+          })),
+          {
+            signal,
+            onItem: i => {
+              if (!signal.aborted) {
+                setBusy({ title, label: `“${documents[i].name}” (${i + 1} of ${n})`, progress: (i / n) * 0.95 });
+              }
+            },
+          },
+        );
+        check();
         mime = { mimeType: 'application/zip', UTI: 'public.zip-archive' };
       }
       check();
       setBusy(null);
       // Waits while App Lock is on; presents nothing if this sheet was closed meanwhile.
-      await shareFile(uri, {
+      const shareDir = dir;
+      const outcome = await shareFile(uri, {
         ...mime,
         signal,
         dialogTitle: mode === 'combined' ? combinedName(documents) : exportAll ? 'All documents' : `${n} documents`,
-        onFinish: () => { if (sessionRef.current === session) onClose(); },
+        onFinish: () => {
+          void deleteQuietly(shareDir);
+          if (sessionRef.current === session) onClose();
+        },
       });
+      exportDir = null; // from here the share sheet owns it (onFinish deletes it)
+      if (outcome === 'skipped') void deleteQuietly(shareDir);
     } catch (err) {
-      if (err instanceof CancelledError || err instanceof PdfCancelledError || signal.aborted) return;
+      void deleteQuietly(exportDir);
+      if (
+        err instanceof CancelledError ||
+        err instanceof PdfCancelledError ||
+        err instanceof ZipCancelledError ||
+        signal.aborted
+      ) {
+        return;
+      }
       if (sessionRef.current !== session) return;
       console.error('Share documents failed', err);
       const body =
         err instanceof ShareError
           ? err.message
-          : err instanceof PdfError && err.kind === 'timeout'
-            ? 'This took too long. Try sharing fewer documents at a time.'
-            : 'Something went wrong while preparing the files. Try again.';
+          : err instanceof ExportSpaceError
+            ? 'There isn’t enough free space on this iPhone to create the file. Free up some space and try again.'
+            : err instanceof ZipLimitError
+              ? 'These documents are too large for one ZIP file. Select fewer in Files and share them in groups.'
+              : err instanceof PdfError && err.kind === 'timeout'
+                ? 'This took too long. Try sharing fewer documents at a time.'
+                : 'Something went wrong while preparing the files. Try again.';
       Alert.alert(exportAll ? 'Couldn’t export your documents' : 'Couldn’t share the documents', body);
     } finally {
       runningRef.current = false;

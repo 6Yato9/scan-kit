@@ -6,7 +6,8 @@
 // Alert, and iOS silently drops a presentation made while a modal is still
 // animating away.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Image, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
+import { PageThumb } from '@/components/page-thumb';
 import { Ionicons } from '@expo/vector-icons';
 import { BottomSheet, SheetGroup, SheetRow } from '@/components/bottom-sheet';
 import { formatDocDate, formatPageCount } from '@/lib/format';
@@ -85,7 +86,7 @@ export function DocActionsSheet({
             <Ionicons name="document-text-outline" size={20} color={colors.muted} />
           </View>
         ) : doc.pages[0] ? (
-          <Image source={{ uri: `${doc.pages[0]}?v=${doc.updatedAt}` }} style={[styles.thumb, { backgroundColor: colors.placeholder }]} />
+          <PageThumb uri={`${doc.pages[0]}?v=${doc.updatedAt}`} style={[styles.thumb, { backgroundColor: colors.placeholder }]} />
         ) : (
           <View style={[styles.thumb, { backgroundColor: colors.placeholder }]} />
         )}

@@ -259,7 +259,8 @@ export function SheetRow({
       <View style={[styles.rowBody, !last && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }]}>
         <View style={styles.rowText}>
           <Text style={[Type.body, { color: fg }]} numberOfLines={1}>{label}</Text>
-          {detail ? <Text style={[Type.footnote, { color: colors.muted, marginTop: 1 }]} numberOfLines={1}>{detail}</Text> : null}
+          {/* Two lines at most, so a long detail (or large text) wraps instead of losing its end. */}
+          {detail ? <Text style={[Type.footnote, styles.rowDetail, { color: colors.muted }]} numberOfLines={2}>{detail}</Text> : null}
         </View>
         {selected ? <Ionicons name="checkmark" size={20} color={colors.accent} /> : null}
         {chevron ? <Ionicons name="chevron-forward" size={18} color={colors.muted} /> : null}
@@ -288,4 +289,5 @@ const styles = StyleSheet.create({
   rowIcon: { width: 28, marginRight: Spacing.md },
   rowBody: { flex: 1, flexDirection: 'row', alignItems: 'center', alignSelf: 'stretch', paddingRight: Spacing.lg, gap: Spacing.sm },
   rowText: { flex: 1, justifyContent: 'center', paddingVertical: Spacing.md },
+  rowDetail: { marginTop: 1, lineHeight: 18 },
 });

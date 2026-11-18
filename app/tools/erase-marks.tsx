@@ -120,7 +120,6 @@ export default function EraseMarksScreen() {
       {/* Presented over the viewer: a baker underneath would never run (see FilterBaker). */}
       {fromViewer ? <FilterBaker /> : null}
       <ToolIntro
-        compact
         icon="color-wand-outline"
         title="Remove light marks"
         text="Turns pages into crisp black and white and lifts faint pencil, highlighter and shadow marks."

@@ -21,7 +21,15 @@ jest.mock('expo-file-system', () => {
     }
     delete() { delete mockFs[this.uri]; }
   }
-  return { File: MockFile, Paths: { cache: { uri: 'file:///cache/' } } };
+  class MockDirectory {
+    uri: string;
+    constructor(...parts: any[]) {
+      const joined = parts.map(p => (p && typeof p === 'object' ? p.uri : p)).join('');
+      this.uri = joined.endsWith('/') ? joined : `${joined}/`;
+    }
+    create() {}
+  }
+  return { File: MockFile, Directory: MockDirectory, Paths: { cache: { uri: 'file:///cache/' } } };
 });
 
 const mockReplace = jest.fn();
@@ -46,7 +54,9 @@ jest.mock('@/lib/system-ui', () => ({ abandonSystemUI: jest.fn() }));
 import ImportScreen from '../app/import';
 
 const INBOX = 'file:///app/Documents/Inbox/Cafe%20receipt.jpg';
-const staged = () => Object.keys(mockFs).filter(u => u.includes('/cache/incoming-'));
+// r7: staged under Caches/incoming/, which the startup sweep clears.
+const staged = () => Object.keys(mockFs).filter(u => u.includes('/cache/incoming/incoming-'));
+const strayInCacheRoot = () => Object.keys(mockFs).filter(u => /^file:\/\/\/cache\/[^/]+$/.test(u));
 const flush = () => act(async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); });
 
 beforeEach(() => {
@@ -98,6 +108,7 @@ test('a successful import removes the staged copy and opens the viewer', async (
   render(<ImportScreen />);
   await flush();
   expect(staged()).toEqual([]);
+  expect(strayInCacheRoot()).toEqual([]);
   expect(mockReplace).toHaveBeenCalledWith({ pathname: '/viewer', params: { id: 'doc-2' } });
   expect(screen.queryByText('Try again')).toBeNull();
 });

@@ -2,7 +2,7 @@
 // Grid card (Files) plus the list row (Home) and their loading skeletons, so
 // both tabs present a document the same way.
 import { useEffect, useRef } from 'react';
-import { Animated, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Document } from '@/types/document';
 import { useTheme } from '@/contexts/theme-context';
@@ -10,6 +10,7 @@ import { formatDocDate, formatPageCount } from '@/lib/format';
 import { highlightRuns } from '@/lib/highlight';
 import { compactMeta } from '@/lib/doc-list';
 import { WordClampText } from '@/components/word-clamp-text';
+import { PageThumb } from '@/components/page-thumb';
 import { Radius, Spacing, Type } from '@/lib/theme';
 
 type Props = {
@@ -40,7 +41,7 @@ function Thumb({ document, iconSize, style }: { document: Document; iconSize: nu
     );
   }
   if (document.pages[0]) {
-    return <Image source={{ uri: `${document.pages[0]}?v=${document.updatedAt}` }} style={[style, edge, { backgroundColor: colors.placeholder }]} resizeMode="cover" />;
+    return <PageThumb uri={`${document.pages[0]}?v=${document.updatedAt}`} style={[style, edge, { backgroundColor: colors.placeholder }]} />;
   }
   return <View style={[style, edge, { backgroundColor: colors.placeholder }]} />;
 }
@@ -140,7 +141,7 @@ export function DocumentCard({
   );
 }
 
-/** Compact row used by Home's Recent list and Files' list view. */
+/** Compact row used by Home's Recent list, search results and Files' list view. Names wrap to two lines. */
 export function DocumentRow({ document, onPress, onLongPress, isSelected, isMultiSelectMode, snippet, snippetQuery }: Props) {
   const { colors } = useTheme();
   return (
@@ -155,7 +156,7 @@ export function DocumentRow({ document, onPress, onLongPress, isSelected, isMult
     >
       <Thumb document={document} iconSize={24} style={styles.rowThumb} />
       <View style={styles.rowInfo}>
-        <Text style={[Type.subhead, { color: colors.text, fontWeight: '600' }]} numberOfLines={1}>{document.name}</Text>
+        <WordClampText style={[Type.subhead, styles.rowName, { color: colors.text }]} numberOfLines={2} maxFontSizeMultiplier={1.4}>{document.name}</WordClampText>
         <Text style={[Type.footnote, styles.rowMeta, { color: colors.muted }]} numberOfLines={1}>{documentMeta(document)}</Text>
         {snippet ? <Snippet text={snippet} query={snippetQuery} style={Type.footnote} /> : null}
       </View>
@@ -272,7 +273,8 @@ const styles = StyleSheet.create({
     gap: Spacing.md,
   },
   rowThumb: { width: 46, height: 60, borderRadius: 6, overflow: 'hidden', borderWidth: StyleSheet.hairlineWidth },
-  rowInfo: { flex: 1 },
+  rowInfo: { flex: 1, minWidth: 0 },
+  rowName: { fontWeight: '600', lineHeight: 20 },
   rowMeta: { marginTop: 2 },
   rowCheckbox: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
   bar: { height: 10, borderRadius: 5 },

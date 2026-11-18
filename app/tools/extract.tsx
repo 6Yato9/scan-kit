@@ -3,10 +3,11 @@
 // extractPages). Each page travels with its .orig shadow so its filter
 // metadata stays truthful.
 import { useState } from 'react';
-import { Alert, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/contexts/theme-context';
+import { PageThumb } from '@/components/page-thumb';
 import { PrimaryButton } from '@/components/primary-button';
 import { NoDocumentsScreen, SectionRow, ToolScreen, pageCountLabel, useToolDocuments } from '@/components/tool-ui';
 import { ToolDocPicker, useToolDoc } from '@/components/tool-doc';
@@ -118,7 +119,7 @@ export default function ExtractScreen() {
                     { borderColor: on ? colors.accent : colors.border, backgroundColor: colors.placeholder },
                   ]}
                 >
-                  <Image source={{ uri: `${uri}?v=${doc.updatedAt}` }} style={styles.pageImg} resizeMode="cover" />
+                  <PageThumb uri={`${uri}?v=${doc.updatedAt}`} style={styles.pageImg} />
                   <View style={[styles.pageNum, { backgroundColor: on ? colors.accentFill : colors.scrim }]}>
                     <Text style={[styles.pageNumText, { color: colors.onAccent }]}>{i + 1}</Text>
                   </View>

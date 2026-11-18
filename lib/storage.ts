@@ -373,6 +373,39 @@ export function documentIdsForCleanup(): Promise<string[] | null> {
   });
 }
 
+/**
+ * What each document's record points at (pages and PDF), trashed documents
+ * included, for the startup sweep of files a record no longer references
+ * (lib/files.ts sweepConvertLeftovers). Records that don't parse are left
+ * out, so their folders are never touched. Null when the records can't be read.
+ */
+export function documentFileRefsForCleanup(): Promise<
+  { id: string; pages: string[]; pdfUri?: string; updatedAt: number }[] | null
+> {
+  return withDocsLock(async () => {
+    await ensureMigrated();
+    let keys: readonly string[];
+    try {
+      keys = (await AsyncStorage.getAllKeys()).filter(k => k.startsWith(DOC_PREFIX));
+    } catch {
+      return null;
+    }
+    const pairs = await AsyncStorage.multiGet(keys);
+    const out: { id: string; pages: string[]; pdfUri?: string; updatedAt: number }[] = [];
+    for (const [key, value] of pairs) {
+      if (value == null) continue;
+      try {
+        const doc = healDocPaths(JSON.parse(value) as Document);
+        if (!doc || typeof doc.id !== 'string' || !Array.isArray(doc.pages)) continue;
+        out.push({ id: doc.id, pages: doc.pages, pdfUri: doc.pdfUri, updatedAt: doc.updatedAt ?? 0 });
+      } catch {
+        console.warn(`storage: corrupt doc ${key.slice(DOC_PREFIX.length)}, kept out of the sweep`);
+      }
+    }
+    return out;
+  });
+}
+
 // ── Recently deleted (trash) ─────────────────────────────────────────────────
 // Deleting a document moves it to the trash: the record and files stay, the
 // record gets `trashedAt`, and getDocuments stops returning it. It can be

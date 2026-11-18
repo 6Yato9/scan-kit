@@ -114,6 +114,7 @@ import {
   isDisposableTemp,
   deleteDisposableTemps,
   sweepTempLeftovers,
+  sweepConvertLeftovers,
   restorePageWithShadow,
   pageLayoutGeneration,
 } from '../lib/files';
@@ -758,5 +759,107 @@ describe('OCR text follows deletions', () => {
   test('deleting a page prunes the cached text of pages the document no longer has', () => {
     deleteSinglePage('doc9', 0, 2);
     expect(mockPruneOcr).toHaveBeenCalledWith('doc9');
+  });
+});
+
+describe('sweepConvertLeftovers (r7 #5: crash orphans from Convert to pages)', () => {
+  const now = 10_000_000_000;
+  const old = now - 60 * 60 * 1000;
+  beforeEach(() => jest.clearAllMocks());
+  const pdfUri = (id: string) => `${DOCS}/${id}/document.pdf`;
+  const pageUri = (id: string, i: number) => `${DOCS}/${id}/page-${i}.jpg?v=3`;
+
+  test('removes document.pdf left in a document that is now pages', () => {
+    seedFile('conv', 'page-0.jpg', 'P0');
+    seedFile('conv', 'page-0.orig.jpg', 'O0');
+    seedFile('conv', 'document.pdf', 'PDF');
+    listFromContents('conv');
+    expect(sweepConvertLeftovers([{ id: 'conv', pages: [pageUri('conv', 0)], updatedAt: old }], now)).toBe(1);
+    expect(read('conv', 'document.pdf')).toBeUndefined();
+    expect(read('conv', 'page-0.jpg')).toBe('P0');
+    expect(read('conv', 'page-0.orig.jpg')).toBe('O0');
+  });
+
+  test('removes page files (and shadows) left in a document that is still a PDF', () => {
+    seedFile('half', 'document.pdf', 'PDF');
+    seedFile('half', 'page-0.jpg', 'P0');
+    seedFile('half', 'page-0.orig.jpg', 'O0');
+    seedFile('half', 'page-1.jpg', 'P1');
+    seedFile('half', 'ocr-lines.json', '{}');
+    listFromContents('half');
+    expect(sweepConvertLeftovers([{ id: 'half', pages: [], pdfUri: pdfUri('half'), updatedAt: old }], now)).toBe(3);
+    expect(read('half', 'document.pdf')).toBe('PDF');
+    expect(read('half', 'page-0.jpg')).toBeUndefined();
+    expect(read('half', 'page-1.jpg')).toBeUndefined();
+    expect(read('half', 'ocr-lines.json')).toBe('{}'); // not a pattern this sweep knows
+    expect(mockPruneOcr).toHaveBeenCalledWith('half');
+  });
+
+  test('never deletes a file the record references', () => {
+    // A record that (oddly) has both: everything it names is kept.
+    seedFile('both', 'document.pdf', 'PDF');
+    seedFile('both', 'page-0.jpg', 'P0');
+    listFromContents('both');
+    expect(
+      sweepConvertLeftovers([{ id: 'both', pages: [pageUri('both', 0)], pdfUri: pdfUri('both'), updatedAt: old }], now),
+    ).toBe(0);
+    expect(read('both', 'document.pdf')).toBe('PDF');
+    expect(read('both', 'page-0.jpg')).toBe('P0');
+  });
+
+  test('leaves recently modified files alone (an Undo copying the PDF back right now)', () => {
+    seedFile('fresh', 'page-0.jpg', 'P0');
+    seedFile('fresh', 'document.pdf', 'PDF', now - 1000);
+    listFromContents('fresh');
+    expect(sweepConvertLeftovers([{ id: 'fresh', pages: [pageUri('fresh', 0)], updatedAt: old }], now)).toBe(0);
+    expect(read('fresh', 'document.pdf')).toBe('PDF');
+  });
+
+  test('skips a document whose record changed recently (an edit may be in flight)', () => {
+    seedFile('busy', 'page-0.jpg', 'P0');
+    seedFile('busy', 'document.pdf', 'PDF');
+    listFromContents('busy');
+    expect(sweepConvertLeftovers([{ id: 'busy', pages: [pageUri('busy', 0)], updatedAt: now - 5_000 }], now)).toBe(0);
+    expect(read('busy', 'document.pdf')).toBe('PDF');
+  });
+
+  test('a PDF record pointing at another file name keeps the folder’s document.pdf', () => {
+    seedFile('legacy', 'document.pdf', 'PDF');
+    seedFile('legacy', 'scan.pdf', 'OTHER');
+    listFromContents('legacy');
+    expect(
+      sweepConvertLeftovers([{ id: 'legacy', pages: [], pdfUri: `${DOCS}/legacy/scan.pdf`, updatedAt: old }], now),
+    ).toBe(0);
+    expect(read('legacy', 'document.pdf')).toBe('PDF');
+  });
+
+  test('ordinary page documents are untouched, including page files past the end', () => {
+    seedFile('img', 'page-0.jpg', 'P0');
+    seedFile('img', 'page-5.jpg', 'P5');
+    listFromContents('img');
+    expect(sweepConvertLeftovers([{ id: 'img', pages: [pageUri('img', 0)], updatedAt: old }], now)).toBe(0);
+    expect(read('img', 'page-5.jpg')).toBe('P5');
+  });
+});
+
+describe('Open-in staging is swept (r7 #3)', () => {
+  beforeEach(() => jest.clearAllMocks());
+  test('settled files in Caches/incoming, legacy root staging files and stale Inbox copies are removed', () => {
+    const now = 10_000_000_000;
+    const staged: any = new MockFile('file:///Library/Caches//incoming/incoming-1-contract.pdf');
+    const live: any = new MockFile('file:///Library/Caches//incoming/attempt-2-contract.pdf');
+    mockMtimes[live.uri] = now - 1000;
+    new MockDirectory({ uri: 'file:///Library/Caches/' }, 'incoming').list = jest.fn(() => [staged, live]);
+    const legacy: any = new MockFile('file:///Library/Caches/incoming-1700000000000-x.pdf');
+    const other: any = new MockFile('file:///Library/Caches/com.apple.something');
+    new MockDirectory({ uri: 'file:///Library/Caches/' }).list = jest.fn(() => [legacy, other]);
+    const inbox: any = new MockFile('file:///documents/Inbox/contract.pdf');
+    new MockDirectory({ uri: 'file:///documents' }, 'Inbox').list = jest.fn(() => [inbox]);
+    expect(sweepTempLeftovers(now)).toBe(3);
+    expect(staged.exists).toBe(false);
+    expect(live.exists).toBe(true);
+    expect(legacy.exists).toBe(false);
+    expect(other.exists).toBe(true);
+    expect(inbox.exists).toBe(false);
   });
 });

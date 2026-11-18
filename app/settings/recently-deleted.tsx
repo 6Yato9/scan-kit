@@ -3,7 +3,7 @@
 // so they can be restored. Tap a row for Restore / Delete forever; "Delete all"
 // empties the list. Deleting from here is the only permanent delete.
 import { useCallback, useRef, useState } from 'react';
-import { Alert, FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Stack, useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -17,6 +17,7 @@ import {
 } from '@/lib/storage';
 import { Document } from '@/types/document';
 import { useTheme } from '@/contexts/theme-context';
+import { PageThumb } from '@/components/page-thumb';
 import { useScan } from '@/contexts/scan-context';
 import { ScreenHeader, HeaderTextButton } from '@/components/screen-header';
 import { BottomSheet, SheetGroup, SheetRow } from '@/components/bottom-sheet';
@@ -211,11 +212,7 @@ function Thumb({ doc }: { doc: Document }) {
     );
   }
   return (
-    <Image
-      source={{ uri: `${doc.pages[0]}?v=${doc.updatedAt}` }}
-      style={[styles.thumb, { backgroundColor: colors.placeholder }]}
-      resizeMode="cover"
-    />
+    <PageThumb uri={`${doc.pages[0]}?v=${doc.updatedAt}`} style={[styles.thumb, { backgroundColor: colors.placeholder }]} />
   );
 }
 

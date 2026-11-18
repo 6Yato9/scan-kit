@@ -15,7 +15,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { File, Paths } from 'expo-file-system';
+import { Directory, File, Paths } from 'expo-file-system';
 import { useTheme } from '@/contexts/theme-context';
 import { useImportDocuments } from '@/components/use-import';
 import { PrimaryButton } from '@/components/primary-button';
@@ -26,11 +26,22 @@ import { Spacing, Type } from '@/lib/theme';
 
 type Status = { state: 'working' } | { state: 'failed'; title: string; body: string; retry?: boolean };
 
+/**
+ * Where incoming files are staged: Caches/incoming/. The startup sweep clears
+ * that folder (lib/files.ts TEMP_DIRS), so a copy left by an import the app
+ * was killed in the middle of doesn't stay on disk, unprotected, for good.
+ */
+function stagingDir(): Directory {
+  const dir = new Directory(Paths.cache, 'incoming');
+  dir.create({ intermediates: true, idempotent: true });
+  return dir;
+}
+
 /** Copy into our cache first: the original may live in a location iOS cleans up. */
 function stageCopy(uri: string): string {
   const src = new File(uri);
   const name = displayNameOf(uri).replace(/[^\w .()-]/g, '_') || 'import';
-  const dest = new File(Paths.cache, `incoming-${Date.now()}-${name}`);
+  const dest = new File(stagingDir(), `incoming-${Date.now()}-${name}`);
   src.copy(dest);
   return dest.uri;
 }
@@ -39,7 +50,7 @@ function stageCopy(uri: string): string {
 function copyOf(uri: string): string | null {
   try {
     const src = new File(uri);
-    const dest = new File(Paths.cache, `attempt-${Date.now()}-${src.name}`);
+    const dest = new File(stagingDir(), `attempt-${Date.now()}-${src.name}`);
     src.copy(dest);
     return dest.uri;
   } catch (err) {

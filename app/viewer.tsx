@@ -89,9 +89,11 @@ import { MoveFolderSheet } from '@/components/move-folder-sheet';
 import { CropModal, CropRect } from '@/components/crop-modal';
 import { FilterBaker } from '@/components/filter-baker';
 import { BakeIndicator } from '@/components/bake-indicator';
+import { PdfConvertBanner, useConvertBannerDismissed } from '@/components/pdf-convert-banner';
+import { PdfDocumentView } from '@/modules/vision-ocr/src/PdfDocumentView';
 import { BottomSheet, SheetHeader } from '@/components/bottom-sheet';
 import { PrimaryButton } from '@/components/primary-button';
-import { HeaderIconButton, HeaderTextButton, ScreenHeader } from '@/components/screen-header';
+import { HeaderIconButton, ScreenHeader } from '@/components/screen-header';
 import { LockScreen, useAppLocked } from '@/components/lock-gate';
 
 const DEFAULT_ADJ: PageAdjustment = { brightness: 0, contrast: 0, saturation: 0 };
@@ -117,7 +119,7 @@ export default function ViewerScreen() {
   // sliding over the dark page reads as a different app.
   return (
     <DarkThemeScope>
-      <ToastProvider onChrome offset={250}>
+      <ToastProvider onChrome offset={266}>
         <ViewerContent rootToast={rootToast} />
       </ToastProvider>
       {locked && (
@@ -158,6 +160,11 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
   const [converting, setConverting] = useState<ConvertProgress | null>(null);
   // This PDF can't be converted (locked or damaged): stop offering the banner.
   const [convertRefused, setConvertRefused] = useState(false);
+  // Imported PDFs in the native view: the page on screen (zero-based) and the
+  // page count, or why the PDF can't be shown.
+  const [pdfPage, setPdfPage] = useState<{ page: number; count: number } | null>(null);
+  const [pdfError, setPdfError] = useState<'locked' | 'unreadable' | null>(null);
+  const [bannerDismissed, dismissBanner] = useConvertBannerDismissed(id);
   const ocrIndexingRef = useRef(false);
   const flatListRef = useRef<FlatList>(null);
   const insets = useSafeAreaInsets();
@@ -856,7 +863,17 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
   // The original PDF kept for Undo; dropped when a newer one replaces it or
   // the viewer closes (the startup sweep removes any left behind).
   const convertUndoRef = useRef<ConvertUndo | null>(null);
-  useEffect(() => () => discardConvertUndo(convertUndoRef.current), []);
+  // False once the viewer has closed: a conversion that finishes after that
+  // discards its Undo copy at once instead of leaving it in Caches.
+  const viewerOpenRef = useRef(true);
+  useEffect(() => {
+    viewerOpenRef.current = true;
+    return () => {
+      viewerOpenRef.current = false;
+      discardConvertUndo(convertUndoRef.current);
+      convertUndoRef.current = null;
+    };
+  }, []);
 
   const handleUndoConvert = useCallback(async (undo: ConvertUndo) => {
     if (convertingRef.current) return;
@@ -883,7 +900,14 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
     convertingRef.current = true;
     setConverting({ stage: 'rendering' });
     try {
-      const { doc: next, pageCount: n, undo } = await convertPdfToPages(doc.id, { onProgress: setConverting });
+      // 'original': an imported PDF is usually computer-made and already clean;
+      // a scan filter would only soften its text and grey its colours.
+      const { doc: next, pageCount: n, undo } = await convertPdfToPages(doc.id, { filter: 'original', onProgress: setConverting });
+      if (!viewerOpenRef.current) {
+        // Closed during the conversion: nobody can tap Undo any more.
+        discardConvertUndo(undo);
+        return;
+      }
       discardConvertUndo(convertUndoRef.current);
       convertUndoRef.current = undo;
       setCurrentPage(0);
@@ -1190,42 +1214,61 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
             </>
           }
         />
-        {convertAvailable && !convertRefused && (
-          <View
-            style={[styles.convertBanner, { backgroundColor: colors.chromeRaised }]}
-            accessibilityLiveRegion="polite"
-          >
-            {converting ? (
-              <ActivityIndicator color={colors.chromeText} style={styles.convertIcon} />
-            ) : (
-              <Ionicons name="images-outline" size={22} color={colors.chromeAccent} style={styles.convertIcon} />
-            )}
-            <View style={styles.convertText}>
-              <Text style={[Type.subhead, styles.convertTitle, { color: colors.chromeText }]} numberOfLines={1}>
-                {converting ? 'Converting to pages…' : 'Convert to pages'}
-              </Text>
-              <Text style={[Type.footnote, { color: colors.chromeMuted }]} numberOfLines={2}>
-                {converting
-                  ? converting.stage === 'saving'
-                    ? `Saving page ${converting.done} of ${converting.total}`
-                    : 'Reading the PDF'
-                  : 'Edit, sign, apply filters and mark up each page.'}
-              </Text>
-            </View>
-            <HeaderTextButton
-              title="Convert"
-              emphasis
-              color={colors.chromeAccent}
-              disabled={!!converting}
-              onPress={handleConvertPdf}
-            />
+        {convertAvailable && !convertRefused && !pdfError && (converting || bannerDismissed === false) ? (
+          <PdfConvertBanner
+            converting={converting}
+            onConvert={handleConvertPdf}
+            onDismiss={() => {
+              dismissBanner();
+              toast.show('Convert to pages is still in More actions');
+            }}
+          />
+        ) : null}
+        {pdfError ? (
+          <View style={styles.centered} accessibilityLiveRegion="polite">
+            <Ionicons name={pdfError === 'locked' ? 'lock-closed-outline' : 'document-text-outline'} size={44} color={colors.chromeMuted} />
+            <Text style={[Type.headline, styles.centeredText, { color: colors.chromeText }]}>
+              {pdfError === 'locked' ? 'This PDF is password protected' : 'Couldn’t open this PDF'}
+            </Text>
+            <Text style={[Type.callout, styles.centeredText, { color: colors.chromeMuted }]}>
+              {pdfError === 'locked'
+                ? 'Scan Kit can’t show a locked PDF. You can still share it, or remove the password in the app it came from and import it again.'
+                : 'The file may be damaged. You can still share it, or try importing it again.'}
+            </Text>
           </View>
+        ) : PdfDocumentView ? (
+          <>
+            <PdfDocumentView
+              source={document.pdfUri.split('?')[0]}
+              backgroundHex={colors.chrome}
+              style={styles.pdfView}
+              accessibilityLabel={pdfPage ? `PDF, page ${pdfPage.page + 1} of ${pdfPage.count}` : 'PDF'}
+              onPageChange={e => setPdfPage({ page: e.nativeEvent.page, count: e.nativeEvent.count })}
+              onLoadError={e => {
+                const kind = e.nativeEvent.message === 'locked' ? 'locked' : 'unreadable';
+                setPdfError(kind);
+                setConvertRefused(true);
+              }}
+            />
+            {/* The same counter as image pages, in its own row under the pages. */}
+            <View style={[styles.counterRow, { paddingBottom: insets.bottom + Spacing.xs }]} pointerEvents="none">
+              {pdfPage && pdfPage.count > 1 ? (
+                <View style={[styles.counter, { backgroundColor: colors.chromeRaised }]}>
+                  <Text style={[Type.footnote, styles.counterText, { color: colors.chromeText }]}>
+                    {pdfPage.page + 1} / {pdfPage.count}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+          </>
+        ) : (
+          // Builds without the native PDF view.
+          <WebView
+            source={{ uri: document.pdfUri }}
+            style={[styles.webView, { backgroundColor: colors.chrome }]}
+            originWhitelist={['file://*', 'blob:*']}
+          />
         )}
-        <WebView
-          source={{ uri: document.pdfUri }}
-          style={[styles.webView, { backgroundColor: colors.chrome }]}
-          originWhitelist={['file://*', 'blob:*']}
-        />
         {renameSheet}
         {moreSheet}
         {moveSheet}
@@ -1262,7 +1305,6 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
           </>
         }
       />
-      <BakeIndicator placement="top" offset={52} />
 
       <View style={styles.pager}>
         <FlatList
@@ -1300,16 +1342,19 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
           </View>
         )}
       </View>
-      {/* Its own row under the page, never on top of it. */}
-      {pageCount > 1 && (
-        <View style={styles.counterRow} pointerEvents="none">
+      {/* Its own row under the page, never on top of it: the page counter and,
+          while pages are being enhanced, the "Enhancing…" pill beside it. The
+          row keeps its height when both are hidden, so the page never jumps. */}
+      <View style={[styles.counterRow, styles.counterRowFixed]} pointerEvents="none">
+        <BakeIndicator placement="inline" />
+        {pageCount > 1 ? (
           <View style={[styles.counter, { backgroundColor: colors.chromeRaised }]}>
             <Text style={[Type.footnote, styles.counterText, { color: colors.chromeText }]}>
               {page + 1} / {pageCount}
             </Text>
           </View>
-        </View>
-      )}
+        ) : null}
+      </View>
 
       {editing ? (
         <PageEditPanel
@@ -1455,7 +1500,9 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.sm,
   },
   pageImage: { flex: 1 },
-  counterRow: { alignItems: 'center', paddingBottom: Spacing.sm },
+  counterRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: Spacing.sm, paddingBottom: Spacing.sm },
+  // Counter pill height (footnote line + padding) plus the row's padding.
+  counterRowFixed: { minHeight: 22 + Spacing.sm },
   counter: {
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.xxs + 1,
@@ -1474,20 +1521,7 @@ const styles = StyleSheet.create({
   },
   counterText: { fontWeight: '600', fontVariant: ['tabular-nums'] },
   webView: { flex: 1 },
-  convertBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginHorizontal: Spacing.gutter,
-    marginBottom: Spacing.sm,
-    paddingLeft: Spacing.md,
-    paddingRight: Spacing.xs,
-    paddingVertical: Spacing.sm,
-    borderRadius: Radius.md,
-    gap: Spacing.md,
-  },
-  convertIcon: { width: 24 },
-  convertText: { flex: 1, minWidth: 0, gap: 1 },
-  convertTitle: { fontWeight: '600' },
+  pdfView: { flex: 1 },
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: Spacing.sm, padding: Spacing.xxl },
   centeredText: { textAlign: 'center' },
   missingBtn: { alignSelf: 'stretch', marginTop: Spacing.lg },

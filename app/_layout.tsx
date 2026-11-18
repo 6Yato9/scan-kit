@@ -1,6 +1,6 @@
 // app/_layout.tsx
-import { useEffect, useState } from 'react';
-import { AppState, StatusBar as RNStatusBar } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { AppState, StatusBar as RNStatusBar, useColorScheme } from 'react-native';
 import { Stack, usePathname, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -12,10 +12,11 @@ import { FilterBaker } from '@/components/filter-baker';
 import { BakeIndicator } from '@/components/bake-indicator';
 import { LockCoverScreen, LockGate, selfLockingRoute } from '@/components/lock-gate';
 import { bakePage } from '@/lib/bake';
-import { statusBarStyleFor } from '@/lib/status-bar-style';
-import { garbageCollectOrphans } from '@/lib/files';
+import { reassertCalls, statusBarStyleFor } from '@/lib/status-bar-style';
+import { subscribeSystemUI } from '@/lib/system-ui';
+import { garbageCollectOrphans, sweepConvertLeftovers } from '@/lib/files';
 import { clearLegacyOcrCache } from '@/lib/ocr-cache';
-import { documentIdsForCleanup, getOnboarded, getOnboardedSync, pendingBakeMigrations } from '@/lib/storage';
+import { documentFileRefsForCleanup, documentIdsForCleanup, getOnboarded, getOnboardedSync, pendingBakeMigrations } from '@/lib/storage';
 
 // The tabs are the root of the stack even when the app is cold-started on
 // another route. "Open in Scan Kit" launches straight into /import, which then
@@ -76,45 +77,65 @@ const TAB_BAR_CLEARANCE = 104;
  * Two things go stale and leave dark text on a dark screen:
  * - React Native's <StatusBar> only talks to iOS when its merged props change
  *   (it caches the last value it sent), so a change made behind its back — a
- *   system sheet, the document camera — is never corrected.
+ *   system picker, the document camera — is never corrected.
  * - UIKit itself: a style set while the app is mid appearance change (light to
  *   dark at runtime) is recorded but not drawn, and setting the same style
  *   again is then a no-op.
  * So besides the declarative component, the style is re-asserted imperatively
- * — briefly flipping to the opposite style first so UIKit can't treat it as
- * unchanged — after every route, theme or foreground change, once right away
- * and again after the transition has settled. Both calls land in the same
- * frame, so nothing flickers.
+ * after every route, theme or foreground change, once right away and again
+ * after the transition has settled. HOW it is re-asserted matters: forcing a
+ * redraw means passing through another style, and that style is drawn for a
+ * moment (lib/status-bar-style.ts reassertCalls). Routine re-asserts therefore
+ * only ever pass through a style that looks the same; the visible "opposite"
+ * step is kept for the moments a stale draw is actually likely — a theme or
+ * appearance change, coming back from the background or from a system picker.
  */
 function StatusBarSync() {
   const pathname = usePathname();
   const { isDark } = useTheme();
+  const systemDark = useColorScheme() === 'dark';
   const style = statusBarStyleFor(pathname, isDark);
+  const lastAppearance = useRef<string | null>(null);
 
   useEffect(() => {
-    const target = style === 'light' ? 'light-content' : 'dark-content';
-    const opposite = style === 'light' ? 'dark-content' : 'light-content';
-    const force = () => {
-      RNStatusBar.setBarStyle(opposite, false);
-      RNStatusBar.setBarStyle(target, false);
+    const apply = (redraw: boolean) => {
+      reassertCalls(style, systemDark, redraw).forEach(s => RNStatusBar.setBarStyle(s, false));
     };
-    RNStatusBar.setBarStyle(target, true);
-    const timers = [150, 400, 800, 1400].map(ms => setTimeout(force, ms));
+    // Only a change of theme / system appearance can leave UIKit's draw stale;
+    // a route change just needs the target (sent through the invisible path
+    // where there is one).
+    const appearance = `${isDark}|${systemDark}`;
+    const appearanceChanged = lastAppearance.current !== null && lastAppearance.current !== appearance;
+    lastAppearance.current = appearance;
+
+    RNStatusBar.setBarStyle(style === 'light' ? 'light-content' : 'dark-content', true);
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const later = (ms: number, redraw: boolean) => { timers.push(setTimeout(() => apply(redraw), ms)); };
+    [150, 400, 800, 1400].forEach(ms => later(ms, appearanceChanged && ms <= 400));
     // Development only: Metro's "Refreshing…" banner is a native window over
     // the status bar, and when it hides iOS can leave the bar in the wrong
-    // style with no event to react to. Re-assert it while a dev build runs.
-    const devTimer = __DEV__ ? setInterval(force, 2000) : undefined;
+    // style with no event to react to. Re-assert it (never visibly) while a
+    // dev build runs.
+    const devTimer = __DEV__ ? setInterval(() => apply(false), 2000) : undefined;
     const sub = AppState.addEventListener('change', state => {
       if (state !== 'active') return;
-      force();
-      timers.push(setTimeout(force, 500));
+      apply(true);
+      later(500, false);
+    });
+    // A system picker / the document camera can change the drawn style behind
+    // UIKit's back; redraw once it has finished closing.
+    const unsubscribeUI = subscribeSystemUI(isOpen => {
+      if (isOpen) return;
+      later(450, true);
+      later(900, false);
     });
     return () => {
       timers.forEach(clearTimeout);
       if (devTimer) clearInterval(devTimer);
       sub.remove();
+      unsubscribeUI();
     };
-  }, [style, pathname]);
+  }, [style, pathname, isDark, systemDark]);
 
   return <StatusBar style={style} />;
 }
@@ -207,6 +228,10 @@ export default function RootLayout() {
       clearLegacyOcrCache();
       documentIdsForCleanup()
         .then(ids => (ids ? garbageCollectOrphans(ids) : 0))
+        // Then files a record no longer references, left by an interrupted
+        // "Convert to pages" or its Undo (lib/files.ts sweepConvertLeftovers).
+        .then(() => documentFileRefsForCleanup())
+        .then(records => (records ? sweepConvertLeftovers(records) : 0))
         .catch(() => {});
     }, 2000);
 

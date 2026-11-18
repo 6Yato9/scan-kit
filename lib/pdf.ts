@@ -19,9 +19,11 @@
 //
 // Memory: pages are downscaled / re-encoded one at a time before being inlined
 // as base64 (expo-print loads HTML with the app bundle as base URL, so file://
-// images in Documents can't be referenced). Unbounded full-resolution pages
-// can get the WebKit content process killed, after which expo-print never
-// settles — so rendering is also raced against a timeout.
+// images in Documents can't be referenced). A print job holds at most
+// MAX_RUN_PAGES pages, prepared just before it renders, so a long document
+// never has all its images in memory. Unbounded full-resolution pages can get
+// the WebKit content process killed, after which expo-print never settles —
+// so rendering is also raced against a timeout.
 import * as Print from 'expo-print';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImageManipulator from 'expo-image-manipulator';
@@ -255,9 +257,14 @@ export function estimatePdfBytes(pages: PageStat[], quality: PdfQuality, searcha
 type PreparedImage = { b64: string; mime: string; width: number; height: number };
 
 /** Read one page, downscaling / re-encoding it first when the preset asks for it. */
-async function prepareImage(uri: string, quality: PdfQuality, maxEdge: number): Promise<PreparedImage> {
+async function prepareImage(
+  uri: string,
+  quality: PdfQuality,
+  maxEdge: number,
+  knownSize?: { width: number; height: number } | null,
+): Promise<PreparedImage> {
   const preset = QUALITY[quality];
-  const natural = await getImageSize(uri);
+  const natural = knownSize !== undefined ? knownSize : await getImageSize(uri);
   const tooBig = !natural || Math.max(natural.width, natural.height) > maxEdge;
 
   if (preset.reencode || tooBig) {
@@ -408,6 +415,24 @@ export function deleteLateRender(uri: string): Promise<void> {
 /** A run of consecutive pages [start, end) printed on one paper size. */
 export type PaperRun = { start: number; end: number; paper: Paper };
 
+/**
+ * Most pages printed in one job. A run's pages are inlined as base64 in one
+ * HTML string and its images are prepared just before it renders, so this
+ * bounds memory however long the document is (a 200-page document is 8 jobs
+ * of 25, not one 200-image string). Needs the native merge; without it the
+ * document stays one job, as before.
+ */
+export const MAX_RUN_PAGES = 25;
+
+/** Cuts runs longer than `max` pages into consecutive runs on the same paper. */
+export function splitLongRuns(runs: PaperRun[], max: number = MAX_RUN_PAGES): PaperRun[] {
+  const out: PaperRun[] = [];
+  for (const r of runs) {
+    for (let s = r.start; s < r.end; s += max) out.push({ start: s, end: Math.min(r.end, s + max), paper: r.paper });
+  }
+  return out;
+}
+
 /** Pages whose papers differ by at most this much (each edge) share a run. */
 const RUN_TOLERANCE = 0.03;
 
@@ -500,7 +525,10 @@ function buildSheet(
   );
 }
 
-/** Print pages [start, end) on one paper; resolves to the rendered file's URI. */
+/**
+ * Print pages [start, end) on one paper; resolves to the rendered file's URI.
+ * `pages` holds just this run's pages (pages[0] is page `run.start`).
+ */
 async function renderRun(
   pages: PreparedPage[],
   run: PaperRun,
@@ -510,7 +538,7 @@ async function renderRun(
   throwIfAborted(signal);
   const { paper } = run;
   const sheets: string[] = [];
-  for (let i = run.start; i < run.end; i++) sheets.push(buildSheet(pages[i], i, paper, opts.overlayHtml));
+  for (let i = run.start; i < run.end; i++) sheets.push(buildSheet(pages[i - run.start], i, paper, opts.overlayHtml));
   const html = buildPdfHtml(sheets, paper);
   sheets.length = 0; // let the per-page strings go before the native call
 
@@ -535,19 +563,28 @@ async function renderRun(
   }
 }
 
-/** Render every run, then stitch them into one PDF. Intermediate files never outlive the call. */
-async function renderAndMerge(pages: PreparedPage[], runs: PaperRun[], opts: GeneratePdfOptions): Promise<string> {
+/**
+ * Render every run, then stitch them into one PDF. Each run's images are
+ * prepared just before it renders and dropped after, so only one run's pages
+ * are ever in memory. Intermediate files never outlive the call.
+ */
+async function renderAndMerge(
+  runs: PaperRun[],
+  prepareRun: (run: PaperRun) => Promise<PreparedPage[]>,
+  pageCount: number,
+  opts: GeneratePdfOptions,
+): Promise<string> {
   const { signal } = opts;
   const parts: string[] = [];
   try {
-    for (const run of runs) parts.push(await renderRun(pages, run, opts));
+    for (const run of runs) parts.push(await renderRun(await prepareRun(run), run, opts));
     throwIfAborted(signal);
     const name = `merged-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.pdf`;
     const out = cleanUri(parts[0]).replace(/[^/]*$/, name);
     const merge = VisionOcr!.mergePdfs!(parts.map(cleanUri), out);
     merge.catch(() => {});
     try {
-      return await guard(merge, signal, opts.timeoutMs ?? 30_000 + 500 * pages.length);
+      return await guard(merge, signal, opts.timeoutMs ?? 30_000 + 500 * pageCount);
     } catch (err) {
       merge.then(deleteLateRender, () => {});
       if (err instanceof PdfCancelledError || err instanceof PdfError) throw err;
@@ -577,17 +614,27 @@ export async function generatePdf(
   const { signal, onProgress } = opts;
   if (pages.length === 0) throw new PdfError('There are no pages to export.', 'empty');
 
-  const maxEdge = maxEdgeFor(quality, pages.length);
-  const prepared: PreparedPage[] = [];
+  const n = pages.length;
+  const uris = pages.map(cleanUri);
+  const maxEdge = maxEdgeFor(quality, n);
 
-  for (let i = 0; i < pages.length; i++) {
+  // Plan the print jobs from each page's pixel size alone (no pixels are read
+  // yet), so a long document never has every page's image in memory at once:
+  // each run is prepared right before it renders (see MAX_RUN_PAGES).
+  const naturals: ({ width: number; height: number } | null)[] = [];
+  for (let i = 0; i < n; i++) {
     throwIfAborted(signal);
-    onProgress?.(i, pages.length, 'preparing');
-    const uri = cleanUri(pages[i]);
+    naturals.push(await getImageSize(uris[i]));
+  }
+
+  const preparePage = async (i: number, report: boolean): Promise<PreparedPage> => {
+    throwIfAborted(signal);
+    if (report) onProgress?.(i, n, 'preparing');
+    const uri = uris[i];
 
     let img: PreparedImage;
     try {
-      img = await prepareImage(uri, quality, maxEdge);
+      img = await prepareImage(uri, quality, maxEdge, naturals[i]);
     } catch {
       throw new PdfError(`Couldn’t read page ${i + 1}.`, 'read');
     }
@@ -596,33 +643,41 @@ export async function generatePdf(
 
     let ocr: PreparedPage['ocr'] = null;
     if (opts.searchable) {
-      onProgress?.(i, pages.length, 'reading-text');
+      if (report) onProgress?.(i, n, 'reading-text');
       try {
         const { lines } = await recognizeLines(uri, signal);
         // OCR coordinates are in the original image's pixels; map via the
         // original size (same aspect ratio as the downscaled copy).
-        const original = (await getImageSize(uri)) ?? { width: img.width, height: img.height };
-        ocr = { lines, original };
+        ocr = { lines, original: naturals[i] ?? { width: img.width, height: img.height } };
       } catch {
         // A page without a text layer is still a valid page.
       }
     }
-    prepared.push({ img, ocr });
-  }
+    return { img, ocr };
+  };
+  // Progress runs once through the pages, then reports 'rendering' once, as
+  // the last run starts printing.
+  const prepareRun = (report: boolean) => async (run: PaperRun): Promise<PreparedPage[]> => {
+    const out: PreparedPage[] = [];
+    for (let i = run.start; i < run.end; i++) out.push(await preparePage(i, report));
+    throwIfAborted(signal);
+    if (report && run.end === n) onProgress?.(n, n, 'rendering');
+    return out;
+  };
 
-  throwIfAborted(signal);
-  onProgress?.(pages.length, pages.length, 'rendering');
-  const sizes = prepared.map(p => ({ width: p.img.width, height: p.img.height }));
-  const runs = planPaperRuns(sizes, pageSize, canMergePdfs());
+  const canMerge = canMergePdfs();
+  const planned = planPaperRuns(naturals, pageSize, canMerge);
+  const runs = canMerge ? splitLongRuns(planned) : planned;
   if (runs.length > 1) {
     try {
-      return await renderAndMerge(prepared, runs, opts);
+      return await renderAndMerge(runs, prepareRun(true), n, opts);
     } catch (err) {
       if (!(err instanceof MergeFailed)) throw err;
       // Stitching failed: one paper size for everything still beats no PDF.
     }
   }
-  return renderRun(prepared, runs.length === 1 ? runs[0] : planPaperRuns(sizes, pageSize, false)[0], opts);
+  const single = runs.length === 1 ? runs[0] : planPaperRuns(naturals, pageSize, false)[0];
+  return renderRun(await prepareRun(runs.length === 1)(single), single, opts);
 }
 
 /**

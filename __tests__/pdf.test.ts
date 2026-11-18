@@ -15,6 +15,8 @@ import {
   PdfCancelledError,
   PdfError,
   planPaperRuns,
+  MAX_RUN_PAGES,
+  splitLongRuns,
 } from '../lib/pdf';
 import { recognizeLines } from '../lib/ocr';
 import { VisionOcr } from '../modules/vision-ocr/src';
@@ -509,5 +511,81 @@ describe('generatePdf with mixed page shapes', () => {
     await expect(generatePdf(pages, { pageSize: 'Auto' })).rejects.toMatchObject({ kind: 'render' });
     expect(FileSystem.deleteAsync).toHaveBeenCalledWith('file:///Caches/Print/run0.pdf', { idempotent: true });
     expect(native.mergePdfs).not.toHaveBeenCalled();
+  });
+});
+
+describe('long documents print in bounded runs (r7 #7)', () => {
+  const A4 = PAPER_SIZES_PT.A4;
+  beforeEach(() => {
+    let n = 0;
+    mockPrint.mockImplementation(() => Promise.resolve({ uri: `file:///Caches/Print/run${n++}.pdf` }));
+    native.mergePdfs = jest.fn((_inputs: string[], out: string) => Promise.resolve(out));
+  });
+  afterEach(() => {
+    mockPrint.mockReset();
+    mockPrint.mockResolvedValue({ uri: 'file:///output.pdf' });
+  });
+
+  test('splitLongRuns cuts runs into pieces of at most MAX_RUN_PAGES on the same paper', () => {
+    const landscape = { width: 842, height: 595 };
+    expect(splitLongRuns([{ start: 0, end: 60, paper: A4 }, { start: 60, end: 62, paper: landscape }], 25)).toEqual([
+      { start: 0, end: 25, paper: A4 },
+      { start: 25, end: 50, paper: A4 },
+      { start: 50, end: 60, paper: A4 },
+      { start: 60, end: 62, paper: landscape },
+    ]);
+    expect(splitLongRuns([{ start: 0, end: 25, paper: A4 }], 25)).toHaveLength(1);
+    expect(splitLongRuns([])).toEqual([]);
+  });
+
+  test('a 200-page document renders 8 jobs of 25 and merges them in order', async () => {
+    const pages = Array.from({ length: 200 }, (_, i) => `file:///p${i}.jpg`);
+    const uri = await generatePdf(pages, { pageSize: 'A4', quality: 'high' });
+    expect(mockPrint).toHaveBeenCalledTimes(8);
+    expect(mockPrint.mock.calls.map(c => c[0].html.match(/class="s"/g).length)).toEqual(Array(8).fill(MAX_RUN_PAGES));
+    expect(native.mergePdfs).toHaveBeenCalledTimes(1);
+    expect(native.mergePdfs!.mock.calls[0][0]).toEqual(Array.from({ length: 8 }, (_, i) => `file:///Caches/Print/run${i}.pdf`));
+    expect(uri).toMatch(/merged-/);
+  });
+
+  test('each run’s images are read only after the previous run has rendered', async () => {
+    imageSize = { width: 1000, height: 1400 }; // under the long-document cap: read as-is
+    const order: string[] = [];
+    mockReadAs.mockImplementation((u: string) => { order.push('read'); return Promise.resolve(`B64-${u}`); });
+    let n = 0;
+    mockPrint.mockImplementation(() => { order.push('print'); return Promise.resolve({ uri: `file:///Caches/Print/run${n++}.pdf` }); });
+    const pages = Array.from({ length: 60 }, (_, i) => `file:///p${i}.jpg`);
+    await generatePdf(pages, { pageSize: 'A4', quality: 'high' });
+    // read ×25, print, read ×25, print, read ×10, print — never more than one run of images held.
+    let held = 0;
+    let most = 0;
+    for (const step of order) {
+      if (step === 'read') most = Math.max(most, ++held);
+      else held = 0;
+    }
+    expect(most).toBe(MAX_RUN_PAGES);
+    expect(order.filter(s => s === 'print')).toHaveLength(3);
+    // Each job carries only its own pages' images.
+    expect(mockPrint.mock.calls[1][0].html).toContain('B64-file:///p25.jpg');
+    expect(mockPrint.mock.calls[1][0].html).not.toContain('B64-file:///p24.jpg');
+    mockReadAs.mockReset();
+    mockReadAs.mockResolvedValue('FAKEBASE64');
+  });
+
+  test('progress still runs once through the pages and reports rendering once', async () => {
+    const onProgress = jest.fn();
+    const pages = Array.from({ length: 30 }, (_, i) => `file:///p${i}.jpg`);
+    await generatePdf(pages, { pageSize: 'A4', onProgress });
+    const phases = onProgress.mock.calls.map(c => c[2]);
+    expect(phases.filter(p => p === 'rendering')).toHaveLength(1);
+    expect(onProgress.mock.calls[onProgress.mock.calls.length - 1]).toEqual([30, 30, 'rendering']);
+    expect(onProgress.mock.calls.filter(c => c[2] === 'preparing').map(c => c[0])).toEqual(Array.from({ length: 30 }, (_, i) => i));
+  });
+
+  test('without the native merge a long document stays one job (older builds)', async () => {
+    delete native.mergePdfs;
+    const pages = Array.from({ length: 40 }, (_, i) => `file:///p${i}.jpg`);
+    await generatePdf(pages, { pageSize: 'A4' });
+    expect(mockPrint).toHaveBeenCalledTimes(1);
   });
 });

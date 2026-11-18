@@ -731,6 +731,20 @@ describe('ghost documents and lost indexes (core #6, #14)', () => {
     expect((await storage.documentIdsForCleanup())?.sort()).toEqual(['broken', 'good']);
   });
 
+  test('documentFileRefsForCleanup lists what every record points at, trashed included, corrupt left out', async () => {
+    await storage.saveDocument({ ...doc, id: 'pages', pages: ['file:///CURRENT/Documents/scan-kit/pages/page-0.jpg'] });
+    await storage.saveDocument({ ...doc, id: 'pdf', pages: [], pdfUri: 'file:///CURRENT/Documents/scan-kit/pdf/document.pdf' });
+    await storage.trashDocument('pdf');
+    await storage.saveDocument({ ...doc, id: 'broken' });
+    await AsyncStorage.setItem('@scan_kit_doc:broken', '{corrupt');
+    const refs = (await storage.documentFileRefsForCleanup())!;
+    expect(refs.map(r => r.id).sort()).toEqual(['pages', 'pdf']);
+    const pdf = refs.find(r => r.id === 'pdf')!;
+    expect(pdf.pages).toEqual([]);
+    expect(pdf.pdfUri).toMatch(/\/pdf\/document\.pdf$/);
+    expect(typeof pdf.updatedAt).toBe('number');
+  });
+
   test('documentIdsForCleanup keeps trashed documents', async () => {
     await storage.saveDocument({ ...doc, id: 'A' });
     await storage.trashDocument('A');

@@ -1,7 +1,8 @@
 // components/merge-sheet.tsx
 // Pick a document whose pages get appended to the target.
 import { useEffect, useState } from 'react';
-import { FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { PageThumb } from '@/components/page-thumb';
 import { Ionicons } from '@expo/vector-icons';
 import { BottomSheet, SheetHeader } from '@/components/bottom-sheet';
 import { documentMeta } from '@/components/document-card';
@@ -53,7 +54,7 @@ export function MergeSheet({ visible, targetDoc, allDocs, onMerge, onClose }: Pr
                 accessibilityLabel={`Merge ${item.name}`}
               >
                 {item.pages[0] ? (
-                  <Image source={{ uri: `${item.pages[0]}?v=${item.updatedAt}` }} style={[styles.thumb, { backgroundColor: colors.placeholder }]} />
+                  <PageThumb uri={`${item.pages[0]}?v=${item.updatedAt}`} style={[styles.thumb, { backgroundColor: colors.placeholder }]} />
                 ) : (
                   <View style={[styles.thumb, { backgroundColor: colors.placeholder }]} />
                 )}

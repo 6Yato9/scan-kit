@@ -59,7 +59,7 @@ export function SettingsRow({
           <AppIcon name={icon} size={18} color={colors.accent} />
         </View>
       ) : null}
-      <View style={[styles.inner, !last && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }]}>
+      <View style={[styles.inner, description ? styles.innerTall : null, !last && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }]}>
         <View style={styles.text}>
           <Text style={[Type.body, styles.label, { color: colors.text }]}>{label}</Text>
           {description ? (
@@ -72,7 +72,7 @@ export function SettingsRow({
           (accessory.text === null ? (
             <ActivityIndicator size="small" color={colors.muted} accessibilityLabel="Calculating" />
           ) : (
-            <Text style={[Type.body, { color: colors.muted }]}>{accessory.text}</Text>
+            <Text style={[Type.body, !onPress && styles.valueAlone, { color: colors.muted }]}>{accessory.text}</Text>
           ))}
         {accessory.type === 'value' && onPress && <Ionicons name="chevron-forward" size={18} color={colors.muted} />}
         {isSwitch && (
@@ -116,8 +116,11 @@ export function SettingsRow({
 /** The app's one segmented control, re-exported for settings screens. */
 export { SegmentedControl } from '@/components/segmented-control';
 
+/** Vertical padding of a row with a description (a two-line row needs more air). */
+const TALL_PAD = Spacing.md;
+
 /** Top offset that centres the 30pt icon tile on a row's first (label) line. */
-export const ICON_TOP = Spacing.sm + Math.round((LABEL_LINE - 30) / 2);
+export const ICON_TOP = TALL_PAD + Math.round((LABEL_LINE - 30) / 2);
 
 const styles = StyleSheet.create({
   spacer: { height: Spacing.xxl },
@@ -128,7 +131,8 @@ const styles = StyleSheet.create({
   // One rule for every row: the icon is centred on the label's line. A
   // one-line row is simply centred; a row with a description keeps its icon
   // beside the label instead of floating in the middle of the paragraph
-  // (inner padding 8 + half the 21pt label line - half the 30pt tile).
+  // (inner padding 12 + half the 22pt label line - half the 30pt tile = 8pt
+  // clear above the tile, as on a one-line row).
   rowTop: { alignItems: 'flex-start' },
   iconTileTop: { marginTop: ICON_TOP },
   inner: {
@@ -140,6 +144,10 @@ const styles = StyleSheet.create({
     paddingRight: Spacing.lg,
     gap: Spacing.sm,
   },
+  innerTall: { paddingVertical: TALL_PAD },
+  // A value with no chevron after it ends where the chevrons above and below
+  // visibly end (the chevron glyph is inset in its box).
+  valueAlone: { marginRight: 4 },
   text: { flex: 1 },
   label: { lineHeight: LABEL_LINE },
   desc: { marginTop: 2, lineHeight: 18 },

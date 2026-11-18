@@ -1,12 +1,11 @@
 // app/(tabs)/index.tsx
-// Home: a starting point, not a second library. Three ways to add a document
-// besides the tab bar's camera button (import photos, import a file, scan an
-// ID card — the one scan the camera button can't do: both sides on one page),
-// the newest documents as large page previews to jump back into, and
-// shortcuts into folders. The full library (every document, grid or list,
-// sort, select) lives in Files. Searching here covers everything, including
-// the text inside every scan (no "extract text" step needed), and a text
-// match shows the line that matched.
+// Home: where you pick up or start work, not a second library. Two ways to
+// bring documents in besides the tab bar's camera button (photos, or a PDF or
+// image file), shortcuts into folders, and the documents worked on most
+// recently as a list with their full names. Everything else has one home:
+// browsing, sorting, selecting and searching the whole library are in Files
+// (the search button here opens Files' search with the keyboard up), and scan
+// modes such as ID card, Book and Whiteboard are in Tools.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
@@ -15,26 +14,22 @@ import { Ionicons } from '@expo/vector-icons';
 import { Document } from '@/types/document';
 import { getDocuments, getFolders } from '@/lib/storage';
 import { useScan } from '@/contexts/scan-context';
-import { LargeTitle } from '@/components/screen-header';
+import { HeaderIconButton, LargeTitle } from '@/components/screen-header';
 import { useTheme } from '@/contexts/theme-context';
 import { EmptyState } from '@/components/empty-state';
-import { DocumentCard, DocumentCardSkeleton, DocumentRow } from '@/components/document-card';
+import { DocumentRow, DocumentRowSkeleton } from '@/components/document-card';
 import { SectionLabel } from '@/components/section-label';
 import { useDocumentActions } from '@/components/document-actions';
 import { useImportDocuments } from '@/components/use-import';
-import { SearchField } from '@/components/search-field';
-import { matchesQuery, searchSnippet, sortDocuments } from '@/lib/doc-list';
+import { sortDocuments } from '@/lib/doc-list';
 import { HIT, Radius, Spacing, TAB_BAR_CLEARANCE, Type } from '@/lib/theme';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
-const RECENT_LIMIT = 8;
-/** Width of one Recent card, so the next one peeks in from the edge. */
-const RECENT_W = 156;
+const RECENT_LIMIT = 6;
 
 export default function HomeScreen() {
   const [documents, setDocuments] = useState<Document[]>([]);
-  const [searchQuery, setSearchQuery] = useState('');
   const [folders, setFolders] = useState<string[]>([]);
   const [loaded, setLoaded] = useState(false);
   const insets = useSafeAreaInsets();
@@ -57,13 +52,8 @@ export default function HomeScreen() {
   useFocusEffect(useCallback(() => { load(); }, [load]));
   useEffect(() => { if (lastSaved > 0) load(); }, [lastSaved, load]);
 
-  const q = searchQuery.trim();
   // Recent means recently worked on, whatever the library's sort order is.
   const recent = useMemo(() => sortDocuments(documents, 'dateModified').slice(0, RECENT_LIMIT), [documents]);
-  const results = useMemo(
-    () => (q ? sortDocuments(documents.filter(d => matchesQuery(d, q)), 'dateModified') : []),
-    [documents, q],
-  );
   const capped = documents.length > RECENT_LIMIT;
 
   const folderCounts = useMemo(() => {
@@ -76,127 +66,96 @@ export default function HomeScreen() {
     router.navigate({ pathname: '/files', params: { folder } });
   }, [router]);
 
-  const searching = !!q;
   const noDocs = loaded && documents.length === 0;
+
+  const quickActions = (
+    <View style={styles.quickRow}>
+      <QuickAction icon="images-outline" label="Import photos" detail="From your library" onPress={importImages} />
+      <QuickAction icon="folder-open-outline" label="Import file" detail="PDF or image" onPress={importFile} />
+    </View>
+  );
+
+  const folderShortcuts = folders.length > 0 ? (
+    <View>
+      <SectionLabel style={styles.sectionLabel}>Folders</SectionLabel>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.edgeScroll}
+        contentContainerStyle={styles.folderRow}
+      >
+        {folders.map(f => {
+          const n = folderCounts.get(f) ?? 0;
+          return (
+            <Pressable
+              key={f}
+              onPress={() => openFolder(f)}
+              style={({ pressed }) => [styles.folder, { backgroundColor: colors.card }, pressed && { opacity: 0.7 }]}
+              accessibilityRole="button"
+              accessibilityLabel={`Folder ${f}, ${n} ${n === 1 ? 'document' : 'documents'}`}
+            >
+              <Ionicons name="folder-outline" size={22} color={colors.accent} />
+              <View style={styles.folderText}>
+                <Text style={[Type.subhead, { color: colors.text, fontWeight: '600' }]} numberOfLines={1}>{f}</Text>
+                <Text style={[Type.caption, { color: colors.muted }]}>{n === 0 ? 'Empty' : `${n} ${n === 1 ? 'document' : 'documents'}`}</Text>
+              </View>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+    </View>
+  ) : null;
 
   const header = (
     <View>
-      {!searching && (
-        <View style={styles.quickRow}>
-          <QuickAction icon="images-outline" label="Import photos" hint="Make a document from photos" onPress={importImages} />
-          <QuickAction icon="folder-open-outline" label="Import file" hint="Import a PDF or an image file" onPress={importFile} />
-          <QuickAction icon="id-card-outline" label="ID card" hint="Scan both sides of a card onto one page" onPress={() => router.push('/tools/id-card')} />
+      {quickActions}
+      {folderShortcuts}
+      {recent.length > 0 && (
+        <View style={styles.sectionRow}>
+          <SectionLabel style={styles.sectionLabel}>Recent</SectionLabel>
+          <Pressable
+            onPress={() => router.navigate('/files')}
+            hitSlop={10}
+            style={styles.seeAll}
+            accessibilityRole="button"
+            accessibilityLabel={capped ? `See all ${documents.length} documents in Files` : 'Open Files'}
+          >
+            <Text style={[Type.subhead, { color: colors.accent }]}>{capped ? 'See all' : 'Files'}</Text>
+          </Pressable>
         </View>
-      )}
-      {!searching && recent.length > 0 && (
-        <>
-          <View style={styles.sectionRow}>
-            <SectionLabel style={styles.sectionLabel}>Recent</SectionLabel>
-            <Pressable
-              onPress={() => router.navigate('/files')}
-              hitSlop={10}
-              style={styles.seeAll}
-              accessibilityRole="button"
-              accessibilityLabel={capped ? `See all ${documents.length} documents` : 'Open Files'}
-            >
-              <Text style={[Type.subhead, { color: colors.accent }]}>{capped ? 'See all' : 'Files'}</Text>
-            </Pressable>
-          </View>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={styles.edgeScroll}
-            contentContainerStyle={styles.recentRow}
-          >
-            {recent.map(d => (
-              <View key={d.id} style={styles.recentCell}>
-                <DocumentCard
-                  document={d}
-                  columns={1}
-                  onPress={() => router.push({ pathname: '/viewer', params: { id: d.id } })}
-                  onLongPress={() => actions.openActions(d)}
-                />
-              </View>
-            ))}
-          </ScrollView>
-        </>
-      )}
-      {!searching && folders.length > 0 && (
-        <>
-          <View style={styles.sectionRow}>
-            <SectionLabel style={styles.sectionLabel}>Folders</SectionLabel>
-          </View>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={styles.edgeScroll}
-            contentContainerStyle={styles.folderRow}
-          >
-            {folders.map(f => {
-              const n = folderCounts.get(f) ?? 0;
-              return (
-                <Pressable
-                  key={f}
-                  onPress={() => openFolder(f)}
-                  style={({ pressed }) => [styles.folder, { backgroundColor: colors.card }, pressed && { opacity: 0.7 }]}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Folder ${f}, ${n} ${n === 1 ? 'document' : 'documents'}`}
-                >
-                  <Ionicons name="folder-outline" size={22} color={colors.accent} />
-                  <View style={styles.folderText}>
-                    <Text style={[Type.subhead, { color: colors.text, fontWeight: '600' }]} numberOfLines={1}>{f}</Text>
-                    <Text style={[Type.caption, { color: colors.muted }]}>{n === 0 ? 'Empty' : `${n} ${n === 1 ? 'document' : 'documents'}`}</Text>
-                  </View>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
-        </>
-      )}
-      {searching && results.length > 0 && (
-        <SectionLabel style={styles.sectionLabel}>
-          {results.length === 1 ? '1 result' : `${results.length} results`}
-        </SectionLabel>
       )}
     </View>
   );
 
+
   return (
     <View style={[styles.container, { paddingTop: insets.top, backgroundColor: colors.bg }]}>
-      <LargeTitle title="Home" />
-
-      <View style={styles.searchRow}>
-        <SearchField value={searchQuery} onChangeText={setSearchQuery} />
-      </View>
+      <LargeTitle
+        title="Home"
+        right={
+          <HeaderIconButton
+            icon="search"
+            label="Search documents"
+            color={colors.accent}
+            onPress={() => router.navigate({ pathname: '/files', params: { search: '1' } })}
+          />
+        }
+      />
 
       {!loaded ? (
         <View style={styles.listContent}>
-          <View style={styles.quickRow}>
-            {[0, 1, 2].map(i => <View key={i} style={[styles.quick, { backgroundColor: colors.card }]} />)}
-          </View>
+          {quickActions}
           <SectionLabel style={styles.sectionLabel}>Recent</SectionLabel>
-          <View style={styles.recentSkeleton}>
-            {[0, 1, 2].map(i => (
-              <View key={i} style={styles.recentCell}>
-                <DocumentCardSkeleton columns={1} />
-              </View>
-            ))}
-          </View>
+          {[0, 1, 2].map(i => <DocumentRowSkeleton key={i} />)}
         </View>
       ) : (
         <FlatList
-          data={results}
+          data={recent}
           keyExtractor={d => d.id}
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="on-drag"
           contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + TAB_BAR_CLEARANCE }]}
           ListHeaderComponent={header}
           ListEmptyComponent={
-            searching ? (
-              <View style={styles.empty}>
-                <EmptyState variant="no-search-results" query={searchQuery.trim()} />
-              </View>
-            ) : noDocs ? (
+            noDocs ? (
               <View style={styles.empty}>
                 <EmptyState
                   variant="no-docs"
@@ -208,8 +167,6 @@ export default function HomeScreen() {
           renderItem={({ item }) => (
             <DocumentRow
               document={item}
-              snippet={searching ? searchSnippet(item, q) : undefined}
-              snippetQuery={searching ? q : undefined}
               onPress={() => router.push({ pathname: '/viewer', params: { id: item.id } })}
               onLongPress={() => actions.openActions(item)}
             />
@@ -225,12 +182,12 @@ export default function HomeScreen() {
 function QuickAction({
   icon,
   label,
-  hint,
+  detail,
   onPress,
 }: {
   icon: IconName;
   label: string;
-  hint: string;
+  detail: string;
   onPress: () => void;
 }) {
   const { colors } = useTheme();
@@ -239,50 +196,45 @@ function QuickAction({
       onPress={onPress}
       style={({ pressed }) => [styles.quick, { backgroundColor: colors.card }, pressed && { opacity: 0.75 }]}
       accessibilityRole="button"
-      accessibilityLabel={label}
-      accessibilityHint={hint}
+      accessibilityLabel={`${label}, ${detail}`}
     >
       <View style={[styles.quickIcon, { backgroundColor: colors.accentLight }]}>
-        <Ionicons name={icon} size={22} color={colors.accent} />
+        <Ionicons name={icon} size={20} color={colors.accent} />
       </View>
-      <Text
-        style={[Type.footnote, styles.quickLabel, { color: colors.text }]}
-        numberOfLines={1}
-        maxFontSizeMultiplier={1.2}
-      >
-        {label}
-      </Text>
+      <View style={styles.quickText}>
+        <Text style={[Type.subhead, styles.quickLabel, { color: colors.text }]} numberOfLines={1} maxFontSizeMultiplier={1.3}>
+          {label}
+        </Text>
+        <Text style={[Type.caption, { color: colors.muted }]} numberOfLines={1} maxFontSizeMultiplier={1.3}>
+          {detail}
+        </Text>
+      </View>
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  searchRow: { paddingHorizontal: Spacing.gutter, paddingBottom: Spacing.xs },
   listContent: { paddingHorizontal: Spacing.gutter, flexGrow: 1 },
-  quickRow: { flexDirection: 'row', gap: Spacing.sm, marginTop: Spacing.md },
+  quickRow: { flexDirection: 'row', gap: Spacing.sm, marginTop: Spacing.sm },
   quick: {
     flex: 1,
-    minHeight: 84,
+    minHeight: 64,
     borderRadius: Radius.lg,
     paddingVertical: Spacing.md,
-    paddingHorizontal: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: Spacing.sm,
+    gap: Spacing.md - 2,
   },
-  quickIcon: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  quickIcon: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  quickText: { flex: 1, minWidth: 0, gap: 1 },
   quickLabel: { fontWeight: '600' },
   sectionRow: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' },
   sectionLabel: { marginTop: Spacing.xl },
   seeAll: { minHeight: HIT / 2, justifyContent: 'flex-end', marginBottom: Spacing.sm, marginRight: Spacing.xs },
-  // Bleeds to the screen edges so cards scroll out from under the gutter.
+  // Bleeds to the screen edges so folders scroll out from under the gutter.
   edgeScroll: { marginHorizontal: -Spacing.gutter },
-  // DocumentCard pads its own cell by 6pt, so the row's outer padding is
-  // trimmed to keep the first card on the 16pt gutter.
-  recentRow: { paddingHorizontal: Spacing.gutter - 6 },
-  recentCell: { width: RECENT_W },
-  recentSkeleton: { flexDirection: 'row', marginHorizontal: -6 },
   folderRow: { paddingHorizontal: Spacing.gutter, gap: Spacing.sm },
   folder: {
     width: 168,

@@ -5,8 +5,19 @@
 //
 // Candidates are laid out invisibly at the same width: first the full text,
 // then the words that fit plus "…", dropping a word until it fits.
+//
+// A spaced dash stays at the end of the line with the word before it
+// ("Northwind Traders –" / "Project Atlas"), never starting the next line.
 import { useState } from 'react';
 import { StyleSheet, Text, View, type StyleProp, type TextStyle } from 'react-native';
+
+/**
+ * `text` with the space before each spaced dash ("Invoice - Project") made
+ * non-breaking, so a line can break after the dash but never before it.
+ */
+export function glueDashes(text: string): string {
+  return text.replace(/ ([-–—])(?=\s)/g, '\u00A0$1');
+}
 
 /** `text` without its last word (and any trailing separators), or null if it is one word. */
 export function dropLastWord(text: string): string | null {
@@ -37,11 +48,12 @@ export function WordClampText({
 }) {
   // A new text or width starts the fitting over.
   const [width, setWidth] = useState(0);
-  const source = `${width}\n${children}`;
+  const text = glueDashes(children);
+  const source = `${width}\n${text}`;
   const fresh: Fit = { source, candidate: null, done: false, result: null };
   const [stored, setFit] = useState<Fit>(fresh);
   const fit = stored.source === source ? stored : fresh;
-  const shown = fit.done && fit.result ? fit.result : children;
+  const shown = fit.done && fit.result ? fit.result : text;
 
   return (
     <View onLayout={e => setWidth(Math.round(e.nativeEvent.layout.width))}>
@@ -79,7 +91,7 @@ export function WordClampText({
               : { ...fit, done: true, result: null }); // one long word: normal truncation
           }}
         >
-          {fit.candidate ?? children}
+          {fit.candidate ?? text}
         </Text>
       )}
     </View>

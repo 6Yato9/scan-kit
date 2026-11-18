@@ -3,7 +3,7 @@
 // two-page document named "ID card …".
 import { useRef, useState } from 'react';
 import { ActionSheetIOS, Alert, Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { AppIcon } from '@/components/app-icon';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/contexts/theme-context';
 import { useScan } from '@/contexts/scan-context';
@@ -126,7 +126,7 @@ export default function IdCardScreen() {
         ) : (
           <View style={styles.placeholder}>
             <View style={[styles.addIcon, { backgroundColor: colors.accentLight }]}>
-              <Ionicons name="id-card-outline" size={26} color={colors.accent} />
+              <AppIcon name="id-card" size={26} color={colors.accent} />
             </View>
             <Text style={[Type.subhead, { color: colors.accent }]}>
               {side === 'front' ? 'Add front' : 'Add back'}

@@ -40,7 +40,10 @@ export function ToastProvider({
   children: ReactNode;
   /** Distance above the bottom safe area. Raise it to clear a screen's own bottom bar. */
   offset?: number;
-  /** Over the always-dark viewer chrome: a light pill, so it stands out in both themes. */
+  /**
+   * Over the always-dark viewer chrome: the chrome's own raised pill with a
+   * hairline edge, matching the viewer's other overlays in both themes.
+   */
   onChrome?: boolean;
 }) {
   const insets = useSafeAreaInsets();
@@ -122,13 +125,15 @@ export function ToastProvider({
             style={[
               styles.toast,
               // Inverse surface: dark pill in light mode, light pill in dark mode.
-              { backgroundColor: onChrome ? colors.chromeText : colors.text, shadowColor: colors.shadow },
+              onChrome
+                ? { backgroundColor: colors.chromeRaised, borderColor: colors.chromeBorder, borderWidth: StyleSheet.hairlineWidth, shadowColor: colors.shadow }
+                : { backgroundColor: colors.text, shadowColor: colors.shadow },
             ]}
           >
             <Text
               maxFontSizeMultiplier={1.4}
               numberOfLines={2}
-              style={[styles.text, action && styles.textWithAction, { color: onChrome ? colors.chrome : colors.bg }]}
+              style={[styles.text, action && styles.textWithAction, { color: onChrome ? colors.chromeText : colors.bg }]}
             >
               {message}
             </Text>
@@ -146,7 +151,7 @@ export function ToastProvider({
                 accessibilityLabel={action.label}
                 style={({ pressed }) => [styles.actionBtn, pressed && { opacity: 0.6 }]}
               >
-                <Text maxFontSizeMultiplier={1.4} style={[styles.text, styles.actionText, { color: onChrome ? colors.chrome : colors.bg }]}>
+                <Text maxFontSizeMultiplier={1.4} style={[styles.text, styles.actionText, { color: onChrome ? colors.chromeAccent : colors.bg }]}>
                   {action.label}
                 </Text>
               </Pressable>

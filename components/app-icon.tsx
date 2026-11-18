@@ -10,23 +10,32 @@
 // - 'long-image' (Long image): image-outline already means "a page as an
 //   image" (Share page as image, JPEG export), so pages stitched into one tall
 //   picture get their own glyph.
+// - 'id-card' (ID card): Ionicons' id-card-outline is an upright badge; ID
+//   cards are landscape, as SF Symbols' person.text.rectangle is.
+// The pencil is a solid stroke rather than an outline, so it is drawn at the
+// light weight to sit with the outline icons around it.
 // Android and web fall back to the nearest Ionicon.
 import { Platform, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { SymbolView, type SFSymbol } from 'expo-symbols';
+import { SymbolView, type SFSymbol, type SymbolWeight } from 'expo-symbols';
 
 export type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
-type SymbolGlyph = 'signature' | 'rename' | 'long-image';
+type SymbolGlyph = 'signature' | 'rename' | 'long-image' | 'id-card';
 export type AppIconName = IoniconName | SymbolGlyph;
 
-const SYMBOLS: Record<SymbolGlyph, { symbol: SFSymbol; fallback: IoniconName; scale: number; rotate?: string }> = {
+const SYMBOLS: Record<
+  SymbolGlyph,
+  { symbol: SFSymbol; fallback: IoniconName; scale: number; rotate?: string; weight?: SymbolWeight }
+> = {
   // The glyph is wide and short, so it is drawn a little larger than the box
   // to carry the same visual weight as its square neighbours.
   signature: { symbol: 'signature', fallback: 'create-outline', scale: 1.2 },
-  rename: { symbol: 'pencil', fallback: 'pencil-outline', scale: 1 },
+  rename: { symbol: 'pencil', fallback: 'pencil-outline', scale: 0.95, weight: 'light' },
   // A tall page split in two: SF Symbols only has the side-by-side split, so
   // it is turned upright.
   'long-image': { symbol: 'rectangle.split.2x1', fallback: 'albums-outline', scale: 1.1, rotate: '90deg' },
+  // Wide and short like the signature, so drawn a little larger.
+  'id-card': { symbol: 'person.text.rectangle', fallback: 'id-card-outline', scale: 1.1 },
 };
 
 export function isSymbolGlyph(name: AppIconName): name is SymbolGlyph {
@@ -40,7 +49,7 @@ export function ioniconFor(name: AppIconName): IoniconName {
 
 export function AppIcon({ name, size, color }: { name: AppIconName; size: number; color: string }) {
   if (!isSymbolGlyph(name)) return <Ionicons name={name} size={size} color={color} />;
-  const { symbol, fallback: fallbackName, scale, rotate } = SYMBOLS[name];
+  const { symbol, fallback: fallbackName, scale, rotate, weight = 'regular' } = SYMBOLS[name];
   const fallback = <Ionicons name={fallbackName} size={size} color={color} />;
   if (Platform.OS !== 'ios') return fallback;
   return (
@@ -49,7 +58,7 @@ export function AppIcon({ name, size, color }: { name: AppIconName; size: number
       accessibilityElementsHidden
       importantForAccessibility="no"
     >
-      <SymbolView name={symbol} size={size * scale} tintColor={color} weight="regular" fallback={fallback} />
+      <SymbolView name={symbol} size={size * scale} tintColor={color} weight={weight} fallback={fallback} />
     </View>
   );
 }
