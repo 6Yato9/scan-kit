@@ -1,7 +1,7 @@
 // app/tools/sign.tsx
 // Draw a signature, choose the page (or every page) and where it goes, then
 // save a signed copy as a new PDF.
-import { useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Image,
@@ -15,15 +15,15 @@ import {
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import * as Crypto from 'expo-crypto';
-import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
 import { useToast } from '@/components/toast';
 import {
+  DocGroup,
   DocRow,
-  NoDocuments,
+  NoDocumentsScreen,
   PagePreview,
   Segmented,
   SectionRow,
@@ -46,7 +46,7 @@ import {
   type Placement,
   type Signature,
 } from '@/lib/stamp';
-import { HIT, Radius, Spacing, Type } from '@/lib/theme';
+import { HIT, Ink, Radius, Spacing, Type } from '@/lib/theme';
 import type { Document } from '@/types/document';
 
 const PAD_HEIGHT = 180;
@@ -57,11 +57,15 @@ const SIZES = [
 ] as const;
 type SizeKey = (typeof SIZES)[number]['value'];
 
-// Ink is drawn at device resolution; on export the canvas is trimmed to the
-// strokes (plus a small margin) so the PNG is small and places precisely.
-const PAD_HTML = `<!DOCTYPE html><html><head>
+// Ink is drawn at device resolution in the theme's text colour on a
+// transparent canvas, so the pad matches light and dark mode. Capture is
+// implicit: a moment after each stroke the canvas is trimmed to the strokes
+// (plus a small margin), recoloured to the document ink and posted back as a
+// PNG, so there is no "Use signature" step.
+function padHtml(ink: string, docInk: string): string {
+  return `<!DOCTYPE html><html><head>
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<style>*{margin:0;padding:0;box-sizing:border-box}html,body{background:#fff;overflow:hidden;height:100%}
+<style>*{margin:0;padding:0;box-sizing:border-box}html,body{background:transparent;overflow:hidden;height:100%}
 canvas{display:block;touch-action:none}</style></head><body><canvas id="c"></canvas>
 <script>
 var canvas = document.getElementById('c');
@@ -71,15 +75,15 @@ var W = window.innerWidth, H = ${PAD_HEIGHT};
 canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
 canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
 ctx.scale(dpr, dpr);
-ctx.strokeStyle = '#111'; ctx.lineWidth = 2.6; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-var drawing = false, drawn = false, last = null;
+ctx.strokeStyle = '${ink}'; ctx.fillStyle = '${ink}'; ctx.lineWidth = 2.6; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+var drawing = false, drawn = false, last = null, timer = null;
 function pt(e){ var t = e.touches[0], r = canvas.getBoundingClientRect(); return { x: t.clientX - r.left, y: t.clientY - r.top }; }
-canvas.addEventListener('touchstart', function(e){ e.preventDefault(); drawing = true; last = pt(e);
-  ctx.beginPath(); ctx.arc(last.x, last.y, ctx.lineWidth / 2, 0, Math.PI * 2); ctx.fillStyle = '#111'; ctx.fill(); drawn = true; }, { passive: false });
+canvas.addEventListener('touchstart', function(e){ e.preventDefault(); clearTimeout(timer); drawing = true; last = pt(e);
+  ctx.beginPath(); ctx.arc(last.x, last.y, ctx.lineWidth / 2, 0, Math.PI * 2); ctx.fill(); drawn = true; }, { passive: false });
 canvas.addEventListener('touchmove', function(e){ e.preventDefault(); if (!drawing) return; var p = pt(e);
   ctx.beginPath(); ctx.moveTo(last.x, last.y); var mx = (last.x + p.x) / 2, my = (last.y + p.y) / 2;
   ctx.quadraticCurveTo(last.x, last.y, mx, my); ctx.lineTo(p.x, p.y); ctx.stroke(); last = p; }, { passive: false });
-canvas.addEventListener('touchend', function(){ drawing = false; });
+canvas.addEventListener('touchend', function(){ drawing = false; clearTimeout(timer); timer = setTimeout(exportSignature, 250); });
 function post(m){ window.ReactNativeWebView.postMessage(m); }
 function exportSignature(){
   if (!drawn) { post('EMPTY'); return; }
@@ -91,11 +95,15 @@ function exportSignature(){
   var m = Math.round(4 * dpr);
   minX = Math.max(0, minX - m); minY = Math.max(0, minY - m); maxX = Math.min(w - 1, maxX + m); maxY = Math.min(h - 1, maxY + m);
   var out = document.createElement('canvas'); out.width = maxX - minX + 1; out.height = maxY - minY + 1;
-  out.getContext('2d').drawImage(canvas, minX, minY, out.width, out.height, 0, 0, out.width, out.height);
+  var o = out.getContext('2d');
+  o.drawImage(canvas, minX, minY, out.width, out.height, 0, 0, out.width, out.height);
+  // Whatever colour the pad shows, the page gets dark ink.
+  o.globalCompositeOperation = 'source-in'; o.fillStyle = '${docInk}'; o.fillRect(0, 0, out.width, out.height);
   post(JSON.stringify({ dataUri: out.toDataURL('image/png'), width: out.width, height: out.height }));
 }
-function clearPad(){ ctx.save(); ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0,0,canvas.width,canvas.height); ctx.restore(); drawn = false; }
+function clearPad(){ clearTimeout(timer); ctx.save(); ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0,0,canvas.width,canvas.height); ctx.restore(); drawn = false; }
 </script></body></html>`;
+}
 
 export default function SignScreen() {
   const router = useRouter();
@@ -119,21 +127,33 @@ export default function SignScreen() {
   const sizeW = SIZES.find(s => s.value === size)!.w;
   const place = sig ? clampPlacement(sig, placement ?? defaultPlacement(sig, aspect, sizeW), aspect) : null;
 
+  // The pad draws in the theme's text colour; a theme change reloads it empty.
+  const html = useMemo(() => padHtml(colors.text, Ink.signature), [colors.text]);
+  useEffect(() => {
+    setSig(null);
+  }, [html]);
+
   const onPadMessage = (e: { nativeEvent: { data: string } }) => {
     const data = e.nativeEvent.data;
     if (data === 'EMPTY') {
-      Alert.alert('Draw your signature', 'Sign in the white box first, then tap Use signature.');
+      setSig(null);
       return;
     }
     try {
       const parsed = JSON.parse(data) as Signature;
       if (!parsed.dataUri?.startsWith('data:image/png') || !(parsed.width > 0)) throw new Error('bad');
+      // Keep any placement the user already chose; clampPlacement fits the new shape.
       setSig(parsed);
-      setPlacement(null);
-      tapLight();
     } catch {
       Alert.alert('Couldn’t capture the signature', 'Clear the box and try again.');
     }
+  };
+
+  const clearSignature = () => {
+    webRef.current?.injectJavaScript('clearPad(); true;');
+    setSig(null);
+    setPlacement(null);
+    tapLight();
   };
 
   const pickDoc = (d: Document) => {
@@ -203,14 +223,15 @@ export default function SignScreen() {
 
   if (loaded && docs.length === 0) {
     return (
-      <ToolScreen title="Sign">
-        <NoDocuments subtitle="Sign adds your signature to a scanned document. Scan or import a document first." />
-      </ToolScreen>
+      <NoDocumentsScreen
+        toolTitle="Sign"
+        subtitle="Sign adds your signature to a scanned document. Scan or import a document first."
+      />
     );
   }
 
   const previewW = Math.min(screenW - Spacing.gutter * 2 - Spacing.sm * 2, 300);
-  const buttonTitle = !sig ? 'Draw your signature first' : !doc ? 'Choose a document' : 'Save signed PDF';
+  const buttonTitle = !sig ? 'Sign in the box above' : !doc ? 'Choose a document' : 'Save signed PDF';
 
   return (
     <ToolScreen
@@ -229,63 +250,41 @@ export default function SignScreen() {
         </>
       }
     >
-      {/* 1. Signature */}
-      <SectionRow label="Signature" action={sig ? 'Redraw' : undefined} onAction={() => setSig(null)} />
-      {sig ? (
-        <View style={[styles.sigCard, { backgroundColor: colors.card }]}>
-          <View style={[styles.sigPaper, { backgroundColor: colors.paper }]}>
-            <Image
-              source={{ uri: sig.dataUri }}
-              style={{ width: '100%', height: '100%' }}
-              resizeMode="contain"
-              accessibilityLabel="Your signature"
-            />
-          </View>
-          <View style={styles.sigStatus}>
-            <Ionicons name="checkmark-circle" size={18} color={colors.accent} />
-            <Text style={[Type.footnote, { color: colors.muted }]}>Signature ready</Text>
-          </View>
-        </View>
-      ) : (
-        <>
-          <View
-            style={[styles.pad, { borderColor: colors.border, backgroundColor: colors.paper }]}
-            onTouchStart={() => setDrawing(true)}
-            onTouchEnd={() => setDrawing(false)}
-            onTouchCancel={() => setDrawing(false)}
-          >
-            <WebView
-              ref={webRef}
-              source={{ html: PAD_HTML }}
-              style={styles.padWeb}
-              scrollEnabled={false}
-              bounces={false}
-              onMessage={onPadMessage}
-              originWhitelist={['*']}
-            />
-            <View style={[styles.baseline, { backgroundColor: colors.paperLine }]} pointerEvents="none" />
-          </View>
-          <View style={styles.padActions}>
-            <PrimaryButton
-              title="Clear"
-              variant="secondary"
-              onPress={() => webRef.current?.injectJavaScript('clearPad(); true;')}
-              style={styles.flex}
-            />
-            <PrimaryButton
-              title="Use signature"
-              onPress={() => webRef.current?.injectJavaScript('exportSignature(); true;')}
-              style={styles.flex}
-            />
-          </View>
-        </>
-      )}
+      {/* 1. Signature — captured as you draw; no separate confirm step. */}
+      <SectionRow label="Signature" action={sig ? 'Clear' : undefined} onAction={clearSignature} />
+      <View
+        style={[styles.pad, { borderColor: colors.border, backgroundColor: colors.card }]}
+        onTouchStart={() => setDrawing(true)}
+        onTouchEnd={() => setDrawing(false)}
+        onTouchCancel={() => setDrawing(false)}
+      >
+        {!sig ? (
+          <Text style={[Type.callout, styles.padHint, { color: colors.faint }]} pointerEvents="none">
+            Sign here
+          </Text>
+        ) : null}
+        <View style={[styles.baseline, { backgroundColor: colors.ring }]} pointerEvents="none" />
+        <WebView
+          key={html}
+          ref={webRef}
+          source={{ html }}
+          style={styles.padWeb}
+          containerStyle={styles.padWeb}
+          scrollEnabled={false}
+          bounces={false}
+          onMessage={onPadMessage}
+          originWhitelist={['*']}
+          accessibilityLabel="Signature pad"
+        />
+      </View>
 
       {/* 2. Document */}
       <SectionLabel>Document</SectionLabel>
-      {docs.map(d => (
-        <DocRow key={d.id} doc={d} selected={d.id === docId} onPress={() => pickDoc(d)} />
-      ))}
+      <DocGroup>
+        {docs.map(d => (
+          <DocRow key={d.id} doc={d} selected={d.id === docId} onPress={() => pickDoc(d)} />
+        ))}
+      </DocGroup>
 
       {/* 3. Placement */}
       {doc && sig && place && pageUri ? (
@@ -303,11 +302,11 @@ export default function SignScreen() {
                       accessibilityRole="button"
                       accessibilityState={{ selected: on }}
                       accessibilityLabel={`Page ${i + 1}`}
-                      style={[styles.pageThumb, { borderColor: on ? colors.accent : 'transparent' }]}
+                      style={[styles.pageThumb, { borderColor: on ? colors.accent : colors.bg }]}
                     >
                       <Image
                         source={{ uri: `${p}?v=${doc.updatedAt}` }}
-                        style={[styles.pageImg, { backgroundColor: colors.placeholder }]}
+                        style={[styles.pageImg, { backgroundColor: colors.placeholder, borderColor: colors.thumbBorder }]}
                       />
                       <Text style={[Type.caption, styles.pageNum, { color: on ? colors.accent : colors.muted }]}>
                         {i + 1}
@@ -371,13 +370,10 @@ const styles = StyleSheet.create({
     bottom: 44,
     height: StyleSheet.hairlineWidth,
   },
-  padActions: { flexDirection: 'row', gap: Spacing.md, marginTop: Spacing.md },
-  sigCard: { borderRadius: Radius.md, padding: Spacing.md, gap: Spacing.sm },
-  sigPaper: { height: 96, borderRadius: Radius.sm, padding: Spacing.sm },
-  sigStatus: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs + 2 },
+  padHint: { position: 'absolute', left: 24, bottom: 52 },
   pages: { gap: Spacing.sm, paddingBottom: Spacing.md },
   pageThumb: { borderWidth: 2, borderRadius: Radius.sm, padding: 2, alignItems: 'center' },
-  pageImg: { width: 48, height: 64, borderRadius: 4 },
+  pageImg: { width: 48, height: 64, borderRadius: 4, borderWidth: StyleSheet.hairlineWidth },
   pageNum: { marginTop: 2, fontWeight: '600' },
   switchRow: {
     flexDirection: 'row',

@@ -1,14 +1,11 @@
 // app/settings/scan-settings.tsx
 import { useCallback, useState } from 'react';
 import { FILTER_LABELS } from '@/components/page-actions-sheet';
-import { ScrollView, StyleSheet } from 'react-native';
-import { Stack, useFocusEffect } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from 'expo-router';
 import { getScanSettings, saveScanSettings, ScanSettings } from '@/lib/storage';
 import { PageFilter } from '@/types/document';
-import { useTheme } from '@/contexts/theme-context';
 import { SettingsGroup, SettingsRow } from '@/components/settings-list';
-import { Spacing } from '@/lib/theme';
+import { ToolScreen } from '@/components/tool-ui';
 
 type Quality = ScanSettings['quality'];
 
@@ -27,8 +24,6 @@ const FILTER_OPTIONS: { label: string; value: PageFilter; desc: string }[] = [
 ];
 
 export default function ScanSettingsScreen() {
-  const insets = useSafeAreaInsets();
-  const { colors } = useTheme();
   const [settings, setSettings] = useState<ScanSettings | null>(null);
 
   useFocusEffect(useCallback(() => {
@@ -45,11 +40,7 @@ export default function ScanSettingsScreen() {
   };
 
   return (
-    <ScrollView
-      style={{ backgroundColor: colors.bg }}
-      contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + Spacing.xxxl }]}
-    >
-      <Stack.Screen options={{ title: 'Scan settings' }} />
+    <ToolScreen title="Scan settings">
       <SettingsGroup title="Image quality" footer="Applies to new scans and imported photos.">
         {QUALITY_OPTIONS.map((opt, i) => (
           <SettingsRow
@@ -75,10 +66,6 @@ export default function ScanSettingsScreen() {
           />
         ))}
       </SettingsGroup>
-    </ScrollView>
+    </ToolScreen>
   );
 }
-
-const styles = StyleSheet.create({
-  content: { paddingHorizontal: Spacing.gutter },
-});

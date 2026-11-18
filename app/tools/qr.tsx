@@ -113,19 +113,23 @@ export default function QrScreen() {
     );
   };
 
-  if (!permission) return <View style={[styles.container, { backgroundColor: colors.bg }]} />;
+  // The whole QR screen is camera chrome, always dark (the status bar is light
+  // here too — see lib/status-bar-style.ts), including the permission step.
+  if (!permission) return <View style={[styles.container, { backgroundColor: colors.chrome }]} />;
 
   if (!permission.granted) {
     // After the user has tapped "Don't Allow" once, the OS won't show the
     // permission dialog again — sending them to Settings is the only path.
     const mustGoToSettings = permission.canAskAgain === false;
     return (
-      <View style={[styles.container, { backgroundColor: colors.bg }]}>
-        <ScreenHeader title="QR code" onBack={() => router.back()} backIcon="close" />
+      <View style={[styles.container, { backgroundColor: colors.chrome }]}>
+        <ScreenHeader title="QR code" dark onBack={() => router.back()} backIcon="close" />
         <View style={styles.centered}>
-          <Ionicons name="camera-outline" size={56} color={colors.muted} />
-          <Text style={[Type.title, styles.permTitle, { color: colors.text }]}>Camera access needed</Text>
-          <Text style={[Type.callout, styles.permSub, { color: colors.muted }]}>
+          <View style={[styles.permIcon, { backgroundColor: colors.chromeRaised }]}>
+            <Ionicons name="camera-outline" size={36} color={colors.chromeAccent} />
+          </View>
+          <Text style={[Type.title, styles.permTitle, { color: colors.chromeText }]}>Camera access needed</Text>
+          <Text style={[Type.callout, styles.permSub, { color: colors.chromeMuted }]}>
             {mustGoToSettings
               ? 'Camera access is turned off. Open Settings to allow it for Scan Kit.'
               : 'Allow camera access to scan QR codes and barcodes.'}
@@ -230,6 +234,7 @@ const styles = StyleSheet.create({
   resultData: { lineHeight: 22 },
   resultActions: { flexDirection: 'row', gap: Spacing.md },
   permTitle: { marginTop: Spacing.lg, marginBottom: Spacing.sm, textAlign: 'center' },
+  permIcon: { width: 80, height: 80, borderRadius: 40, alignItems: 'center', justifyContent: 'center' },
   permSub: { textAlign: 'center', lineHeight: 21, marginBottom: Spacing.xxl },
   permBtn: { alignSelf: 'stretch' },
 });

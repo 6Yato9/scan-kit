@@ -105,7 +105,7 @@ export default function IdCardScreen() {
   const slot = (side: Side, uri: string | null) => (
     <>
       <SectionRow
-        label={side === 'front' ? 'Front' : 'Back, optional'}
+        label={side === 'front' ? 'Front' : 'Back (optional)'}
         action={uri ? 'Retake' : undefined}
         onAction={() => capture(side)}
       />
@@ -115,7 +115,7 @@ export default function IdCardScreen() {
         accessibilityLabel={uri ? `Retake ${side}` : `Add ${side} of card`}
         style={({ pressed }) => [
           styles.slot,
-          { backgroundColor: colors.card, borderColor: uri ? colors.card : colors.border },
+          { backgroundColor: colors.card, borderColor: uri ? colors.card : colors.ring },
           !uri && styles.dashed,
           pressed && { opacity: 0.7 },
         ]}
@@ -124,7 +124,9 @@ export default function IdCardScreen() {
           <Image source={{ uri }} style={styles.preview} resizeMode="contain" />
         ) : (
           <View style={styles.placeholder}>
-            <Ionicons name="id-card-outline" size={34} color={colors.muted} />
+            <View style={[styles.addIcon, { backgroundColor: colors.accentLight }]}>
+              <Ionicons name="id-card-outline" size={26} color={colors.accent} />
+            </View>
             <Text style={[Type.subhead, { color: colors.accent }]}>
               {side === 'front' ? 'Add front' : 'Add back'}
             </Text>
@@ -158,4 +160,5 @@ const styles = StyleSheet.create({
   dashed: { borderStyle: 'dashed' },
   preview: { width: '100%', height: '100%' },
   placeholder: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: Spacing.sm },
+  addIcon: { width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center' },
 });

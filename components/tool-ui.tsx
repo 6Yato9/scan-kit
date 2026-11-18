@@ -3,7 +3,7 @@
 // (header + scroll body + pinned action bar), the document picker rows, the
 // option list, the empty state and a progress line. Keeping them here is what
 // makes the tools look like one product instead of fifteen.
-import { ReactNode, useCallback, useEffect, useState } from 'react';
+import { Children, createContext, Fragment, ReactNode, useCallback, useContext, useEffect, useState } from 'react';
 import {
   Image,
   KeyboardAvoidingView,
@@ -18,10 +18,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/theme-context';
-import { ScreenHeader } from '@/components/screen-header';
-import { EmptyState } from '@/components/empty-state';
+import { useScan } from '@/contexts/scan-context';
 import { SectionLabel } from '@/components/section-label';
-import { HeaderTextButton } from '@/components/screen-header';
+import { HeaderTextButton, ScreenHeader } from '@/components/screen-header';
+import { PrimaryButton } from '@/components/primary-button';
 import { getDocuments } from '@/lib/storage';
 import { HIT, Radius, Spacing, Type } from '@/lib/theme';
 import type { Document } from '@/types/document';
@@ -75,9 +75,10 @@ export function pageCountLabel(n: number): string {
 }
 
 /**
- * Standard tool screen: chevron-back header, scrolling body, and an optional
- * action bar pinned above the home indicator (keep the PrimaryButton in it
- * mounted and toggle `disabled`, so the layout never jumps).
+ * Standard pushed screen (every tool and every settings screen): chevron-back
+ * ScreenHeader, scrolling body, and an optional action bar pinned above the
+ * home indicator (keep the PrimaryButton in it mounted and toggle `disabled`,
+ * so the layout never jumps).
  */
 export function ToolScreen({
   title,
@@ -133,16 +134,70 @@ export function ToolScreen({
   );
 }
 
-/** Centred icon + heading + explanation, for the camera-first tools. */
-export function ToolIntro({ icon, title, text }: { icon: IconName; title: string; text: string }) {
+type IntroPoint = { icon: IconName; text: string };
+
+/**
+ * The one hero used by tool intros and tool empty states: icon, heading and a
+ * short explanation, top-aligned under the header (never vertically centred,
+ * so every tool's hero sits at the same height). `points` adds a short "how it
+ * works" card under it. `compact` is a single row for screens with content
+ * below (Erase marks).
+ */
+export function ToolIntro({
+  icon,
+  title,
+  text,
+  points,
+  compact = false,
+}: {
+  icon: IconName;
+  title: string;
+  text: string;
+  points?: IntroPoint[];
+  compact?: boolean;
+}) {
   const { colors } = useTheme();
-  return (
-    <View style={styles.intro}>
-      <View style={[styles.introIcon, { backgroundColor: colors.accentLight }]}>
-        <Ionicons name={icon} size={40} color={colors.accent} />
+  if (compact) {
+    return (
+      <View style={[styles.introCompact, { backgroundColor: colors.card }]}>
+        <View style={[styles.introCompactIcon, { backgroundColor: colors.accentLight }]}>
+          <Ionicons name={icon} size={24} color={colors.accent} />
+        </View>
+        <View style={styles.flex}>
+          <Text style={[Type.headline, { color: colors.text }]}>{title}</Text>
+          <Text style={[Type.footnote, styles.introCompactText, { color: colors.muted }]}>{text}</Text>
+        </View>
       </View>
-      <Text style={[Type.title, styles.center, { color: colors.text }]}>{title}</Text>
-      <Text style={[Type.callout, styles.center, styles.introText, { color: colors.muted }]}>{text}</Text>
+    );
+  }
+  return (
+    <View>
+      <View style={styles.intro}>
+        <View style={[styles.introIcon, { backgroundColor: colors.accentLight }]}>
+          <Ionicons name={icon} size={36} color={colors.accent} />
+        </View>
+        <Text style={[Type.title, styles.center, { color: colors.text }]} accessibilityRole="header">
+          {title}
+        </Text>
+        <Text style={[Type.callout, styles.center, styles.introText, { color: colors.muted }]}>{text}</Text>
+      </View>
+      {points?.length ? (
+        <View style={[styles.group, styles.points, { backgroundColor: colors.card }]}>
+          {points.map((pt, i) => (
+            <View key={pt.text} style={styles.point}>
+              <Ionicons name={pt.icon} size={20} color={colors.accent} style={styles.pointIcon} />
+              <View
+                style={[
+                  styles.pointBody,
+                  i < points.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+                ]}
+              >
+                <Text style={[Type.callout, styles.pointText, { color: colors.text }]}>{pt.text}</Text>
+              </View>
+            </View>
+          ))}
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -196,7 +251,7 @@ export function PagePreview({
     </View>
   );
   return (
-    <View style={[styles.previewFrame, { backgroundColor: colors.card }]}>
+    <View style={[styles.previewFrame, { backgroundColor: colors.card, shadowColor: colors.shadow }]}>
       {onPress ? (
         <Pressable
           onPress={e => onPress({ x: e.nativeEvent.locationX / width, y: e.nativeEvent.locationY / height })}
@@ -228,9 +283,63 @@ export function ToolNote({ children }: { children: string }) {
   return <Text style={[Type.footnote, styles.note, { color: colors.muted }]}>{children}</Text>;
 }
 
+// Rows rendered inside a DocGroup draw no card of their own.
+const InDocGroup = createContext(false);
+
 /**
- * One document in a picker list. `order` shows a numbered badge (multi-select
- * in a meaningful order, e.g. merge); otherwise a checkmark marks the selection.
+ * The one document picker: an inset grouped card with hairline separators
+ * (like OptionList). Put DocRows inside it.
+ */
+export function DocGroup({ children }: { children: ReactNode }) {
+  const { colors } = useTheme();
+  const rows = Children.toArray(children);
+  return (
+    <InDocGroup.Provider value>
+      <View style={[styles.group, { backgroundColor: colors.card }]}>
+        {rows.map((row, i) => (
+          <Fragment key={i}>
+            {i > 0 ? <View style={[styles.docSeparator, { backgroundColor: colors.border }]} /> : null}
+            {row}
+          </Fragment>
+        ))}
+      </View>
+    </InDocGroup.Provider>
+  );
+}
+
+/** Radio / checkbox indicator: an empty ring, or a filled accent disc with a check or a number. */
+export function SelectionMark({ selected, order }: { selected: boolean; order?: number }) {
+  const { colors } = useTheme();
+  if (!selected) return <View style={[styles.mark, styles.markEmpty, { borderColor: colors.ring }]} />;
+  return (
+    <View style={[styles.mark, { backgroundColor: colors.accentFill }]}>
+      {order ? (
+        <Text style={[styles.badgeText, { color: colors.onAccent }]}>{order}</Text>
+      ) : (
+        <Ionicons name="checkmark" size={16} color={colors.onAccent} />
+      )}
+    </View>
+  );
+}
+
+/** A document's first page at thumbnail size, with a hairline so white pages keep their edge. */
+export function DocThumb({ doc, width = 40, height = 52 }: { doc: Document; width?: number; height?: number }) {
+  const { colors } = useTheme();
+  const frame = [styles.thumb, { width, height, backgroundColor: colors.placeholder, borderColor: colors.thumbBorder }];
+  return doc.pages[0] ? (
+    <Image source={{ uri: `${doc.pages[0]}?v=${doc.updatedAt}` }} style={frame} resizeMode="cover" />
+  ) : (
+    <View style={[frame, styles.thumbIcon]}>
+      <Ionicons name="document-text-outline" size={20} color={colors.muted} />
+    </View>
+  );
+}
+
+/**
+ * One document in a picker. The selection mark is always visible (an empty
+ * ring until chosen) so the rows read as choices, not navigation. `order`
+ * numbers the mark for multi-select in a meaningful order (merge). Wrap rows
+ * in a DocGroup.
  */
 export function DocRow({
   doc,
@@ -246,67 +355,92 @@ export function DocRow({
   multi?: boolean;
 }) {
   const { colors } = useTheme();
+  const grouped = useContext(InDocGroup);
   const meta = doc.pdfUri ? 'PDF' : pageCountLabel(doc.pages.length);
   return (
     <Pressable
       onPress={onPress}
-      accessibilityRole="button"
-      accessibilityState={{ selected }}
+      accessibilityRole={multi ? 'checkbox' : 'radio'}
+      accessibilityState={multi ? { checked: selected } : { selected, checked: selected }}
       accessibilityLabel={`${doc.name}, ${meta}`}
       style={({ pressed }) => [
         styles.row,
-        { backgroundColor: colors.card, borderColor: selected ? colors.accent : colors.card },
-        pressed && { opacity: 0.7 },
+        !grouped && [styles.rowCard, { backgroundColor: colors.card }],
+        pressed && { backgroundColor: colors.separator },
       ]}
     >
-      {doc.pages[0] ? (
-        <Image
-          source={{ uri: `${doc.pages[0]}?v=${doc.updatedAt}` }}
-          style={[styles.thumb, { backgroundColor: colors.placeholder }]}
-          resizeMode="cover"
-        />
-      ) : (
-        <View style={[styles.thumb, styles.thumbIcon, { backgroundColor: colors.placeholder }]}>
-          <Ionicons name="document-text-outline" size={22} color={colors.muted} />
-        </View>
-      )}
+      <DocThumb doc={doc} />
       <View style={styles.flex}>
-        <Text style={[Type.subhead, { color: colors.text }]} numberOfLines={1}>
+        <Text style={[Type.body, { color: colors.text }]} numberOfLines={1}>
           {doc.name}
         </Text>
         <Text style={[Type.footnote, styles.meta, { color: colors.muted }]}>{meta}</Text>
       </View>
-      {order ? (
-        <View style={[styles.badge, { backgroundColor: colors.accentFill }]}>
-          <Text style={[styles.badgeText, { color: colors.onAccent }]}>{order}</Text>
-        </View>
-      ) : selected ? (
-        <Ionicons name="checkmark" size={22} color={colors.accent} />
-      ) : multi ? (
-        <View style={[styles.badge, styles.badgeEmpty, { borderColor: colors.border }]} />
-      ) : null}
+      <SelectionMark selected={selected} order={order} />
     </Pressable>
   );
 }
 
 /**
- * Empty state for a tool that has no documents to work on, with a way out:
- * importing photos (the Files tab handles the flow).
+ * Empty state for a tool that has no documents to work on, with a way out
+ * (importing photos; the Files tab handles the flow). Prefer NoDocumentsScreen,
+ * which docks the action at the bottom like every other tool.
  */
 export function NoDocuments({ title, subtitle }: { title?: string; subtitle?: string }) {
   const router = useRouter();
   return (
-    <View style={styles.empty}>
-      <EmptyState
+    <View>
+      <ToolIntro
         icon="documents-outline"
         title={title ?? 'No documents yet'}
-        subtitle={subtitle ?? 'Scan or import a document first, then come back to this tool.'}
-        actionLabel="Import photos"
-        onAction={() =>
-          router.navigate({ pathname: '/(tabs)/files', params: { action: 'importImages' } } as never)
-        }
+        text={subtitle ?? 'Scan or import a document first, then come back to this tool.'}
       />
+      <View style={styles.inlineAction}>
+        <PrimaryButton
+          title="Import photos"
+          icon="images-outline"
+          onPress={() => router.navigate({ pathname: '/(tabs)/files', params: { action: 'importImages' } } as never)}
+        />
+      </View>
     </View>
+  );
+}
+
+/**
+ * A whole tool screen for "nothing to work on yet": the shared top-aligned
+ * hero, with Import photos and Scan docked at the bottom like any tool action.
+ */
+export function NoDocumentsScreen({ toolTitle, title, subtitle }: { toolTitle: string; title?: string; subtitle?: string }) {
+  const router = useRouter();
+  const { triggerScan } = useScan();
+  return (
+    <ToolScreen
+      title={toolTitle}
+      footer={
+        <>
+          <PrimaryButton
+            title="Scan a document"
+            icon="camera-outline"
+            onPress={async () => {
+              const id = await triggerScan();
+              if (id) router.push({ pathname: '/viewer', params: { id } });
+            }}
+          />
+          <PrimaryButton
+            title="Import photos"
+            icon="images-outline"
+            variant="secondary"
+            onPress={() => router.navigate({ pathname: '/(tabs)/files', params: { action: 'importImages' } } as never)}
+          />
+        </>
+      }
+    >
+      <ToolIntro
+        icon="documents-outline"
+        title={title ?? 'No documents yet'}
+        text={subtitle ?? 'Scan or import a document first, then come back to this tool.'}
+      />
+    </ToolScreen>
   );
 }
 
@@ -372,9 +506,48 @@ export function Segmented<T extends string>({
             onPress={() => onChange(opt.value)}
             accessibilityRole="radio"
             accessibilityState={{ checked: on }}
-            style={[styles.segmentItem, on && [styles.segmentOn, { backgroundColor: colors.card }]]}
+            style={[styles.segmentItem, on && [styles.segmentOn, { backgroundColor: colors.segmentOn, shadowColor: colors.shadow }]]}
           >
             <Text style={[Type.subhead, { color: on ? colors.text : colors.muted }]} numberOfLines={1}>
+              {opt.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+/** A row of round colour swatches (ink colours are content, so they come from data, not the theme). */
+export function ColorSwatches<T extends string>({
+  options,
+  value,
+  onChange,
+}: {
+  options: { value: T; label: string; color: string }[];
+  value: T;
+  onChange: (v: T) => void;
+}) {
+  const { colors } = useTheme();
+  return (
+    <View style={[styles.swatches, { backgroundColor: colors.card }]} accessibilityRole="radiogroup">
+      {options.map(opt => {
+        const on = opt.value === value;
+        return (
+          <Pressable
+            key={opt.value}
+            onPress={() => onChange(opt.value)}
+            accessibilityRole="radio"
+            accessibilityState={{ checked: on, selected: on }}
+            accessibilityLabel={opt.label}
+            style={styles.swatchHit}
+          >
+            <View style={[styles.swatchRing, { borderColor: on ? colors.accent : 'transparent' }]}>
+              <View style={[styles.swatch, { backgroundColor: opt.color }]}>
+                {on ? <Ionicons name="checkmark" size={18} color={colors.onScrim} /> : null}
+              </View>
+            </View>
+            <Text style={[Type.caption, { color: on ? colors.text : colors.muted, fontWeight: on ? '600' : '400' }]}>
               {opt.label}
             </Text>
           </Pressable>
@@ -409,35 +582,66 @@ const styles = StyleSheet.create({
     gap: Spacing.sm,
   },
   center: { textAlign: 'center' },
-  intro: { alignItems: 'center', paddingHorizontal: Spacing.xl, paddingVertical: Spacing.lg, gap: Spacing.md },
+  intro: {
+    alignItems: 'center',
+    paddingHorizontal: Spacing.xl,
+    paddingTop: Spacing.xxxl,
+    paddingBottom: Spacing.xl,
+    gap: Spacing.sm,
+  },
   introIcon: {
-    width: 88,
-    height: 88,
-    borderRadius: 44,
+    width: 80,
+    height: 80,
+    borderRadius: 40,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: Spacing.xs,
+    marginBottom: Spacing.md,
   },
   introText: { lineHeight: 21 },
+  introCompact: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    padding: Spacing.lg,
+    borderRadius: Radius.md,
+    marginTop: Spacing.lg,
+  },
+  introCompactIcon: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
+  introCompactText: { marginTop: 2, lineHeight: 18 },
+  points: { marginTop: Spacing.sm },
+  point: { flexDirection: 'row', alignItems: 'center', paddingLeft: Spacing.lg },
+  pointIcon: { width: 24, marginRight: Spacing.md },
+  pointBody: { flex: 1, paddingVertical: Spacing.md, paddingRight: Spacing.lg, minHeight: HIT + 4, justifyContent: 'center' },
+  pointText: { lineHeight: 20 },
+  inlineAction: { marginTop: Spacing.sm },
   note: { marginTop: Spacing.sm, marginHorizontal: Spacing.xs, lineHeight: 18 },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.md,
-    padding: Spacing.sm + 2,
+    paddingVertical: Spacing.sm + 2,
+    paddingLeft: Spacing.md,
     paddingRight: Spacing.lg,
-    borderRadius: Radius.md,
-    marginBottom: Spacing.sm,
-    borderWidth: 1.5,
-    minHeight: HIT,
+    minHeight: HIT + 16,
   },
-  thumb: { width: 44, height: 58, borderRadius: 6 },
+  rowCard: { borderRadius: Radius.md, marginBottom: Spacing.sm },
+  // Inset to the text column, like iOS list separators.
+  docSeparator: { height: StyleSheet.hairlineWidth, marginLeft: Spacing.md + 40 + Spacing.md },
+  thumb: { borderRadius: 5, borderWidth: StyleSheet.hairlineWidth },
   thumbIcon: { alignItems: 'center', justifyContent: 'center' },
   meta: { marginTop: 2 },
-  badge: { width: 26, height: 26, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
-  badgeEmpty: { borderWidth: 1.5 },
+  mark: { width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  markEmpty: { borderWidth: 1.5 },
   badgeText: { fontSize: 13, fontWeight: '700' },
-  empty: { paddingVertical: Spacing.xxxl, minHeight: 360 },
+  swatches: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    borderRadius: Radius.md,
+    paddingVertical: Spacing.md,
+  },
+  swatchHit: { alignItems: 'center', gap: Spacing.xs + 2, minWidth: HIT + 20 },
+  swatchRing: { padding: 3, borderRadius: 24, borderWidth: 2 },
+  swatch: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
   group: { borderRadius: Radius.md, overflow: 'hidden' },
   sectionRow: {
     flexDirection: 'row',
@@ -458,7 +662,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.xs,
   },
   segmentOn: {
-    shadowColor: '#000',
     shadowOpacity: 0.12,
     shadowRadius: 3,
     shadowOffset: { width: 0, height: 1 },
@@ -468,7 +671,6 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     padding: Spacing.sm,
     borderRadius: Radius.md,
-    shadowColor: '#000',
     shadowOpacity: 0.08,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 2 },

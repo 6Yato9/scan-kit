@@ -9,8 +9,10 @@ import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
 import { useToast } from '@/components/toast';
 import {
+  ColorSwatches,
+  DocGroup,
   DocRow,
-  NoDocuments,
+  NoDocumentsScreen,
   PagePreview,
   Segmented,
   ToolNote,
@@ -100,9 +102,10 @@ export default function WatermarkScreen() {
 
   if (loaded && docs.length === 0) {
     return (
-      <ToolScreen title="Watermark">
-        <NoDocuments subtitle="Watermark stamps text on every page of a scan. Scan or import a document first." />
-      </ToolScreen>
+      <NoDocumentsScreen
+        toolTitle="Watermark"
+        subtitle="Watermark stamps text on every page of a scan. Scan or import a document first."
+      />
     );
   }
 
@@ -179,12 +182,18 @@ export default function WatermarkScreen() {
       <Segmented options={STYLES} value={style} onChange={setStyle} />
 
       <SectionLabel>Color</SectionLabel>
-      <Segmented options={COLORS} value={color} onChange={setColor} />
+      <ColorSwatches
+        options={COLORS.map(c => ({ ...c, color: `rgb(${STAMP_RGB[c.value].join(',')})` }))}
+        value={color}
+        onChange={setColor}
+      />
 
       <SectionLabel>Document</SectionLabel>
-      {docs.map(d => (
-        <DocRow key={d.id} doc={d} selected={d.id === doc?.id} onPress={() => !progress && setDocId(d.id)} />
-      ))}
+      <DocGroup>
+        {docs.map(d => (
+          <DocRow key={d.id} doc={d} selected={d.id === doc?.id} onPress={() => !progress && setDocId(d.id)} />
+        ))}
+      </DocGroup>
       <ToolNote>A new PDF is saved with the watermark on every page. The original document is kept.</ToolNote>
     </ToolScreen>
   );

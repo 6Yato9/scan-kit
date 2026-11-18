@@ -1,12 +1,12 @@
 // app/settings/document-settings.tsx
 import { useCallback, useState } from 'react';
-import { ScrollView, StyleSheet, TextInput, View } from 'react-native';
-import { Stack, useFocusEffect } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { StyleSheet, TextInput, View } from 'react-native';
+import { useFocusEffect } from 'expo-router';
 import { getDocSettings, saveDocSettings, DocSettings } from '@/lib/storage';
 import { autoName } from '@/lib/auto-name';
 import { useTheme } from '@/contexts/theme-context';
 import { SettingsGroup, SettingsRow } from '@/components/settings-list';
+import { ToolScreen } from '@/components/tool-ui';
 import { HIT, Spacing, Type } from '@/lib/theme';
 
 const PAGE_SIZE_OPTIONS: { label: string; desc: string; value: DocSettings['pdfPageSize'] }[] = [
@@ -20,7 +20,6 @@ const QUALITY_OPTIONS: { label: string; value: DocSettings['pdfQuality']; desc: 
 ];
 
 export default function DocumentSettingsScreen() {
-  const insets = useSafeAreaInsets();
   const { colors } = useTheme();
   const [settings, setSettings] = useState<DocSettings | null>(null);
 
@@ -41,12 +40,7 @@ export default function DocumentSettingsScreen() {
   const example = autoName(new Date(), settings?.namePrefix ?? 'Scan');
 
   return (
-    <ScrollView
-      style={{ backgroundColor: colors.bg }}
-      contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + Spacing.xxxl }]}
-      keyboardShouldPersistTaps="handled"
-    >
-      <Stack.Screen options={{ title: 'Document settings' }} />
+    <ToolScreen title="Document settings">
       <SettingsGroup title="Name for new scans" footer={`New scans will be named “${example}”.`}>
         <View style={styles.inputRow}>
           <TextInput
@@ -63,7 +57,7 @@ export default function DocumentSettingsScreen() {
         </View>
       </SettingsGroup>
 
-      <SettingsGroup title="PDF page size">
+      <SettingsGroup title="Paper size" footer="Used for every PDF you export and everything you print. Each page fits on one sheet.">
         {PAGE_SIZE_OPTIONS.map((opt, i) => (
           <SettingsRow
             key={opt.value}
@@ -88,12 +82,11 @@ export default function DocumentSettingsScreen() {
           />
         ))}
       </SettingsGroup>
-    </ScrollView>
+    </ToolScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  content: { paddingHorizontal: Spacing.gutter },
   inputRow: { paddingHorizontal: Spacing.lg, minHeight: HIT + 8, justifyContent: 'center' },
   input: { paddingVertical: Spacing.md },
 });

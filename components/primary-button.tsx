@@ -22,13 +22,16 @@ export function PrimaryButton({
   disabled?: boolean;
   loading?: boolean;
   icon?: IconName;
-  /** primary: filled accent. secondary: neutral fill. destructive: red text on neutral. */
+  /**
+   * primary: filled accent. secondary: tinted fill with accent text (visible on
+   * both the screen background and cards). destructive: red text on a red tint.
+   */
   variant?: 'primary' | 'secondary' | 'destructive';
   style?: ViewStyle;
 }) {
   const { colors } = useTheme();
-  const bg = variant === 'primary' ? colors.accentFill : colors.secondary;
-  const fg = variant === 'primary' ? colors.onAccent : variant === 'destructive' ? colors.danger : colors.text;
+  const bg = variant === 'primary' ? colors.accentFill : variant === 'destructive' ? colors.dangerBg : colors.tintFill;
+  const fg = variant === 'primary' ? colors.onAccent : variant === 'destructive' ? colors.danger : colors.onTint;
   const inactive = disabled || loading;
   return (
     <Pressable

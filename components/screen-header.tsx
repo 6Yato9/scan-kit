@@ -83,6 +83,7 @@ export function ScreenHeader({
   left,
   dark = false,
   withInset = true,
+  fillLeft = false,
 }: {
   title?: string;
   /** Renders a back (or close) button in the left slot. */
@@ -97,6 +98,11 @@ export function ScreenHeader({
   dark?: boolean;
   /** Add the top safe-area inset. Turn off when the parent already pads for it. */
   withInset?: boolean;
+  /**
+   * Give the left slot all the room the right slot doesn't need (no centred
+   * title). For a left-aligned document title next to a few actions (viewer).
+   */
+  fillLeft?: boolean;
 }) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
@@ -125,7 +131,7 @@ export function ScreenHeader({
         ) : (
           <View />
         )}
-        <View style={[styles.side, styles.sideRight]}>{right}</View>
+        <View style={[styles.side, styles.sideRight, fillLeft && styles.sideFit]}>{right}</View>
       </View>
     </View>
   );
@@ -142,6 +148,7 @@ const styles = StyleSheet.create({
   side: { flex: 1, flexDirection: 'row', alignItems: 'center' },
   sideLeft: { justifyContent: 'flex-start' },
   sideRight: { justifyContent: 'flex-end' },
+  sideFit: { flex: 0 },
   title: { flexShrink: 1, textAlign: 'center', maxWidth: '60%' },
   iconBtn: { minWidth: HIT, height: HIT, alignItems: 'center', justifyContent: 'center' },
   textBtn: { minHeight: HIT, paddingHorizontal: Spacing.sm, justifyContent: 'center' },

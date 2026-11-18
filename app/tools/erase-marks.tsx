@@ -9,8 +9,9 @@ import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
 import { useToast } from '@/components/toast';
 import {
+  DocGroup,
   DocRow,
-  NoDocuments,
+  NoDocumentsScreen,
   ToolIntro,
   ToolNote,
   ToolProgress,
@@ -85,9 +86,10 @@ export default function EraseMarksScreen() {
 
   if (loaded && docs.length === 0) {
     return (
-      <ToolScreen title="Erase marks">
-        <NoDocuments subtitle="Erase marks cleans up scanned pages. Scan or import a document first." />
-      </ToolScreen>
+      <NoDocumentsScreen
+        toolTitle="Erase marks"
+        subtitle="Erase marks cleans up scanned pages. Scan or import a document first."
+      />
     );
   }
 
@@ -113,19 +115,22 @@ export default function EraseMarksScreen() {
       }
     >
       <ToolIntro
+        compact
         icon="color-wand-outline"
         title="Remove light marks"
         text="Turns pages into crisp black and white and lifts faint pencil, highlighter and shadow marks."
       />
       <SectionLabel>Document</SectionLabel>
-      {docs.map(doc => (
-        <DocRow
-          key={doc.id}
-          doc={doc}
-          selected={doc.id === selectedId}
-          onPress={() => !running && setSelectedId(doc.id)}
-        />
-      ))}
+      <DocGroup>
+        {docs.map(doc => (
+          <DocRow
+            key={doc.id}
+            doc={doc}
+            selected={doc.id === selectedId}
+            onPress={() => !running && setSelectedId(doc.id)}
+          />
+        ))}
+      </DocGroup>
       <ToolNote>
         Changes the selected document. To undo, open it and choose the Original filter for each page.
       </ToolNote>

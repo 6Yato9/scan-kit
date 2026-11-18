@@ -9,7 +9,6 @@ import { useToast } from '@/components/toast';
 import { PrimaryButton } from '@/components/primary-button';
 import { HeaderIconButton } from '@/components/screen-header';
 import { ToolIntro, ToolProgress, ToolScreen } from '@/components/tool-ui';
-import { EmptyState } from '@/components/empty-state';
 import { notifyError, notifySuccess, tapLight } from '@/lib/haptics';
 import { ocrAvailable, recognizeLines } from '@/lib/ocr';
 import { alertScanError, deleteTempFiles, pickPhotos, scanWithCamera } from '@/lib/tool-scan';
@@ -112,11 +111,13 @@ export default function ExtractTextScreen() {
         }
       >
         {empty ? (
-          <EmptyState
-            icon="text-outline"
-            title="No text found"
-            subtitle="We couldn’t find any readable text. Make sure the page is in focus and well lit."
-          />
+          <View style={styles.pad}>
+            <ToolIntro
+              icon="reader-outline"
+              title="No text found"
+              text="We couldn’t find any readable text. Make sure the page is in focus and well lit."
+            />
+          </View>
         ) : (
           <ScrollView contentContainerStyle={styles.resultScroll}>
             <View style={[styles.resultCard, { backgroundColor: colors.card }]}>
@@ -137,7 +138,6 @@ export default function ExtractTextScreen() {
   return (
     <ToolScreen
       title="Extract text"
-      scroll={false}
       footer={
         <>
           {progress ? (
@@ -164,24 +164,30 @@ export default function ExtractTextScreen() {
         </>
       }
     >
-      <View style={styles.center}>
-        <ToolIntro
-          icon="text-outline"
-          title="Extract text"
-          text={
-            available
-              ? 'Scan a page or pick photos. The text is recognized on your device, ready to copy or share.'
-              : 'Text recognition isn’t available on this device.'
-          }
-        />
-      </View>
+      <ToolIntro
+        icon="reader-outline"
+        title="Extract text"
+        text={
+          available
+            ? 'Scan a page or pick photos. The text is recognized on your device, ready to copy or share.'
+            : 'Text recognition isn’t available on this device.'
+        }
+        points={
+          available
+            ? [
+                { icon: 'lock-closed-outline', text: 'Recognition runs on this device. Nothing is uploaded.' },
+                { icon: 'copy-outline', text: 'Copy the text, share it, or select just the part you need.' },
+              ]
+            : undefined
+        }
+      />
     </ToolScreen>
   );
 }
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  center: { flex: 1, justifyContent: 'center' },
+  pad: { paddingHorizontal: Spacing.gutter },
   actions: { flexDirection: 'row', gap: Spacing.md },
   resultScroll: { padding: Spacing.gutter },
   resultCard: { borderRadius: Radius.md, padding: Spacing.lg },

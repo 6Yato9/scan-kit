@@ -2,7 +2,6 @@
 // Scan (or import) whiteboard photos and save them with the Enhanced filter,
 // which is baked into the pixels by the scan pipeline.
 import { useRef, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useScan } from '@/contexts/scan-context';
 import { PrimaryButton } from '@/components/primary-button';
@@ -42,7 +41,6 @@ export default function WhiteboardScreen() {
   return (
     <ToolScreen
       title="Whiteboard"
-      scroll={false}
       footer={
         <>
           <PrimaryButton
@@ -63,17 +61,16 @@ export default function WhiteboardScreen() {
         </>
       }
     >
-      <View style={styles.center}>
-        <ToolIntro
-          icon="easel-outline"
-          title="Scan a whiteboard"
-          text="Contrast and color are boosted automatically so marker writing stays crisp and the board looks clean."
-        />
-      </View>
+      <ToolIntro
+        icon="easel-outline"
+        title="Scan a whiteboard"
+        text="Marker writing stays crisp and the board comes out clean and bright."
+        points={[
+          { icon: 'scan-outline', text: 'Stand square to the board so its edges are detected.' },
+          { icon: 'contrast-outline', text: 'Contrast and color are boosted automatically.' },
+          { icon: 'color-filter-outline', text: 'Change the filter for any page later in the viewer.' },
+        ]}
+      />
     </ToolScreen>
   );
 }
-
-const styles = StyleSheet.create({
-  center: { flex: 1, justifyContent: 'center' },
-});

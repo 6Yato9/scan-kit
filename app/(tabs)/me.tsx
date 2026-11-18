@@ -5,13 +5,12 @@ import { Alert, InteractionManager, ScrollView, StyleSheet, Text, View } from 'r
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Directory, File, Paths } from 'expo-file-system';
-import { SortSheet } from '@/components/sort-sheet';
 import { SegmentedControl, SettingsGroup, SettingsRow } from '@/components/settings-list';
-import { getAppLockEnabled, getSortPreference, saveSortPreference, setAppLockEnabled, SortKey } from '@/lib/storage';
+import { getAppLockEnabled, setAppLockEnabled, TRASH_RETENTION_DAYS } from '@/lib/storage';
 import { authenticate, biometricKind, BiometricKind, canAuthenticate } from '@/lib/biometrics';
 import { tapLight } from '@/lib/haptics';
 import { useTheme } from '@/contexts/theme-context';
-import { Spacing } from '@/lib/theme';
+import { Spacing, TAB_BAR_CLEARANCE } from '@/lib/theme';
 
 /** Recursively sums the byte size of every file under a directory. */
 function dirSize(dir: Directory): number {
@@ -38,12 +37,6 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(value < 10 ? 1 : 0)} ${units[i]}`;
 }
 
-const SORT_LABEL: Record<SortKey, string> = {
-  dateAdded: 'Date added',
-  dateModified: 'Last modified',
-  nameAZ: 'Name',
-};
-
 const LOCK_METHOD: Record<BiometricKind, string> = {
   faceId: 'Face ID',
   touchId: 'Touch ID',
@@ -53,8 +46,6 @@ const LOCK_METHOD: Record<BiometricKind, string> = {
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const [sortSheetVisible, setSortSheetVisible] = useState(false);
-  const [sortKey, setSortKey] = useState<SortKey>('dateAdded');
   const [storageUsed, setStorageUsed] = useState<string | null>(null);
   const [appLock, setAppLock] = useState(false);
   const [lockKind, setLockKind] = useState<BiometricKind>('passcode');
@@ -64,7 +55,6 @@ export default function SettingsScreen() {
 
   useFocusEffect(useCallback(() => {
     let cancelled = false;
-    getSortPreference().then(k => { if (!cancelled) setSortKey(k); });
     getAppLockEnabled().then(v => { if (!cancelled) setAppLock(v); });
     // Walking the folder is synchronous; let the screen paint (with its
     // spinner) first.
@@ -78,11 +68,6 @@ export default function SettingsScreen() {
     });
     return () => { cancelled = true; task.cancel(); };
   }, []));
-
-  const handleSort = async (key: SortKey) => {
-    setSortKey(key);
-    await saveSortPreference(key);
-  };
 
   // Toggle the whole-app lock. Turning it on requires a successful check so a
   // user can't enable a lock they can't pass. Turning it off fails open when
@@ -118,7 +103,7 @@ export default function SettingsScreen() {
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
       <ScrollView
         style={styles.container}
-        contentContainerStyle={[styles.content, { paddingTop: insets.top + 14, paddingBottom: insets.bottom + 110 }]}
+        contentContainerStyle={[styles.content, { paddingTop: insets.top + 14, paddingBottom: insets.bottom + TAB_BAR_CLEARANCE }]}
       >
         <Text style={[styles.screenTitle, { color: colors.text }]} accessibilityRole="header">Settings</Text>
 
@@ -151,18 +136,18 @@ export default function SettingsScreen() {
         <SettingsGroup title="Scanning and documents">
           <SettingsRow icon="camera-outline" label="Scan settings" accessory={{ type: 'chevron' }} onPress={() => router.push('/settings/scan-settings')} />
           <SettingsRow icon="document-text-outline" label="Document settings" accessory={{ type: 'chevron' }} onPress={() => router.push('/settings/document-settings')} />
-          <SettingsRow icon="print-outline" label="Printing" accessory={{ type: 'chevron' }} onPress={() => router.push('/settings/printer')} />
-          <SettingsRow
-            icon="swap-vertical-outline"
-            label="Sort documents by"
-            accessory={{ type: 'value', text: SORT_LABEL[sortKey] }}
-            onPress={() => setSortSheetVisible(true)}
-            last
-          />
+          <SettingsRow icon="print-outline" label="Printing" accessory={{ type: 'chevron' }} onPress={() => router.push('/settings/printer')} last />
         </SettingsGroup>
 
-        <SettingsGroup title="Storage" footer="Everything is stored on this device only.">
-          <SettingsRow icon="server-outline" label="Space used" accessory={{ type: 'value', text: storageUsed }} last />
+        <SettingsGroup title="Storage" footer={`Everything is stored on this device only. Deleted documents stay in Recently deleted for ${TRASH_RETENTION_DAYS} days.`}>
+          <SettingsRow icon="server-outline" label="Space used" accessory={{ type: 'value', text: storageUsed }} />
+          <SettingsRow
+            icon="trash-outline"
+            label="Recently deleted"
+            accessory={{ type: 'chevron' }}
+            onPress={() => router.push('/settings/recently-deleted' as never)}
+            last
+          />
         </SettingsGroup>
 
         <SettingsGroup title="Support">
@@ -170,12 +155,6 @@ export default function SettingsScreen() {
           <SettingsRow icon="information-circle-outline" label="About Scan Kit" accessory={{ type: 'chevron' }} onPress={() => router.push('/settings/about')} last />
         </SettingsGroup>
 
-        <SortSheet
-          visible={sortSheetVisible}
-          current={sortKey}
-          onSort={handleSort}
-          onClose={() => setSortSheetVisible(false)}
-        />
       </ScrollView>
       {/* Opaque mask over the status bar so the scrolling title and section
           labels never pass under the clock and battery. */}

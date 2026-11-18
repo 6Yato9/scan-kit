@@ -10,8 +10,9 @@ import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
 import { useToast } from '@/components/toast';
 import {
+  DocGroup,
   DocRow,
-  NoDocuments,
+  NoDocumentsScreen,
   OptionList,
   ToolNote,
   ToolProgress,
@@ -78,9 +79,10 @@ export default function CompressScreen() {
 
   if (loaded && docs.length === 0) {
     return (
-      <ToolScreen title="Compress">
-        <NoDocuments subtitle="Compress makes scanned documents smaller. Scan or import a document first." />
-      </ToolScreen>
+      <NoDocumentsScreen
+        toolTitle="Compress"
+        subtitle="Compress makes scanned documents smaller. Scan or import a document first."
+      />
     );
   }
 
@@ -133,18 +135,20 @@ export default function CompressScreen() {
       <OptionList options={LEVELS} value={level} onChange={v => { setLevel(v); setResult(null); }} />
 
       <SectionLabel>Document</SectionLabel>
-      {docs.map(d => (
-        <DocRow
-          key={d.id}
-          doc={d}
-          selected={d.id === docId}
-          onPress={() => {
-            if (running) return;
-            setDocId(d.id);
-            setResult(null);
-          }}
-        />
-      ))}
+      <DocGroup>
+        {docs.map(d => (
+          <DocRow
+            key={d.id}
+            doc={d}
+            selected={d.id === docId}
+            onPress={() => {
+              if (running) return;
+              setDocId(d.id);
+              setResult(null);
+            }}
+          />
+        ))}
+      </DocGroup>
       <ToolNote>Works on scanned and imported photos. Imported PDF files can’t be compressed.</ToolNote>
     </ToolScreen>
   );

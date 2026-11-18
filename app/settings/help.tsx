@@ -1,11 +1,10 @@
 // app/settings/help.tsx
 // Short, scannable help: how to do the main things in Scan Kit.
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Stack } from 'expo-router';
+import { StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/theme-context';
 import { SectionLabel } from '@/components/section-label';
+import { ToolScreen } from '@/components/tool-ui';
 import { Radius, Spacing, Type } from '@/lib/theme';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
@@ -44,15 +43,16 @@ const SECTIONS: { title: string; tips: Tip[] }[] = [
   },
 ];
 
+/** Joins the last two words so a paragraph never ends on a lone short word. */
+function noWidow(text: string): string {
+  const i = text.lastIndexOf(' ');
+  return i > 0 ? `${text.slice(0, i)}\u00A0${text.slice(i + 1)}` : text;
+}
+
 export default function HelpScreen() {
-  const insets = useSafeAreaInsets();
   const { colors } = useTheme();
   return (
-    <ScrollView
-      style={{ backgroundColor: colors.bg }}
-      contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + Spacing.xxxl }]}
-    >
-      <Stack.Screen options={{ title: 'Help' }} />
+    <ToolScreen title="Help">
       {SECTIONS.map(section => (
         <View key={section.title}>
           <SectionLabel>{section.title}</SectionLabel>
@@ -69,19 +69,18 @@ export default function HelpScreen() {
                   ]}
                 >
                   <Text style={[Type.headline, { color: colors.text }]}>{tip.title}</Text>
-                  <Text style={[Type.subhead, styles.body, { color: colors.muted }]}>{tip.text}</Text>
+                  <Text style={[Type.subhead, styles.body, { color: colors.muted }]}>{noWidow(tip.text)}</Text>
                 </View>
               </View>
             ))}
           </View>
         </View>
       ))}
-    </ScrollView>
+    </ToolScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  content: { paddingHorizontal: Spacing.gutter },
   group: { borderRadius: Radius.md, overflow: 'hidden' },
   row: { flexDirection: 'row', alignItems: 'flex-start', paddingLeft: Spacing.lg },
   iconTile: { width: 30, height: 30, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginRight: Spacing.md, marginTop: Spacing.md },

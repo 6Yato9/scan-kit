@@ -8,8 +8,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
-import { useToast } from '@/components/toast';
-import { DocRow, NoDocuments, ToolNote, ToolScreen, useToolDocuments } from '@/components/tool-ui';
+import { DocGroup, DocRow, NoDocumentsScreen, ToolNote, ToolScreen, useToolDocuments } from '@/components/tool-ui';
 import { buildLongImageHtml, planLongImage, type LongImagePlan } from '@/lib/long-image';
 import { deleteQuietly, exportFileName, makeExportDir, shareFile } from '@/lib/share';
 import { notifyError, notifySuccess } from '@/lib/haptics';
@@ -28,7 +27,6 @@ type Output = { uri: string; dir: string; plan: LongImagePlan; docName: string; 
 
 export default function LongImageScreen() {
   const { colors } = useTheme();
-  const { show } = useToast();
   const { width: screenW } = useWindowDimensions();
   const { docs, loaded } = useToolDocuments();
   const [docId, setDocId] = useState<string | null>(null);
@@ -104,9 +102,10 @@ export default function LongImageScreen() {
 
   if (loaded && docs.length === 0) {
     return (
-      <ToolScreen title="Long image">
-        <NoDocuments subtitle="Long image joins a document’s pages into one tall picture. Scan or import a document first." />
-      </ToolScreen>
+      <NoDocumentsScreen
+        toolTitle="Long image"
+        subtitle="Long image joins a document’s pages into one tall picture. Scan or import a document first."
+      />
     );
   }
 
@@ -147,9 +146,11 @@ export default function LongImageScreen() {
       ) : (
         <>
           <SectionLabel>Document</SectionLabel>
-          {docs.map(d => (
-            <DocRow key={d.id} doc={d} selected={d.id === docId} onPress={() => !working && setDocId(d.id)} />
-          ))}
+          <DocGroup>
+            {docs.map(d => (
+              <DocRow key={d.id} doc={d} selected={d.id === docId} onPress={() => !working && setDocId(d.id)} />
+            ))}
+          </DocGroup>
           <ToolNote>All pages are stacked top to bottom into a single JPEG you can share or save to Photos.</ToolNote>
         </>
       )}

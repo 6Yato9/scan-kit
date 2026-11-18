@@ -34,7 +34,7 @@ export function MoveFolderSheet({ visible, document, documents, folders, onMove,
   const setNewName = (v: string) => { newNameRef.current = v; setNewNameState(v); };
   const inputRef = useRef<TextInput>(null);
 
-  useEffect(() => { if (!visible) { setCreating(false); setNewName(''); } }, [visible]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!visible) { setCreating(false); setNewName(''); } }, [visible]);
 
   if (!bulk && !shownDoc) return null;
 

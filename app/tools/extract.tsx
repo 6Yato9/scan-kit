@@ -10,7 +10,7 @@ import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
 import { useToast } from '@/components/toast';
-import { DocRow, NoDocuments, SectionRow, ToolScreen, pageCountLabel, useToolDocuments } from '@/components/tool-ui';
+import { DocGroup, DocRow, NoDocumentsScreen, SectionRow, ToolScreen, pageCountLabel, useToolDocuments } from '@/components/tool-ui';
 import { saveDocument } from '@/lib/storage';
 import { copyPageWithShadow, deleteDocumentFiles } from '@/lib/files';
 import { notifyError, notifySuccess } from '@/lib/haptics';
@@ -83,12 +83,11 @@ export default function ExtractScreen() {
 
   if (loaded && docs.length === 0) {
     return (
-      <ToolScreen title="Extract pages">
-        <NoDocuments
-          title="No multi-page documents"
-          subtitle="Extracting pages needs a document with at least two pages."
-        />
-      </ToolScreen>
+      <NoDocumentsScreen
+        toolTitle="Extract pages"
+        title="No multi-page documents"
+        subtitle="Extracting pages needs a document with at least two pages. Scan or import one first."
+      />
     );
   }
 
@@ -105,9 +104,11 @@ export default function ExtractScreen() {
       }
     >
       <SectionLabel>Document</SectionLabel>
-      {docs.map(d => (
-        <DocRow key={d.id} doc={d} selected={d.id === docId} onPress={() => pick(d)} />
-      ))}
+      <DocGroup>
+        {docs.map(d => (
+          <DocRow key={d.id} doc={d} selected={d.id === docId} onPress={() => pick(d)} />
+        ))}
+      </DocGroup>
 
       {doc ? (
         <>
@@ -132,7 +133,7 @@ export default function ExtractScreen() {
                   ]}
                 >
                   <Image source={{ uri: `${uri}?v=${doc.updatedAt}` }} style={styles.pageImg} resizeMode="cover" />
-                  <View style={[styles.pageNum, { backgroundColor: on ? colors.accentFill : 'rgba(0,0,0,0.55)' }]}>
+                  <View style={[styles.pageNum, { backgroundColor: on ? colors.accentFill : colors.scrim }]}>
                     <Text style={[styles.pageNumText, { color: colors.onAccent }]}>{i + 1}</Text>
                   </View>
                   {on ? (

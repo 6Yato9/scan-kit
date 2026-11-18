@@ -51,7 +51,7 @@ const OPEN_MS = 280;
 const CLOSE_MS = 220;
 
 export function BottomSheet({ visible: requested, onClose, children, transparentBackdrop, onDismissed, variant = 'plain' }: Props) {
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
   // Step aside while the app lock is up: an open sheet would otherwise sit on
   // top of the lock screen. It comes back by itself after unlocking.
   const locked = useAppLocked();
@@ -153,7 +153,7 @@ export function BottomSheet({ visible: requested, onClose, children, transparent
         <Animated.View
           style={[
             StyleSheet.absoluteFill,
-            { backgroundColor: transparentBackdrop ? 'transparent' : isDark ? 'rgba(0,0,0,0.6)' : 'rgba(0,0,0,0.4)', opacity: backdrop },
+            { backgroundColor: transparentBackdrop ? 'transparent' : colors.backdrop, opacity: backdrop },
           ]}
         >
           <Pressable
@@ -177,11 +177,11 @@ export function BottomSheet({ visible: requested, onClose, children, transparent
               paddingBottom: Math.max(insets.bottom, Spacing.lg) + Spacing.sm,
               transform: [{ translateY }],
             },
-            isDark && { borderColor: 'rgba(255,255,255,0.08)', borderWidth: StyleSheet.hairlineWidth },
+            { borderColor: colors.sheetBorder, borderWidth: StyleSheet.hairlineWidth, shadowColor: colors.shadow },
           ]}
         >
           <View {...pan.panHandlers} style={styles.handleArea}>
-            <View style={[styles.handle, { backgroundColor: isDark ? 'rgba(255,255,255,0.25)' : 'rgba(0,0,0,0.18)' }]} />
+            <View style={[styles.handle, { backgroundColor: colors.handle }]} />
           </View>
           <View style={styles.content}>{children}</View>
         </Animated.View>
@@ -270,7 +270,6 @@ const styles = StyleSheet.create({
   sheet: {
     borderTopLeftRadius: Radius.xl,
     borderTopRightRadius: Radius.xl,
-    shadowColor: '#000',
     shadowOpacity: 0.15,
     shadowRadius: 16,
     shadowOffset: { width: 0, height: -4 },

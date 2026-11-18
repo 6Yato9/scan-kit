@@ -2,7 +2,7 @@
 // Photograph open book spreads; each spread is split down the middle into its
 // left and right page and saved as one document (all captures, in order).
 import { useRef, useState } from 'react';
-import { Alert, StyleSheet, View } from 'react-native';
+import { Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useScan } from '@/contexts/scan-context';
 import { PrimaryButton } from '@/components/primary-button';
@@ -57,7 +57,6 @@ export default function BookScreen() {
   return (
     <ToolScreen
       title="Book mode"
-      scroll={false}
       footer={
         <>
           <PrimaryButton
@@ -78,17 +77,16 @@ export default function BookScreen() {
         </>
       }
     >
-      <View style={styles.center}>
-        <ToolIntro
-          icon="book-outline"
-          title="Scan a book"
-          text="Capture an open book, one spread at a time. Each spread is split down the middle into a left and a right page."
-        />
-      </View>
+      <ToolIntro
+        icon="book-outline"
+        title="Scan a book"
+        text="Capture an open book one spread at a time. Each spread becomes two pages."
+        points={[
+          { icon: 'phone-portrait-outline', text: 'Hold the phone level above the open book, with both pages in view.' },
+          { icon: 'git-compare-outline', text: 'Each spread is split down the middle into a left and a right page.' },
+          { icon: 'documents-outline', text: 'All spreads are saved, in order, as one document.' },
+        ]}
+      />
     </ToolScreen>
   );
 }
-
-const styles = StyleSheet.create({
-  center: { flex: 1, justifyContent: 'center' },
-});

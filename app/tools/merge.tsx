@@ -10,7 +10,7 @@ import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
 import { useToast } from '@/components/toast';
-import { DocRow, NoDocuments, ToolNote, ToolScreen, pageCountLabel, useToolDocuments } from '@/components/tool-ui';
+import { DocGroup, DocRow, NoDocumentsScreen, ToolNote, ToolScreen, pageCountLabel, useToolDocuments } from '@/components/tool-ui';
 import { saveDocument } from '@/lib/storage';
 import { appendPages, deleteDocumentFiles } from '@/lib/files';
 import { autoName } from '@/lib/auto-name';
@@ -80,12 +80,11 @@ export default function MergeScreen() {
 
   if (loaded && docs.length < 2) {
     return (
-      <ToolScreen title="Merge documents">
-        <NoDocuments
-          title={docs.length ? 'Only one document' : 'No documents yet'}
-          subtitle="Merging needs at least two scanned documents. Scan or import another one first."
-        />
-      </ToolScreen>
+      <NoDocumentsScreen
+        toolTitle="Merge documents"
+        title={docs.length ? 'Only one document' : 'No documents yet'}
+        subtitle="Merging needs at least two scanned documents. Scan or import another one first."
+      />
     );
   }
 
@@ -118,19 +117,21 @@ export default function MergeScreen() {
       />
 
       <SectionLabel>Documents, in order</SectionLabel>
-      {docs.map(doc => {
-        const order = selected.indexOf(doc.id) + 1;
-        return (
-          <DocRow
-            key={doc.id}
-            doc={doc}
-            selected={order > 0}
-            order={order || undefined}
-            multi
-            onPress={() => toggle(doc.id)}
-          />
-        );
-      })}
+      <DocGroup>
+        {docs.map(doc => {
+          const order = selected.indexOf(doc.id) + 1;
+          return (
+            <DocRow
+              key={doc.id}
+              doc={doc}
+              selected={order > 0}
+              order={order || undefined}
+              multi
+              onPress={() => toggle(doc.id)}
+            />
+          );
+        })}
+      </DocGroup>
       <ToolNote>Pages are added in the order you tap the documents. The originals are kept.</ToolNote>
     </ToolScreen>
   );

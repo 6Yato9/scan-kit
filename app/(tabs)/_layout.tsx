@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -10,6 +11,7 @@ import {
 } from 'react-native';
 import { Tabs, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { BlurView } from 'expo-blur';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useScan } from '@/contexts/scan-context';
@@ -38,7 +40,7 @@ const ROUTE_COUNT = 5;
 function FloatingTabBar({ state, navigation, descriptors }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
   const { width: screenWidth } = useWindowDimensions();
-  const { isDark, colors } = useTheme();
+  const { colors } = useTheme();
   const { triggerScan } = useScan();
   const router = useRouter();
 
@@ -132,11 +134,22 @@ function FloatingTabBar({ state, navigation, descriptors }: BottomTabBarProps) {
           bottom: insets.bottom + 8,
           left: Math.max(16, (screenWidth - ROUTE_COUNT * 78) / 2),
           right: Math.max(16, (screenWidth - ROUTE_COUNT * 78) / 2),
-          backgroundColor: isDark ? 'rgba(18,18,18,0.93)' : 'rgba(248,248,248,0.93)',
-          borderColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.06)',
+          borderColor: colors.barBorder,
+          shadowColor: colors.shadow,
         },
       ]}
     >
+      {/* Real translucency: the system chrome material blurs whatever scrolls
+          underneath, so text behind the bar never stays legible. It sits in its
+          own clipped layer because the bar itself must not clip (the scan
+          button rises above it). Android has no live blur; it gets a fill. */}
+      <View style={styles.material} pointerEvents="none">
+        {Platform.OS === 'ios' ? (
+          <BlurView tint={colors.barBlurTint} intensity={100} style={StyleSheet.absoluteFill} />
+        ) : (
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.barFill }]} />
+        )}
+      </View>
       {/* ── Glass selector (absolutely positioned, behind tab icons) ── */}
       {tabWidth > 0 && (
         <Animated.View
@@ -145,12 +158,8 @@ function FloatingTabBar({ state, navigation, descriptors }: BottomTabBarProps) {
             styles.glassSelector,
             {
               width: tabWidth - 8,  // 4px inset on each side
-              backgroundColor: isDark
-                ? 'rgba(255,255,255,0.13)'
-                : 'rgba(0,0,0,0.09)',
-              borderColor: isDark
-                ? 'rgba(255,255,255,0.22)'
-                : 'rgba(0,0,0,0.14)',
+              backgroundColor: colors.barSelector,
+              borderColor: colors.barSelectorBorder,
               opacity: selectorOpacity,
               transform: [
                 {
@@ -209,7 +218,7 @@ function FloatingTabBar({ state, navigation, descriptors }: BottomTabBarProps) {
               size={22}
               color={color}
             />
-            <Text allowFontScaling={false} style={[styles.tabLabel, { color }]}>
+            <Text maxFontSizeMultiplier={1.2} numberOfLines={1} style={[styles.tabLabel, { color }]}>
               {TAB_LABELS[route.name] ?? route.name}
             </Text>
           </Pressable>
@@ -243,9 +252,8 @@ const styles = StyleSheet.create({
     position: 'absolute',
     height: 64,
     borderRadius: 32,
-    borderWidth: 0.5,
-    shadowColor: '#000',
-    shadowOpacity: 0.28,
+    borderWidth: StyleSheet.hairlineWidth,
+    shadowOpacity: 0.18,
     shadowRadius: 18,
     shadowOffset: { width: 0, height: 6 },
     elevation: 14,
@@ -253,6 +261,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
+  material: { ...StyleSheet.absoluteFillObject, borderRadius: 32, overflow: 'hidden' },
   // Absolutely positioned glass pill behind the active tab
   glassSelector: {
     position: 'absolute',
@@ -270,8 +279,8 @@ const styles = StyleSheet.create({
     paddingTop: 2,
   },
   tabLabel: {
-    fontSize: 10,
-    fontWeight: '500',
+    fontSize: 11,
+    fontWeight: '600',
     marginBottom: 4,
   },
   scanBtn: {

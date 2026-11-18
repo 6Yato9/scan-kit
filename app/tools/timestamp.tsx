@@ -9,8 +9,9 @@ import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
 import { useToast } from '@/components/toast';
 import {
+  DocGroup,
   DocRow,
-  NoDocuments,
+  NoDocumentsScreen,
   OptionList,
   PagePreview,
   Segmented,
@@ -33,7 +34,7 @@ import {
   type Corner,
   type TimestampFormat,
 } from '@/lib/stamp';
-import { Spacing } from '@/lib/theme';
+import { Ink, Spacing } from '@/lib/theme';
 
 type When = 'scanned' | 'now';
 
@@ -99,9 +100,10 @@ export default function TimestampScreen() {
 
   if (loaded && docs.length === 0) {
     return (
-      <ToolScreen title="Timestamp">
-        <NoDocuments subtitle="Timestamp prints the date on every page of a scan. Scan or import a document first." />
-      </ToolScreen>
+      <NoDocumentsScreen
+        toolTitle="Timestamp"
+        subtitle="Timestamp prints the date on every page of a scan. Scan or import a document first."
+      />
     );
   }
 
@@ -139,10 +141,10 @@ export default function TimestampScreen() {
                     paddingVertical: fontSize * 0.35,
                     paddingHorizontal: fontSize * 0.6,
                     borderRadius: fontSize * 0.3,
-                    backgroundColor: 'rgba(255,255,255,0.85)',
+                    backgroundColor: Ink.stampBg,
                   }}
                 >
-                  <Text style={{ fontSize, fontWeight: '500', color: '#222' }} numberOfLines={1}>
+                  <Text style={{ fontSize, fontWeight: '500', color: Ink.stampText }} numberOfLines={1}>
                     {stamp}
                   </Text>
                 </View>
@@ -176,9 +178,11 @@ export default function TimestampScreen() {
       <OptionList options={CORNERS} value={corner} onChange={setCorner} />
 
       <SectionLabel>Document</SectionLabel>
-      {docs.map(d => (
-        <DocRow key={d.id} doc={d} selected={d.id === doc?.id} onPress={() => !progress && setDocId(d.id)} />
-      ))}
+      <DocGroup>
+        {docs.map(d => (
+          <DocRow key={d.id} doc={d} selected={d.id === doc?.id} onPress={() => !progress && setDocId(d.id)} />
+        ))}
+      </DocGroup>
       <ToolNote>A new PDF is saved with the date on every page. The original document is kept.</ToolNote>
     </ToolScreen>
   );

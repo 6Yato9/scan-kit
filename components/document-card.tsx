@@ -19,18 +19,20 @@ type Props = {
 
 function Thumb({ document, iconSize, style }: { document: Document; iconSize: number; style: object }) {
   const { colors } = useTheme();
+  // A hairline keeps a white page from melting into the white card.
+  const edge = { borderColor: colors.thumbBorder };
   if (document.pdfUri) {
     return (
-      <View style={[style, styles.pdfThumb, { backgroundColor: colors.placeholder }]}>
+      <View style={[style, edge, styles.pdfThumb, { backgroundColor: colors.placeholder }]}>
         <Ionicons name="document-text-outline" size={iconSize} color={colors.muted} />
         <Text allowFontScaling={false} style={[styles.pdfLabel, { color: colors.muted }]}>PDF</Text>
       </View>
     );
   }
   if (document.pages[0]) {
-    return <Image source={{ uri: `${document.pages[0]}?v=${document.updatedAt}` }} style={[style, { backgroundColor: colors.placeholder }]} resizeMode="cover" />;
+    return <Image source={{ uri: `${document.pages[0]}?v=${document.updatedAt}` }} style={[style, edge, { backgroundColor: colors.placeholder }]} resizeMode="cover" />;
   }
-  return <View style={[style, { backgroundColor: colors.placeholder }]} />;
+  return <View style={[style, edge, { backgroundColor: colors.placeholder }]} />;
 }
 
 export function documentMeta(document: Document): string {
@@ -43,7 +45,7 @@ export function DocumentCard({ document, onPress, onLongPress, isSelected, isMul
     <Pressable
       style={({ pressed }) => [
         styles.card,
-        { backgroundColor: colors.card },
+        { backgroundColor: colors.card, shadowColor: colors.shadow },
         isSelected && { borderColor: colors.accent },
         pressed && styles.pressed,
       ]}
@@ -63,7 +65,9 @@ export function DocumentCard({ document, onPress, onLongPress, isSelected, isMul
         <View
           style={[
             styles.checkbox,
-            isSelected ? { backgroundColor: colors.accentFill, borderColor: colors.accentFill } : null,
+            isSelected
+              ? { backgroundColor: colors.accentFill, borderColor: colors.accentFill }
+              : { backgroundColor: colors.scrimSoft, borderColor: colors.onScrim },
           ]}
         >
           {isSelected && <Ionicons name="checkmark" size={15} color={colors.onAccent} />}
@@ -73,24 +77,43 @@ export function DocumentCard({ document, onPress, onLongPress, isSelected, isMul
   );
 }
 
-/** Compact row used by Home's Recent list. */
-export function DocumentRow({ document, onPress, onLongPress }: Omit<Props, 'isSelected' | 'isMultiSelectMode'>) {
+/** Compact row used by Home's Recent list and Files' list view. */
+export function DocumentRow({ document, onPress, onLongPress, isSelected, isMultiSelectMode }: Props) {
   const { colors } = useTheme();
   return (
     <Pressable
-      style={({ pressed }) => [styles.row, { backgroundColor: colors.card }, pressed && styles.pressed]}
+      style={({ pressed }) => [
+        styles.row,
+        { backgroundColor: colors.card },
+        // Selection ring only in select mode, so the normal row is unchanged.
+        isMultiSelectMode && { borderWidth: 2, margin: -2, marginBottom: Spacing.sm - 2, borderColor: isSelected ? colors.accent : 'transparent' },
+        pressed && styles.pressed,
+      ]}
       onPress={onPress}
       onLongPress={onLongPress}
       accessibilityRole="button"
       accessibilityLabel={`${document.name}, ${documentMeta(document)}`}
-      accessibilityHint="Long-press for more actions"
+      accessibilityState={isMultiSelectMode ? { selected: !!isSelected } : undefined}
+      accessibilityHint={isMultiSelectMode ? undefined : 'Long-press for more actions'}
     >
       <Thumb document={document} iconSize={24} style={styles.rowThumb} />
       <View style={styles.rowInfo}>
         <Text style={[Type.subhead, { color: colors.text, fontWeight: '600' }]} numberOfLines={1}>{document.name}</Text>
         <Text style={[Type.footnote, styles.rowMeta, { color: colors.muted }]} numberOfLines={1}>{documentMeta(document)}</Text>
       </View>
-      <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+      {isMultiSelectMode ? (
+        <View
+          style={[
+            styles.rowCheckbox,
+            { borderColor: colors.border },
+            isSelected ? { backgroundColor: colors.accentFill, borderColor: colors.accentFill } : null,
+          ]}
+        >
+          {isSelected && <Ionicons name="checkmark" size={15} color={colors.onAccent} />}
+        </View>
+      ) : (
+        <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+      )}
     </Pressable>
   );
 }
@@ -117,7 +140,7 @@ export function DocumentRowSkeleton() {
   const opacity = usePulse();
   return (
     <Animated.View style={[styles.row, { backgroundColor: colors.card, opacity }]}>
-      <View style={[styles.rowThumb, { backgroundColor: colors.placeholder }]} />
+      <View style={[styles.rowThumb, { backgroundColor: colors.placeholder, borderColor: colors.placeholder }]} />
       <View style={styles.rowInfo}>
         <View style={[styles.bar, { width: '60%', backgroundColor: colors.placeholder }]} />
         <View style={[styles.bar, { width: '35%', marginTop: Spacing.sm, backgroundColor: colors.placeholder }]} />
@@ -131,7 +154,7 @@ export function DocumentCardSkeleton() {
   const opacity = usePulse();
   return (
     <Animated.View style={[styles.card, { backgroundColor: colors.card, opacity }]}>
-      <View style={[styles.thumbnail, { backgroundColor: colors.placeholder }]} />
+      <View style={[styles.thumbnail, { backgroundColor: colors.placeholder, borderColor: colors.placeholder }]} />
       <View style={styles.info}>
         <View style={[styles.bar, { width: '70%', backgroundColor: colors.placeholder }]} />
         <View style={[styles.bar, { width: '45%', marginTop: Spacing.sm, backgroundColor: colors.placeholder }]} />
@@ -153,7 +176,6 @@ const styles = StyleSheet.create({
     borderRadius: Radius.md,
     borderWidth: 2,
     borderColor: 'transparent',
-    shadowColor: '#000',
     shadowOpacity: 0.06,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 2 },
@@ -161,7 +183,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   pressed: { opacity: 0.85 },
-  thumbnail: { width: '100%', aspectRatio: 0.75 },
+  thumbnail: { width: '100%', aspectRatio: 0.75, borderBottomWidth: StyleSheet.hairlineWidth },
   pdfThumb: { alignItems: 'center', justifyContent: 'center', gap: Spacing.xs },
   pdfLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.5 },
   info: { paddingHorizontal: Spacing.md - 2, paddingVertical: Spacing.sm + 2 },
@@ -174,8 +196,6 @@ const styles = StyleSheet.create({
     height: 26,
     borderRadius: 13,
     borderWidth: 2,
-    borderColor: '#fff',
-    backgroundColor: 'rgba(0,0,0,0.25)',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -188,8 +208,9 @@ const styles = StyleSheet.create({
     paddingRight: Spacing.md,
     gap: Spacing.md,
   },
-  rowThumb: { width: 46, height: 60, borderRadius: 6, overflow: 'hidden' },
+  rowThumb: { width: 46, height: 60, borderRadius: 6, overflow: 'hidden', borderWidth: StyleSheet.hairlineWidth },
   rowInfo: { flex: 1 },
   rowMeta: { marginTop: 2 },
+  rowCheckbox: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
   bar: { height: 10, borderRadius: 5 },
 });

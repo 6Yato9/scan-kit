@@ -19,7 +19,7 @@ import { getDocuments, patchDocument } from '@/lib/storage';
 import { originalUri } from '@/lib/files';
 import { pageFileUri } from '@/lib/image';
 import { bakePage, runPageEdit } from '@/lib/bake';
-import { HIT, Spacing } from '@/lib/theme';
+import { HIT, Ink, Spacing } from '@/lib/theme';
 import { useTheme } from '@/contexts/theme-context';
 import { HeaderTextButton, ScreenHeader } from '@/components/screen-header';
 import { FilterBaker } from '@/components/filter-baker';
@@ -29,10 +29,10 @@ import type { Document, PageAdjustment, PageFilter } from '@/types/document';
 // `chrome*` colours, never the light/dark foregrounds. Ink colours are content,
 // not UI, so they are fixed.
 const PEN_COLORS = [
-  { id: 'black', hex: '#000000', label: 'Black' },
-  { id: 'red',   hex: '#e53935', label: 'Red' },
-  { id: 'blue',  hex: '#1565c0', label: 'Blue' },
-  { id: 'green', hex: '#2e7d32', label: 'Green' },
+  { id: 'black', hex: Ink.black, label: 'Black' },
+  { id: 'red',   hex: Ink.red,   label: 'Red' },
+  { id: 'blue',  hex: Ink.blue,  label: 'Blue' },
+  { id: 'green', hex: Ink.green, label: 'Green' },
 ];
 
 const PEN_SIZES = [
@@ -41,14 +41,14 @@ const PEN_SIZES = [
   { size: 8, label: 'Bold' },
 ];
 
-function buildHtml(imageSrc: string, origSrc: string | null): string {
+function buildHtml(imageSrc: string, origSrc: string | null, chrome: string): string {
   return `<!DOCTYPE html>
 <html>
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
-body { background:#111; overflow:hidden; width:100vw; height:100vh; }
+body { background:${chrome}; overflow:hidden; width:100vw; height:100vh; }
 #wrap { position:relative; width:100vw; height:100vh; display:flex; align-items:center; justify-content:center; }
 #bg { max-width:100%; max-height:100%; display:block; object-fit:contain; pointer-events:none; user-select:none; }
 #c { position:absolute; top:0; left:0; width:100%; height:100%; touch-action:none; cursor:crosshair; }
@@ -74,7 +74,7 @@ function resize() {
   applyTool();
 }
 
-let currentColor = '#000000';
+let currentColor = '${Ink.black}';
 let currentWidth = 4;
 let isEraser = false;
 let drawing = false;
@@ -85,7 +85,7 @@ function post(msg) { if (window.ReactNativeWebView) window.ReactNativeWebView.po
 function applyTool() {
   if (isEraser) {
     ctx.globalCompositeOperation = 'destination-out';
-    ctx.strokeStyle = 'rgba(0,0,0,1)';
+    ctx.strokeStyle = '${Ink.black}'; // erases via destination-out; only alpha matters
     ctx.lineWidth = 24;
   } else {
     ctx.globalCompositeOperation = 'source-over';
@@ -213,11 +213,12 @@ export default function AnnotateScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
+  const chrome = colors.chrome;
   const webRef = useRef<WebView>(null);
   const [html, setHtml] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
-  const [penColor, setPenColor] = useState(PEN_COLORS[0].hex);
+  const [penColor, setPenColor] = useState<string>(PEN_COLORS[0].hex);
   const [penSize, setPenSize] = useState(4);
   const [tool, setTool] = useState<Tool>('pen');
   // The page's filter/adjustment when the screen opened. If a bake changes them
@@ -244,10 +245,10 @@ export default function AnnotateScreen() {
       // megabytes of JS string + WebView heap on large scans. The query defeats
       // WebKit's image cache after an in-place edit such as a rotate.
       const bust = `?t=${found.updatedAt}`;
-      setHtml(buildHtml(uri + bust, orig.exists ? orig.uri + bust : null));
+      setHtml(buildHtml(uri + bust, orig.exists ? orig.uri + bust : null, chrome));
     })();
     return () => { cancelled = true; };
-  }, [docId, pageIndex, router]);
+  }, [docId, pageIndex, router, chrome]);
 
   const save = async (payload: { page: string; orig: string | null }) => {
     const strip = (d: string) => d.replace(/^data:image\/jpeg;base64,/, '');

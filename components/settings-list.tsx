@@ -133,7 +133,7 @@ export function SegmentedControl<T extends string>({
             accessibilityRole="radio"
             accessibilityState={{ selected, checked: selected }}
             accessibilityLabel={opt.label}
-            style={[styles.segment, selected && [styles.segmentSelected, { backgroundColor: colors.accentFill }]]}
+            style={[styles.segment, selected && [styles.segmentSelected, { backgroundColor: colors.accentFill, shadowColor: colors.shadow }]]}
           >
             {opt.icon ? <Ionicons name={opt.icon} size={16} color={selected ? colors.onAccent : colors.muted} /> : null}
             <Text style={[Type.subhead, { color: selected ? colors.onAccent : colors.text, fontWeight: selected ? '600' : '500' }]}>
@@ -174,7 +174,6 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   segmentSelected: {
-    shadowColor: '#000',
     shadowOpacity: 0.12,
     shadowRadius: 3,
     shadowOffset: { width: 0, height: 1 },
