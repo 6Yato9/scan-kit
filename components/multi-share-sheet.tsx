@@ -106,7 +106,8 @@ export function MultiShareSheet({ visible, documents, onClose }: Props) {
       await clearExportCache();
       const settings = await getDocSettings().catch(() => null);
       const pageSize = settings?.pdfPageSize ?? 'A4';
-      const quality = settings?.pdfQuality === 'high' ? 'high' : 'standard';
+      // Standard always: the old "PDF image quality" setting was removed.
+      const quality = 'standard' as const;
       const dir = await makeExportDir();
       check();
 

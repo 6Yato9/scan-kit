@@ -166,7 +166,7 @@ export default function ExtractTextScreen() {
     >
       <ToolIntro
         icon="reader-outline"
-        title="Extract text"
+        title="Turn a page into text"
         text={
           available
             ? 'Scan a page or pick photos. The text is recognized on your device, ready to copy or share.'

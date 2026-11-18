@@ -23,7 +23,17 @@ import { WebView } from 'react-native-webview';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import DocumentScanner from 'react-native-document-scanner-plugin';
-import { getDocuments, updateDocument, getScanSettings, patchDocument, restoreDocument, trashDocument, subscribeDocumentChanges } from '@/lib/storage';
+import {
+  getDocuments,
+  getFolders,
+  getScanSettings,
+  patchDocument,
+  restoreDocument,
+  saveFolder,
+  subscribeDocumentChanges,
+  trashDocument,
+  updateDocument,
+} from '@/lib/storage';
 import { deleteSinglePage, reorderPages } from '@/lib/files';
 import { cropPage, pageFileUri, rotatePage } from '@/lib/image';
 import {
@@ -37,6 +47,10 @@ import {
   withDocLock,
 } from '@/lib/bake';
 import { addPagesToDocument, finishAddedPages } from '@/lib/add-pages';
+import { retakePage, undoRetake, type RetakeUndo } from '@/lib/retake-page';
+import { duplicateDocument } from '@/lib/doc-ops';
+import { indexDocText } from '@/lib/save-scan';
+import { alertScanError, deleteTempFiles, pickPhotos, scanWithCamera, ToolScanError } from '@/lib/tool-scan';
 import { insertAt, restoreStashedPage, stashPage } from '@/lib/page-undo';
 import { notifySuccess, notifyError } from '@/lib/haptics';
 import { ocrAvailable, recognizeLines, extractDocText } from '@/lib/ocr';
@@ -49,7 +63,7 @@ import {
   ShareError,
 } from '@/lib/share';
 import { Document, PageAdjustment, PageFilter } from '@/types/document';
-import { useTheme } from '@/contexts/theme-context';
+import { DarkThemeScope, useTheme } from '@/contexts/theme-context';
 import { QUALITY_MAP, SCAN_QUALITY_MAP, useScan } from '@/contexts/scan-context';
 import { HIT, Radius, Spacing, Type } from '@/lib/theme';
 import { ExportSheet } from '@/components/export-sheet';
@@ -60,6 +74,7 @@ import { MoreAction, ViewerMoreSheet } from '@/components/viewer-more-sheet';
 import { ToastProvider, useToast } from '@/components/toast';
 import { ReorderModal } from '@/components/reorder-modal';
 import { RenameSheet } from '@/components/rename-sheet';
+import { MoveFolderSheet } from '@/components/move-folder-sheet';
 import { CropModal, CropRect } from '@/components/crop-modal';
 import { FilterBaker } from '@/components/filter-baker';
 import { BakeIndicator } from '@/components/bake-indicator';
@@ -81,15 +96,22 @@ type OcrState = { status: 'running' } | { status: 'done'; text: string };
  */
 export default function ViewerScreen() {
   const rootToast = useToast();
+  // The viewer is always dark, so everything it presents (the … menu, export,
+  // move to folder, recognized text) uses the dark palette too: a bright sheet
+  // sliding over the dark page reads as a different app.
   return (
-    <ToastProvider onChrome offset={250}>
-      <ViewerContent rootToast={rootToast} />
-    </ToastProvider>
+    <DarkThemeScope>
+      <ToastProvider onChrome offset={250}>
+        <ViewerContent rootToast={rootToast} />
+      </ToastProvider>
+    </DarkThemeScope>
   );
 }
 
 function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }) {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  // `notice`: a message from the screen that opened this one (a tool's "Signed
+  // copy saved"). The viewer covers the app-wide toast host, so it shows it.
+  const { id, notice } = useLocalSearchParams<{ id: string; notice?: string }>();
   const { width: screenWidth } = useWindowDimensions();
   const { colors } = useTheme();
   const [document, setDocument] = useState<Document | null>(null);
@@ -106,6 +128,9 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
   const [renameVisible, setRenameVisible] = useState(false);
   const [cropVisible, setCropVisible] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [retaking, setRetaking] = useState(false);
+  const [moveVisible, setMoveVisible] = useState(false);
+  const [folders, setFolders] = useState<string[]>([]);
   const [ocr, setOcr] = useState<OcrState | null>(null);
   const [copied, setCopied] = useState(false);
   const ocrIndexingRef = useRef(false);
@@ -168,6 +193,13 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
       reload().catch(err => console.error('viewer reload', err));
     }, [reload]),
   );
+
+  const shownNotice = useRef<string | null>(null);
+  useEffect(() => {
+    if (!notice || status !== 'ready' || shownNotice.current === notice) return;
+    shownNotice.current = notice;
+    toast.show(notice);
+  }, [notice, status, toast]);
 
   // Background writes to this document (OCR indexing renames a new scan from
   // its first line of text) must show up without leaving the screen.
@@ -528,6 +560,162 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
     }
   }, [addFrom]);
 
+  // ── Retake page ───────────────────────────────────────────────────────────
+
+  /** Puts the page a retake replaced back, with its filter, adjustment and text. */
+  const undoRetakePage = useCallback(async (index: number, undo: RetakeUndo) => {
+    try {
+      const next = await undoRetake(id, index, undo);
+      // A default-filter bake started for the new page would otherwise land on
+      // the restored one; re-choosing its own look supersedes it.
+      if (pendingBakesFor(id).has(index)) {
+        bakePage(id, index, undo.filter, undo.adjustment).catch(err => console.error('bake after undo', err));
+      }
+      setDocument(withPendingChoices(next));
+      notifySuccess();
+      indexDocText(next.id, next.pages).catch(() => {});
+    } catch (err) {
+      console.error('Undo retake failed', err);
+      notifyError();
+      Alert.alert("Couldn't restore the page", 'Try again.');
+      reload().catch(() => {});
+    }
+  }, [id, withPendingChoices, reload]);
+
+  const retakingRef = useRef(false);
+  /** Replaces page `index` with the image at `uri` and offers Undo. */
+  const applyRetake = useCallback(async (docId: string, index: number, uri: string) => {
+    retakingRef.current = true;
+    setRetaking(true);
+    try {
+      flushAdjust();
+      const settings = await getScanSettings();
+      const { doc: next, undo } = await retakePage(docId, index, uri, QUALITY_MAP[settings.quality]);
+      setDocument(withPendingChoices(next));
+      // Same finish as a new page: the default filter, then the text index.
+      finishAddedPages(next, [index], settings.defaultFilter);
+      notifySuccess();
+      toast.show(
+        next.pages.length > 1 ? `Page ${index + 1} replaced` : 'Page replaced',
+        undo ? { action: { label: 'Undo', onPress: () => { undoRetakePage(index, undo); } } } : undefined,
+      );
+    } catch (err) {
+      console.error('Retake failed', err);
+      notifyError();
+      Alert.alert("Couldn't replace the page", 'Your page is unchanged. Try again.');
+      reload().catch(() => {});
+    } finally {
+      retakingRef.current = false;
+      setRetaking(false);
+    }
+  }, [flushAdjust, withPendingChoices, toast, undoRetakePage, reload]);
+
+  const retakeFrom = useCallback(async (source: 'camera' | 'photos', index: number) => {
+    const doc = docRef.current;
+    if (!doc || retakingRef.current) return;
+    let uris: string[] | null = null;
+    try {
+      // Photos are auto-cropped by retakePage, so the picker hands them over as is.
+      uris = source === 'camera' ? await scanWithCamera() : await pickPhotos(false, { autoCrop: false });
+    } catch (err) {
+      if (err instanceof ToolScanError && err.kind === 'unavailable') {
+        Alert.alert(
+          'Camera not available',
+          'The document camera can’t be opened on this device. You can replace the page with a photo instead.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Choose from Photos', onPress: () => { retakeFrom('photos', index); } },
+          ],
+        );
+      } else {
+        alertScanError(err);
+      }
+      return;
+    }
+    if (!uris?.length) return;
+    // The camera can capture several pages in one go; a retake uses the first.
+    const [first, ...extra] = uris;
+    deleteTempFiles(extra);
+    await applyRetake(doc.id, index, first);
+  }, [applyRetake]);
+
+  const handleRetake = useCallback(() => {
+    const doc = docRef.current;
+    if (!doc) return;
+    const index = pageRef.current;
+    const title = doc.pages.length > 1 ? `Retake page ${index + 1}` : 'Retake page';
+    const message = 'The new page replaces this one, in the same place.';
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        { title, message, options: ['Scan with camera', 'Choose from Photos', 'Cancel'], cancelButtonIndex: 2 },
+        i => {
+          if (i === 0) retakeFrom('camera', index);
+          else if (i === 1) retakeFrom('photos', index);
+        },
+      );
+    } else {
+      Alert.alert(title, message, [
+        { text: 'Scan with camera', onPress: () => retakeFrom('camera', index) },
+        { text: 'Choose from Photos', onPress: () => retakeFrom('photos', index) },
+        { text: 'Cancel', style: 'cancel' },
+      ]);
+    }
+  }, [retakeFrom]);
+
+  // ── Document actions (… menu) ─────────────────────────────────────────────
+
+  /** Opens a tool on this document; the tool skips its document picker. */
+  const openTool = useCallback((pathname: string) => {
+    const doc = docRef.current;
+    if (!doc) return;
+    flushAdjust();
+    router.push({ pathname, params: { docId: doc.id } } as any);
+  }, [router, flushAdjust]);
+
+  const handleDuplicate = useCallback(async () => {
+    const doc = docRef.current;
+    if (!doc) return;
+    try {
+      flushAdjust();
+      const copy = await duplicateDocument(doc);
+      bumpLastSaved();
+      notifySuccess();
+      toast.show(`Saved “${copy.name}”`, {
+        action: { label: 'Open', onPress: () => router.replace({ pathname: '/viewer', params: { id: copy.id } }) },
+      });
+    } catch (err) {
+      console.error('Duplicate failed', err);
+      notifyError();
+      Alert.alert("Couldn't duplicate the document", 'There may not be enough free space. Try again.');
+    }
+  }, [flushAdjust, bumpLastSaved, toast, router]);
+
+  const openMove = useCallback(() => {
+    getFolders()
+      .then(f => { setFolders(f); setMoveVisible(true); })
+      .catch(() => setMoveVisible(true));
+  }, []);
+
+  const handleMove = useCallback(async (doc: Document, folder: string | null) => {
+    setMoveVisible(false);
+    if ((doc.folder ?? null) === folder) return;
+    try {
+      const ok = await patchDocument(doc.id, { folder: folder ?? undefined });
+      if (!ok) { setStatus('missing'); return; }
+      setDocument(prev => (prev ? { ...prev, folder: folder ?? undefined } : prev));
+      bumpLastSaved();
+      toast.show(folder ? `Moved to “${folder}”` : 'Removed from folder');
+    } catch (err) {
+      console.error('Move to folder failed', err);
+      Alert.alert("Couldn't move the document", 'Try again.');
+    }
+  }, [bumpLastSaved, toast]);
+
+  const createFolder = useCallback(async (name: string) => {
+    await saveFolder(name);
+    setFolders(await getFolders());
+  }, []);
+
   // ── Share / annotate / text ───────────────────────────────────────────────
 
   // Runs after the "…" sheet has fully closed (ViewerMoreSheet waits for it),
@@ -703,7 +891,7 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
         <Text style={[Type.headline, styles.titleText, { color: colors.chromeText }]} numberOfLines={1}>
           {document.name}
         </Text>
-        <Ionicons name="pencil" size={13} color={colors.chromeMuted} style={styles.titlePencil} />
+        <Ionicons name="pencil-outline" size={14} color={colors.chromeMuted} style={styles.titlePencil} />
       </Pressable>
     </View>
   );
@@ -725,11 +913,26 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
   const pageCount = document.pages.length;
   const page = Math.min(currentPage, Math.max(0, pageCount - 1));
 
-  // "…" menu. Rename and Reorder moved here from the header so the title has room.
+  // "…" menu: tools for this document as tiles, then document, page and
+  // delete actions. Image documents only for the tools (they work on pages).
+  const pageLabel = pageCount > 1 ? `page ${page + 1}` : 'page';
+  const moreTools: MoreAction[] = document.pdfUri
+    ? []
+    : [
+        { key: 'sign', icon: 'create-outline', label: 'Sign', onPress: () => openTool('/tools/sign') },
+        { key: 'watermark', icon: 'water-outline', label: 'Watermark', onPress: () => openTool('/tools/watermark') },
+        { key: 'timestamp', icon: 'time-outline', label: 'Timestamp', onPress: () => openTool('/tools/timestamp') },
+        ...(pageCount > 1
+          ? [{ key: 'extract', icon: 'cut-outline' as const, label: 'Extract', onPress: () => openTool('/tools/extract') }]
+          : []),
+        { key: 'compress', icon: 'contract-outline', label: 'Compress', onPress: () => openTool('/tools/compress') },
+      ];
   const moreGroups: MoreAction[][] = document.pdfUri
     ? [
         [
           { key: 'rename', icon: 'pencil-outline', label: 'Rename', onPress: () => setRenameVisible(true) },
+          { key: 'move', icon: 'folder-outline', label: 'Move to folder', detail: document.folder, onPress: openMove },
+          { key: 'duplicate', icon: 'duplicate-outline', label: 'Duplicate', onPress: handleDuplicate },
           { key: 'print', icon: 'print-outline', label: 'Print', onPress: handlePrintPdf },
         ],
         [{ key: 'delete-doc', icon: 'trash-outline', label: 'Delete document', destructive: true, onPress: confirmDeleteDocument }],
@@ -737,18 +940,16 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
     : [
         [
           { key: 'rename', icon: 'pencil-outline', label: 'Rename', onPress: () => setRenameVisible(true) },
-          ...(pageCount > 1
-            ? [{ key: 'reorder', icon: 'swap-vertical-outline' as const, label: 'Reorder pages', onPress: () => setReorderVisible(true) }]
-            : []),
           { key: 'add', icon: 'add-circle-outline', label: 'Add pages', onPress: handleAddMore },
+          ...(pageCount > 1
+            ? [{ key: 'reorder', icon: 'reorder-three-outline' as const, label: 'Reorder pages', onPress: () => setReorderVisible(true) }]
+            : []),
+          { key: 'move', icon: 'folder-outline', label: 'Move to folder', detail: document.folder, onPress: openMove },
+          { key: 'duplicate', icon: 'duplicate-outline', label: 'Duplicate', onPress: handleDuplicate },
         ],
         [
-          {
-            key: 'share-page',
-            icon: 'image-outline',
-            label: pageCount > 1 ? `Share page ${page + 1} as image` : 'Share page as image',
-            onPress: handleSharePage,
-          },
+          { key: 'retake', icon: 'camera-reverse-outline', label: `Retake ${pageLabel}`, onPress: handleRetake },
+          { key: 'share-page', icon: 'image-outline', label: `Share ${pageLabel} as image`, onPress: handleSharePage },
         ],
         [
           ...(pageCount > 1
@@ -763,8 +964,20 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
       visible={moreVisible}
       title={document.name}
       subtitle={document.pdfUri ? 'PDF' : `${pageCount} ${pageCount === 1 ? 'page' : 'pages'}`}
+      tools={moreTools}
       groups={moreGroups}
       onClose={() => setMoreVisible(false)}
+    />
+  );
+
+  const moveSheet = (
+    <MoveFolderSheet
+      visible={moveVisible}
+      document={document}
+      folders={folders}
+      onMove={handleMove}
+      onCreateFolder={createFolder}
+      onClose={() => setMoveVisible(false)}
     />
   );
 
@@ -803,6 +1016,7 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
         />
         {renameSheet}
         {moreSheet}
+        {moveSheet}
       </View>
     );
   }
@@ -864,14 +1078,23 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
             </View>
           )}
         />
-        {pageCount > 1 && (
-          <View style={[styles.counter, { backgroundColor: colors.chromeRaised }]} pointerEvents="none">
+        {retaking && (
+          <View style={[styles.retakeBusy, { backgroundColor: colors.scrim }]} pointerEvents="none">
+            <ActivityIndicator color={colors.onScrim} />
+            <Text style={[Type.footnote, { color: colors.onScrim }]}>Replacing the page…</Text>
+          </View>
+        )}
+      </View>
+      {/* Its own row under the page, never on top of it. */}
+      {pageCount > 1 && (
+        <View style={styles.counterRow} pointerEvents="none">
+          <View style={[styles.counter, { backgroundColor: colors.chromeRaised }]}>
             <Text style={[Type.footnote, styles.counterText, { color: colors.chromeText }]}>
               {page + 1} / {pageCount}
             </Text>
           </View>
-        )}
-      </View>
+        </View>
+      )}
 
       {editing ? (
         <PageEditPanel
@@ -938,6 +1161,7 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
       />
 
       {moreSheet}
+      {moveSheet}
 
       <CropModal
         visible={cropVisible}
@@ -1014,14 +1238,22 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.sm,
   },
   pageImage: { flex: 1 },
+  counterRow: { alignItems: 'center', paddingBottom: Spacing.sm },
   counter: {
-    position: 'absolute',
-    bottom: Spacing.md,
-    alignSelf: 'center',
     paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.xs,
+    paddingVertical: Spacing.xxs + 1,
     borderRadius: Radius.pill,
-    opacity: 0.92,
+  },
+  retakeBusy: {
+    position: 'absolute',
+    alignSelf: 'center',
+    top: '42%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.sm + 2,
+    borderRadius: Radius.pill,
   },
   counterText: { fontWeight: '600', fontVariant: ['tabular-nums'] },
   webView: { flex: 1 },

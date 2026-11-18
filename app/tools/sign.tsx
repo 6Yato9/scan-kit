@@ -14,12 +14,12 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
+import { Ionicons } from '@expo/vector-icons';
 import * as Crypto from 'expo-crypto';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
-import { useToast } from '@/components/toast';
 import {
   DocGroup,
   DocRow,
@@ -33,6 +33,8 @@ import {
   useImageAspect,
   useToolDocuments,
 } from '@/components/tool-ui';
+import { ToolDocHeader, useToolDoc } from '@/components/tool-doc';
+import { FilterBaker } from '@/components/filter-baker';
 import { generatePdf } from '@/lib/pdf';
 import { copyPdfToStorage, deleteDocumentFiles } from '@/lib/files';
 import { deleteQuietly } from '@/lib/share';
@@ -48,6 +50,13 @@ import {
 } from '@/lib/stamp';
 import { HIT, Ink, Radius, Spacing, Type } from '@/lib/theme';
 import type { Document } from '@/types/document';
+import {
+  forgetSignature,
+  listSavedSignatures,
+  loadSavedSignature,
+  rememberSignature,
+  type SavedSignature,
+} from '@/lib/saved-signatures';
 
 const PAD_HEIGHT = 180;
 const SIZES = [
@@ -108,20 +117,32 @@ function clearPad(){ clearTimeout(timer); ctx.save(); ctx.setTransform(1,0,0,1,0
 export default function SignScreen() {
   const router = useRouter();
   const { colors } = useTheme();
-  const { show } = useToast();
   const { width: screenW } = useWindowDimensions();
   const webRef = useRef<WebView>(null);
   const { docs, loaded } = useToolDocuments();
   const [sig, setSig] = useState<Signature | null>(null);
   const [drawing, setDrawing] = useState(false);
-  const [docId, setDocId] = useState<string | null>(null);
   const [pageIndex, setPageIndex] = useState(0);
   const [everyPage, setEveryPage] = useState(false);
   const [size, setSize] = useState<SizeKey>('m');
   const [placement, setPlacement] = useState<Placement | null>(null);
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
 
-  const doc = docs.find(d => d.id === docId) ?? null;
+  const { doc, docId, setDocId, fixed, fromViewer } = useToolDoc(docs);
+  // Signatures used before (newest first) and the one picked, if any.
+  const [saved, setSaved] = useState<SavedSignature[]>([]);
+  const [savedPick, setSavedPick] = useState<string | null>(null);
+  useEffect(() => {
+    listSavedSignatures().then(setSaved).catch(() => {});
+  }, []);
+  // Opened on a document: start on its last page, like picking it would.
+  const startedOn = useRef<string | null>(null);
+  useEffect(() => {
+    if (fixed && doc && startedOn.current !== doc.id) {
+      startedOn.current = doc.id;
+      setPageIndex(doc.pages.length - 1);
+    }
+  }, [fixed, doc]);
   const pageUri = doc ? doc.pages[Math.min(pageIndex, doc.pages.length - 1)] : null;
   const aspect = useImageAspect(pageUri);
   const sizeW = SIZES.find(s => s.value === size)!.w;
@@ -130,13 +151,15 @@ export default function SignScreen() {
   // The pad draws in the theme's text colour; a theme change reloads it empty.
   const html = useMemo(() => padHtml(colors.text, Ink.signature), [colors.text]);
   useEffect(() => {
-    setSig(null);
+    // A saved signature survives a theme change; a drawn one is gone with the pad.
+    if (!savedPick) setSig(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [html]);
 
   const onPadMessage = (e: { nativeEvent: { data: string } }) => {
     const data = e.nativeEvent.data;
     if (data === 'EMPTY') {
-      setSig(null);
+      if (!savedPick) setSig(null);
       return;
     }
     try {
@@ -144,6 +167,7 @@ export default function SignScreen() {
       if (!parsed.dataUri?.startsWith('data:image/png') || !(parsed.width > 0)) throw new Error('bad');
       // Keep any placement the user already chose; clampPlacement fits the new shape.
       setSig(parsed);
+      setSavedPick(null);
     } catch {
       Alert.alert('Couldn’t capture the signature', 'Clear the box and try again.');
     }
@@ -152,8 +176,40 @@ export default function SignScreen() {
   const clearSignature = () => {
     webRef.current?.injectJavaScript('clearPad(); true;');
     setSig(null);
+    setSavedPick(null);
     setPlacement(null);
     tapLight();
+  };
+
+  const pickSaved = async (s: SavedSignature) => {
+    if (progress) return;
+    try {
+      const loaded = await loadSavedSignature(s);
+      webRef.current?.injectJavaScript('clearPad(); true;');
+      setSig(loaded);
+      setSavedPick(s.id);
+      tapLight();
+    } catch {
+      Alert.alert('Couldn’t load the signature', 'Draw it in the box instead.');
+    }
+  };
+
+  const removeSaved = (s: SavedSignature) => {
+    Alert.alert('Remove this saved signature?', 'You can save it again by signing with it.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Remove',
+        style: 'destructive',
+        onPress: async () => {
+          await forgetSignature(s.id).catch(() => {});
+          if (savedPick === s.id) {
+            setSig(null);
+            setSavedPick(null);
+          }
+          setSaved(await listSavedSignatures().catch(() => []));
+        },
+      },
+    ]);
   };
 
   const pickDoc = (d: Document) => {
@@ -208,9 +264,11 @@ export default function SignScreen() {
         createdAt: now,
         updatedAt: now,
       });
+      // Remembered for next time (moves up if it was a saved one already).
+      await rememberSignature(sig);
       notifySuccess();
-      show('Signed PDF saved');
-      router.replace({ pathname: '/viewer', params: { id } });
+      // The viewer shows the toast: it covers the app-wide toast host.
+      router.replace({ pathname: '/viewer', params: { id, notice: 'Signed copy saved. The original is unchanged.' } });
     } catch {
       try { deleteDocumentFiles(id); } catch {}
       notifyError();
@@ -231,7 +289,9 @@ export default function SignScreen() {
   }
 
   const previewW = Math.min(screenW - Spacing.gutter * 2 - Spacing.sm * 2, 300);
-  const buttonTitle = !sig ? 'Sign in the box above' : !doc ? 'Choose a document' : 'Save signed PDF';
+  const buttonTitle = !sig
+    ? saved.length ? 'Choose or draw a signature' : 'Sign in the box above'
+    : !doc ? 'Choose a document' : 'Save signed PDF';
 
   return (
     <ToolScreen
@@ -250,15 +310,54 @@ export default function SignScreen() {
         </>
       }
     >
+      {/* Presented over the viewer: a baker underneath would never run (see FilterBaker). */}
+      {fromViewer ? <FilterBaker /> : null}
       {/* 1. Signature — captured as you draw; no separate confirm step. */}
+      {fixed && doc ? <ToolDocHeader doc={doc} /> : null}
       <SectionRow label="Signature" action={sig ? 'Clear' : undefined} onAction={clearSignature} />
+      {saved.length > 0 ? (
+        <>
+          <View style={styles.savedRow}>
+            {saved.map((s, i) => {
+              const on = savedPick === s.id;
+              return (
+                <Pressable
+                  key={s.id}
+                  onPress={() => pickSaved(s)}
+                  onLongPress={() => removeSaved(s)}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: on, checked: on }}
+                  accessibilityLabel={i === 0 ? 'Last used signature' : 'Earlier signature'}
+                  accessibilityHint="Touch and hold to remove it"
+                  style={({ pressed }) => [
+                    styles.savedTile,
+                    { backgroundColor: colors.paper, borderColor: on ? colors.accent : colors.thumbBorder },
+                    on && styles.savedTileOn,
+                    pressed && { opacity: 0.7 },
+                  ]}
+                >
+                  <Image source={{ uri: s.uri }} style={styles.savedImg} resizeMode="contain" />
+                  {on ? (
+                    <View style={[styles.savedCheck, { backgroundColor: colors.accentFill }]}>
+                      <Ionicons name="checkmark" size={13} color={colors.onAccent} />
+                    </View>
+                  ) : null}
+                </Pressable>
+              );
+            })}
+          </View>
+          <Text style={[Type.footnote, styles.orDraw, { color: colors.muted }]}>
+            {savedPick ? 'Or draw a new one below.' : 'Tap a saved signature, or draw a new one below.'}
+          </Text>
+        </>
+      ) : null}
       <View
         style={[styles.pad, { borderColor: colors.border, backgroundColor: colors.card }]}
         onTouchStart={() => setDrawing(true)}
         onTouchEnd={() => setDrawing(false)}
         onTouchCancel={() => setDrawing(false)}
       >
-        {!sig ? (
+        {!sig || savedPick ? (
           <Text style={[Type.callout, styles.padHint, { color: colors.faint }]} pointerEvents="none">
             Sign here
           </Text>
@@ -278,13 +377,17 @@ export default function SignScreen() {
         />
       </View>
 
-      {/* 2. Document */}
-      <SectionLabel>Document</SectionLabel>
-      <DocGroup>
-        {docs.map(d => (
-          <DocRow key={d.id} doc={d} selected={d.id === docId} onPress={() => pickDoc(d)} />
-        ))}
-      </DocGroup>
+      {/* 2. Document (skipped when the tool was opened on one) */}
+      {fixed ? null : (
+        <>
+          <SectionLabel>Document</SectionLabel>
+          <DocGroup>
+            {docs.map(d => (
+              <DocRow key={d.id} doc={d} selected={d.id === docId} onPress={() => pickDoc(d)} />
+            ))}
+          </DocGroup>
+        </>
+      )}
 
       {/* 3. Placement */}
       {doc && sig && place && pageUri ? (
@@ -384,4 +487,27 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.lg,
   },
   previewWrap: { alignItems: 'center' },
+  savedRow: { flexDirection: 'row', gap: Spacing.sm },
+  savedTile: {
+    flex: 1,
+    maxWidth: '50%',
+    height: 72,
+    borderRadius: Radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: Spacing.sm,
+    justifyContent: 'center',
+  },
+  savedTileOn: { borderWidth: 2, padding: Spacing.sm - 1.5 },
+  savedImg: { width: '100%', height: '100%' },
+  savedCheck: {
+    position: 'absolute',
+    top: Spacing.xs + 2,
+    right: Spacing.xs + 2,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  orDraw: { marginTop: Spacing.sm, marginBottom: Spacing.sm, paddingHorizontal: Spacing.xs },
 });

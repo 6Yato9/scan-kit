@@ -7,7 +7,6 @@ import * as Crypto from 'expo-crypto';
 import { useRouter } from 'expo-router';
 import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
-import { useToast } from '@/components/toast';
 import {
   DocGroup,
   DocRow,
@@ -15,12 +14,15 @@ import {
   OptionList,
   PagePreview,
   Segmented,
+  SectionRow,
   ToolNote,
   ToolProgress,
   ToolScreen,
   useImageAspect,
   useToolDocuments,
 } from '@/components/tool-ui';
+import { ToolDocHeader, useToolDoc } from '@/components/tool-doc';
+import { FilterBaker } from '@/components/filter-baker';
 import { generatePdf } from '@/lib/pdf';
 import { copyPdfToStorage, deleteDocumentFiles } from '@/lib/files';
 import { deleteQuietly } from '@/lib/share';
@@ -47,17 +49,16 @@ const CORNERS: { value: Corner; label: string }[] = [
 
 export default function TimestampScreen() {
   const router = useRouter();
-  const { show } = useToast();
   const { width: screenW } = useWindowDimensions();
   const { docs, loaded } = useToolDocuments();
-  const [docId, setDocId] = useState<string | null>(null);
   const [when, setWhen] = useState<When>('scanned');
   const [format, setFormat] = useState<TimestampFormat>('datetime');
   const [corner, setCorner] = useState<Corner>('bottom-right');
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
   const [now] = useState(() => Date.now());
 
-  const doc = docs.find(d => d.id === docId) ?? docs[0] ?? null;
+  // Never a default: stamping the wrong document is worse than one more tap.
+  const { doc, setDocId, fixed, fromViewer } = useToolDoc(docs);
   const aspect = useImageAspect(doc?.pages[0]);
   const stamp = formatStamp(when === 'scanned' && doc ? doc.createdAt : now, format);
 
@@ -86,8 +87,8 @@ export default function TimestampScreen() {
         updatedAt: ts,
       });
       notifySuccess();
-      show('Timestamped PDF saved');
-      router.replace({ pathname: '/viewer', params: { id } });
+      // The viewer shows the toast: it covers the app-wide toast host.
+      router.replace({ pathname: '/viewer', params: { id, notice: 'Timestamped copy saved' } });
     } catch {
       try { deleteDocumentFiles(id); } catch {}
       notifyError();
@@ -121,10 +122,31 @@ export default function TimestampScreen() {
               total={progress.total}
             />
           ) : null}
-          <PrimaryButton title="Save timestamped PDF" onPress={apply} disabled={!doc} loading={!!progress} />
+          <PrimaryButton title={doc ? 'Save timestamped PDF' : 'Choose a document'} onPress={apply} disabled={!doc} loading={!!progress} />
         </>
       }
     >
+      {/* Presented over the viewer: a baker underneath would never run (see FilterBaker). */}
+      {fromViewer ? <FilterBaker /> : null}
+      {fixed && doc ? (
+        <ToolDocHeader doc={doc} />
+      ) : doc ? (
+        // Chosen: collapse the list so the preview and options sit right below.
+        <>
+          <SectionRow label="Document" action="Change" onAction={() => !progress && setDocId(null)} />
+          <ToolDocHeader doc={doc} flush />
+        </>
+      ) : (
+        <>
+          <SectionLabel>Document</SectionLabel>
+          <DocGroup>
+            {docs.map(d => (
+              <DocRow key={d.id} doc={d} selected={false} onPress={() => !progress && setDocId(d.id)} />
+            ))}
+          </DocGroup>
+        </>
+      )}
+
       {doc ? (
         <View style={styles.previewWrap}>
           <PagePreview uri={`${doc.pages[0]}?v=${doc.updatedAt}`} aspect={aspect} width={previewW}>
@@ -177,12 +199,6 @@ export default function TimestampScreen() {
       <SectionLabel>Position</SectionLabel>
       <OptionList options={CORNERS} value={corner} onChange={setCorner} />
 
-      <SectionLabel>Document</SectionLabel>
-      <DocGroup>
-        {docs.map(d => (
-          <DocRow key={d.id} doc={d} selected={d.id === doc?.id} onPress={() => !progress && setDocId(d.id)} />
-        ))}
-      </DocGroup>
       <ToolNote>A new PDF is saved with the date on every page. The original document is kept.</ToolNote>
     </ToolScreen>
   );

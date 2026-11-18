@@ -81,7 +81,10 @@ export function ExportSheet({ visible, document, onClose }: Props) {
   const toast = useToast();
   const [busy, setBusy] = useState<Busy | null>(null);
   const [pageSize, setPageSize] = useState<PageSize>('A4');
-  const [quality, setQuality] = useState<PdfQuality>('standard');
+  // Always standard: the old "PDF image quality" setting is gone (a stored
+  // 'high' would otherwise stick with no way to change it). "Smaller PDF"
+  // covers size.
+  const quality: PdfQuality = 'standard';
   const [bytes, setBytes] = useState<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   // Bumped on every open/close so a late share-sheet callback can't close a
@@ -104,7 +107,6 @@ export function ExportSheet({ visible, document, onClose }: Props) {
       .then(s => {
         if (cancelled) return;
         setPageSize(s.pdfPageSize);
-        setQuality(s.pdfQuality === 'high' ? 'high' : 'standard');
       })
       .catch(() => {});
     return () => {

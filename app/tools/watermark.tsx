@@ -7,7 +7,6 @@ import { useRouter } from 'expo-router';
 import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
-import { useToast } from '@/components/toast';
 import {
   ColorSwatches,
   DocGroup,
@@ -15,12 +14,15 @@ import {
   NoDocumentsScreen,
   PagePreview,
   Segmented,
+  SectionRow,
   ToolNote,
   ToolProgress,
   ToolScreen,
   useImageAspect,
   useToolDocuments,
 } from '@/components/tool-ui';
+import { ToolDocHeader, useToolDoc } from '@/components/tool-doc';
+import { FilterBaker } from '@/components/filter-baker';
 import { generatePdf } from '@/lib/pdf';
 import { copyPdfToStorage, deleteDocumentFiles } from '@/lib/files';
 import { deleteQuietly } from '@/lib/share';
@@ -51,16 +53,15 @@ const COLORS: { value: StampColor; label: string }[] = [
 export default function WatermarkScreen() {
   const router = useRouter();
   const { colors } = useTheme();
-  const { show } = useToast();
   const { width: screenW } = useWindowDimensions();
   const { docs, loaded } = useToolDocuments();
-  const [docId, setDocId] = useState<string | null>(null);
   const [text, setText] = useState('CONFIDENTIAL');
   const [style, setStyle] = useState<WatermarkStyle>('diagonal');
   const [color, setColor] = useState<StampColor>('gray');
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
 
-  const doc = docs.find(d => d.id === docId) ?? docs[0] ?? null;
+  // Never a default: stamping the wrong document is worse than one more tap.
+  const { doc, setDocId, fixed, fromViewer } = useToolDoc(docs);
   const aspect = useImageAspect(doc?.pages[0]);
   const label = text.trim();
 
@@ -88,8 +89,8 @@ export default function WatermarkScreen() {
         updatedAt: now,
       });
       notifySuccess();
-      show('Watermarked PDF saved');
-      router.replace({ pathname: '/viewer', params: { id } });
+      // The viewer shows the toast: it covers the app-wide toast host.
+      router.replace({ pathname: '/viewer', params: { id, notice: 'Watermarked copy saved' } });
     } catch {
       try { deleteDocumentFiles(id); } catch {}
       notifyError();
@@ -125,7 +126,7 @@ export default function WatermarkScreen() {
             />
           ) : null}
           <PrimaryButton
-            title={label ? 'Save watermarked PDF' : 'Enter watermark text'}
+            title={!doc ? 'Choose a document' : label ? 'Save watermarked PDF' : 'Enter watermark text'}
             onPress={apply}
             disabled={!doc || !label}
             loading={!!progress}
@@ -133,6 +134,27 @@ export default function WatermarkScreen() {
         </>
       }
     >
+      {/* Presented over the viewer: a baker underneath would never run (see FilterBaker). */}
+      {fromViewer ? <FilterBaker /> : null}
+      {fixed && doc ? (
+        <ToolDocHeader doc={doc} />
+      ) : doc ? (
+        // Chosen: collapse the list so the preview and options sit right below.
+        <>
+          <SectionRow label="Document" action="Change" onAction={() => !progress && setDocId(null)} />
+          <ToolDocHeader doc={doc} flush />
+        </>
+      ) : (
+        <>
+          <SectionLabel>Document</SectionLabel>
+          <DocGroup>
+            {docs.map(d => (
+              <DocRow key={d.id} doc={d} selected={false} onPress={() => !progress && setDocId(d.id)} />
+            ))}
+          </DocGroup>
+        </>
+      )}
+
       {doc ? (
         <View style={styles.previewWrap}>
           <PagePreview uri={`${doc.pages[0]}?v=${doc.updatedAt}`} aspect={aspect} width={previewW}>
@@ -188,12 +210,6 @@ export default function WatermarkScreen() {
         onChange={setColor}
       />
 
-      <SectionLabel>Document</SectionLabel>
-      <DocGroup>
-        {docs.map(d => (
-          <DocRow key={d.id} doc={d} selected={d.id === doc?.id} onPress={() => !progress && setDocId(d.id)} />
-        ))}
-      </DocGroup>
       <ToolNote>A new PDF is saved with the watermark on every page. The original document is kept.</ToolNote>
     </ToolScreen>
   );

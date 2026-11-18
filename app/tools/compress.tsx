@@ -20,6 +20,8 @@ import {
   formatBytes,
   useToolDocuments,
 } from '@/components/tool-ui';
+import { ToolDocHeader, useToolDoc } from '@/components/tool-doc';
+import { FilterBaker } from '@/components/filter-baker';
 import { compressDocument, documentSize, type CompressLevel, type CompressResult } from '@/lib/compress';
 import { invalidateDocPreviews } from '@/lib/bake';
 import { notifyError, notifySuccess } from '@/lib/haptics';
@@ -36,12 +38,11 @@ export default function CompressScreen() {
   const { colors } = useTheme();
   const { show } = useToast();
   const { docs, loaded, reload } = useToolDocuments();
-  const [docId, setDocId] = useState<string | null>(null);
   const [level, setLevel] = useState<CompressLevel>('balanced');
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
   const [result, setResult] = useState<(CompressResult & { docId: string }) | null>(null);
 
-  const doc = docs.find(d => d.id === docId) ?? null;
+  const { doc, docId, setDocId, fixed, fromViewer } = useToolDoc(docs);
   const currentSize = useMemo(() => (doc ? documentSize(doc) : 0), [doc]);
   const running = progress !== null;
 
@@ -101,11 +102,16 @@ export default function CompressScreen() {
             />
           ) : null}
           {done ? (
-            <PrimaryButton
-              title="Open document"
-              icon="open-outline"
-              onPress={() => router.replace({ pathname: '/viewer', params: { id: done.docId } })}
-            />
+            fromViewer ? (
+              // Opened from the viewer: it is right underneath and reloads on focus.
+              <PrimaryButton title="Done" onPress={() => router.back()} />
+            ) : (
+              <PrimaryButton
+                title="Open document"
+                icon="open-outline"
+                onPress={() => router.replace({ pathname: '/viewer', params: { id: done.docId } })}
+              />
+            )
           ) : (
             <PrimaryButton
               title={doc ? `Compress document (${formatBytes(currentSize)})` : "Select a document"}
@@ -117,6 +123,9 @@ export default function CompressScreen() {
         </>
       }
     >
+      {/* Presented over the viewer: a baker underneath would never run (see FilterBaker). */}
+      {fromViewer ? <FilterBaker /> : null}
+      {fixed && doc ? <ToolDocHeader doc={doc} /> : null}
       {done ? (
         <View style={[styles.result, { backgroundColor: colors.card }]}>
           <View style={styles.resultCol}>
@@ -134,22 +143,26 @@ export default function CompressScreen() {
       <SectionLabel>Size</SectionLabel>
       <OptionList options={LEVELS} value={level} onChange={v => { setLevel(v); setResult(null); }} />
 
-      <SectionLabel>Document</SectionLabel>
-      <DocGroup>
-        {docs.map(d => (
-          <DocRow
-            key={d.id}
-            doc={d}
-            selected={d.id === docId}
-            onPress={() => {
-              if (running) return;
-              setDocId(d.id);
-              setResult(null);
-            }}
-          />
-        ))}
-      </DocGroup>
-      <ToolNote>Works on scanned and imported photos. Imported PDF files can’t be compressed.</ToolNote>
+      {fixed ? null : (
+        <>
+          <SectionLabel>Document</SectionLabel>
+          <DocGroup>
+            {docs.map(d => (
+              <DocRow
+                key={d.id}
+                doc={d}
+                selected={d.id === docId}
+                onPress={() => {
+                  if (running) return;
+                  setDocId(d.id);
+                  setResult(null);
+                }}
+              />
+            ))}
+          </DocGroup>
+          <ToolNote>Works on scanned and imported photos. Imported PDF files can’t be compressed.</ToolNote>
+        </>
+      )}
     </ToolScreen>
   );
 }

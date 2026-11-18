@@ -1,8 +1,10 @@
 // app/(tabs)/index.tsx
-// Home: a starting point, not a second library. Quick actions (scan, import),
-// the few most recent documents, and shortcuts into folders. The full library
+// Home: a starting point, not a second library. Shortcuts (import, sign —
+// scanning is the tab bar's camera button, so there's no second Scan card), the
+// few most recent documents, and shortcuts into folders. The full library
 // (every document, grid or list, sort, select, folders) lives in Files.
-// Searching here covers everything, including text inside documents.
+// Searching here covers everything, including text inside documents, and a
+// text match shows the line that matched.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
@@ -11,6 +13,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Document } from '@/types/document';
 import { getDocuments, getFolders } from '@/lib/storage';
 import { useScan } from '@/contexts/scan-context';
+import { LargeTitle } from '@/components/screen-header';
 import { useTheme } from '@/contexts/theme-context';
 import { EmptyState } from '@/components/empty-state';
 import { DocumentRow, DocumentRowSkeleton } from '@/components/document-card';
@@ -18,8 +21,8 @@ import { SectionLabel } from '@/components/section-label';
 import { useDocumentActions } from '@/components/document-actions';
 import { useImportDocuments } from '@/components/use-import';
 import { SearchField } from '@/components/search-field';
-import { matchesQuery, sortDocuments } from '@/lib/doc-list';
-import { HIT, Radius, Spacing, Type } from '@/lib/theme';
+import { matchesQuery, searchSnippet, sortDocuments } from '@/lib/doc-list';
+import { HIT, Radius, Spacing, TAB_BAR_CLEARANCE, Type } from '@/lib/theme';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
@@ -32,7 +35,7 @@ export default function HomeScreen() {
   const [loaded, setLoaded] = useState(false);
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { lastSaved, triggerScan } = useScan();
+  const { lastSaved } = useScan();
   const { colors } = useTheme();
   const actions = useDocumentActions({ documents, setDocuments, folders, setFolders });
   const { importImages, importFile } = useImportDocuments();
@@ -50,7 +53,7 @@ export default function HomeScreen() {
   useFocusEffect(useCallback(() => { load(); }, [load]));
   useEffect(() => { if (lastSaved > 0) load(); }, [lastSaved, load]);
 
-  const q = searchQuery.trim().toLowerCase();
+  const q = searchQuery.trim();
   // Recent means recently worked on, whatever the library's sort order is.
   const { displayed, capped } = useMemo(() => {
     if (q) return { displayed: sortDocuments(documents.filter(d => matchesQuery(d, q)), 'dateModified'), capped: false };
@@ -64,11 +67,6 @@ export default function HomeScreen() {
     return counts;
   }, [documents]);
 
-  const scan = useCallback(async () => {
-    const id = await triggerScan();
-    if (id) router.push({ pathname: '/viewer', params: { id } });
-  }, [triggerScan, router]);
-
   const openFolder = useCallback((folder: string) => {
     router.navigate({ pathname: '/files', params: { folder } });
   }, [router]);
@@ -80,9 +78,9 @@ export default function HomeScreen() {
     <View>
       {!searching && (
         <View style={styles.quickRow}>
-          <QuickAction icon="camera-outline" label="Scan" hint="Scan a document with the camera" onPress={scan} primary />
           <QuickAction icon="images-outline" label="Import photos" hint="Make a document from photos" onPress={importImages} />
           <QuickAction icon="folder-open-outline" label="Import file" hint="Import a PDF or an image file" onPress={importFile} />
+          <QuickAction icon="create-outline" label="Sign" hint="Sign a document" onPress={() => router.push('/tools/sign')} />
         </View>
       )}
       {!searching && folders.length > 0 && (
@@ -138,9 +136,7 @@ export default function HomeScreen() {
 
   return (
     <View style={[styles.container, { paddingTop: insets.top, backgroundColor: colors.bg }]}>
-      <View style={styles.header}>
-        <Text style={[styles.title, { color: colors.text }]} accessibilityRole="header">Home</Text>
-      </View>
+      <LargeTitle title="Home" />
 
       <View style={styles.searchRow}>
         <SearchField value={searchQuery} onChangeText={setSearchQuery} />
@@ -160,7 +156,7 @@ export default function HomeScreen() {
           keyExtractor={d => d.id}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
-          contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + 110 }]}
+          contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + TAB_BAR_CLEARANCE }]}
           ListHeaderComponent={header}
           ListEmptyComponent={
             searching ? (
@@ -171,7 +167,7 @@ export default function HomeScreen() {
               <View style={styles.empty}>
                 <EmptyState
                   variant="no-docs"
-                  subtitle="Scan a document, or import photos or a PDF. Your newest documents show up here."
+                  subtitle="Tap the camera button to scan, or import photos or a PDF. Your newest documents show up here."
                 />
               </View>
             ) : null
@@ -179,6 +175,8 @@ export default function HomeScreen() {
           renderItem={({ item }) => (
             <DocumentRow
               document={item}
+              snippet={searching ? searchSnippet(item, q) : undefined}
+              snippetQuery={searching ? q : undefined}
               onPress={() => router.push({ pathname: '/viewer', params: { id: item.id } })}
               onLongPress={() => actions.openActions(item)}
             />
@@ -196,34 +194,26 @@ function QuickAction({
   label,
   hint,
   onPress,
-  primary,
 }: {
   icon: IconName;
   label: string;
   hint: string;
   onPress: () => void;
-  primary?: boolean;
 }) {
   const { colors } = useTheme();
   return (
     <Pressable
       onPress={onPress}
-      style={({ pressed }) => [
-        styles.quick,
-        { backgroundColor: primary ? colors.accentFill : colors.card },
-        pressed && { opacity: 0.75 },
-      ]}
+      style={({ pressed }) => [styles.quick, { backgroundColor: colors.card }, pressed && { opacity: 0.75 }]}
       accessibilityRole="button"
       accessibilityLabel={label}
       accessibilityHint={hint}
     >
-      <View style={[styles.quickIcon, !primary && { backgroundColor: colors.accentLight }]}>
-        {/* A soft disc of the label colour behind the icon on the filled card. */}
-        {primary && <View style={[StyleSheet.absoluteFill, styles.quickDisc, { backgroundColor: colors.onAccent }]} />}
-        <Ionicons name={icon} size={22} color={primary ? colors.onAccent : colors.accent} />
+      <View style={[styles.quickIcon, { backgroundColor: colors.accentLight }]}>
+        <Ionicons name={icon} size={22} color={colors.accent} />
       </View>
       <Text
-        style={[Type.footnote, styles.quickLabel, { color: primary ? colors.onAccent : colors.text }]}
+        style={[Type.footnote, styles.quickLabel, { color: colors.text }]}
         numberOfLines={1}
         maxFontSizeMultiplier={1.2}
       >
@@ -235,22 +225,12 @@ function QuickAction({
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingLeft: 20,
-    paddingRight: Spacing.sm,
-    paddingTop: 14,
-    paddingBottom: Spacing.sm,
-    minHeight: 14 + HIT + Spacing.sm,
-  },
-  title: { fontSize: 30, fontWeight: '800', letterSpacing: -0.5 },
   searchRow: { paddingHorizontal: Spacing.gutter, paddingBottom: Spacing.xs },
   listContent: { paddingHorizontal: Spacing.gutter, flexGrow: 1 },
   quickRow: { flexDirection: 'row', gap: Spacing.sm, marginTop: Spacing.md },
   quick: {
     flex: 1,
-    minHeight: 92,
+    minHeight: 84,
     borderRadius: Radius.lg,
     paddingVertical: Spacing.md,
     paddingHorizontal: Spacing.sm,
@@ -259,7 +239,6 @@ const styles = StyleSheet.create({
     gap: Spacing.sm,
   },
   quickIcon: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
-  quickDisc: { borderRadius: 20, opacity: 0.18 },
   quickLabel: { fontWeight: '600' },
   sectionRow: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' },
   sectionLabel: { marginTop: Spacing.xl },

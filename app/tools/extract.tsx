@@ -9,8 +9,9 @@ import { useRouter } from 'expo-router';
 import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
-import { useToast } from '@/components/toast';
-import { DocGroup, DocRow, NoDocumentsScreen, SectionRow, ToolScreen, pageCountLabel, useToolDocuments } from '@/components/tool-ui';
+import { DocGroup, DocRow, NoDocumentsScreen, SectionRow, ToolNote, ToolScreen, pageCountLabel, useToolDocuments } from '@/components/tool-ui';
+import { ToolDocHeader, useToolDoc } from '@/components/tool-doc';
+import { FilterBaker } from '@/components/filter-baker';
 import { saveDocument } from '@/lib/storage';
 import { copyPageWithShadow, deleteDocumentFiles } from '@/lib/files';
 import { notifyError, notifySuccess } from '@/lib/haptics';
@@ -20,13 +21,11 @@ import type { Document } from '@/types/document';
 export default function ExtractScreen() {
   const router = useRouter();
   const { colors } = useTheme();
-  const { show } = useToast();
   const { docs, loaded } = useToolDocuments(d => !d.pdfUri && d.pages.length > 1);
-  const [docId, setDocId] = useState<string | null>(null);
   const [pages, setPages] = useState<Set<number>>(new Set());
   const [saving, setSaving] = useState(false);
 
-  const doc = docs.find(d => d.id === docId) ?? null;
+  const { doc, docId, setDocId, fixed, fromViewer } = useToolDoc(docs);
 
   const pick = (d: Document) => {
     if (d.id === docId) return;
@@ -70,8 +69,11 @@ export default function ExtractScreen() {
         updatedAt: now,
       });
       notifySuccess();
-      show(`Extracted ${pageCountLabel(sorted.length)}`);
-      router.replace({ pathname: '/viewer', params: { id: newId } });
+      // The viewer shows the toast: it covers the app-wide toast host.
+      router.replace({
+        pathname: '/viewer',
+        params: { id: newId, notice: `${pageCountLabel(sorted.length)} saved as a new document` },
+      });
     } catch {
       try { deleteDocumentFiles(newId); } catch {}
       notifyError();
@@ -103,12 +105,21 @@ export default function ExtractScreen() {
         />
       }
     >
-      <SectionLabel>Document</SectionLabel>
-      <DocGroup>
-        {docs.map(d => (
-          <DocRow key={d.id} doc={d} selected={d.id === docId} onPress={() => pick(d)} />
-        ))}
-      </DocGroup>
+      {/* Presented over the viewer: a baker underneath would never run (see FilterBaker). */}
+      {fromViewer ? <FilterBaker /> : null}
+      {fixed && doc ? (
+        <ToolDocHeader doc={doc} />
+      ) : (
+        <>
+          <SectionLabel>Document</SectionLabel>
+          <DocGroup>
+            {docs.map(d => (
+              <DocRow key={d.id} doc={d} selected={d.id === docId} onPress={() => pick(d)} />
+            ))}
+          </DocGroup>
+          <ToolNote>Only documents with two or more pages are listed. Imported PDFs can’t be split.</ToolNote>
+        </>
+      )}
 
       {doc ? (
         <>

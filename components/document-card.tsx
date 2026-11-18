@@ -8,6 +8,7 @@ import { Document } from '@/types/document';
 import { useTheme } from '@/contexts/theme-context';
 import { formatDocDate, formatPageCount } from '@/lib/format';
 import { highlightRuns } from '@/lib/highlight';
+import { compactMeta } from '@/lib/doc-list';
 import { Radius, Spacing, Type } from '@/lib/theme';
 
 type Props = {
@@ -114,7 +115,9 @@ export function DocumentCard({
           <Thumb document={document} iconSize={32} style={styles.thumbnail} />
           <View style={styles.info}>
             <Text style={[Type.footnote, styles.name, { color: colors.text }]} numberOfLines={2}>{document.name}</Text>
-            <Text style={[Type.caption, { color: colors.muted }]} numberOfLines={1}>{documentMeta(document)}</Text>
+            <Text style={[Type.caption, { color: colors.muted }]} numberOfLines={1}>
+              {columns >= 3 ? compactMeta(document) : documentMeta(document)}
+            </Text>
             {snippet ? <Snippet text={snippet} query={snippetQuery} /> : null}
           </View>
         </View>

@@ -45,3 +45,14 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 }
 
 export const useTheme = () => useContext(ThemeContext);
+
+/**
+ * Renders its subtree with the dark palette whatever the app theme is. The
+ * always-dark screens (viewer) wrap their sheets in it, so a bright sheet never
+ * slides over the dark chrome.
+ */
+export function DarkThemeScope({ children }: { children: React.ReactNode }) {
+  const ctx = useContext(ThemeContext);
+  const value = useMemo(() => ({ ...ctx, isDark: true, colors: Colors.dark }), [ctx]);
+  return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
+}

@@ -7,7 +7,6 @@ import { Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
-import { useToast } from '@/components/toast';
 import {
   DocGroup,
   DocRow,
@@ -19,6 +18,8 @@ import {
   pageCountLabel,
   useToolDocuments,
 } from '@/components/tool-ui';
+import { ToolDocHeader, useToolDoc } from '@/components/tool-doc';
+import { FilterBaker } from '@/components/filter-baker';
 import { bakePage, invalidateDocPreviews } from '@/lib/bake';
 import { notifyError, notifySuccess } from '@/lib/haptics';
 import type { Document, PageAdjustment, PageFilter } from '@/types/document';
@@ -28,12 +29,10 @@ const ERASE_ADJUSTMENT: PageAdjustment = { brightness: 30, contrast: 30, saturat
 
 export default function EraseMarksScreen() {
   const router = useRouter();
-  const { show } = useToast();
   const { docs, loaded } = useToolDocuments();
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
 
-  const selected = docs.find(d => d.id === selectedId) ?? null;
+  const { doc: selected, docId: selectedId, setDocId: setSelectedId, fixed, fromViewer } = useToolDoc(docs);
   const running = progress !== null;
 
   const run = async (doc: Document) => {
@@ -61,8 +60,11 @@ export default function EraseMarksScreen() {
       return;
     }
     notifySuccess();
-    show(failed ? `Cleaned ${total - failed} of ${total} pages` : 'Marks erased');
-    router.replace({ pathname: '/viewer', params: { id: doc.id } });
+    const notice = failed ? `Cleaned ${total - failed} of ${total} pages` : 'Marks erased';
+    // The viewer shows the toast: it covers the app-wide toast host. Opened from
+    // the viewer, go back to it rather than stacking a second one.
+    if (fromViewer) router.dismissTo({ pathname: '/viewer', params: { id: doc.id, notice } });
+    else router.replace({ pathname: '/viewer', params: { id: doc.id, notice } });
   };
 
   const handleApply = () => {
@@ -114,25 +116,33 @@ export default function EraseMarksScreen() {
         </>
       }
     >
+      {/* Presented over the viewer: a baker underneath would never run (see FilterBaker). */}
+      {fromViewer ? <FilterBaker /> : null}
       <ToolIntro
         compact
         icon="color-wand-outline"
         title="Remove light marks"
         text="Turns pages into crisp black and white and lifts faint pencil, highlighter and shadow marks."
       />
-      <SectionLabel>Document</SectionLabel>
-      <DocGroup>
-        {docs.map(doc => (
-          <DocRow
-            key={doc.id}
-            doc={doc}
-            selected={doc.id === selectedId}
-            onPress={() => !running && setSelectedId(doc.id)}
-          />
-        ))}
-      </DocGroup>
+      {fixed && selected ? (
+        <ToolDocHeader doc={selected} />
+      ) : (
+        <>
+          <SectionLabel>Document</SectionLabel>
+          <DocGroup>
+            {docs.map(doc => (
+              <DocRow
+                key={doc.id}
+                doc={doc}
+                selected={doc.id === selectedId}
+                onPress={() => !running && setSelectedId(doc.id)}
+              />
+            ))}
+          </DocGroup>
+        </>
+      )}
       <ToolNote>
-        Changes the selected document. To undo, open it and choose the Original filter for each page.
+        Changes the document itself. To undo, open it, tap Filters and choose Original. Apply to all undoes every page at once.
       </ToolNote>
     </ToolScreen>
   );

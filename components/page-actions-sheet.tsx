@@ -8,7 +8,7 @@
 // means nothing native has to wait for it to dismiss before Crop, Mark up or
 // a share sheet can open.
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Image, LayoutChangeEvent, Pressable, StyleSheet, Text, View } from 'react-native';
 import { PageFilter, PageAdjustment } from '@/types/document';
 import { bakePreviews, PREVIEW_FILTERS } from '@/lib/bake';
 import { ChromeSlider } from '@/components/chrome-slider';
@@ -30,6 +30,32 @@ const isDefault = (a: PageAdjustment) => a.brightness === 0 && a.contrast === 0 
 
 /** Fixed content height so switching tabs never makes the page above jump. */
 const CONTENT_H = 150;
+
+/**
+ * Filter tiles show a zoomed-in crop of the page (the upper middle, where a
+ * title or the first lines usually are) rather than the whole page shrunk to a
+ * stamp: at this size four whole-page thumbnails look identical, while text
+ * at reading size makes Grayscale vs Black & white vs Enhanced obvious.
+ */
+const TILE_ZOOM = 2.4;
+/** Centre of the crop, as a fraction of the page height. */
+const TILE_FOCUS_Y = 0.25;
+
+/** A crop of `uri` filling a tile of `w`×`h`, zoomed in on the upper middle of the page. */
+function CropImage({ uri, w, h, aspect, bg }: { uri: string; w: number; h: number; aspect: number; bg: string }) {
+  if (!w || !h) return null;
+  const imgW = w * TILE_ZOOM;
+  const imgH = imgW * aspect;
+  const left = -(imgW - w) / 2;
+  const top = -Math.max(0, Math.min(imgH * TILE_FOCUS_Y - h / 2, imgH - h));
+  return (
+    <Image
+      source={{ uri }}
+      style={{ position: 'absolute', width: imgW, height: imgH, left, top, backgroundColor: bg }}
+      resizeMode="stretch"
+    />
+  );
+}
 
 type Props = {
   tab: EditTab;
@@ -71,6 +97,8 @@ export function PageEditPanel({
 }: Props) {
   const { colors } = useTheme();
   const [previews, setPreviews] = useState<string[] | null>(null);
+  const [tile, setTile] = useState({ w: 0, h: 0 });
+  const [aspect, setAspect] = useState(1.3);
 
   // Real previews: each tile is the page rendered through that filter (RN's
   // `filter` style can't do this on iOS). One WebView pass renders all four.
@@ -87,6 +115,22 @@ export function PageEditPanel({
   const adj = adjustment ?? DEFAULT_ADJ;
   const fallback = cacheBust ? `${uri}?v=${cacheBust}` : uri;
 
+  // The crop needs the page's shape (h / w).
+  useEffect(() => {
+    let cancelled = false;
+    Image.getSize(
+      fallback,
+      (w, h) => { if (!cancelled && w > 0) setAspect(h / w); },
+      () => {},
+    );
+    return () => { cancelled = true; };
+  }, [fallback]);
+
+  const onTileLayout = (e: LayoutChangeEvent) => {
+    const { width, height } = e.nativeEvent.layout;
+    if (Math.abs(width - tile.w) > 0.5 || Math.abs(height - tile.h) > 0.5) setTile({ w: width, h: height });
+  };
+
   // Left of the tabs: the one secondary action that fits the current tab.
   const secondary =
     tab === 'filters'
@@ -100,16 +144,28 @@ export function PageEditPanel({
       <View style={styles.topRow}>
         <View style={styles.side}>
           {secondary && (
+            // A real button (filled pill), not a label: "Apply to all" is the
+            // only way to give a whole document one look.
             <Pressable
               onPress={secondary.onPress}
               disabled={secondary.disabled}
-              hitSlop={8}
-              style={({ pressed }) => [styles.textBtn, (pressed || secondary.disabled) && { opacity: secondary.disabled ? 0.35 : 0.6 }]}
+              hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+              style={({ pressed }) => [
+                styles.pillBtn,
+                { backgroundColor: colors.chromeBorder },
+                (pressed || secondary.disabled) && { opacity: secondary.disabled ? 0.4 : 0.6 },
+              ]}
               accessibilityRole="button"
               accessibilityLabel={secondary.a11y}
               accessibilityState={{ disabled: secondary.disabled }}
             >
-              <Text style={[Type.subhead, { color: colors.chromeText }]} numberOfLines={1}>{secondary.label}</Text>
+              <Text
+                style={[Type.footnote, styles.pillText, { color: colors.chromeText }]}
+                numberOfLines={1}
+                maxFontSizeMultiplier={1.2}
+              >
+                {secondary.label}
+              </Text>
             </Pressable>
           )}
         </View>
@@ -163,11 +219,9 @@ export function PageEditPanel({
                   accessibilityState={{ selected: active }}
                 >
                   <View style={[styles.previewRing, { borderColor: active ? colors.chromeAccent : 'transparent' }]}>
-                    <Image
-                      source={{ uri: preview ?? fallback }}
-                      style={[styles.preview, { backgroundColor: colors.chrome }]}
-                      resizeMode="cover"
-                    />
+                    <View style={[styles.preview, { backgroundColor: colors.paper }]} onLayout={i === 0 ? onTileLayout : undefined}>
+                      <CropImage uri={preview ?? fallback} w={tile.w} h={tile.h} aspect={aspect} bg={colors.paper} />
+                    </View>
                     {!preview && (
                       <View style={styles.previewBusy} pointerEvents="none">
                         <ActivityIndicator size="small" color={colors.chromeText} />
@@ -228,7 +282,7 @@ const styles = StyleSheet.create({
   textBtn: { minHeight: HIT, justifyContent: 'center' },
   segment: { flexDirection: 'row', borderRadius: Radius.sm, padding: 2 },
   segmentBtn: {
-    minWidth: 84,
+    minWidth: 76,
     minHeight: 32,
     paddingHorizontal: Spacing.md,
     alignItems: 'center',
@@ -245,7 +299,14 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     padding: 2,
   },
-  preview: { width: '100%', aspectRatio: 0.78, borderRadius: Radius.sm - 2 },
+  preview: { width: '100%', aspectRatio: 0.78, borderRadius: Radius.sm - 2, overflow: 'hidden' },
+  pillBtn: {
+    minHeight: 32,
+    justifyContent: 'center',
+    paddingHorizontal: Spacing.md,
+    borderRadius: Radius.pill,
+  },
+  pillText: { fontWeight: '600' },
   previewBusy: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
   filterLabel: { marginTop: Spacing.xs + 2 },
   filterLabelActive: { fontWeight: '600' },

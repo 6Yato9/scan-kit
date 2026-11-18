@@ -10,6 +10,7 @@ import {
   Text,
   TextInput,
   View,
+  useWindowDimensions,
 } from 'react-native';
 import { useLocalSearchParams, useNavigation, useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -29,7 +30,7 @@ import {
   SortKey,
 } from '@/lib/storage';
 import { mergeIntoNew } from '@/lib/doc-ops';
-import { matchesQuery, sortDocuments } from '@/lib/doc-list';
+import { matchesQuery, searchSnippet, sortDocuments } from '@/lib/doc-list';
 import { useScan } from '@/contexts/scan-context';
 import { useTheme } from '@/contexts/theme-context';
 import { notifySuccess, selection } from '@/lib/haptics';
@@ -39,7 +40,7 @@ import { FilesLayout, getFilesLayout, saveFilesLayout } from '@/lib/view-pref';
 import { EmptyState } from '@/components/empty-state';
 import { SortSheet } from '@/components/sort-sheet';
 import { MoveFolderSheet } from '@/components/move-folder-sheet';
-import { HeaderIconButton, HeaderTextButton } from '@/components/screen-header';
+import { HeaderIconButton, HeaderTextButton, LargeTitle } from '@/components/screen-header';
 import { PrimaryButton } from '@/components/primary-button';
 import { SearchField } from '@/components/search-field';
 import { useDocumentActions } from '@/components/document-actions';
@@ -47,7 +48,7 @@ import { useToast } from '@/components/toast';
 import { useImportDocuments } from '@/components/use-import';
 import { MultiShareSheet } from '@/components/multi-share-sheet';
 import { ExportSheet } from '@/components/export-sheet';
-import { HIT, Radius, Spacing, Type } from '@/lib/theme';
+import { Radius, Spacing, Type } from '@/lib/theme';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
@@ -55,6 +56,14 @@ function countLabel(n: number): string {
   return n === 0 ? 'Empty' : `${n} document${n === 1 ? '' : 's'}`;
 }
 type FolderPrompt = { mode: 'create' } | { mode: 'rename'; folder: string };
+
+/**
+ * Grid columns: three on phones, so a screen shows two full rows of documents
+ * instead of one and a half; more on wider screens (iPad, landscape).
+ */
+function gridColumns(width: number): number {
+  return Math.max(3, Math.min(6, Math.floor(width / 130)));
+}
 
 export default function FilesScreen() {
   const [documents, setDocuments] = useState<Document[]>([]);
@@ -92,6 +101,8 @@ export default function FilesScreen() {
   const { lastSaved } = useScan();
   const { colors } = useTheme();
   const toast = useToast();
+  const { width: screenW } = useWindowDimensions();
+  const columns = gridColumns(screenW);
 
   const enterSelect = useCallback((doc?: Document) => {
     setSelecting(true);
@@ -135,7 +146,7 @@ export default function FilesScreen() {
     if (loaded && activeFolder !== null && !folders.includes(activeFolder)) setActiveFolder(null);
   }, [loaded, folders, activeFolder]);
 
-  const q = searchQuery.trim().toLowerCase();
+  const q = searchQuery.trim();
   const displayedDocuments = useMemo(() => {
     let filtered = q ? documents.filter(d => matchesQuery(d, q)) : documents;
     if (activeFolder !== null) filtered = filtered.filter(d => d.folder === activeFolder);
@@ -364,24 +375,24 @@ export default function FilesScreen() {
 
   return (
     <View style={[styles.container, { paddingTop: insets.top, backgroundColor: colors.bg }]}>
-      <View style={styles.header}>
-        {selecting ? (
-          <>
-            <Text style={[styles.title, { color: colors.text }]} accessibilityRole="header" numberOfLines={1}>
-              {selCount === 0 ? 'Select' : `${selCount} selected`}
-            </Text>
-            <View style={styles.headerActions}>
+      {selecting ? (
+        <LargeTitle
+          title={selCount === 0 ? 'Select' : `${selCount} selected`}
+          right={
+            <>
               <HeaderTextButton
                 title={allShownSelected ? 'Deselect all' : 'Select all'}
                 onPress={() => setSelectedIds(allShownSelected ? new Set() : new Set(displayedDocuments.map(d => d.id)))}
               />
               <HeaderTextButton title="Done" emphasis onPress={exitSelect} />
-            </View>
-          </>
-        ) : (
-          <>
-            <Text style={[styles.title, { color: colors.text }]} accessibilityRole="header">Files</Text>
-            <View style={styles.headerActions}>
+            </>
+          }
+        />
+      ) : (
+        <LargeTitle
+          title="Files"
+          right={
+            <>
               <HeaderIconButton icon="checkmark-circle-outline" label="Select documents" color={colors.accent} size={23} onPress={() => enterSelect()} disabled={documents.length === 0} />
               <HeaderIconButton
                 icon={layout === 'grid' ? 'list-outline' : 'grid-outline'}
@@ -390,12 +401,12 @@ export default function FilesScreen() {
                 size={22}
                 onPress={toggleLayout}
               />
-              <HeaderIconButton icon="swap-vertical" label="Sort documents" color={colors.accent} size={22} onPress={() => setSortSheetVisible(true)} />
+              <HeaderIconButton icon="swap-vertical-outline" label="Sort documents" color={colors.accent} size={22} onPress={() => setSortSheetVisible(true)} />
               <HeaderIconButton icon="add" label="Add documents or a folder" color={colors.accent} size={28} onPress={() => setAddSheetVisible(true)} />
-            </View>
-          </>
-        )}
-      </View>
+            </>
+          }
+        />
+      )}
 
       <View style={styles.searchRow}>
         <SearchField value={searchQuery} onChangeText={setSearchQuery} />
@@ -432,8 +443,7 @@ export default function FilesScreen() {
           <View style={styles.gridContent}>
             {[0, 1].map(r => (
               <View key={r} style={styles.skeletonRow}>
-                <DocumentCardSkeleton />
-                <DocumentCardSkeleton />
+                {Array.from({ length: columns }, (_, c) => <DocumentCardSkeleton key={c} columns={columns} />)}
               </View>
             ))}
           </View>
@@ -457,10 +467,10 @@ export default function FilesScreen() {
       ) : (
         <FlatList
           // numColumns can't change on a mounted list.
-          key={layout}
+          key={layout === 'grid' ? `grid-${columns}` : 'list'}
           data={displayedDocuments}
           keyExtractor={d => d.id}
-          numColumns={layout === 'grid' ? 2 : 1}
+          numColumns={layout === 'grid' ? columns : 1}
           style={styles.list}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
@@ -473,6 +483,9 @@ export default function FilesScreen() {
             layout === 'grid' ? (
               <DocumentCard
                 document={item}
+                columns={columns}
+                snippet={q ? searchSnippet(item, q) : undefined}
+                snippetQuery={q || undefined}
                 onPress={() => handleCardPress(item)}
                 onLongPress={() => handleCardLongPress(item)}
                 isSelected={selectedIds.has(item.id)}
@@ -481,6 +494,8 @@ export default function FilesScreen() {
             ) : (
               <DocumentRow
                 document={item}
+                snippet={q ? searchSnippet(item, q) : undefined}
+                snippetQuery={q || undefined}
                 onPress={() => handleCardPress(item)}
                 onLongPress={() => handleCardLongPress(item)}
                 isSelected={selectedIds.has(item.id)}
@@ -691,18 +706,6 @@ function BarButton({
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingLeft: 20,
-    paddingRight: Spacing.sm,
-    paddingTop: 14,
-    paddingBottom: Spacing.sm,
-    minHeight: 14 + HIT + Spacing.sm,
-  },
-  title: { fontSize: 30, fontWeight: '800', letterSpacing: -0.5, flexShrink: 1 },
-  headerActions: { flexDirection: 'row', alignItems: 'center' },
   searchRow: { paddingHorizontal: Spacing.gutter, paddingBottom: Spacing.md },
   chipsScroll: { flexGrow: 0, flexShrink: 0 },
   chips: { paddingHorizontal: Spacing.gutter, paddingTop: Spacing.xs, paddingBottom: Spacing.sm, gap: Spacing.sm, flexDirection: 'row' },
@@ -716,7 +719,7 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
   },
   list: { flex: 1 },
-  gridContent: { paddingHorizontal: Spacing.gutter - 6, paddingTop: Spacing.xs },
+  gridContent: { paddingHorizontal: Spacing.gutter - 4, paddingTop: Spacing.xs },
   listContent: { paddingHorizontal: Spacing.gutter, paddingTop: Spacing.xs },
   skeletonRow: { flexDirection: 'row' },
   multiBar: {
