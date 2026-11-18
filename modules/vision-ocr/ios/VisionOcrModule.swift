@@ -38,6 +38,20 @@ public class VisionOcrModule: Module {
       }
     }
 
+    /// Render every page of a PDF to JPEGs. Resolves to the file URIs in order.
+    AsyncFunction("renderPdfPages") { (inputUri: String, outputDirUri: String, maxEdge: Double, promise: Promise) in
+      DispatchQueue.global(qos: .userInitiated).async {
+        do {
+          func path(_ u: String) -> String { URL(string: u).flatMap { $0.isFileURL ? $0.path : nil } ?? u }
+          let paths = try PdfRasterizer.render(inputPath: path(inputUri), outputDir: path(outputDirUri),
+                                               maxEdge: CGFloat(maxEdge), quality: 0.9)
+          promise.resolve(paths.map { URL(fileURLWithPath: $0).absoluteString })
+        } catch {
+          promise.reject("ERR_PDF_RENDER", error.localizedDescription)
+        }
+      }
+    }
+
     /// Detect a document in a photo and return a perspective-corrected copy.
     /// Resolves to { uri, detected }. When nothing confident is found, resolves
     /// with the input uri and detected: false.
