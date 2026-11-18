@@ -1,65 +1,83 @@
 // components/reorder-modal.tsx
-import { Modal, Pressable, SafeAreaView, StyleSheet, Text, View, Image } from 'react-native';
+// Drag-to-reorder sheet for the viewer. Uses the always-dark chrome like the
+// viewer it is presented over.
+import { Image, Modal, Pressable, StyleSheet, Text } from 'react-native';
 import { useEffect, useState } from 'react';
+import { Ionicons } from '@expo/vector-icons';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import DraggableFlatList, {
   ScaleDecorator,
   RenderItemParams,
 } from 'react-native-draggable-flatlist';
-import { PageAdjustment, PageFilter } from '@/types/document';
 import { useTheme } from '@/contexts/theme-context';
+import { HeaderTextButton, ScreenHeader } from '@/components/screen-header';
+import { HIT, Spacing, Type } from '@/lib/theme';
 
 type PageItem = {
   index: number;
   uri: string;
-  filter?: PageFilter;
-  adjustment?: PageAdjustment;
 };
 
 type Props = {
   visible: boolean;
   pages: string[];
-  filters?: PageFilter[];
-  adjustments?: PageAdjustment[];
+  /** Cache-bust value (document.updatedAt) so thumbnails reflect in-place edits. */
+  cacheBust?: number;
+  /** Shows a spinner on Done while the new order is being written. */
+  saving?: boolean;
   onConfirm: (newOrderIndices: number[]) => void;
   onCancel: () => void;
 };
 
-export function ReorderModal({ visible, pages, filters, adjustments, onConfirm, onCancel }: Props) {
+export function ReorderModal({ visible, pages, cacheBust, saving, onConfirm, onCancel }: Props) {
   const { colors } = useTheme();
   const [items, setItems] = useState<PageItem[]>([]);
 
   // Re-init whenever the modal becomes visible OR the underlying pages change.
-  // (Relying solely on `onShow` left the modal showing stale state if the doc
-  // changed between opens.)
   useEffect(() => {
     if (!visible) return;
-    setItems(pages.map((uri, index) => ({
-      index,
-      uri,
-      filter: filters?.[index],
-      adjustment: adjustments?.[index],
-    })));
-  }, [visible, pages, filters, adjustments]);
+    setItems(pages.map((uri, index) => ({ index, uri })));
+  }, [visible, pages]);
+
+  const changed = items.some((item, i) => item.index !== i);
 
   function handleConfirm() {
+    if (!changed) {
+      onCancel();
+      return;
+    }
     onConfirm(items.map(item => item.index));
   }
 
   const renderItem = ({ item, getIndex, drag, isActive }: RenderItemParams<PageItem>) => {
+    const position = (getIndex() ?? 0) + 1;
     return (
       <ScaleDecorator>
         <Pressable
-          style={[styles.row, { backgroundColor: isActive ? colors.accentLight : colors.card }]}
+          style={[
+            styles.row,
+            { backgroundColor: isActive ? colors.chromeBorder : colors.chromeRaised },
+          ]}
           onLongPress={drag}
-          delayLongPress={100}
+          delayLongPress={150}
+          accessibilityRole="button"
+          accessibilityLabel={`Page ${position}`}
+          accessibilityHint="Touch and hold, then drag to move"
         >
           <Image
-            source={{ uri: item.uri }}
-            style={[styles.thumb, { backgroundColor: colors.placeholder }]}
+            source={{ uri: cacheBust ? `${item.uri}?v=${cacheBust}` : item.uri }}
+            style={[styles.thumb, { backgroundColor: colors.chrome }]}
             resizeMode="cover"
           />
-          <Text style={[styles.pageLabel, { color: colors.text }]}>Page {(getIndex() ?? 0) + 1}</Text>
-          <Text style={[styles.dragHandle, { color: colors.border }]}>☰</Text>
+          <Text style={[Type.body, styles.pageLabel, { color: colors.chromeText }]}>Page {position}</Text>
+          <Pressable
+            onPressIn={drag}
+            hitSlop={8}
+            style={styles.handle}
+            accessibilityLabel={`Move page ${position}`}
+          >
+            <Ionicons name="reorder-three-outline" size={26} color={colors.chromeMuted} />
+          </Pressable>
         </Pressable>
       </ScaleDecorator>
     );
@@ -72,16 +90,26 @@ export function ReorderModal({ visible, pages, filters, adjustments, onConfirm, 
       presentationStyle="pageSheet"
       onRequestClose={onCancel}
     >
-      <SafeAreaView style={[styles.container, { backgroundColor: colors.card }]}>
-        <View style={[styles.header, { borderBottomColor: colors.border }]}>
-          <Pressable onPress={onCancel} hitSlop={12}>
-            <Text style={[styles.cancel, { color: colors.muted }]}>Cancel</Text>
-          </Pressable>
-          <Text style={[styles.title, { color: colors.text }]}>Reorder Pages</Text>
-          <Pressable onPress={handleConfirm} hitSlop={12}>
-            <Text style={[styles.done, { color: colors.accent }]}>Done</Text>
-          </Pressable>
-        </View>
+      {/* A Modal is a separate native root, so the gesture handler needs its own root inside it. */}
+      <GestureHandlerRootView style={[styles.container, { backgroundColor: colors.chrome }]}>
+        <ScreenHeader
+          dark
+          withInset={false}
+          title="Reorder pages"
+          left={<HeaderTextButton title="Cancel" color={colors.chromeText} onPress={onCancel} />}
+          right={
+            <HeaderTextButton
+              title={saving ? 'Saving…' : 'Done'}
+              emphasis
+              disabled={saving}
+              color={colors.chromeAccent}
+              onPress={handleConfirm}
+            />
+          }
+        />
+        <Text style={[Type.footnote, styles.hint, { color: colors.chromeMuted }]}>
+          Touch and hold a page, then drag it to a new position.
+        </Text>
         <DraggableFlatList
           data={items}
           onDragEnd={({ data }) => setItems(data)}
@@ -89,37 +117,29 @@ export function ReorderModal({ visible, pages, filters, adjustments, onConfirm, 
           renderItem={renderItem}
           contentContainerStyle={styles.list}
         />
-      </SafeAreaView>
+      </GestureHandlerRootView>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  title: { fontSize: 17, fontWeight: '600' },
-  cancel: { fontSize: 16 },
-  done: { fontSize: 16, fontWeight: '600' },
-  list: { paddingVertical: 8 },
+  hint: { paddingHorizontal: Spacing.gutter, paddingBottom: Spacing.sm },
+  list: { paddingHorizontal: Spacing.gutter, paddingBottom: Spacing.xxxl },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    gap: 14,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm + 2,
+    gap: Spacing.md + 2,
+    borderRadius: 12,
+    marginBottom: Spacing.sm,
   },
   thumb: {
     width: 44,
     height: 58,
     borderRadius: 4,
   },
-  pageLabel: { flex: 1, fontSize: 15 },
-  dragHandle: { fontSize: 20 },
+  pageLabel: { flex: 1 },
+  handle: { width: HIT, height: HIT, alignItems: 'center', justifyContent: 'center' },
 });

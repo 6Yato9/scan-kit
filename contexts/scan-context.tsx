@@ -1,12 +1,14 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState, ReactNode } from 'react';
-import { Alert, Linking } from 'react-native';
+import { ActivityIndicator, Alert, Linking, StyleSheet, Text, View } from 'react-native';
 import DocumentScanner from 'react-native-document-scanner-plugin';
 import { PageFilter } from '@/types/document';
 import { notifySuccess, notifyError } from '@/lib/haptics';
 import { getScanSettings, getDocSettings } from '@/lib/storage';
 import { saveScan, indexDocText } from '@/lib/save-scan';
 import { autoName } from '@/lib/auto-name';
-import { bakePage } from '@/lib/bake';
+import { bakePages } from '@/lib/bake';
+import { useTheme } from '@/contexts/theme-context';
+import { Radius, Spacing, Type } from '@/lib/theme';
 
 type SaveInput = {
   pages?: string[];
@@ -17,6 +19,8 @@ type SaveInput = {
 type ScanContextType = {
   lastSaved: number;
   scanning: boolean;
+  /** True while a scan or import is being written to storage. */
+  saving: boolean;
   /** Scans, saves, and returns the new document id — or null if cancelled or failed. */
   triggerScan: () => Promise<string | null>;
   /** Saves imported pages or a PDF, returning the new document id — or null on failure. */
@@ -24,21 +28,30 @@ type ScanContextType = {
   bumpLastSaved: () => void;
 };
 
-const QUALITY_MAP = { low: 0.5, medium: 0.75, high: 0.9 } as const;
-const SCAN_QUALITY_MAP = { low: 50, medium: 75, high: 90 } as const;
+/** Recompression quality applied when a page is stored (scan settings → 0–1). */
+export const QUALITY_MAP = { low: 0.5, medium: 0.75, high: 0.9 } as const;
+/** Quality the document camera itself encodes at (0–100). */
+export const SCAN_QUALITY_MAP = { low: 50, medium: 75, high: 90 } as const;
 
 const ScanContext = createContext<ScanContextType | null>(null);
 
 export function ScanProvider({ children }: { children: ReactNode }) {
   const [lastSaved, setLastSaved] = useState(0);
   const [scanning, setScanning] = useState(false);
+  const [saving, setSaving] = useState<number | null>(null); // page count being saved
   const scanningRef = useRef(false);
+  const savingRef = useRef(false);
 
   const saveAndOpen = useCallback(async (input: SaveInput): Promise<string | null> => {
-    const [scan, docSettings] = await Promise.all([getScanSettings(), getDocSettings()]);
-    const filter = input.defaultFilter ?? scan.defaultFilter;
+    // A second import started while the first is still writing would create a
+    // duplicate document; ignore it.
+    if (savingRef.current) return null;
+    savingRef.current = true;
     const count = input.pages?.length ?? 0;
+    setSaving(Math.max(1, count));
     try {
+      const [scan, docSettings] = await Promise.all([getScanSettings(), getDocSettings()]);
+      const filter = input.defaultFilter ?? scan.defaultFilter;
       const { id, pages } = await saveScan({
         pages: input.pages,
         pdfUri: input.pdfUri,
@@ -48,30 +61,23 @@ export function ScanProvider({ children }: { children: ReactNode }) {
       });
       setLastSaved(Date.now());
       notifySuccess();
-      if (pages.length) indexDocText(id, pages).catch(() => {});
-      // Bake the default filter into each page's pixels, fire-and-forget so the
-      // caller isn't blocked on it. Sequential — the baker (a single off-screen
-      // WebView) handles one job at a time, and a large scan must not flood the
-      // queue. A page that fails to bake just keeps its raw pixels and no
-      // recorded filter, which is a consistent state, so per-page errors are
-      // swallowed and the loop continues.
+      // Bake the default filter into the pages' pixels without blocking the
+      // caller (it opens the viewer, which shows progress). Every page is
+      // tracked from the start so edits made meanwhile re-target the bakes;
+      // OCR runs after so the index reflects the final pixels.
       (async () => {
-        for (let i = 0; i < pages.length; i++) {
-          if (filter === 'original') continue;
-          try {
-            await bakePage(id, i, filter, undefined);
-          } catch (err) {
-            console.error('Bake failed for new page', i, err);
-          }
-        }
-      })().catch(() => {});
+        if (pages.length && filter !== 'original') await bakePages(id, pages.map((_, i) => i), filter);
+        if (pages.length) await indexDocText(id, pages);
+      })().catch(err => console.error('post-save processing failed', err));
       return id;
     } catch (err) {
       console.error('Save failed', err);
       notifyError();
-      const msg = err instanceof Error ? err.message : 'Could not save the scan.';
-      Alert.alert('Save failed', msg);
+      Alert.alert("Couldn't save the scan", 'There may not be enough free space. Free up some storage and try again.');
       return null;
+    } finally {
+      savingRef.current = false;
+      setSaving(null);
     }
   }, []);
 
@@ -81,10 +87,11 @@ export function ScanProvider({ children }: { children: ReactNode }) {
     setScanning(true);
     try {
       const settings = await getScanSettings();
+      // VisionKit always shows its own review/crop step; the plugin has no
+      // option to turn that on or off.
       const { scannedImages } = await DocumentScanner.scanDocument({
         croppedImageQuality: SCAN_QUALITY_MAP[settings.quality],
-        letUserAdjustCrop: settings.autoCrop,
-      } as any);
+      });
       if (!scannedImages?.length) return null;
       return await saveAndOpen({ pages: scannedImages });
     } catch (err) {
@@ -105,7 +112,7 @@ export function ScanProvider({ children }: { children: ReactNode }) {
         );
       } else {
         notifyError();
-        Alert.alert('Scan failed', 'Could not start the scanner. Try again.');
+        Alert.alert("Couldn't start the scanner", 'Try again in a moment.');
       }
       return null;
     } finally {
@@ -119,17 +126,51 @@ export function ScanProvider({ children }: { children: ReactNode }) {
   const value = useMemo(() => ({
     lastSaved,
     scanning,
+    saving: saving !== null,
     triggerScan,
     saveAndOpen,
     bumpLastSaved,
-  }), [lastSaved, scanning, triggerScan, saveAndOpen, bumpLastSaved]);
+  }), [lastSaved, scanning, saving, triggerScan, saveAndOpen, bumpLastSaved]);
 
   return (
     <ScanContext.Provider value={value}>
       {children}
+      {saving !== null && <SavingOverlay pages={saving} />}
     </ScanContext.Provider>
   );
 }
+
+/** Blocks input and shows progress while a scan or import is written to disk. */
+function SavingOverlay({ pages }: { pages: number }) {
+  const { colors } = useTheme();
+  return (
+    <View style={styles.overlay} accessibilityViewIsModal accessibilityLiveRegion="polite">
+      <View style={[styles.card, { backgroundColor: colors.card }]}>
+        <ActivityIndicator color={colors.accent} />
+        <Text style={[Type.subhead, { color: colors.text }]}>
+          {pages > 1 ? `Saving ${pages} pages…` : 'Saving…'}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  overlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  card: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.lg,
+    borderRadius: Radius.lg,
+  },
+});
 
 export function useScan() {
   const ctx = useContext(ScanContext);

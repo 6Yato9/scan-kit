@@ -86,3 +86,35 @@ export async function mirrorGeometryToOriginal(
     console.error('mirrorGeometryToOriginal failed', err);
   }
 }
+
+/** Canonical file:// URI of page `pageIndex` of `docId` (pages are stored by position). */
+export function pageFileUri(docId: string, pageIndex: number): string {
+  const dir = new Directory(Paths.document, 'scan-kit', docId);
+  return new File(dir, `page-${pageIndex}.jpg`).uri;
+}
+
+/**
+ * Crops a stored page in place and applies the identical crop to its `.orig`
+ * shadow. `rect` is in the page's natural pixels; `.orig` has the same
+ * dimensions, so the two stay the same shape — otherwise the next filter change
+ * would re-derive from the uncropped original and silently undo the crop.
+ */
+export async function cropPage(
+  docId: string,
+  pageIndex: number,
+  rect: { originX: number; originY: number; width: number; height: number },
+): Promise<string> {
+  const src = pageFileUri(docId, pageIndex);
+  const result = await manipulateAsync(src, [{ crop: rect }], { compress: 0.9, format: SaveFormat.JPEG });
+  const resultPath = result.uri.split('?')[0];
+  let stored = src;
+  if (resultPath !== src) {
+    stored = replacePage(resultPath, docId, pageIndex);
+    try {
+      const tmp = new File(resultPath);
+      if (tmp.exists) tmp.delete();
+    } catch {}
+  }
+  await mirrorGeometryToOriginal(docId, pageIndex, [{ crop: rect }]);
+  return stored;
+}

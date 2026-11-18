@@ -1,68 +1,79 @@
 // components/crop-modal.tsx
 // In-place crop UI for an existing page image. Drag the four corner handles to
 // define a crop rectangle over the image; Done applies the crop via
-// expo-image-manipulator and returns the new file URI.
+// the caller (see app/viewer.tsx), which writes it under the page lock.
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
   Modal,
   PanResponder,
-  Pressable,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
+import { StatusBar } from 'expo-status-bar';
 import { useTheme } from '@/contexts/theme-context';
+import { HeaderTextButton, ScreenHeader } from '@/components/screen-header';
+import { FilterBaker } from '@/components/filter-baker';
+import { Spacing, Type } from '@/lib/theme';
 
 type Props = {
   visible: boolean;
   uri: string;
+  /** Cache-bust value (document.updatedAt) so the image reflects in-place edits such as a rotate. */
+  cacheBust?: number;
   onCancel: () => void;
   /**
-   * `rect` is in natural image pixels. The page's page-N.orig.jpg shadow has the
-   * same dimensions (it differs only in colour), so the caller can apply the very
-   * same crop to it and keep the two in the same shape.
+   * `rect` is in natural image pixels. The caller applies it to the page and to
+   * its page-N.orig.jpg shadow (same dimensions, differs only in colour) under
+   * the page lock, so a filter bake landing meanwhile can't undo the crop.
+   * Rejecting keeps the modal open with an error so the user can retry.
    */
-  onDone: (croppedUri: string, rect: { originX: number; originY: number; width: number; height: number }) => void;
+  onDone: (rect: CropRect) => Promise<void>;
 };
 
+export type CropRect = { originX: number; originY: number; width: number; height: number };
 type Rect = { x: number; y: number; w: number; h: number };
 type Fit = { scale: number; offX: number; offY: number; dispW: number; dispH: number };
 
-const HANDLE = 28;     // touch target size
+const HANDLE = 44;     // touch target size
 const MIN = 48;        // minimum crop size in display px
 const CORNERS = ['tl', 'tr', 'bl', 'br'] as const;
 type Corner = (typeof CORNERS)[number];
 
-export function CropModal({ visible, uri, onCancel, onDone }: Props) {
+export function CropModal({ visible, uri, cacheBust, onCancel, onDone }: Props) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const [imgSize, setImgSize] = useState<{ w: number; h: number } | null>(null);
   const [box, setBox] = useState<{ w: number; h: number } | null>(null); // container size
   const [rect, setRect] = useState<Rect | null>(null);
   const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
 
-  // Strip any cache-bust suffix before measuring / cropping.
+  // The manipulator gets the bare path; the on-screen image and its measured size
+  // get a cache-busted one, or RN's image cache can serve the pre-rotate pixels
+  // (and dimensions) after an in-place edit.
   const cleanUri = uri.split('?')[0];
+  const displayUri = cacheBust ? `${cleanUri}?v=${cacheBust}` : cleanUri;
 
   // Load natural image dimensions when the modal opens.
   useEffect(() => {
     if (!visible) {
       setImgSize(null);
       setRect(null);
+      setFailed(false);
       return;
     }
     let cancelled = false;
     Image.getSize(
-      cleanUri,
+      displayUri,
       (w, h) => { if (!cancelled) setImgSize({ w, h }); },
       () => { if (!cancelled) setImgSize(null); },
     );
     return () => { cancelled = true; };
-  }, [visible, cleanUri]);
+  }, [visible, displayUri]);
 
   // Compute the displayed-image rect (object-fit: contain) inside the container.
   const fit: Fit | null = imgSize && box
@@ -124,6 +135,7 @@ export function CropModal({ visible, uri, onCancel, onDone }: Props) {
   async function handleDone() {
     if (!rect || !fit || !imgSize || busy) return;
     setBusy(true);
+    setFailed(false);
     try {
       // Display coords → image pixel coords.
       const originX = Math.max(0, Math.round((rect.x - fit.offX) / fit.scale));
@@ -131,14 +143,11 @@ export function CropModal({ visible, uri, onCancel, onDone }: Props) {
       const width = Math.min(imgSize.w - originX, Math.round(rect.w / fit.scale));
       const height = Math.min(imgSize.h - originY, Math.round(rect.h / fit.scale));
       if (width < 1 || height < 1) { setBusy(false); return; }
-      const result = await manipulateAsync(
-        cleanUri,
-        [{ crop: { originX, originY, width, height } }],
-        { compress: 0.9, format: SaveFormat.JPEG },
-      );
-      onDone(result.uri, { originX, originY, width, height });
-    } catch {
+      await onDone({ originX, originY, width, height });
+    } catch (err) {
+      console.error('Crop failed', err);
       // Leave the modal open so the user can retry.
+      setFailed(true);
     } finally {
       setBusy(false);
     }
@@ -154,24 +163,35 @@ export function CropModal({ visible, uri, onCancel, onDone }: Props) {
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onCancel} transparent={false}>
-      <View style={[styles.container, { paddingTop: insets.top }]}>
-        {/* Top bar */}
-        <View style={styles.topBar}>
-          <Pressable onPress={onCancel} hitSlop={12} accessibilityRole="button" accessibilityLabel="Cancel crop">
-            <Text style={styles.cancel}>Cancel</Text>
-          </Pressable>
-          <Text style={styles.title}>Crop</Text>
-          <Pressable onPress={handleDone} hitSlop={12} disabled={busy} accessibilityRole="button" accessibilityLabel="Apply crop">
-            {busy ? <ActivityIndicator color={colors.accent} /> : <Text style={[styles.done, { color: colors.accent }]}>Done</Text>}
-          </Pressable>
-        </View>
+      <View style={[styles.container, { backgroundColor: colors.chrome }]}>
+        <StatusBar style="light" />
+        {/* This modal covers the viewer, whose baker can't run while buried. */}
+        <FilterBaker />
+        <ScreenHeader
+          dark
+          title="Crop"
+          left={<HeaderTextButton title="Cancel" color={colors.chromeText} onPress={onCancel} />}
+          right={
+            busy ? (
+              <ActivityIndicator color={colors.chromeAccent} style={styles.busy} />
+            ) : (
+              <HeaderTextButton
+                title="Done"
+                emphasis
+                color={colors.chromeAccent}
+                disabled={!rect}
+                onPress={handleDone}
+              />
+            )
+          }
+        />
 
         {/* Crop area */}
         <View
           style={styles.cropArea}
           onLayout={e => setBox({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}
         >
-          <Image source={{ uri: cleanUri }} style={StyleSheet.absoluteFill} resizeMode="contain" />
+          <Image source={{ uri: displayUri }} style={StyleSheet.absoluteFill} resizeMode="contain" />
 
           {rect && (
             <>
@@ -182,7 +202,7 @@ export function CropModal({ visible, uri, onCancel, onDone }: Props) {
               <View style={[styles.dim, { left: rect.x + rect.w, top: rect.y, right: 0, height: rect.h }]} />
 
               {/* Crop border */}
-              <View pointerEvents="none" style={[styles.cropBorder, { left: rect.x, top: rect.y, width: rect.w, height: rect.h, borderColor: colors.accent }]} />
+              <View pointerEvents="none" style={[styles.cropBorder, { left: rect.x, top: rect.y, width: rect.w, height: rect.h, borderColor: colors.chromeAccent }]} />
 
               {/* Corner handles */}
               {CORNERS.map(c => {
@@ -192,8 +212,9 @@ export function CropModal({ visible, uri, onCancel, onDone }: Props) {
                     key={c}
                     {...responders.current![c].panHandlers}
                     style={[styles.handle, { left: p.left, top: p.top }]}
+                    accessibilityLabel="Crop corner"
                   >
-                    <View style={[styles.handleDot, { backgroundColor: colors.accent }]} />
+                    <View style={[styles.handleDot, { backgroundColor: colors.chromeAccent, borderColor: colors.chromeText }]} />
                   </View>
                 );
               })}
@@ -201,31 +222,24 @@ export function CropModal({ visible, uri, onCancel, onDone }: Props) {
           )}
         </View>
 
-        <Text style={styles.hint}>Drag the corners to crop</Text>
+        <Text style={[Type.footnote, styles.hint, { color: failed ? colors.danger : colors.chromeMuted, paddingBottom: insets.bottom + Spacing.md }]}>
+          {failed ? "Couldn't crop this page. Try again." : 'Drag the corners to crop'}
+        </Text>
       </View>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#000' },
-  topBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  cancel: { color: '#ccc', fontSize: 16 },
-  title: { color: '#fff', fontSize: 17, fontWeight: '700' },
-  done: { fontSize: 16, fontWeight: '700' },
+  container: { flex: 1 },
+  busy: { minWidth: 60 },
   // No overflow:hidden — corner handles sit at the image edge and would be
   // clipped (ungrabbable) on edge-to-edge images. The dim is drawn as explicit
   // bands, so nothing relies on clipping here.
-  cropArea: { flex: 1, margin: 16, position: 'relative' },
+  cropArea: { flex: 1, margin: Spacing.xxl, position: 'relative' },
   dim: { position: 'absolute', backgroundColor: 'rgba(0,0,0,0.55)' },
   cropBorder: { position: 'absolute', borderWidth: 2 },
   handle: { position: 'absolute', width: HANDLE, height: HANDLE, alignItems: 'center', justifyContent: 'center' },
-  handleDot: { width: 16, height: 16, borderRadius: 8, borderWidth: 2, borderColor: '#fff' },
-  hint: { color: '#888', textAlign: 'center', fontSize: 13, paddingBottom: 12 },
+  handleDot: { width: 20, height: 20, borderRadius: 10, borderWidth: 2 },
+  hint: { textAlign: 'center', paddingTop: Spacing.xs },
 });

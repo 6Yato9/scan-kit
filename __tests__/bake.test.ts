@@ -1,14 +1,14 @@
 // __tests__/bake.test.ts
+// bakePage runs against the REAL bake queue here; the test plays the WebView
+// host (take a job, answer it), so ordering and race behaviour are exercised
+// end to end. Only storage and file access are faked.
 const mockWriteAsStringAsync = jest.fn().mockResolvedValue(undefined);
 
 jest.mock('expo-file-system/legacy', () => ({
   writeAsStringAsync: (...args: any[]) => mockWriteAsStringAsync(...args),
 }));
 
-// Lightweight stand-ins for Directory/File/Paths, mirroring the pattern in
-// __tests__/files.test.ts, so bake.ts's destination URI (built the same way
-// lib/files.ts builds one) is deterministic and inspectable via mockWriteAsStringAsync's
-// call args rather than hand-building the expected path string here too.
+let mockDirExists = true;
 jest.mock('expo-file-system', () => {
   class MockFile {
     uri: string;
@@ -22,6 +22,7 @@ jest.mock('expo-file-system', () => {
     constructor(...parts: any[]) {
       this.uri = parts.map(p => (p && typeof p === 'object' ? p.uri : p)).join('/');
     }
+    get exists() { return mockDirExists; }
   }
   return {
     File: MockFile,
@@ -30,14 +31,9 @@ jest.mock('expo-file-system', () => {
   };
 });
 
-const mockEnsureOriginal = jest.fn();
+const mockEnsureOriginal = jest.fn((docId: string, i: number) => `file:///documents/scan-kit/${docId}/page-${i}.orig.jpg`);
 jest.mock('../lib/files', () => ({
-  ensureOriginal: (...args: any[]) => mockEnsureOriginal(...args),
-}));
-
-const mockEnqueueBake = jest.fn();
-jest.mock('../lib/bake-queue', () => ({
-  enqueueBake: (...args: any[]) => mockEnqueueBake(...args),
+  ensureOriginal: (docId: string, i: number) => mockEnsureOriginal(docId, i),
 }));
 
 const mockSetPageBaked = jest.fn().mockResolvedValue(undefined);
@@ -45,89 +41,229 @@ jest.mock('../lib/storage', () => ({
   setPageBaked: (...args: any[]) => mockSetPageBaked(...args),
 }));
 
-import { bakePage } from '../lib/bake';
+import {
+  bakePage,
+  bakePages,
+  hasPendingBakes,
+  pendingBakesFor,
+  remapForDelete,
+  remapForReorder,
+  runPageEdit,
+  subscribeBakeChanges,
+} from '../lib/bake';
+import { completeJob, failJob, pendingCount, takeNextJob, BakeJob } from '../lib/bake-queue';
 
-beforeEach(() => {
+const page = (i: number) => `file:///documents/scan-kit/doc1/page-${i}.jpg`;
+const flush = async () => {
+  for (let i = 0; i < 10; i++) await new Promise(r => setImmediate(r));
+};
+/** Plays the WebView: answers the next job with base64 naming its source. */
+async function bakeNext(): Promise<BakeJob> {
+  await flush();
+  const job = takeNextJob();
+  if (!job) throw new Error('no job queued');
+  completeJob(job.id, `data:image/jpeg;base64,${job.src.split('/').pop()}`);
+  await flush();
+  return job;
+}
+const writes = () => mockWriteAsStringAsync.mock.calls.map(c => [c[0], c[1]]);
+
+beforeEach(async () => {
+  // Drain anything a previous test left behind.
+  await flush();
+  for (let j = takeNextJob(); j; j = takeNextJob()) failJob(j.id, 'reset');
+  await flush();
   jest.clearAllMocks();
+  mockDirExists = true;
   mockWriteAsStringAsync.mockResolvedValue(undefined);
   mockSetPageBaked.mockResolvedValue(undefined);
-  mockEnsureOriginal.mockReturnValue('file:///documents/scan-kit/doc1/page-0.orig.jpg');
 });
 
 test('bakes from .orig, writes the decoded bytes to the right page, and records the filter', async () => {
-  mockEnqueueBake.mockResolvedValue('data:image/jpeg;base64,AAAA');
+  const done = bakePage('doc1', 0, 'grayscale', undefined);
+  const job = await bakeNext();
 
-  await bakePage('doc1', 0, 'grayscale', undefined);
-
-  expect(mockEnsureOriginal).toHaveBeenCalledWith('doc1', 0);
-  expect(mockEnqueueBake).toHaveBeenCalledWith({
-    docId: 'doc1',
-    pageIndex: 0,
-    src: 'file:///documents/scan-kit/doc1/page-0.orig.jpg',
-    ops: [{ grayscale: 1 }],
-  });
-  expect(mockWriteAsStringAsync).toHaveBeenCalledWith(
-    'file:///documents/scan-kit/doc1/page-0.jpg',
-    'AAAA',
-    { encoding: 'base64' }
-  );
+  expect(job.src).toBe('file:///documents/scan-kit/doc1/page-0.orig.jpg');
+  expect(job.ops).toEqual([{ grayscale: 1 }]);
+  await expect(done).resolves.toBe(true);
+  expect(mockWriteAsStringAsync).toHaveBeenCalledWith(page(0), 'page-0.orig.jpg', { encoding: 'base64' });
   expect(mockSetPageBaked).toHaveBeenCalledWith('doc1', 0, 'grayscale', undefined);
-
   // Write must happen before the filter is recorded.
-  const writeOrder = mockWriteAsStringAsync.mock.invocationCallOrder[0];
-  const recordOrder = mockSetPageBaked.mock.invocationCallOrder[0];
-  expect(writeOrder).toBeLessThan(recordOrder);
+  expect(mockWriteAsStringAsync.mock.invocationCallOrder[0])
+    .toBeLessThan(mockSetPageBaked.mock.invocationCallOrder[0]);
 });
 
 test('passes adjustments through to the bake ops and setPageBaked', async () => {
-  mockEnqueueBake.mockResolvedValue('data:image/jpeg;base64,CCCC');
   const adjustment = { brightness: 10, contrast: 0, saturation: 0 };
-
-  await bakePage('doc1', 0, 'enhanced', adjustment);
-
-  expect(mockEnqueueBake).toHaveBeenCalledWith(
-    expect.objectContaining({ ops: [{ contrast: 1.3 }, { saturate: 1.3 }, { brightness: 1.1 }] })
-  );
+  const done = bakePage('doc1', 0, 'enhanced', adjustment);
+  const job = await bakeNext();
+  await done;
+  expect(job.ops).toEqual([{ contrast: 1.3 }, { saturate: 1.3 }, { brightness: 1.1 }]);
   expect(mockSetPageBaked).toHaveBeenCalledWith('doc1', 0, 'enhanced', adjustment);
 });
 
-test('on a rejected bake, neither the write nor setPageBaked happens', async () => {
-  mockEnqueueBake.mockRejectedValue(new Error('BAKE_ERROR:image failed to load'));
-
-  await expect(bakePage('doc1', 0, 'grayscale', undefined)).rejects.toThrow(
-    'BAKE_ERROR:image failed to load'
-  );
-
+test('on a failed bake, neither the write nor setPageBaked happens', async () => {
+  const done = bakePage('doc1', 0, 'grayscale', undefined);
+  await flush();
+  failJob(takeNextJob()!.id, 'load');
+  await expect(done).rejects.toThrow('load');
   expect(mockWriteAsStringAsync).not.toHaveBeenCalled();
   expect(mockSetPageBaked).not.toHaveBeenCalled();
 });
 
 test('a failed write propagates and setPageBaked is never called', async () => {
-  mockEnqueueBake.mockResolvedValue('data:image/jpeg;base64,DDDD');
   mockWriteAsStringAsync.mockRejectedValue(new Error('disk full'));
-
-  await expect(bakePage('doc1', 0, 'grayscale', undefined)).rejects.toThrow('disk full');
-
+  const done = bakePage('doc1', 0, 'grayscale', undefined);
+  const assertion = expect(done).rejects.toThrow('disk full');
+  await bakeNext();
+  await assertion;
   expect(mockSetPageBaked).not.toHaveBeenCalled();
 });
 
-test('filter "original" still bakes from .orig with no ops, restoring the unfiltered image', async () => {
-  mockEnsureOriginal.mockReturnValue('file:///documents/scan-kit/doc1/page-1.orig.jpg');
-  mockEnqueueBake.mockResolvedValue('data:image/jpeg;base64,EEEE');
+test('a document deleted mid-bake is not written to (or resurrected)', async () => {
+  const done = bakePage('doc1', 0, 'bw', undefined);
+  mockDirExists = false;
+  await bakeNext();
+  await expect(done).resolves.toBe(false);
+  expect(mockWriteAsStringAsync).not.toHaveBeenCalled();
+  expect(mockSetPageBaked).not.toHaveBeenCalled();
+});
 
-  await bakePage('doc1', 1, 'original', undefined);
+describe('edits during an in-flight bake (core #1)', () => {
+  test('deleting an EARLIER page re-targets the bake to the page’s new index', async () => {
+    const done = bakePage('doc1', 2, 'bw', undefined);
+    await flush();
+    const running = takeNextJob()!; // the WebView is working on old page 2
+    expect(running.src).toContain('page-2.orig.jpg');
 
-  expect(mockEnsureOriginal).toHaveBeenCalledWith('doc1', 1);
-  expect(mockEnqueueBake).toHaveBeenCalledWith(
-    expect.objectContaining({
-      src: 'file:///documents/scan-kit/doc1/page-1.orig.jpg',
-      ops: [],
-    })
-  );
-  expect(mockWriteAsStringAsync).toHaveBeenCalledWith(
-    'file:///documents/scan-kit/doc1/page-1.jpg',
-    'EEEE',
-    { encoding: 'base64' }
-  );
-  expect(mockSetPageBaked).toHaveBeenCalledWith('doc1', 1, 'original', undefined);
+    await runPageEdit('doc1', { remap: remapForDelete(1) }, () => {});
+    // The old result would land on the wrong file; it is discarded…
+    completeJob(running.id, 'data:image/jpeg;base64,STALE');
+    // …and the page is baked again from where it lives now.
+    const redo = await bakeNext();
+    expect(redo.src).toContain('page-1.orig.jpg');
+    await expect(done).resolves.toBe(true);
+
+    expect(writes()).toEqual([[page(1), 'page-1.orig.jpg']]);
+    expect(mockSetPageBaked).toHaveBeenCalledTimes(1);
+    expect(mockSetPageBaked).toHaveBeenCalledWith('doc1', 1, 'bw', undefined);
+  });
+
+  test('deleting the page being baked drops the bake: no write, no resurrection', async () => {
+    const done = bakePage('doc1', 1, 'bw', undefined);
+    await flush();
+    const running = takeNextJob()!;
+    await runPageEdit('doc1', { remap: remapForDelete(1) }, () => {});
+    completeJob(running.id, 'data:image/jpeg;base64,X');
+    await expect(done).resolves.toBe(false);
+    expect(mockWriteAsStringAsync).not.toHaveBeenCalled();
+    expect(mockSetPageBaked).not.toHaveBeenCalled();
+    expect(pendingCount()).toBe(0);
+  });
+
+  test('a queued (not yet running) bake follows its page through a reorder', async () => {
+    const done = bakePage('doc1', 0, 'grayscale', undefined);
+    await flush();
+    // Reverse three pages before the WebView picks the job up.
+    await runPageEdit('doc1', { remap: remapForReorder([2, 1, 0]) }, () => {});
+    const job = await bakeNext();
+    expect(job.src).toContain('page-2.orig.jpg');
+    await expect(done).resolves.toBe(true);
+    expect(mockSetPageBaked).toHaveBeenCalledWith('doc1', 2, 'grayscale', undefined);
+    expect(takeNextJob()).toBeNull(); // the stale queued job was withdrawn, not run
+  });
+
+  test('rotating the page mid-bake re-bakes from the rotated .orig instead of undoing the rotate', async () => {
+    const done = bakePage('doc1', 0, 'enhanced', undefined);
+    await flush();
+    const running = takeNextJob()!;
+    await runPageEdit('doc1', { pages: [0] }, () => {});
+    completeJob(running.id, 'data:image/jpeg;base64,UNROTATED');
+    await bakeNext();
+    await expect(done).resolves.toBe(true);
+    expect(writes()).toEqual([[page(0), 'page-0.orig.jpg']]);
+  });
+
+  test('an edit to another page leaves the bake alone', async () => {
+    const done = bakePage('doc1', 0, 'bw', undefined);
+    await flush();
+    const running = takeNextJob()!;
+    await runPageEdit('doc1', { pages: [3] }, () => {});
+    completeJob(running.id, 'data:image/jpeg;base64,OK');
+    await expect(done).resolves.toBe(true);
+    expect(writes()).toEqual([[page(0), 'OK']]);
+  });
+
+  test('a fresh scan baked with bakePages survives a delete in the middle', async () => {
+    const all = bakePages('doc1', [0, 1, 2, 3], 'enhanced');
+    await flush();
+    const first = takeNextJob()!; // page 0 running, 1-3 queued
+    await runPageEdit('doc1', { remap: remapForDelete(1) }, () => {});
+    completeJob(first.id, `data:image/jpeg;base64,${first.src.split('/').pop()}`);
+    await bakeNext();
+    await bakeNext();
+    await all;
+    expect(takeNextJob()).toBeNull();
+    // Old pages 0, 2, 3 are now 0, 1, 2 — each baked exactly once, from its own source.
+    expect(writes().sort()).toEqual([
+      [page(0), 'page-0.orig.jpg'],
+      [page(1), 'page-1.orig.jpg'],
+      [page(2), 'page-2.orig.jpg'],
+    ]);
+  });
+});
+
+describe('latest choice wins (core #10)', () => {
+  test('filter then slider: only the newest request writes, with the new filter', async () => {
+    const filterDone = bakePage('doc1', 0, 'bw', undefined, { priority: 'high' });
+    await flush();
+    const adj = { brightness: 20, contrast: 0, saturation: 0 };
+    const adjustDone = bakePage('doc1', 0, 'bw', adj, { priority: 'high' });
+    await bakeNext();
+    await expect(filterDone).resolves.toBe(false);
+    await expect(adjustDone).resolves.toBe(true);
+    expect(mockSetPageBaked).toHaveBeenCalledTimes(1);
+    expect(mockSetPageBaked).toHaveBeenCalledWith('doc1', 0, 'bw', adj);
+  });
+
+  test('a superseded RUNNING bake cannot overwrite the newer one', async () => {
+    const older = bakePage('doc1', 0, 'grayscale', undefined);
+    await flush();
+    const running = takeNextJob()!;
+    const newer = bakePage('doc1', 0, 'bw', undefined);
+    completeJob(running.id, 'data:image/jpeg;base64,OLD');
+    await bakeNext();
+    await expect(older).resolves.toBe(false);
+    await expect(newer).resolves.toBe(true);
+    expect(mockSetPageBaked.mock.calls).toEqual([['doc1', 0, 'bw', undefined]]);
+  });
+
+  test('pendingBakesFor exposes the newest choice per page until it lands', async () => {
+    const changes: string[] = [];
+    const unsub = subscribeBakeChanges(id => changes.push(id));
+    const done = bakePage('doc1', 1, 'enhanced', undefined);
+    expect(pendingBakesFor('doc1').get(1)).toEqual({ filter: 'enhanced', adjustment: undefined });
+    expect(hasPendingBakes('doc1')).toBe(true);
+    await bakeNext();
+    await done;
+    expect(pendingBakesFor('doc1').size).toBe(0);
+    expect(changes).toContain('doc1');
+    unsub();
+  });
+});
+
+test('runPageEdit waits for an in-progress write and vice versa (no interleaving)', async () => {
+  const order: string[] = [];
+  let release!: () => void;
+  mockWriteAsStringAsync.mockImplementationOnce(() => new Promise<void>(r => {
+    order.push('write-start');
+    release = () => { order.push('write-end'); r(); };
+  }));
+  const done = bakePage('doc1', 5, 'bw', undefined);
+  await bakeNext();
+  const edit = runPageEdit('doc1', { pages: [0] }, () => { order.push('edit'); });
+  await flush();
+  release();
+  await Promise.all([done, edit]);
+  expect(order).toEqual(['write-start', 'write-end', 'edit']);
 });

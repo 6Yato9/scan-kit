@@ -11,7 +11,9 @@ type Props = {
   onValueChange: (v: number) => void;
 };
 
-const THUMB = 20;
+const THUMB = 22;
+// Taller than the thumb so the whole row is an easy 44pt target.
+const TOUCH_HEIGHT = 44;
 
 export function SimpleSlider({ label, value, min = -100, max = 100, onValueChange }: Props) {
   const { colors } = useTheme();
@@ -60,6 +62,7 @@ export function SimpleSlider({ label, value, min = -100, max = 100, onValueChang
   ).current;
 
   const pct = (value - min) / (max - min);
+  const centre = Math.max(0, Math.min(1, (0 - min) / (max - min)));
   const displayVal = value > 0 ? `+${value}` : String(value);
 
   return (
@@ -75,19 +78,29 @@ export function SimpleSlider({ label, value, min = -100, max = 100, onValueChang
         style={styles.touchArea}
         onLayout={e => { state.current.width = e.nativeEvent.layout.width; }}
         {...panResponder.panHandlers}
+        accessible
+        accessibilityRole="adjustable"
+        accessibilityLabel={label}
+        accessibilityValue={{ min, max, now: value }}
+        accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]}
+        onAccessibilityAction={e => {
+          const step = 10;
+          if (e.nativeEvent.actionName === 'increment') onValueChange(Math.min(max, value + step));
+          if (e.nativeEvent.actionName === 'decrement') onValueChange(Math.max(min, value - step));
+        }}
       >
         {/* Track background */}
         <View style={[styles.track, { backgroundColor: colors.border }]} />
         {/* Center tick mark */}
         <View style={[styles.centerTick, { backgroundColor: colors.muted }]} />
-        {/* Fill from left to thumb */}
+        {/* Fill from the centre (no change) to the thumb */}
         <View
           style={[
             styles.fill,
             {
-              width: `${pct * 100}%` as any,
+              left: `${Math.min(pct, centre) * 100}%` as any,
+              width: `${Math.abs(pct - centre) * 100}%` as any,
               backgroundColor: colors.accent,
-              opacity: 0.5,
             },
           ]}
         />
@@ -99,6 +112,7 @@ export function SimpleSlider({ label, value, min = -100, max = 100, onValueChang
               left: `${pct * 100}%` as any,
               marginLeft: -THUMB / 2,
               backgroundColor: colors.accent,
+              borderColor: colors.card,
             },
           ]}
         />
@@ -108,16 +122,16 @@ export function SimpleSlider({ label, value, min = -100, max = 100, onValueChang
 }
 
 const styles = StyleSheet.create({
-  container: { marginVertical: 6 },
+  container: { marginVertical: 2 },
   labelRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 8,
+    marginBottom: 0,
   },
-  label: { fontSize: 13, fontWeight: '500' },
+  label: { fontSize: 14, fontWeight: '500' },
   valueText: { fontSize: 13, fontWeight: '600', minWidth: 36, textAlign: 'right' },
   touchArea: {
-    height: THUMB,
+    height: TOUCH_HEIGHT,
     justifyContent: 'center',
   },
   track: {
@@ -137,7 +151,6 @@ const styles = StyleSheet.create({
   },
   fill: {
     position: 'absolute',
-    left: 0,
     height: 4,
     borderRadius: 2,
   },
@@ -146,5 +159,10 @@ const styles = StyleSheet.create({
     width: THUMB,
     height: THUMB,
     borderRadius: THUMB / 2,
+    borderWidth: 2,
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
   },
 });

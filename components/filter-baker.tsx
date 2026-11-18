@@ -1,9 +1,9 @@
 // components/filter-baker.tsx
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { buildBakeHtml, buildPreviewHtml } from '@/lib/bake-html';
-import { BakeJob, completeJob, failJob, releaseJob, setBakeNotifier, takeNextJob } from '@/lib/bake-queue';
+import { BakeHost, BakeJob, completeJob, failJob, registerBakeHost, releaseJob, takeNextJob } from '@/lib/bake-queue';
 
 /**
  * Off-screen WebView that turns queued bake jobs into filtered JPEG bytes.
@@ -14,43 +14,61 @@ import { BakeJob, completeJob, failJob, releaseJob, setBakeNotifier, takeNextJob
  * help: its actions are geometry only.
  *
  * MOUNTING: this must be rendered by whichever screen is actually on top. A
- * `fullScreenModal` (the viewer) is presented in its own native view controller
- * that covers everything below it, so a baker mounted only at the root is buried
- * under the modal, never becomes visible, and iOS then never loads its WebView at
- * all — no loadStart, no onMessage, and every bake hangs forever. Hence one
- * instance at the root (for the tabs) and one inside the viewer.
+ * full-screen modal is presented in its own native view controller that covers
+ * everything below it, so a baker mounted only at the root is buried, and iOS
+ * never runs its WebView. Hence one instance at the root (for the tabs) and one
+ * inside every full-screen surface (viewer, annotate, crop). The queue keeps
+ * them in a stack and only feeds the newest one; when it unmounts, the one
+ * underneath is woken (see lib/bake-queue.ts).
  *
  * The file-access props are load-bearing: without allowUniversalAccessFromFileURLs
  * the canvas is tainted by the file:// image and toDataURL throws SecurityError.
  */
 export function FilterBaker() {
   const [job, setJob] = useState<BakeJob | null>(null);
+  // Bumped to force a brand-new WebView after a content-process crash.
+  const [generation, setGeneration] = useState(0);
   const jobRef = useRef<BakeJob | null>(null);
-  const busyRef = useRef(false);
+  const hostRef = useRef<BakeHost | null>(null);
+
+  const finish = useCallback(() => {
+    jobRef.current = null;
+    setJob(null);
+  }, []);
 
   const pump = useCallback(() => {
-    if (busyRef.current) return;
-    const next = takeNextJob();
+    if (jobRef.current || !hostRef.current) return;
+    const next = takeNextJob(hostRef.current);
     if (!next) return;
-    busyRef.current = true;
     jobRef.current = next;
     setJob(next);
   }, []);
 
+  const host = useMemo<BakeHost>(() => ({
+    pump: () => pump(),
+    revoke: (jobId: number) => {
+      // The queue took this job back (we were covered, or it timed out). Drop
+      // it so a late message can't be attributed to it, and look for more.
+      if (jobRef.current?.id === jobId) {
+        jobRef.current = null;
+        setJob(null);
+        setGeneration(g => g + 1);
+      }
+      setTimeout(pump, 0);
+    },
+  }), [pump]);
+
   useEffect(() => {
-    setBakeNotifier(pump);
-    pump();
+    hostRef.current = host;
+    const unregister = registerBakeHost(host);
     return () => {
-      setBakeNotifier(null);
-      // Hand any in-flight job back to the queue rather than stranding it. This
-      // instance is going away (screen dismissed) and its WebView will never
-      // report; without this the enqueuer's promise never settles.
-      const inFlight = jobRef.current;
+      hostRef.current = null;
       jobRef.current = null;
-      busyRef.current = false;
-      if (inFlight) releaseJob(inFlight);
+      // Hands anything this instance was holding back to the queue and wakes
+      // the host underneath (the one that becomes visible again).
+      unregister();
     };
-  }, [pump]);
+  }, [host]);
 
   const handleMessage = useCallback((e: { nativeEvent: { data: string } }) => {
     // Read the ref, not the render-captured `job` — the message can arrive on a
@@ -65,17 +83,35 @@ export function FilterBaker() {
     } else {
       failJob(current.id, 'unexpected message');
     }
-    jobRef.current = null;
-    setJob(null);
-    busyRef.current = false;
-    pump();
-  }, [pump]);
+    finish();
+    // Next job on the following tick, after this WebView has unmounted.
+    setTimeout(pump, 0);
+  }, [finish, pump]);
+
+  // WebKit's content process can be killed under memory pressure (large pages).
+  // Without this the job would sit leased until the timeout; instead hand it
+  // straight back and start over with a fresh WebView.
+  const handleCrash = useCallback(() => {
+    const current = jobRef.current;
+    finish();
+    setGeneration(g => g + 1);
+    if (current) releaseJob(current);
+  }, [finish]);
+
+  const handleLoadError = useCallback(() => {
+    const current = jobRef.current;
+    if (!current) return;
+    failJob(current.id, 'webview load error');
+    finish();
+    setTimeout(pump, 0);
+  }, [finish, pump]);
 
   if (!job) return null;
 
   return (
     <View style={styles.host} pointerEvents="none">
       <WebView
+        key={`${job.id}-${generation}`}
         source={{
           html: job.previews
             ? buildPreviewHtml(job.src, job.previews, job.previewWidth ?? 120)
@@ -84,6 +120,9 @@ export function FilterBaker() {
         }}
         style={styles.web}
         onMessage={handleMessage}
+        onContentProcessDidTerminate={handleCrash}
+        onRenderProcessGone={handleCrash}
+        onError={handleLoadError}
         originWhitelist={['*']}
         allowFileAccess
         allowFileAccessFromFileURLs

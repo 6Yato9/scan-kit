@@ -12,7 +12,7 @@ import { BakeIndicator } from '@/components/bake-indicator';
 import { LockGate } from '@/components/lock-gate';
 import { bakePage } from '@/lib/bake';
 import { garbageCollectOrphans } from '@/lib/files';
-import { getDocuments, getOnboarded, getOnboardedSync, pendingBakeMigrations } from '@/lib/storage';
+import { documentIdsForCleanup, getOnboarded, getOnboardedSync, pendingBakeMigrations } from '@/lib/storage';
 
 // First-run gate: after mount, read the onboarding flag and redirect to the
 // onboarding screen if it hasn't been completed. Kept separate from the tabs
@@ -44,6 +44,9 @@ function OnboardingGate() {
   return null;
 }
 
+// Height of the floating tab bar plus its gap above the home indicator.
+const TAB_BAR_CLEARANCE = 104;
+
 function ThemedStack() {
   const { colors, isDark } = useTheme();
   return (
@@ -51,7 +54,6 @@ function ThemedStack() {
     <StatusBar style={isDark ? 'light' : 'dark'} />
     <OnboardingGate />
     <FilterBaker />
-    <BakeIndicator top={60} />
     <LockGate>
     <Stack
       screenOptions={{
@@ -65,6 +67,8 @@ function ThemedStack() {
       }}
     >
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      {/* App lock (components/lock-gate.tsx): covers full-screen modals too. */}
+      <Stack.Screen name="lock" options={{ presentation: 'fullScreenModal', headerShown: false, gestureEnabled: false, animation: 'fade' }} />
       <Stack.Screen
         name="onboarding"
         options={{ headerShown: false, presentation: 'fullScreenModal' }}
@@ -109,6 +113,9 @@ function ThemedStack() {
       <Stack.Screen name="tools/extract-text" options={{ headerShown: false, presentation: 'card' }} />
     </Stack>
     </LockGate>
+    {/* After the navigator so it draws above the tab screens; clears the
+        floating tab bar. Full-screen surfaces (viewer) render their own. */}
+    <BakeIndicator placement="bottom" offset={TAB_BAR_CLEARANCE} />
     </>
   );
 }
@@ -117,23 +124,25 @@ export default function RootLayout() {
   useEffect(() => {
     // Fire-and-forget startup sweep of orphaned doc dirs and interrupted-
     // operation temp files. Delayed slightly so it never competes with render.
+    // documentIdsForCleanup returns null when the list can't be trusted (doc
+    // records exist that didn't parse), and then nothing is deleted.
     const t = setTimeout(() => {
-      getDocuments()
-        .then(docs => garbageCollectOrphans(docs.map(d => d.id)))
+      documentIdsForCleanup()
+        .then(ids => (ids ? garbageCollectOrphans(ids) : 0))
         .catch(() => {});
     }, 2000);
 
     // v3 migration: bake any filter/adjustment a pre-v3 app version only ever
-    // recorded as metadata (see pendingBakeMigrations). FilterBaker is mounted
-    // just below in ThemedStack, so its WebView is available by the time this
-    // runs. Jobs are drained sequentially — the baker handles one job at a
-    // time and a large library must not flood the queue — and a single page's
-    // failure (caught inside bakePage's rejection) doesn't stop the rest.
+    // recorded as metadata (see pendingBakeMigrations). All jobs are requested
+    // together: the queue still runs them one at a time, but every page is
+    // tracked from the start, so an edit made meanwhile (deleting a page)
+    // re-targets them instead of a sequential loop baking stale indices. One
+    // page's failure doesn't stop the rest.
     (async () => {
       const jobs = await pendingBakeMigrations();
-      for (const job of jobs) {
-        await bakePage(job.docId, job.pageIndex, job.filter, job.adjustment).catch(() => {});
-      }
+      await Promise.all(jobs.map(job =>
+        bakePage(job.docId, job.pageIndex, job.filter, job.adjustment).catch(() => false),
+      ));
     })().catch(() => {});
 
     return () => clearTimeout(t);

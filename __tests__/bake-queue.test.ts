@@ -92,10 +92,11 @@ describe('pendingCount', () => {
   });
 });
 
-describe('setBakeNotifier', () => {
-  it('calls the notifier whenever a job is enqueued', () => {
+describe('setBakeNotifier (legacy)', () => {
+  it('wakes the notifier whenever a job is enqueued', () => {
     const notifier = jest.fn();
     bakeQueue.setBakeNotifier(notifier);
+    notifier.mockClear(); // registering pumps once, in case work is already waiting
 
     bakeQueue.enqueueBake({ docId: 'd1', pageIndex: 0, src: 'a', ops: [] }).catch(() => {});
     bakeQueue.enqueueBake({ docId: 'd1', pageIndex: 1, src: 'b', ops: [] }).catch(() => {});
@@ -107,9 +108,145 @@ describe('setBakeNotifier', () => {
     const notifier = jest.fn();
     bakeQueue.setBakeNotifier(notifier);
     bakeQueue.setBakeNotifier(null);
+    notifier.mockClear();
 
     bakeQueue.enqueueBake({ docId: 'd1', pageIndex: 0, src: 'a', ops: [] }).catch(() => {});
 
     expect(notifier).not.toHaveBeenCalled();
+  });
+});
+
+function makeHost() {
+  const host = {
+    pump: jest.fn(),
+    revoke: jest.fn(),
+  };
+  return host;
+}
+
+describe('host stack', () => {
+  it('only the topmost host is handed work', () => {
+    const root = makeHost();
+    const viewer = makeHost();
+    bakeQueue.registerBakeHost(root);
+    bakeQueue.registerBakeHost(viewer);
+    bakeQueue.enqueueBake({ docId: 'd', pageIndex: 0, src: 'a', ops: [] }).catch(() => {});
+
+    expect(viewer.pump).toHaveBeenCalled();
+    expect(bakeQueue.takeNextJob(root)).toBeNull();
+    expect(bakeQueue.takeNextJob(viewer)?.pageIndex).toBe(0);
+  });
+
+  it('a host covered by a new one gives its in-flight job to the new top', () => {
+    const root = makeHost();
+    bakeQueue.registerBakeHost(root);
+    bakeQueue.enqueueBake({ docId: 'd', pageIndex: 0, src: 'a', ops: [] }).catch(() => {});
+    const job = bakeQueue.takeNextJob(root)!;
+
+    const viewer = makeHost();
+    bakeQueue.registerBakeHost(viewer);
+
+    expect(root.revoke).toHaveBeenCalledWith(job.id);
+    expect(viewer.pump).toHaveBeenCalled();
+    expect(bakeQueue.takeNextJob(viewer)?.id).toBe(job.id);
+  });
+
+  it('closing the top host re-queues its job and wakes the host underneath', async () => {
+    const root = makeHost();
+    bakeQueue.registerBakeHost(root);
+    const viewer = makeHost();
+    const unregister = bakeQueue.registerBakeHost(viewer);
+    const promise = bakeQueue.enqueueBake({ docId: 'd', pageIndex: 3, src: 'a', ops: [] });
+    const job = bakeQueue.takeNextJob(viewer)!;
+    root.pump.mockClear();
+
+    unregister();
+
+    expect(root.pump).toHaveBeenCalled();
+    const again = bakeQueue.takeNextJob(root)!;
+    expect(again.id).toBe(job.id);
+    bakeQueue.completeJob(again.id, 'data:ok');
+    await expect(promise).resolves.toBe('data:ok');
+  });
+
+  it('a late result from a host that lost the job is still accepted once', async () => {
+    const root = makeHost();
+    bakeQueue.registerBakeHost(root);
+    const promise = bakeQueue.enqueueBake({ docId: 'd', pageIndex: 0, src: 'a', ops: [] });
+    const job = bakeQueue.takeNextJob(root)!;
+    const viewer = makeHost();
+    bakeQueue.registerBakeHost(viewer);
+
+    bakeQueue.completeJob(job.id, 'data:late');
+    await expect(promise).resolves.toBe('data:late');
+    // The re-queued copy is skipped rather than baked a second time.
+    expect(bakeQueue.takeNextJob(viewer)).toBeNull();
+  });
+});
+
+describe('lease timeout', () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  it('re-queues a stuck job once, then fails it', async () => {
+    const host = makeHost();
+    bakeQueue.registerBakeHost(host);
+    const promise = bakeQueue.enqueueBake({ docId: 'd', pageIndex: 0, src: 'a', ops: [] });
+    const first = bakeQueue.takeNextJob(host)!;
+
+    jest.advanceTimersByTime(bakeQueue.LEASE_TIMEOUT_MS + 1);
+    expect(host.revoke).toHaveBeenCalledWith(first.id);
+    const second = bakeQueue.takeNextJob(host)!;
+    expect(second.id).toBe(first.id);
+
+    jest.advanceTimersByTime(bakeQueue.LEASE_TIMEOUT_MS + 1);
+    await expect(promise).rejects.toThrow('timeout');
+    expect(bakeQueue.pendingCount()).toBe(0);
+  });
+
+  it('a host that crashes on every attempt gets the job failed, not looped', async () => {
+    const host = makeHost();
+    bakeQueue.registerBakeHost(host);
+    const promise = bakeQueue.enqueueBake({ docId: 'd', pageIndex: 0, src: 'a', ops: [] });
+    bakeQueue.releaseJob(bakeQueue.takeNextJob(host)!);
+    bakeQueue.releaseJob(bakeQueue.takeNextJob(host)!);
+    await expect(promise).rejects.toThrow('host gave up');
+  });
+});
+
+describe('cancelJob and priority', () => {
+  it('a cancelled queued job rejects with BakeCancelled and is never handed out', async () => {
+    const { id, promise } = bakeQueue.enqueueBakeWithId({ docId: 'd', pageIndex: 0, src: 'a', ops: [] });
+    expect(bakeQueue.cancelJob(id)).toBe(true);
+    await expect(promise).rejects.toBeInstanceOf(bakeQueue.BakeCancelled);
+    expect(bakeQueue.takeNextJob()).toBeNull();
+    expect(bakeQueue.cancelJob(id)).toBe(false);
+  });
+
+  it('cancelling a running job frees its host', async () => {
+    const host = makeHost();
+    bakeQueue.registerBakeHost(host);
+    const { id, promise } = bakeQueue.enqueueBakeWithId({ docId: 'd', pageIndex: 0, src: 'a', ops: [] });
+    bakeQueue.takeNextJob(host);
+    bakeQueue.cancelJob(id);
+    await promise.catch(() => {});
+    expect(host.revoke).toHaveBeenCalledWith(id);
+  });
+
+  it('high-priority work runs before queued background work, in its own FIFO order', () => {
+    bakeQueue.enqueueBake({ docId: 'd', pageIndex: 0, src: 'bg0', ops: [] }).catch(() => {});
+    bakeQueue.enqueueBake({ docId: 'd', pageIndex: 1, src: 'bg1', ops: [] }).catch(() => {});
+    bakeQueue.enqueueBake({ docId: 'd', pageIndex: 2, src: 'hi1', ops: [] }, { priority: 'high' }).catch(() => {});
+    bakeQueue.enqueueBake({ docId: 'd', pageIndex: 3, src: 'hi2', ops: [] }, { priority: 'high' }).catch(() => {});
+    const order = [1, 2, 3, 4].map(() => bakeQueue.takeNextJob()!.src);
+    expect(order).toEqual(['hi1', 'hi2', 'bg0', 'bg1']);
+  });
+
+  it('preview jobs are not counted as visible "Enhancing" activity', () => {
+    const counts: number[] = [];
+    bakeQueue.subscribeBakeActivity(n => counts.push(n));
+    bakeQueue.enqueueBake({ docId: 'd', pageIndex: 0, src: 'a', ops: [], previews: [[]] }).catch(() => {});
+    bakeQueue.enqueueBake({ docId: 'd', pageIndex: 0, src: 'a', ops: [] }).catch(() => {});
+    expect(counts).toEqual([0, 0, 1]);
   });
 });

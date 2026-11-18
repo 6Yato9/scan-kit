@@ -1,4 +1,6 @@
 // components/thumbnail-strip.tsx
+// The viewer's page strip. The viewer is always-dark chrome, so this uses the
+// `chrome*` colours regardless of the app theme.
 import { useEffect, useRef } from 'react';
 import {
   FlatList,
@@ -9,46 +11,48 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { PageAdjustment, PageFilter } from '@/types/document';
 import { useTheme } from '@/contexts/theme-context';
+import { Spacing } from '@/lib/theme';
 
 type Props = {
   pages: string[];
-  filters?: PageFilter[];
-  adjustments?: PageAdjustment[];
   currentPage: number;
   onPagePress: (index: number) => void;
   onAddPress: () => void;
   bottomInset: number;
-  /** Cache-bust value (typically document.updatedAt) so RN <Image> reloads after page files are overwritten by rotate/annotate/compress. */
+  /** Cache-bust value (typically document.updatedAt) so RN <Image> reloads after page files are overwritten in place. */
   cacheBust?: number;
+  /** Disables the Add tile while pages are being added. */
+  adding?: boolean;
 };
+
+const THUMB_W = 48;
+const THUMB_H = 64;
+const GAP = 8;
+// Thumb width + gap = stride. getItemLayout makes scrollToIndex deterministic
+// even before items have laid out.
+const ITEM_STRIDE = THUMB_W + GAP;
 
 export function ThumbnailStrip({
   pages,
-  filters,
-  adjustments,
   currentPage,
   onPagePress,
   onAddPress,
   bottomInset,
   cacheBust,
+  adding,
 }: Props) {
   const { colors } = useTheme();
   const listRef = useRef<FlatList>(null);
 
   useEffect(() => {
-    if (pages.length > 0) {
+    if (pages.length > 0 && currentPage < pages.length) {
       listRef.current?.scrollToIndex({ index: currentPage, animated: true, viewPosition: 0.5 });
     }
   }, [currentPage, pages.length]);
 
-  // Width 48 + gap 6 in content style = 54 px stride. Providing getItemLayout
-  // makes scrollToIndex deterministic even before items have laid out.
-  const ITEM_STRIDE = 54;
-
   return (
-    <View style={[styles.container, { paddingBottom: bottomInset + 8, backgroundColor: colors.card }]}>
+    <View style={[styles.container, { paddingBottom: bottomInset + Spacing.sm, backgroundColor: colors.chromeRaised }]}>
       <FlatList
         ref={listRef}
         data={pages}
@@ -64,23 +68,43 @@ export function ThumbnailStrip({
           }, 50);
         }}
         renderItem={({ item, index }) => {
+          const active = index === currentPage;
           return (
             <Pressable
-              style={[styles.thumb, index === currentPage && { borderColor: colors.accent }]}
+              style={[styles.thumb, { borderColor: active ? colors.accent : 'transparent', backgroundColor: colors.chrome }]}
               onPress={() => onPagePress(index)}
+              accessibilityRole="button"
+              accessibilityLabel={`Page ${index + 1} of ${pages.length}`}
+              accessibilityState={{ selected: active }}
             >
               <Image
                 source={{ uri: cacheBust ? `${item}?v=${cacheBust}` : item }}
                 style={styles.thumbImage}
                 resizeMode="cover"
               />
+              <View style={[styles.badge, { backgroundColor: active ? colors.accentFill : 'rgba(0,0,0,0.6)' }]}>
+                <Text allowFontScaling={false} style={[styles.badgeText, { color: colors.chromeText }]}>
+                  {index + 1}
+                </Text>
+              </View>
             </Pressable>
           );
         }}
         ListFooterComponent={
-          <Pressable style={[styles.addBtn, { borderColor: colors.border }]} onPress={onAddPress}>
-            <Ionicons name="add" size={24} color={colors.muted} />
-            <Text allowFontScaling={false} style={[styles.addLabel, { color: colors.muted }]}>Add</Text>
+          <Pressable
+            style={({ pressed }) => [
+              styles.addBtn,
+              { borderColor: colors.chromeMuted },
+              (pressed || adding) && { opacity: 0.5 },
+            ]}
+            onPress={onAddPress}
+            disabled={adding}
+            accessibilityRole="button"
+            accessibilityLabel="Add pages"
+            accessibilityState={{ disabled: !!adding, busy: !!adding }}
+          >
+            <Ionicons name="add" size={24} color={colors.chromeText} />
+            <Text allowFontScaling={false} style={[styles.addLabel, { color: colors.chromeMuted }]}>Add</Text>
           </Pressable>
         }
       />
@@ -90,32 +114,41 @@ export function ThumbnailStrip({
 
 const styles = StyleSheet.create({
   container: {
-    paddingTop: 8,
+    paddingTop: Spacing.sm + 2,
   },
   content: {
-    paddingHorizontal: 8,
-    gap: 6,
+    paddingHorizontal: Spacing.md,
+    gap: GAP,
   },
   thumb: {
-    width: 48,
-    height: 64,
-    borderRadius: 4,
+    width: THUMB_W,
+    height: THUMB_H,
+    borderRadius: 6,
     borderWidth: 2,
-    borderColor: 'transparent',
     overflow: 'hidden',
   },
   thumbImage: {
     width: '100%',
     height: '100%',
   },
+  badge: {
+    position: 'absolute',
+    bottom: 2,
+    alignSelf: 'center',
+    minWidth: 16,
+    paddingHorizontal: 4,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  badgeText: { fontSize: 10, fontWeight: '700', lineHeight: 14 },
   addBtn: {
-    width: 48,
-    height: 64,
-    borderRadius: 4,
+    width: THUMB_W,
+    height: THUMB_H,
+    borderRadius: 6,
     borderWidth: 1.5,
     borderStyle: 'dashed',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  addLabel: { fontSize: 9, marginTop: 2 },
+  addLabel: { fontSize: 10, marginTop: 2, fontWeight: '500' },
 });

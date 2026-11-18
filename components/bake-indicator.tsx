@@ -1,33 +1,53 @@
 // components/bake-indicator.tsx
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useTheme } from '@/contexts/theme-context';
 import { subscribeBakeActivity } from '@/lib/bake-queue';
+import { Radius, Spacing, Type } from '@/lib/theme';
 
 /**
  * "Enhancing…" pill shown while filter bakes are in flight.
  *
- * Anchored to the TOP rather than the bottom: filter changes are made from the
- * page-actions bottom sheet, which covers the lower half of the screen, so a
- * bottom-anchored pill would be hidden at exactly the moment it is needed.
+ * Positioned from the safe-area insets: `placement` picks the edge and `offset`
+ * is the distance from the safe area (e.g. the height of a header or tab bar
+ * the pill must clear). The viewer anchors it to the top, because the
+ * page-actions sheet covers the bottom half exactly when a filter is picked.
  *
  * Baking happens off-screen in a WebView and takes a moment per page, so without
  * this the user picks a filter (or finishes a multi-page scan) and nothing appears
- * to happen until the image silently changes underneath them. That silence is the
- * single biggest thing making the app feel less finished than it is.
+ * to happen until the image silently changes underneath them.
  *
  * Renders nothing when idle, so it costs nothing on the common path.
  */
-export function BakeIndicator({ top = 0 }: { top?: number }) {
+export function BakeIndicator({
+  placement = 'top',
+  offset = 0,
+}: {
+  placement?: 'top' | 'bottom';
+  offset?: number;
+}) {
+  const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
   const [active, setActive] = useState(0);
 
   useEffect(() => subscribeBakeActivity(setActive), []);
 
   if (active === 0) return null;
 
+  const edge = placement === 'top'
+    ? { top: insets.top + offset + Spacing.sm }
+    : { bottom: insets.bottom + offset + Spacing.sm };
+
   return (
-    <View style={[styles.pill, { top: top + 12 }]} pointerEvents="none">
-      <ActivityIndicator size="small" color="#fff" />
-      <Text style={styles.label}>
+    <View
+      style={[styles.pill, edge, { backgroundColor: colors.chromeRaised }]}
+      pointerEvents="none"
+      accessibilityLiveRegion="polite"
+      accessibilityLabel={active > 1 ? `Enhancing ${active} pages` : 'Enhancing page'}
+    >
+      <ActivityIndicator size="small" color={colors.chromeText} />
+      <Text style={[Type.footnote, styles.label, { color: colors.chromeText }]}>
         {active > 1 ? `Enhancing ${active} pages…` : 'Enhancing…'}
       </Text>
     </View>
@@ -40,11 +60,16 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.78)',
+    gap: Spacing.sm,
+    paddingHorizontal: Spacing.md + 2,
+    paddingVertical: Spacing.sm + 2,
+    borderRadius: Radius.pill,
+    zIndex: 10,
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 6,
   },
-  label: { color: '#fff', fontSize: 13, fontWeight: '600' },
+  label: { fontWeight: '600' },
 });

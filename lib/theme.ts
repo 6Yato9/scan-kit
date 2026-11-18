@@ -28,6 +28,14 @@ export type ThemeColors = {
   chromeRaised: string;
   chromeText: string;
   chromeMuted: string;
+  /** Tinted text/icons (selected states, "Done") on chrome. */
+  chromeAccent: string;
+  /** Hairlines and inactive outlines on chrome. */
+  chromeBorder: string;
+  /** A sheet of paper (signature pad, page previews) — white in both themes. */
+  paper: string;
+  /** Faint guide line drawn on `paper`. */
+  paperLine: string;
 };
 
 export const Colors: Record<'light' | 'dark', ThemeColors> = {
@@ -55,6 +63,10 @@ export const Colors: Record<'light' | 'dark', ThemeColors> = {
     chromeRaised: '#1c1c1e',
     chromeText: '#ffffff',
     chromeMuted: '#9a9a9f',
+    chromeAccent: '#4ec6e0',
+    chromeBorder: '#3a3a3c',
+    paper: '#ffffff',
+    paperLine: '#c8c8c8',
   },
   dark: {
     bg: '#111111',
@@ -83,6 +95,10 @@ export const Colors: Record<'light' | 'dark', ThemeColors> = {
     chromeRaised: '#1c1c1e',
     chromeText: '#ffffff',
     chromeMuted: '#9a9a9f',
+    chromeAccent: '#4ec6e0',
+    chromeBorder: '#3a3a3c',
+    paper: '#ffffff',
+    paperLine: '#c8c8c8',
   },
 };
 
