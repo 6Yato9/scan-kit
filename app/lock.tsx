@@ -6,6 +6,7 @@ import { useEffect } from 'react';
 import { BackHandler } from 'react-native';
 import { Stack } from 'expo-router';
 import { LockScreen } from '@/components/lock-gate';
+import { FilterBaker } from '@/components/filter-baker';
 
 export default function LockRoute() {
   useEffect(() => {
@@ -17,6 +18,9 @@ export default function LockRoute() {
     <>
       <Stack.Screen options={{ headerShown: false, gestureEnabled: false }} />
       <LockScreen />
+      {/* The lock covers every other screen's baker, so it hosts one itself —
+          otherwise bakes queued just before locking would stall until unlock. */}
+      <FilterBaker />
     </>
   );
 }

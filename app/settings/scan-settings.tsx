@@ -1,5 +1,6 @@
 // app/settings/scan-settings.tsx
 import { useCallback, useState } from 'react';
+import { FILTER_LABELS } from '@/components/page-actions-sheet';
 import { ScrollView, StyleSheet } from 'react-native';
 import { Stack, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -19,10 +20,10 @@ const QUALITY_OPTIONS: { label: string; value: Quality; desc: string }[] = [
 
 // Labels match the filter names in the viewer.
 const FILTER_OPTIONS: { label: string; value: PageFilter; desc: string }[] = [
-  { label: 'Enhanced', value: 'enhanced', desc: 'Brighter paper and crisper text' },
-  { label: 'Original', value: 'original', desc: 'Colors exactly as captured' },
-  { label: 'Grayscale', value: 'grayscale', desc: 'Shades of gray' },
-  { label: 'Black and white', value: 'bw', desc: 'High contrast, best for text' },
+  { label: FILTER_LABELS.enhanced, value: 'enhanced', desc: 'Brighter paper and crisper text' },
+  { label: FILTER_LABELS.original, value: 'original', desc: 'Colors exactly as captured' },
+  { label: FILTER_LABELS.grayscale, value: 'grayscale', desc: 'Shades of gray' },
+  { label: FILTER_LABELS.bw, value: 'bw', desc: 'High contrast, best for text' },
 ];
 
 export default function ScanSettingsScreen() {
