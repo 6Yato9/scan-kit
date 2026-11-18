@@ -1,4 +1,4 @@
-import { compactMeta, matchesQuery, searchSnippet, windowAround } from '../lib/doc-list';
+import { compactMeta, matchesQuery, recoveredLabels, searchSnippet, windowAround } from '../lib/doc-list';
 
 const doc = (name: string, ocrText?: string): any => ({ id: 'x', name, pages: [], ocrText, createdAt: 1, updatedAt: 1 });
 
@@ -88,5 +88,35 @@ describe('compactMeta', () => {
     expect(compactMeta({ pages: [], pdfUri: 'x', updatedAt: new Date(2026, 10, 17, 23).getTime() }, now)).toBe('PDF, Yesterday');
     expect(compactMeta({ pages: ['a'], updatedAt: new Date(2026, 2, 3).getTime() }, now, 'en-US')).toBe('1 page, Mar 3');
     expect(compactMeta({ pages: ['a'], updatedAt: new Date(2024, 2, 3).getTime() }, now, 'en-US')).toBe('1 page, Mar 2024');
+  });
+});
+
+describe('recoveredLabels', () => {
+  test('pages take the title read from their text, the count goes in the detail', () => {
+    expect(recoveredLabels({ kind: 'pages', fileCount: 3, textTitle: 'Northwind Invoice #4471' }))
+      .toEqual({ title: 'Northwind Invoice #4471', count: '3 pages' });
+  });
+  test('without text, say what they are', () => {
+    expect(recoveredLabels({ kind: 'pages', fileCount: 1 })).toEqual({ title: 'Scanned pages', count: '1 page' });
+    expect(recoveredLabels({ kind: 'signatures', fileCount: 2 })).toEqual({ title: 'Saved signatures', count: '2 signatures' });
+    expect(recoveredLabels({ kind: 'files', fileCount: 1 })).toEqual({ title: 'Other files', count: '1 file' });
+  });
+  test('a PDF counts its pages once read', () => {
+    expect(recoveredLabels({ kind: 'pdf', fileCount: 1 })).toEqual({ title: 'PDF document', count: 'PDF' });
+    expect(recoveredLabels({ kind: 'pdf', fileCount: 1, textTitle: 'Lease', pdfPages: 4 }))
+      .toEqual({ title: 'Lease', count: 'PDF, 4 pages' });
+  });
+});
+
+describe('recoveredLabels for a lone file', () => {
+  test('keeps the file\'s original name and says what it is', () => {
+    expect(recoveredLabels({ kind: 'files', fileCount: 1, soleFile: 'file:///a/legacy-documents/Lease%20letter.pdf' }))
+      .toEqual({ title: 'Lease letter', count: 'PDF' });
+    expect(recoveredLabels({ kind: 'files', fileCount: 1, soleFile: 'file:///a/Paperwork%20(signed).pdf', pdfPages: 3 }))
+      .toEqual({ title: 'Paperwork (signed)', count: 'PDF, 3 pages' });
+    expect(recoveredLabels({ kind: 'files', fileCount: 1, soleFile: 'file:///a/IMG_0042.JPG' }))
+      .toEqual({ title: 'IMG_0042', count: 'Image' });
+    expect(recoveredLabels({ kind: 'files', fileCount: 1, soleFile: 'file:///a/harness-log.txt' }))
+      .toEqual({ title: 'harness-log', count: 'TXT file' });
   });
 });

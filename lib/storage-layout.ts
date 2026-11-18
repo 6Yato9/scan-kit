@@ -112,6 +112,9 @@ type Layout = {
   errors: string[];
 };
 
+/** Where the move steps report what they did. */
+type Log = { actions: string[]; errors: string[] };
+
 type Marker = {
   version?: number;
   /** The one-time Documents-root pass: 'pending' while it runs, 'done' after. */
@@ -329,7 +332,7 @@ function looksLikeAprilMergeFolder(dir: Directory): boolean {
  * MD5 where it can be read) and only then removing the original. On any doubt
  * the original stays and the copy is removed. Returns true when it moved.
  */
-function moveFile(item: File, target: File, rel: string, log: Layout): boolean {
+function moveFile(item: File, target: File, rel: string, log: Log): boolean {
   const srcUri = item.uri;
   try {
     item.move(target);
@@ -389,7 +392,7 @@ function relocateDir(
   destDir: Directory,
   rel: string,
   recovered: (rel: string) => Directory,
-  log: Layout,
+  log: Log,
 ): boolean {
   // Handles are re-made from these URIs for every check: a moved handle
   // follows its file (expo-file-system updates its url on move), so asking the
@@ -468,7 +471,7 @@ function relocateDir(
 }
 
 /** Moves `item` into `dir` under `name` (or `name 2`, `name 3`, …), never over anything. */
-function moveAside(item: File | Directory, dir: Directory, name: string, log: Layout, rel: string, verb = 'kept aside'): boolean {
+function moveAside(item: File | Directory, dir: Directory, name: string, log: Log, rel: string, verb = 'kept aside'): boolean {
   try {
     dir.create({ intermediates: true, idempotent: true });
     for (let n = 1; n < 100; n++) {
@@ -497,19 +500,46 @@ function recoveredDir(support: Directory, now: number, rel: string): Directory {
 // ── The steps ───────────────────────────────────────────────────────────────
 
 /**
- * Document folders in Documents/scan-kit that are the app's: see
- * looksLikeDocFolder. Before the move has completed once the folder was the
- * app's alone (Documents wasn't visible in Files), so any name is accepted —
- * and dot-named temp folders (.retake-staging) go along; after that only
- * document ids are.
+ * Document folders in Documents/scan-kit that are the app's. Before the move
+ * has completed once, the folder was the app's alone (no shipped build made
+ * Documents visible in Files), so every folder named with a document id or
+ * holding a page or a PDF goes, whatever else is in it (an older build's side
+ * file must not keep a document behind), as does any other folder holding only
+ * what the app writes into a document's folder, and dot-named temp folders
+ * (.retake-staging). After that
+ * only document-id folders holding nothing but the app's files are taken:
+ * see looksLikeDocFolder.
  */
 function appDocFolders(oldScan: Directory, completed: boolean): Directory[] {
   const items = listOf(oldScan) ?? [];
   return items.filter((c): c is Directory => {
     if (!(c instanceof Directory)) return false;
-    if (nameOf(c).startsWith('.')) return !completed;
-    return completed ? looksLikeDocFolder(c, true, true) : looksLikeDocFolder(c, false, false);
+    const name = nameOf(c);
+    if (name.startsWith('.')) return !completed;
+    if (completed) return looksLikeDocFolder(c, true, true);
+    return DOC_ID.test(name) || holdsDocContent(c) || looksLikeDocFolder(c, false, false);
   });
+}
+
+/**
+ * True when Documents/scan-kit still holds a folder a document may be using:
+ * one appDocFolders would take, or ANY folder holding a page or a PDF,
+ * whatever it is called and whatever else is in it. Decided from what is
+ * there, not from what the move managed: while one exists the old root stays
+ * in use (docDir finds a document's folder there), so no document's pages can
+ * go missing because its folder wasn't moved (r11 #1). Generous on purpose:
+ * keeping the old root readable for a folder that turns out to be the user's
+ * costs nothing (no document id names it, and nothing is swept while it is
+ * read); dropping it while a document is in it hides that document.
+ */
+function docFoldersRemain(oldScan: Directory, completed: boolean): boolean {
+  if (appDocFolders(oldScan, completed).length > 0) return true;
+  return (listOf(oldScan) ?? []).some(c => c instanceof Directory && !nameOf(c).startsWith('.') && holdsDocContent(c));
+}
+
+/** True when `dir` directly holds a page or a PDF (anything else in it aside). */
+function holdsDocContent(dir: Directory): boolean {
+  return (listOf(dir) ?? []).some(i => !(i instanceof Directory) && DOC_CONTENT.test(nameOf(i)));
 }
 
 /** Moves the app's document folders out of Documents/scan-kit (see the header). */
@@ -668,7 +698,7 @@ export function migrateStorageLayout(now: number = Date.now()): LayoutReport {
     // Saved signatures: a convenience (a few PNGs and an index).
     moveSignatures(oldSigs, newSigs, support, now, next);
     marker = moveDocumentsLeftovers(support, marker, read.state === 'corrupt' || copiesMade, next, now);
-    const leftBehind = appDocFolders(oldScan, completed).length > 0;
+    const leftBehind = docFoldersRemain(oldScan, completed);
     if (read.state === 'corrupt') {
       // Unreadable: it was written by a launch that ran the move. Repair it.
       writeJsonSync(support, MARKER_NAME, { version: LAYOUT_VERSION, strays: 'done', straysAt: now, migratedAt: now });
@@ -681,7 +711,7 @@ export function migrateStorageLayout(now: number = Date.now()): LayoutReport {
 
   // Which folders to use follows from what is on disk now, whatever happened
   // above — never from what the steps meant to do.
-  const leftBehind = appDocFolders(oldScan, completed).length > 0;
+  const leftBehind = docFoldersRemain(oldScan, completed);
   if (!leftBehind) {
     next.scanRoot = newScan.uri; // made on demand on a fresh install
     next.state = 'app-support';
@@ -783,6 +813,132 @@ export function docDir(docId: string): Directory {
     if (legacy.exists) return legacy;
   } catch {}
   return primary;
+}
+
+/** Every existing folder of document `docId` (two only while the move is part done). */
+export function docDirs(docId: string): Directory[] {
+  return scanRoots()
+    .map(root => new Directory(root, docId))
+    .filter(d => exists(d, true));
+}
+
+/** True when `dir` directly holds any file the app writes into a document's folder, or OCR text. */
+function holdsAppFiles(dir: Directory): boolean {
+  for (const item of listOf(dir) ?? []) {
+    const name = nameOf(item);
+    if (item instanceof Directory) {
+      if (name === OCR_DIR && (listOf(item) ?? []).some(o => !nameOf(o).startsWith('.'))) return true;
+    } else if (DOC_FOLDER_FILE.test(name)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Document `docId`'s ONE folder, for anything that writes, renames or deletes
+ * its pages. Normally docDir. While the move is part done ('split') a crash or
+ * a failed move can leave a document's files in both roots; an edit that
+ * shifts or reorders pages by index in one root only would pair pages with the
+ * wrong shadows and lose some (r11 #5). So the app's files are first merged
+ * into the new root — an item in both stays in the new root, the old one is
+ * kept aside in Recovered files, never overwritten — and if that can't be
+ * finished this throws, and the edit doesn't happen.
+ */
+export function resolveDocDir(docId: string): Directory {
+  const l = current();
+  const primary = new Directory(l.scanRoot, docId);
+  if (!l.legacyScanRoot) return primary;
+  const legacy = new Directory(l.legacyScanRoot, docId);
+  if (!exists(legacy, true)) return primary;
+  if (!exists(primary, true)) return legacy;
+  if (!holdsAppFiles(legacy)) return primary;
+  const log: Log = { actions: [], errors: [] };
+  const now = Date.now();
+  const support = l.support ? new Directory(l.support) : null;
+  const rel = `${SCAN_DIR_NAME}/${docId}`;
+  const aside = (r: string) => (support ? recoveredDir(support, now, r) : new Directory(l.scanRoot, `${docId} conflicts`));
+  for (const item of listOf(new Directory(legacy.uri)) ?? []) {
+    const name = nameOf(item);
+    try {
+      if (item instanceof Directory) {
+        if (name !== OCR_DIR) continue; // not the app's: left where it is
+        relocateDir(item, new Directory(primary, OCR_DIR), `${rel}/${OCR_DIR}`, aside, log);
+      } else if (DOC_FOLDER_FILE.test(name)) {
+        const target = new File(primary, name);
+        if (!exists(target, true) && !exists(new Directory(primary, name), true)) {
+          if (moveFile(item, target, `${rel}/${name}`, log)) log.actions.push(`merged ${rel}/${name}`);
+        } else {
+          moveAside(item, aside(rel), name, log, `${rel}/${name}`);
+        }
+      }
+    } catch (e) {
+      log.errors.push(`merge ${rel}/${name}: ${String(e)}`);
+    }
+  }
+  try {
+    const left = new Directory(legacy.uri);
+    if (left.exists && left.list().length === 0) left.delete();
+  } catch {}
+  if (log.actions.length || log.errors.length) console.log(`storage-layout: merged ${docId} into one folder`, log.errors.slice(0, 5));
+  if (exists(new Directory(legacy.uri), false) && holdsAppFiles(new Directory(legacy.uri))) {
+    throw new Error(`storage-layout: document ${docId} is still in two folders`);
+  }
+  return primary;
+}
+
+/**
+ * True when `uri` is inside the Documents folder AND that folder is (or may
+ * become) visible in the Files app — iOS, where the app's data lives in
+ * Application Support. Elsewhere Documents is private and this is false.
+ */
+export function isUserVisibleUri(uri: string): boolean {
+  if (!current().support) return false;
+  const docs = sameFileKey(slash(Paths.document.uri));
+  return sameFileKey(uri).startsWith(docs);
+}
+
+/**
+ * Removes only what the app writes into a document's folder from `dir` (page
+ * files, side files, document.pdf, ocr/*.json), then the folder if that left
+ * it empty. Anything else — a file the user put there — stays, and so does
+ * the folder holding it. Returns true when the folder is gone.
+ */
+export function removeAppFiles(dir: Directory): boolean {
+  for (const item of listOf(dir) ?? []) {
+    const name = nameOf(item);
+    try {
+      if (item instanceof Directory) {
+        if (name !== OCR_DIR) continue;
+        for (const o of listOf(item) ?? []) {
+          if (!(o instanceof Directory) && /\.json$/.test(nameOf(o))) o.delete();
+        }
+        if (item.list().length === 0) item.delete();
+      } else if (DOC_FOLDER_FILE.test(name)) {
+        item.delete();
+      }
+    } catch {}
+  }
+  try {
+    const left = new Directory(dir.uri);
+    if (left.exists && left.list().length === 0) left.delete();
+    return !left.exists;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * One spelling per file, for comparing URIs that may name the same file
+ * differently: no ?query, percent-escapes decoded, and iOS's /private/var
+ * firmlink as /var (FileManager hands out either, r11 #7).
+ */
+export function sameFileKey(uri: string): string {
+  let u = String(uri).split('?')[0];
+  try {
+    u = decodeURIComponent(u);
+  } catch {}
+  return u.replace(/^file:\/\/\/private\/var\//, 'file:///var/');
 }
 
 /** The saved signatures' folder (lib/saved-signatures.ts). */
@@ -888,7 +1044,7 @@ function sizeOf(f: File): number {
 function groupOf(dir: Directory, savedAt: number | null, referenced: Set<string>, signatures = false): RecoveredGroup | null {
   const all = filesUnder(dir);
   // A file a document still uses (legacy-documents) is not "recovered": it is in use.
-  if (all.some(f => referenced.has(f.uri.split('?')[0]))) return null;
+  if (all.some(f => referenced.has(sameFileKey(f.uri)))) return null;
   const visible = all.filter(f => !/\.json$/i.test(nameOf(f)) && !/\.orig\.jpg$/i.test(nameOf(f)));
   if (visible.length === 0) return null;
   const bytes = all.reduce((s, f) => s + sizeOf(f), 0);
@@ -922,6 +1078,9 @@ export function listRecoveredGroups(referenced: Set<string> | null): RecoveredGr
   const out: RecoveredGroup[] = [];
   const push = (g: RecoveredGroup | null) => { if (g) out.push(g); };
   const none = new Set<string>();
+  // Compared in one spelling: records and directory listings can name a file
+  // with or without /private, escaped or not.
+  if (referenced) referenced = new Set([...referenced].map(sameFileKey));
   for (const batch of listOf(new Directory(support, RECOVERED_DIR_NAME)) ?? []) {
     if (!(batch instanceof Directory)) continue;
     const when = Number(nameOf(batch));
@@ -948,7 +1107,7 @@ export function listRecoveredGroups(referenced: Set<string> | null): RecoveredGr
       for (const d of listOf(top) ?? []) if (d instanceof Directory) push(groupOf(d, null, inUse));
     } else if (top instanceof Directory) {
       push(groupOf(top, null, inUse));
-    } else if (!nameOf(top).startsWith('.') && !inUse.has(top.uri)) {
+    } else if (!nameOf(top).startsWith('.') && !inUse.has(sameFileKey(top.uri))) {
       out.push({ key: top.uri, dir: '', kind: IMAGE_FILE.test(nameOf(top)) ? 'pages' : 'files', savedAt: null, files: [top.uri], bytes: sizeOf(top as File) });
     }
   }
@@ -963,8 +1122,12 @@ export function listRecoveredGroups(referenced: Set<string> | null): RecoveredGr
 export function deleteRecoveredGroup(group: RecoveredGroup): boolean {
   const support = applicationSupportDir();
   if (!support) return false;
-  const roots = [new Directory(support, RECOVERED_DIR_NAME).uri, new Directory(support, LEGACY_DOCS_DIR_NAME).uri];
-  const inside = (u: string) => roots.some(r => u.startsWith(r) && u !== r);
+  const key = (u: string) => sameFileKey(u).replace(/\/+$/, '');
+  const roots = [new Directory(support, RECOVERED_DIR_NAME).uri, new Directory(support, LEGACY_DOCS_DIR_NAME).uri].map(key);
+  const inside = (u: string) => {
+    const k = key(u);
+    return !k.split('/').includes('..') && roots.some(r => k.startsWith(`${r}/`));
+  };
   let ok = true;
   try {
     if (group.dir && inside(group.dir)) {
@@ -986,8 +1149,8 @@ export function deleteRecoveredGroup(group: RecoveredGroup): boolean {
   for (let i = 0; i < 4 && parent; i++) {
     parent = parent.slice(0, parent.lastIndexOf('/'));
     const dir = new Directory(parent);
-    const isRoot = roots.some(r => slash(r) === slash(dir.uri));
-    if (!inside(slash(dir.uri)) && !isRoot) break;
+    const isRoot = roots.includes(key(dir.uri));
+    if (!inside(dir.uri) && !isRoot) break;
     try {
       if (dir.exists && dir.list().length === 0) dir.delete();
       else break;

@@ -30,11 +30,31 @@ type Props = {
   icon?: AppIconName;
   /** On the always-dark viewer chrome (e.g. a PDF that can't be shown). */
   chrome?: boolean;
+  /**
+   * 'top' (default): the hero sits at the top of the space, at the same height
+   * as every tool's intro (ToolIntro), so an empty list and a tool's first
+   * screen look alike. 'center' only where the space is a page frame (the
+   * viewer's PDF that can't be shown).
+   */
+  placement?: 'top' | 'center';
 };
+
+/** The one hero size: a 72pt tinted disc with a 32pt glyph (EmptyState, ToolIntro). */
+export const HERO_DISC = 72;
+const HERO_GLYPH = 32;
+
+/** The tinted disc and glyph that heads every empty state and tool intro. */
+export function HeroIcon({ name, tint, color }: { name: AppIconName; tint: string; color: string }) {
+  return (
+    <View style={[styles.iconCircle, { backgroundColor: tint }]}>
+      <AppIcon name={name} size={HERO_GLYPH} color={color} />
+    </View>
+  );
+}
 
 const COPY: Record<Variant, { title: string; subtitle: string; icon: IconName }> = {
   'no-docs':           { icon: 'scan-outline',        title: 'No documents yet',      subtitle: 'Scan a document with the camera or import one to get started.' },
-  'empty-folder':      { icon: 'folder-open-outline', title: 'This folder is empty',  subtitle: 'Long-press a document and choose Move to folder to add it here.' },
+  'empty-folder':      { icon: 'folder-open-outline', title: 'This folder is empty',  subtitle: 'Tap the More button on a document and choose Move to folder to add it here.' },
   'no-search-results': { icon: 'search-outline',      title: 'No results',            subtitle: 'Try a different search term.' },
 };
 
@@ -53,6 +73,7 @@ export function EmptyState({
   subtitle,
   icon,
   chrome = false,
+  placement = 'top',
 }: Props) {
   const { colors } = useTheme();
   // The viewer is dark in both themes: the dark palette's tint, chrome text.
@@ -66,10 +87,8 @@ export function EmptyState({
   const body = subtitle
     ?? (variant === 'no-search-results' && query ? `No documents match “${query}”.` : copy.subtitle);
   return (
-    <View style={styles.container}>
-      <View style={[styles.iconCircle, { backgroundColor: tint }]}>
-        <AppIcon name={icon ?? copy.icon} size={36} color={iconColor} />
-      </View>
+    <View style={[styles.container, placement === 'center' && styles.centered]}>
+      <HeroIcon name={icon ?? copy.icon} tint={tint} color={iconColor} />
       <Text style={[Type.title, styles.title, { color: titleColor }]}>{heading}</Text>
       <Text style={[Type.callout, styles.subtitle, { color: bodyColor }]}>{body}</Text>
       {onAction && actionLabel ? (
@@ -88,16 +107,19 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     alignItems: 'center',
-    justifyContent: 'center',
     // Buttons sit at the screen gutter like every other full-width button;
     // the text is held narrower so it wraps into a comfortable measure.
     paddingHorizontal: Spacing.gutter,
-    paddingVertical: Spacing.xxxl,
+    // Same top inset as ToolIntro, so the hero lands at the same height.
+    paddingTop: Spacing.xxl,
+    paddingBottom: Spacing.xxxl,
   },
+  centered: { justifyContent: 'center', paddingTop: Spacing.xxxl },
+  // ToolIntro's spacing: 20pt from the disc to the title.
   iconCircle: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
+    width: HERO_DISC,
+    height: HERO_DISC,
+    borderRadius: HERO_DISC / 2,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: Spacing.xl,

@@ -5,6 +5,11 @@
 // action (Undo, Open) rests 6 s, long enough to read it and reach the button,
 // and 10 s while VoiceOver is running, so the button can still be reached by
 // swiping to it.
+//
+// Where it sits: by default `offset` above the bottom safe area (the tab bar);
+// a screen with its own bottom bar claims a spot just above it with
+// useToastAnchor (ToolScreen does, for its pinned footer), and the viewer
+// passes `bottom` to keep it above its toolbar, never on it.
 import {
   createContext,
   useCallback,
@@ -17,12 +22,15 @@ import {
 import { AccessibilityInfo, Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/theme-context';
+import { Colors } from '@/lib/theme';
 
 /** Optional trailing button, e.g. Undo after a delete. Keeps the toast up longer. */
 export type ToastAction = { label: string; onPress: () => void };
 type ToastOptions = { action?: ToastAction };
 
-type ToastContextType = { show: (message: string, options?: ToastOptions) => void };
+/** Claims the toast's position (distance of its bottom edge above the screen's bottom); returns the release. */
+type ClaimAnchor = (bottom: number) => () => void;
+type ToastContextType = { show: (message: string, options?: ToastOptions) => void; claimAnchor?: ClaimAnchor };
 
 const ToastContext = createContext<ToastContextType | null>(null);
 
@@ -35,18 +43,18 @@ export const ACTION_VISIBLE_MS_SCREEN_READER = 10000;
 export function ToastProvider({
   children,
   offset = 140,
-  top = null,
+  bottom = null,
   onChrome = false,
 }: {
   children: ReactNode;
   /** Distance above the bottom safe area. Raise it to clear a screen's own bottom bar. */
   offset?: number;
   /**
-   * When set, the toast's top edge sits at this window y instead (it then
-   * covers what is below that line, never what is above it). The viewer pins
-   * it to its page counter row so a toast never covers the page.
+   * When set, the toast's bottom edge sits this far above the bottom of the
+   * screen instead, whatever a screen claimed. The viewer sets it just above
+   * its toolbar, so a toast never covers (or blocks) the toolbar's buttons.
    */
-  top?: number | null;
+  bottom?: number | null;
   /**
    * Over the always-dark viewer chrome: the chrome's own raised pill with a
    * hairline edge, matching the viewer's other overlays in both themes.
@@ -54,7 +62,7 @@ export function ToastProvider({
   onChrome?: boolean;
 }) {
   const insets = useSafeAreaInsets();
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
   const [message, setMessage] = useState<string | null>(null);
   const [action, setAction] = useState<ToastAction | null>(null);
 
@@ -65,6 +73,14 @@ export function ToastProvider({
   // quick second tap must not run it again — Undo twice would restore twice.
   const actionUsed = useRef(false);
   const screenReader = useRef(false);
+  // A screen's own bottom bar (useToastAnchor); the latest claim wins.
+  const [anchor, setAnchor] = useState<{ id: number; bottom: number } | null>(null);
+  const anchorSeq = useRef(0);
+  const claimAnchor = useCallback<ClaimAnchor>(at => {
+    const id = ++anchorSeq.current;
+    setAnchor({ id, bottom: at });
+    return () => setAnchor(a => (a && a.id === id ? null : a));
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -117,15 +133,20 @@ export function ToastProvider({
     };
   }, []);
 
+  // The action is always tinted, like a link: the accent that reads on the
+  // pill — the viewer chrome's accent there, else the other theme's accent
+  // (the pill is the inverse surface: dark in light mode, light in dark mode).
+  const actionColor = onChrome ? colors.chromeAccent : Colors[isDark ? 'light' : 'dark'].accent;
+
   return (
-    <ToastContext.Provider value={{ show }}>
+    <ToastContext.Provider value={{ show, claimAnchor }}>
       {children}
       {message !== null && (
         <Animated.View
           pointerEvents={action ? 'box-none' : 'none'}
           style={[
             styles.wrapper,
-            top !== null ? { top } : { bottom: insets.bottom + offset },
+            { bottom: bottom ?? anchor?.bottom ?? insets.bottom + offset },
             { opacity, transform: [{ translateY }] },
           ]}
         >
@@ -159,7 +180,7 @@ export function ToastProvider({
                 accessibilityLabel={action.label}
                 style={({ pressed }) => [styles.actionBtn, pressed && { opacity: 0.6 }]}
               >
-                <Text maxFontSizeMultiplier={1.4} style={[styles.text, styles.actionText, { color: onChrome ? colors.chromeAccent : colors.bg }]}>
+                <Text maxFontSizeMultiplier={1.4} style={[styles.text, styles.actionText, { color: actionColor }]}>
                   {action.label}
                 </Text>
               </Pressable>
@@ -175,6 +196,17 @@ export function useToast() {
   const ctx = useContext(ToastContext);
   if (!ctx) throw new Error('useToast must be used within ToastProvider');
   return ctx;
+}
+
+const noClaim: ClaimAnchor = () => () => {};
+
+/**
+ * For a screen with its own bottom bar: `claim(bottom)` puts the app's toasts
+ * with their bottom edge `bottom` points above the screen's bottom, until the
+ * returned release is called (on blur). Outside a provider it does nothing.
+ */
+export function useToastAnchor(): ClaimAnchor {
+  return useContext(ToastContext)?.claimAnchor ?? noClaim;
 }
 
 const styles = StyleSheet.create({

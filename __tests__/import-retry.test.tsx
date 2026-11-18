@@ -29,7 +29,7 @@ jest.mock('expo-file-system', () => {
     }
     create() {}
   }
-  return { File: MockFile, Directory: MockDirectory, Paths: { cache: { uri: 'file:///cache/' } } };
+  return { File: MockFile, Directory: MockDirectory, Paths: { cache: { uri: 'file:///cache/' }, document: { uri: 'file:///app/Documents/' } } };
 });
 
 const mockReplace = jest.fn();
@@ -174,5 +174,33 @@ describe('open in place (the user’s own file, security-scoped)', () => {
     await flush();
     expect(screen.getByText('Couldn’t open the file')).toBeTruthy();
     expect(mockSaveFiles).not.toHaveBeenCalled();
+  });
+});
+
+// r11 #3: only the copy iOS made in THIS app's own Documents/Inbox is removed.
+describe('the incoming file is removed only when it is our own Inbox copy', () => {
+  test.each([
+    ['another app\'s Documents/Inbox', 'file:///var/mobile/Containers/Data/Application/OTHER/Documents/Inbox/Lease.pdf'],
+    ['an iCloud Drive folder called Documents/Inbox', 'file:///private/var/mobile/Library/Mobile%20Documents/com~apple~CloudDocs/Documents/Inbox/Lease.pdf'],
+    ['a sub-folder of our Inbox', 'file:///app/Documents/Inbox/Nested/Lease.pdf'],
+    ['a path that climbs out of our Inbox', 'file:///app/Documents/Inbox/../Lease.pdf'],
+  ])('%s is the user\'s original and is never deleted', async (_what, original) => {
+    mockFs[original] = true;
+    mockIncoming.uri = original;
+    mockSaveFiles.mockResolvedValueOnce('doc-9');
+    render(<ImportScreen />);
+    await flush();
+    expect(mockSaveFiles).toHaveBeenCalledTimes(1);
+    expect(mockFs[original]).toBe(true);
+  });
+
+  test('our own Inbox copy is removed once staged, however its path is spelled', async () => {
+    const SPELLED = 'file:///app/Documents/Inbox/Cafe receipt.jpg'; // unescaped
+    mockFs[SPELLED] = true;
+    mockIncoming.uri = SPELLED;
+    mockSaveFiles.mockResolvedValueOnce('doc-10');
+    render(<ImportScreen />);
+    await flush();
+    expect(mockFs[SPELLED]).toBeUndefined();
   });
 });

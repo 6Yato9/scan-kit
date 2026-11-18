@@ -107,3 +107,32 @@ export function planFilesCopy(
   });
   return { remove, write };
 }
+
+// ── Retrying a copy that couldn't be made ────────────────────────────────────
+
+/** A document whose PDF couldn't be made: at which version, how often, and when to try again. */
+export type WriteFailure = { stamp: number; count: number; until: number };
+
+/** First retry after 30 s, doubling each time, at most an hour apart. */
+export const RETRY_BASE_MS = 30 * 1000;
+export const RETRY_MAX_MS = 60 * 60 * 1000;
+
+/** How long to wait after the `count`-th failure in a row. */
+export function retryDelayMs(count: number): number {
+  return Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** Math.max(0, count - 1));
+}
+
+/** The record after another failure of the document at version `stamp`. */
+export function noteWriteFailure(prev: WriteFailure | undefined, stamp: number, now: number): WriteFailure {
+  const count = prev && prev.stamp === stamp ? prev.count + 1 : 1;
+  return { stamp, count, until: now + retryDelayMs(count) };
+}
+
+/**
+ * Whether to try making the copy now: always for a document that hasn't
+ * failed, or that changed since it did (the change may be the fix); otherwise
+ * only once its delay is over.
+ */
+export function mayAttemptWrite(failure: WriteFailure | undefined, stamp: number, now: number): boolean {
+  return !failure || failure.stamp !== stamp || now >= failure.until;
+}

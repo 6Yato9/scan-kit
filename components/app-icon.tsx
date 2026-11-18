@@ -9,7 +9,9 @@
 //   stroke than every other outline icon, so it reads as solid in a list.
 // - 'long-image' (Long image): image-outline already means "a page as an
 //   image" (Share page as image, JPEG export), so pages stitched into one tall
-//   picture get their own glyph: a page stretched taller, arrows up and down.
+//   picture get their own glyph: one tall frame holding three pages stacked
+//   end to end (SF Symbols' three-part split, turned upright). Arrows out of a
+//   frame read as "resize", which this tool doesn't do.
 // - 'watermark' (Watermark): Ionicons only has the water drop, a pun on the
 //   name; SF Symbols' page with a stamp says "mark every page".
 // - 'id-card' (ID card): Ionicons' id-card-outline is an upright badge; ID
@@ -33,8 +35,8 @@ const SYMBOLS: Record<
   // to carry the same visual weight as its square neighbours.
   signature: { symbol: 'signature', fallback: 'create-outline', scale: 1.2 },
   rename: { symbol: 'pencil', fallback: 'pencil-outline', scale: 0.95, weight: 'light' },
-  // A page stretched taller: arrows up and down out of its top and bottom.
-  'long-image': { symbol: 'rectangle.expand.vertical', fallback: 'albums-outline', scale: 1.05 },
+  // Pages joined into one tall picture: a three-part split turned upright.
+  'long-image': { symbol: 'rectangle.split.3x1', fallback: 'albums-outline', scale: 1.15, rotate: '90deg' },
   // A page carrying a stamp: what a watermark does to every page.
   watermark: { symbol: 'checkmark.seal.text.page', fallback: 'ribbon-outline', scale: 1.05 },
   // Wide and short like the signature, so drawn a little larger.

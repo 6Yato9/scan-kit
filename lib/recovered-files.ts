@@ -13,7 +13,7 @@ import {
   rebaseStoredUri,
   type RecoveredGroup,
 } from './storage-layout';
-import { documentFileRefsForCleanup, documentIdsForCleanup, getScanSettings } from './storage';
+import { documentFileRefsForCleanup, getScanSettings, storedDocumentIds } from './storage';
 import { saveScan } from './save-scan';
 import { autoName } from './auto-name';
 
@@ -27,10 +27,11 @@ function clean(uri: string): string {
 
 /**
  * Every file URI a document record uses (pages, their .orig shadows, PDFs),
- * or null when not every record could be read.
+ * or null when not every record could be read. Read-only: this runs whenever
+ * the Me tab is focused, so it must not purge anything (r11 #4).
  */
 async function referencedFiles(): Promise<Set<string> | null> {
-  const [ids, refs] = await Promise.all([documentIdsForCleanup(), documentFileRefsForCleanup()]);
+  const [ids, refs] = await Promise.all([storedDocumentIds(), documentFileRefsForCleanup()]);
   if (!ids || !refs || refs.length < ids.length) return null;
   const out = new Set<string>();
   for (const r of refs) {

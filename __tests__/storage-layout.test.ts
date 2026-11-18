@@ -22,7 +22,8 @@ const mockState: { container: string; moves: number; movedFrom: string[]; docs?:
 };
 
 jest.mock('expo-file-system', () => {
-  const strip = (u: string) => u.replace(/\/+$/, '');
+  // iOS: /private/var is a firmlink to /var — either spelling names the same file.
+  const strip = (u: string) => u.replace(/\/+$/, '').replace(/^file:\/\/\/private\/var\//, 'file:///var/');
   const enc = (seg: string) => seg.split('/').map(s => s.replace(/ /g, '%20')).join('/');
   const join = (parts: any[]) => {
     const [first, ...rest] = parts;
@@ -465,7 +466,11 @@ describe('after the move, Documents belongs to the user', () => {
 
     const r = relaunch(5000);
 
-    expect(r.state).toBe('app-support');
+    // A folder with pages stays in Documents (doc-a, below), so the old root
+    // is still read — no document in it can go missing (r11 #1).
+    expect(r.state).toBe('split');
+    expect(r.scanRoot).toBe(`${SUPPORT}/scan-kit/`);
+    expect(L.docDir('doc-a').uri).toBe(`${SUPPORT}/scan-kit/doc-a/`); // the moved one wins
     // 'doc-a' isn't a document id: after the first move only real ids come back.
     // (Real documents always have one; see the next test.)
     expect(files(`${DOCS}/scan-kit`)['doc-a/page-0.jpg']).toBe('A0-edited-by-older-build');
@@ -516,7 +521,9 @@ describe('the record of the move', () => {
 
     const r = relaunch(2000);
 
-    expect(r.state).toBe('app-support');
+    // 'split' only because a folder holding a page (Holiday) is in Documents/scan-kit: still read, never moved.
+    expect(r.state).toBe('split');
+    expect(r.scanRoot).toBe(`${SUPPORT}/scan-kit/`);
     expect(files(`${DOCS}/documents`)).toEqual({ [`${U2}/page_0.jpg`]: 'looks-like-april' });
     expect(files(`${DOCS}/scan-kit`)).toEqual({ 'Holiday/page-0.jpg': 'user' });
     expect(marker()).toMatchObject({ strays: 'done', migratedAt: 2000 }); // repaired
@@ -869,5 +876,280 @@ describe('the startup sweep after the move', () => {
     expect(mockFs.has(`${DOCS}/DOCUMENT_SCAN_1_20261118_103000.jpg`)).toBe(false);
     expect(realFiles().isScannerOutput(moved)).toBe(true); // still known as already cropped
     expect(realFiles().isDisposableTemp(moved)).toBe(true);
+  });
+});
+
+// ── Round 11 ────────────────────────────────────────────────────────────────
+
+describe('r11 #1: a document folder holding an unrecognised file is never hidden', () => {
+  const realFiles = (): typeof import('../lib/files') => jest.requireActual('../lib/files');
+
+  test('first launch: it moves with the rest, every file of it, and opens from Application Support', () => {
+    seedOldLayout();
+    put(`${DOCS}/scan-kit/${U1}/page-0.jpg`, 'U0');
+    put(`${DOCS}/scan-kit/${U1}/page-1.jpg`, 'U1');
+    put(`${DOCS}/scan-kit/${U1}/page-1.orig.jpg`, 'U1-orig');
+    put(`${DOCS}/scan-kit/${U1}/thumbnail.png`, 'an older build’s side file'); // not in DOC_FOLDER_FILE
+    const before = files(`${DOCS}/scan-kit/${U1}`);
+
+    const r = L.migrateStorageLayout(1000);
+
+    expect(r.state).toBe('app-support');
+    expect(files(`${SUPPORT}/scan-kit/${U1}`)).toEqual(before);
+    expect(L.docDir(U1).uri).toBe(`${SUPPORT}/scan-kit/${U1}/`);
+    expect(L.rebaseStoredUri(`${DOCS}/scan-kit/${U1}/page-1.jpg`)).toBe(`${SUPPORT}/scan-kit/${U1}/page-1.jpg`);
+    expect(mockFs.has(`${DOCS}/scan-kit`)).toBe(false);
+    expect(marker().migratedAt).toBe(1000);
+  });
+
+  test('first launch, not named with an id: a folder with pages and an odd file still goes', () => {
+    seedOldLayout();
+    put(`${DOCS}/scan-kit/doc-a/notes.tmp`, 'odd');
+    L.migrateStorageLayout(1000);
+    expect(files(`${SUPPORT}/scan-kit/doc-a`)['notes.tmp']).toBe('odd');
+    expect(files(`${SUPPORT}/scan-kit/doc-a`)['page-1.jpg']).toBe('A1');
+  });
+
+  test('a document folder that stays in Documents keeps being read from there, on every launch', () => {
+    // After the move has completed, an id folder with a foreign file in it is
+    // not taken — but if a document uses it, its pages must still open.
+    seedOldLayout();
+    L.migrateStorageLayout(1000);
+    put(`${DOCS}/scan-kit/${U2}/page-0.jpg`, 'P0');
+    put(`${DOCS}/scan-kit/${U2}/page-1.jpg`, 'P1');
+    put(`${DOCS}/scan-kit/${U2}/page-0.jpg.icloud`, 'odd');
+
+    for (const t of [2000, 3000]) {
+      const r = relaunch(t);
+      expect(r.state).toBe('split');
+      expect(L.scanRoots().map(d => d.uri)).toEqual([`${SUPPORT}/scan-kit/`, `${DOCS}/scan-kit/`]);
+      expect(L.docDir(U2).uri).toBe(`${DOCS}/scan-kit/${U2}/`);
+      expect(L.rebaseStoredUri(`${SUPPORT}/scan-kit/${U2}/page-1.jpg`)).toBe(`${DOCS}/scan-kit/${U2}/page-1.jpg`);
+      expect(files(`${DOCS}/scan-kit/${U2}`)).toEqual({ 'page-0.jpg': 'P0', 'page-1.jpg': 'P1', 'page-0.jpg.icloud': 'odd' });
+      // The other documents are unaffected.
+      expect(L.docDir('doc-a').uri).toBe(`${SUPPORT}/scan-kit/doc-a/`);
+    }
+  });
+
+  test('a record pointing at it opens every page (the hidden-document path)', async () => {
+    seedOldLayout();
+    L.migrateStorageLayout(1000);
+    put(`${DOCS}/scan-kit/${U2}/page-0.jpg`, 'P0');
+    put(`${DOCS}/scan-kit/${U2}/readme.txt`, 'odd');
+    relaunch(2000);
+    const mod = require('@react-native-async-storage/async-storage');
+    const AS = mod.default ?? mod;
+    await AS.setItem('@scan_kit_schema_version', '3');
+    await AS.setItem('@scan_kit_doc_index', JSON.stringify([U2]));
+    await AS.setItem(`@scan_kit_doc:${U2}`, JSON.stringify({
+      id: U2, name: 'Kept', createdAt: 1, updatedAt: 1, pages: [`${C0}/Documents/scan-kit/${U2}/page-0.jpg`],
+    }));
+    const storage: typeof import('../lib/storage') = require('../lib/storage');
+    const d = await storage.getDocument(U2);
+    expect(d!.pages[0]).toBe(`${DOCS}/scan-kit/${U2}/page-0.jpg`);
+    expect(mockFs.get(d!.pages[0])?.type).toBe('file');
+    // Nothing in either root is swept while it is there.
+    await realFiles().garbageCollectOrphans([U2, 'doc-a', 'doc-pdf', 'doc-trash'], 10 ** 13);
+    expect(files(`${DOCS}/scan-kit/${U2}`)).toEqual({ 'page-0.jpg': 'P0', 'readme.txt': 'odd' });
+  });
+});
+
+describe('r11 #5: a document split across both roots is made one folder before a page edit', () => {
+  jest.mock('expo-image-manipulator', () => ({ manipulateAsync: jest.fn(), SaveFormat: { JPEG: 'jpeg' } }));
+  const realFiles = (): typeof import('../lib/files') => jest.requireActual('../lib/files');
+
+  /** A crash/failed move left U1's pages 0-1 in Application Support and 2-3 in Documents. */
+  function splitDoc() {
+    seedOldLayout();
+    for (let i = 0; i < 4; i++) {
+      put(`${DOCS}/scan-kit/${U1}/page-${i}.jpg`, `P${i}`);
+      put(`${DOCS}/scan-kit/${U1}/page-${i}.orig.jpg`, `O${i}`);
+    }
+    for (const k of ['scan-kit', `scan-kit/${U1}`, `scan-kit/${U1}/page-2.jpg`, `scan-kit/${U1}/page-3.jpg`, `scan-kit/${U1}/page-3.orig.jpg`]) {
+      mockFailMoves.add(`${DOCS}/${k}`);
+    }
+    for (const k of [`scan-kit/${U1}/page-2.jpg`, `scan-kit/${U1}/page-3.jpg`, `scan-kit/${U1}/page-3.orig.jpg`]) mockFailCopies.add(`${DOCS}/${k}`);
+    L.migrateStorageLayout(1000);
+    expect(L.storageLayout().state).toBe('split');
+    expect(Object.keys(files(`${DOCS}/scan-kit/${U1}`)).sort()).toEqual(['page-2.jpg', 'page-3.jpg', 'page-3.orig.jpg']);
+    mockFailMoves.clear();
+    mockFailCopies.clear();
+  }
+
+  test('deleting a page shifts every page and shadow in step, across what was two folders', () => {
+    splitDoc();
+    realFiles().deleteSinglePage(U1, 1, 4);
+    expect(files(`${SUPPORT}/scan-kit/${U1}`)).toEqual({
+      'page-0.jpg': 'P0', 'page-0.orig.jpg': 'O0',
+      'page-1.jpg': 'P2', 'page-1.orig.jpg': 'O2',
+      'page-2.jpg': 'P3', 'page-2.orig.jpg': 'O3',
+    });
+    expect(mockFs.has(`${DOCS}/scan-kit/${U1}`)).toBe(false);
+  });
+
+  test('reordering pages keeps each shadow with its page', () => {
+    splitDoc();
+    const uris = realFiles().reorderPages(U1, [3, 2, 1, 0]);
+    expect(uris[0]).toBe(`${SUPPORT}/scan-kit/${U1}/page-0.jpg`);
+    expect(files(`${SUPPORT}/scan-kit/${U1}`)).toEqual({
+      'page-0.jpg': 'P3', 'page-0.orig.jpg': 'O3',
+      'page-1.jpg': 'P2', 'page-1.orig.jpg': 'O2',
+      'page-2.jpg': 'P1', 'page-2.orig.jpg': 'O1',
+      'page-3.jpg': 'P0', 'page-3.orig.jpg': 'O0',
+    });
+  });
+
+  test('a file in both roots is never overwritten: the old one is kept aside', () => {
+    splitDoc();
+    put(`${DOCS}/scan-kit/${U1}/page-0.jpg`, 'P0-older'); // e.g. a copy whose removal failed
+    const dir = L.resolveDocDir(U1);
+    expect(dir.uri).toBe(`${SUPPORT}/scan-kit/${U1}/`);
+    expect(files(`${SUPPORT}/scan-kit/${U1}`)['page-0.jpg']).toBe('P0');
+    expect(Object.values(files(`${SUPPORT}/scan-kit-recovered`))).toEqual(['P0-older']);
+  });
+
+  test('when it can’t be made one folder, the edit is refused and nothing moves', () => {
+    splitDoc();
+    mockFailMoves.add(`${DOCS}/scan-kit/${U1}/page-3.jpg`);
+    mockFailCopies.add(`${DOCS}/scan-kit/${U1}/page-3.jpg`);
+    expect(() => realFiles().deleteSinglePage(U1, 1, 4)).toThrow(/two folders/);
+    expect(files(`${SUPPORT}/scan-kit/${U1}`)['page-1.jpg']).toBe('P1');
+    expect(files(`${DOCS}/scan-kit/${U1}`)).toEqual({ 'page-3.jpg': 'P3' });
+  });
+
+  test('a user’s file in the old folder stays there', () => {
+    splitDoc();
+    put(`${DOCS}/scan-kit/${U1}/letter.docx`, 'user');
+    L.resolveDocDir(U1);
+    expect(files(`${DOCS}/scan-kit/${U1}`)).toEqual({ 'letter.docx': 'user' });
+  });
+
+  test('outside the split state it is just the document’s folder', () => {
+    seedOldLayout();
+    L.migrateStorageLayout(1000);
+    expect(L.resolveDocDir('doc-a').uri).toBe(`${SUPPORT}/scan-kit/doc-a/`);
+  });
+});
+
+describe('r11 #6: what is in Documents is deleted file by file, only the app’s', () => {
+  jest.mock('expo-image-manipulator', () => ({ manipulateAsync: jest.fn(), SaveFormat: { JPEG: 'jpeg' } }));
+  const realFiles = (): typeof import('../lib/files') => jest.requireActual('../lib/files');
+
+  test('deleting a document still in Documents leaves a file of the user’s, and its folder', () => {
+    seedOldLayout();
+    L.migrateStorageLayout(1000);
+    put(`${DOCS}/scan-kit/${U2}/page-0.jpg`, 'P0');
+    put(`${DOCS}/scan-kit/${U2}/page-0.orig.jpg`, 'O0');
+    put(`${DOCS}/scan-kit/${U2}/ocr/1-2.json`, '{}');
+    put(`${DOCS}/scan-kit/${U2}/my-notes.txt`, 'user');
+    relaunch(2000);
+    realFiles().deleteDocumentFiles(U2);
+    expect(files(`${DOCS}/scan-kit/${U2}`)).toEqual({ 'my-notes.txt': 'user' });
+  });
+
+  test('deleting a document removes its folder in both roots', () => {
+    seedOldLayout();
+    L.migrateStorageLayout(1000);
+    put(`${SUPPORT}/scan-kit/${U2}/page-0.jpg`, 'new');
+    put(`${DOCS}/scan-kit/${U2}/page-1.jpg`, 'old');
+    put(`${DOCS}/scan-kit/${U2}/x.bin`, 'odd');
+    relaunch(2000);
+    realFiles().deleteDocumentFiles(U2);
+    expect(mockFs.has(`${SUPPORT}/scan-kit/${U2}`)).toBe(false);
+    expect(files(`${DOCS}/scan-kit/${U2}`)).toEqual({ 'x.bin': 'odd' });
+  });
+
+  test('the move failed outright: the sweep deletes no user folder in Documents/scan-kit', async () => {
+    seedOldLayout();
+    put(`${SUPPORT}/scan-kit`, 'a file in the way'); // Application Support/scan-kit can't be made
+    mockFailMoves.add(`${DOCS}/scan-kit`);
+    dir(`${DOCS}/scan-kit/Empty folder`);
+    put(`${DOCS}/scan-kit/Holiday/page-0.jpg`, 'user photo');
+    put(`${DOCS}/scan-kit/${U2}/page-0.jpg`, 'orphan page');
+    put(`${DOCS}/scan-kit/${U2}/cv.pdf`, 'user cv');
+    put(`${DOCS}/scan-kit/${U1}/page-0.jpg`, 'orphan');
+    put(`${DOCS}/scan-kit/${U1}/page-0.orig.jpg`, 'orphan-orig');
+    L.migrateStorageLayout(1000);
+    expect(L.storageLayout().state).toBe('documents');
+
+    await realFiles().garbageCollectOrphans(['doc-a', 'doc-pdf', 'doc-trash'], 10 ** 13);
+
+    expect(mockFs.get(`${DOCS}/scan-kit/Empty folder`)?.type).toBe('dir');
+    expect(files(`${DOCS}/scan-kit/Holiday`)).toEqual({ 'page-0.jpg': 'user photo' });
+    expect(files(`${DOCS}/scan-kit/${U2}`)).toEqual({ 'page-0.jpg': 'orphan page', 'cv.pdf': 'user cv' });
+    expect(mockFs.has(`${DOCS}/scan-kit/${U1}`)).toBe(false); // only the app's files: a real orphan
+    expect(files(`${DOCS}/scan-kit/doc-a`)['page-0.jpg']).toBe('A0');
+  });
+});
+
+describe('r11 #7: /private/var and /var name the same file', () => {
+  const PRIV = (u: string) => u.replace('file:///var/', 'file:///private/var/');
+
+  test('a legacy page a record names through /private/var is in use, never offered', () => {
+    seedOldLayout();
+    L.migrateStorageLayout(1000);
+    const page = `${SUPPORT}/legacy-documents/documents/${M}/page_0.jpg`;
+    expect(L.listRecoveredGroups(new Set([PRIV(page)]))).toEqual([]);
+    expect(L.listRecoveredGroups(new Set([decodeURIComponent(page)]))).toEqual([]);
+  });
+
+  test('a group listed through /private/var can be deleted, and nothing outside the folders can', () => {
+    seedOldLayout();
+    L.migrateStorageLayout(1000);
+    const [g] = L.listRecoveredGroups(new Set());
+    expect(L.deleteRecoveredGroup({ ...g, dir: '', files: g.files.map(PRIV) })).toBe(true);
+    expect(mockFs.has(`${SUPPORT}/legacy-documents`)).toBe(false);
+    const escape = `${SUPPORT}/legacy-documents/../scan-kit/doc-a/page-0.jpg`;
+    expect(L.deleteRecoveredGroup({ key: 'x', dir: '', kind: 'pages', savedAt: null, files: [PRIV(escape)], bytes: 1 })).toBe(false);
+    expect(files(`${SUPPORT}/scan-kit/doc-a`)['page-0.jpg']).toBe('A0');
+  });
+
+  test('sameFileKey', () => {
+    expect(L.sameFileKey('file:///private/var/mobile/a%20b.jpg?v=2')).toBe('file:///var/mobile/a b.jpg');
+    expect(L.sameFileKey('file:///var/mobile/a b.jpg')).toBe('file:///var/mobile/a b.jpg');
+  });
+});
+
+describe('r11 #2: scanner pages named in a locale’s own digits', () => {
+  const realFiles = (): typeof import('../lib/files') => jest.requireActual('../lib/files');
+  const AR = 'DOCUMENT_SCAN_0_٢٠٢٦١١١٨_١٠٣٠٠٠.jpg'; // Arabic-Indic
+  const FA = 'DOCUMENT_SCAN_1_۲۰۲۶۱۱۱۸_۱۰۳۰۰۰.jpg'; // Persian
+  const enc = (n: string) => n.split('').map(c => (/[\w.]/.test(c) ? c : encodeURIComponent(c))).join('');
+
+  test('are moved out of Documents, escaped or not', () => {
+    seedOldLayout();
+    L.migrateStorageLayout(1000);
+    put(`${DOCS}/${AR}`, 'ar');
+    put(`${DOCS}/${FA}`, 'fa');
+    // As the scanner hands them over: escaped, and through /private/var.
+    const [a, f] = realFiles().moveScannerOutputToCaches([`${DOCS}/${enc(AR)}`, `${DOCS.replace('file:///var/', 'file:///private/var/')}/${FA}`]);
+    expect(mockFs.has(`${DOCS}/${AR}`)).toBe(false);
+    expect(mockFs.has(`${DOCS}/${FA}`)).toBe(false);
+    expect(decodeURIComponent(a)).toBe(`${C1}/Library/Caches/scanner/${AR}`);
+    expect(decodeURIComponent(f)).toBe(`${C1}/Library/Caches/scanner/${FA}`);
+    expect(realFiles().isScannerOutput(a)).toBe(true);
+  });
+
+  test('are swept from Documents when left behind; look-alike user files never are', () => {
+    seedOldLayout();
+    L.migrateStorageLayout(1000);
+    mockFs.delete(`${DOCS}/Inbox/Lease.pdf`);
+    put(`${DOCS}/${enc(AR)}`, 'ar');
+    put(`${DOCS}/${enc('DOCUMENT_SCAN_0_٢٠٢٦_mine.jpg')}`, 'user');
+    put(`${DOCS}/DOCUMENT_SCAN_0_mine.jpg`, 'user');
+    realFiles().sweepTempLeftovers(10 ** 13);
+    expect(under(DOCS).map(decodeURIComponent).sort()).toEqual(['DOCUMENT_SCAN_0_mine.jpg', 'DOCUMENT_SCAN_0_٢٠٢٦_mine.jpg'].sort());
+  });
+
+  test('isDisposableTemp knows them, with or without direction marks', () => {
+    seedOldLayout();
+    L.migrateStorageLayout(1000);
+    const F = realFiles();
+    expect(F.isDisposableTemp(`${DOCS}/${enc(AR)}`)).toBe(true);
+    expect(F.isDisposableTemp(`${DOCS}/${FA}`)).toBe(true);
+    expect(F.isDisposableTemp(`${DOCS}/DOCUMENT_SCAN_0_‏٢٠٢٦١١١٨_‏١٠٣٠٠٠.jpg`)).toBe(true);
+    expect(F.isDisposableTemp(`${DOCS}/DOCUMENT_SCAN_0_20261118_103000.jpg`)).toBe(true);
+    expect(F.isDisposableTemp(`${DOCS}/DOCUMENT_SCAN_0_٢٠٢٦١١١٨.jpg`)).toBe(false);
+    expect(F.isDisposableTemp(`${DOCS}/Scan ٢٠٢٦١١١٨_١٠٣٠٠٠.jpg`)).toBe(false);
   });
 });

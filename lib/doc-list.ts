@@ -137,3 +137,56 @@ export function compactMeta(d: { pages: string[]; pdfUri?: string; updatedAt: nu
         : { month: 'short', year: 'numeric' });
   return `${count}, ${when}`;
 }
+
+/** What Settings › Recovered files knows about one set-aside group (lib/recovered-files). */
+export type RecoveredLabelInput = {
+  kind: 'pages' | 'pdf' | 'signatures' | 'files';
+  fileCount: number;
+  /** A title read from the group's own text (titleFromText), when there is one. */
+  textTitle?: string | null;
+  /** Pages in a PDF group, once read. */
+  pdfPages?: number | null;
+  /** The URI of a lone file, whose own name is the best title ("Lease letter.pdf"). */
+  soleFile?: string | null;
+};
+
+/** "…/Lease%20letter.pdf" → { name: "Lease letter", ext: "pdf" }. */
+function fileNameParts(uri: string): { name: string; ext: string } {
+  let base = uri.split('?')[0].split('/').pop() ?? '';
+  try { base = decodeURIComponent(base); } catch { /* keep it encoded */ }
+  const dot = base.lastIndexOf('.');
+  return dot > 0 ? { name: base.slice(0, dot), ext: base.slice(dot + 1).toLowerCase() } : { name: base, ext: '' };
+}
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/**
+ * A recovered group's row: a real title when its text names it ("Northwind
+ * Invoice #4471"), else what it is ("Scanned pages", "PDF document"); the
+ * count goes first in the detail line ("3 pages", "PDF, 4 pages").
+ */
+export function recoveredLabels(g: RecoveredLabelInput): { title: string; count: string } {
+  const n = g.fileCount;
+  switch (g.kind) {
+    case 'pages':
+      return { title: g.textTitle || 'Scanned pages', count: plural(n, 'page', 'pages') };
+    case 'pdf':
+      return {
+        title: g.textTitle || 'PDF document',
+        count: g.pdfPages ? `PDF, ${plural(g.pdfPages, 'page', 'pages')}` : 'PDF',
+      };
+    case 'signatures':
+      return { title: 'Saved signatures', count: plural(n, 'signature', 'signatures') };
+    default: {
+      // A lone file keeps its original name; the detail says what it is.
+      if (n === 1 && g.soleFile) {
+        const { name, ext } = fileNameParts(g.soleFile);
+        const what = ext === 'pdf'
+          ? (g.pdfPages ? `PDF, ${plural(g.pdfPages, 'page', 'pages')}` : 'PDF')
+          : /^(jpe?g|png|heic)$/.test(ext) ? 'Image' : ext ? `${ext.toUpperCase()} file` : '1 file';
+        return { title: name || 'Other file', count: what };
+      }
+      return { title: 'Other files', count: plural(n, 'file', 'files') };
+    }
+  }
+}

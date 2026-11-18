@@ -97,6 +97,41 @@ function Snippet({ text, query, style }: { text: string; query?: string; style?:
 
 const columnWidth = (columns: number) => `${100 / Math.max(1, columns)}%` as const;
 
+/**
+ * The card is one VoiceOver element, so the More button inside it isn't
+ * reachable on its own: the same menu is offered as the card's "More actions"
+ * action (swipe up or down to it).
+ */
+function moreAction(selecting: boolean | undefined, open: () => void) {
+  if (selecting) return {};
+  return {
+    accessibilityActions: [{ name: 'longpress', label: 'More actions' }],
+    onAccessibilityAction: (e: { nativeEvent: { actionName: string } }) => {
+      if (e.nativeEvent.actionName === 'longpress') open();
+    },
+  };
+}
+
+/**
+ * The visible way into a document's actions (share, rename, move, delete…),
+ * the same menu a long-press opens: an ellipsis at the end of the meta line.
+ * Its 44pt touch target overhangs the card's padding instead of growing it.
+ */
+function MoreButton({ name, onPress, size = 18 }: { name: string; onPress: () => void; size?: number }) {
+  const { colors } = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      hitSlop={{ top: 12, bottom: 12, left: 10, right: 10 }}
+      accessibilityRole="button"
+      accessibilityLabel={`More actions for ${name}`}
+      style={({ pressed }) => [styles.more, pressed && { opacity: 0.5 }]}
+    >
+      <Ionicons name="ellipsis-horizontal" size={size} color={colors.muted} />
+    </Pressable>
+  );
+}
+
 function a11yLabel(document: Document, snippet?: string) {
   return `${document.name}, ${documentMeta(document)}${snippet ? `. Matches: ${snippet}` : ''}`;
 }
@@ -140,10 +175,16 @@ export function DocumentCard({
         accessibilityRole="button"
         accessibilityLabel={a11yLabel(document, snippet)}
         accessibilityState={isMultiSelectMode ? { selected: !!isSelected } : undefined}
-        accessibilityHint={isMultiSelectMode ? undefined : 'Long-press for more actions'}
+        {...moreAction(isMultiSelectMode, onLongPress)}
       >
         <View style={styles.cardClip}>
-          <Thumb document={document} iconSize={32} style={styles.thumbnail} />
+          <View>
+            <Thumb document={document} iconSize={32} style={styles.thumbnail} />
+            {/* More in the page's lower corner, so the text below keeps its
+                full width even three columns across. The selection check
+                takes the upper corner while selecting. */}
+            {isMultiSelectMode ? null : <MoreChip name={document.name} onPress={onLongPress} />}
+          </View>
           <View style={styles.info}>
             <WordClampText style={[Type.footnote, styles.name, { color: colors.text }]} numberOfLines={2} maxFontSizeMultiplier={1.3}>{document.name}</WordClampText>
             <Text style={[Type.caption, { color: colors.muted }]} numberOfLines={1}>
@@ -181,7 +222,7 @@ export function DocumentRow({ document, onPress, onLongPress, isSelected, isMult
       accessibilityRole="button"
       accessibilityLabel={a11yLabel(document, snippet)}
       accessibilityState={isMultiSelectMode ? { selected: !!isSelected } : undefined}
-      accessibilityHint={isMultiSelectMode ? undefined : 'Long-press for more actions'}
+      {...moreAction(isMultiSelectMode, onLongPress)}
     >
       <Thumb document={document} iconSize={24} style={styles.rowThumb} />
       <View style={styles.rowInfo}>
@@ -200,9 +241,62 @@ export function DocumentRow({ document, onPress, onLongPress, isSelected, isMult
           {isSelected && <Ionicons name="checkmark" size={15} color={colors.onAccent} />}
         </View>
       ) : (
-        <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+        <MoreButton name={document.name} onPress={onLongPress} size={20} />
       )}
       {isMultiSelectMode && isSelected ? <SelectionRing /> : null}
+    </Pressable>
+  );
+}
+
+/**
+ * A fixed-width page tile for Home's "Continue editing" shelf: a large first
+ * page, the name on two lines and when it was last changed, with the same
+ * More button as the Files grid. Not a grid cell — it sits in a horizontal row.
+ */
+export function DocumentTile({
+  document,
+  onPress,
+  onLongPress,
+  width,
+}: Pick<Props, 'document' | 'onPress' | 'onLongPress'> & { width: number }) {
+  const { colors } = useTheme();
+  return (
+    <Pressable
+      style={({ pressed }) => [styles.card, styles.tile, { width, backgroundColor: colors.card, shadowColor: colors.shadow }, pressed && styles.pressed]}
+      onPress={onPress}
+      onLongPress={onLongPress}
+      accessibilityRole="button"
+      accessibilityLabel={`${document.name}, ${formatPageCount(document)}, edited ${formatDocDate(document.updatedAt)}`}
+      {...moreAction(false, onLongPress)}
+    >
+      <View style={styles.cardClip}>
+        <Thumb document={document} iconSize={32} style={styles.thumbnail} />
+        <View style={styles.info}>
+          <WordClampText style={[Type.footnote, styles.name, { color: colors.text }]} numberOfLines={2} maxFontSizeMultiplier={1.3}>{document.name}</WordClampText>
+          <View style={styles.metaRow}>
+            <Text style={[Type.caption, styles.metaText, { color: colors.muted }]} numberOfLines={1} maxFontSizeMultiplier={1.3}>
+              {formatDocDate(document.updatedAt)}
+            </Text>
+            <MoreButton name={document.name} onPress={onLongPress} size={16} />
+          </View>
+        </View>
+      </View>
+    </Pressable>
+  );
+}
+
+/** The grid card's More button: a small dark disc over the page's lower corner. */
+function MoreChip({ name, onPress }: { name: string; onPress: () => void }) {
+  const { colors } = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      hitSlop={9}
+      accessibilityRole="button"
+      accessibilityLabel={`More actions for ${name}`}
+      style={({ pressed }) => [styles.moreChip, { backgroundColor: colors.scrimSoft }, pressed && { opacity: 0.6 }]}
+    >
+      <Ionicons name="ellipsis-horizontal" size={16} color={colors.onScrim} />
     </Pressable>
   );
 }
@@ -233,6 +327,20 @@ export function DocumentRowSkeleton() {
       <View style={styles.rowInfo}>
         <View style={[styles.bar, { width: '60%', backgroundColor: colors.placeholder }]} />
         <View style={[styles.bar, { width: '35%', marginTop: Spacing.sm, backgroundColor: colors.placeholder }]} />
+      </View>
+    </Animated.View>
+  );
+}
+
+export function DocumentTileSkeleton({ width }: { width: number }) {
+  const { colors } = useTheme();
+  const opacity = usePulse();
+  return (
+    <Animated.View style={[styles.card, styles.tile, styles.cardClip, { width, backgroundColor: colors.card, opacity }]}>
+      <View style={[styles.thumbnail, { backgroundColor: colors.placeholder, borderColor: colors.placeholder }]} />
+      <View style={styles.info}>
+        <View style={[styles.bar, { width: '75%', backgroundColor: colors.placeholder }]} />
+        <View style={[styles.bar, { width: '50%', marginTop: Spacing.sm, backgroundColor: colors.placeholder }]} />
       </View>
     </Animated.View>
   );
@@ -281,6 +389,16 @@ const styles = StyleSheet.create({
   name: { fontWeight: '600', marginBottom: 2, lineHeight: 17, minHeight: 34 },
   snippet: { marginTop: Spacing.xs },
   snippetHit: { fontWeight: '700' },
+  moreChip: {
+    position: 'absolute',
+    end: Spacing.sm,
+    bottom: Spacing.sm,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   checkbox: {
     position: 'absolute',
     top: Spacing.sm,
@@ -305,6 +423,11 @@ const styles = StyleSheet.create({
   rowInfo: { flex: 1, minWidth: 0 },
   rowName: { fontWeight: '600', lineHeight: 20 },
   rowMeta: { marginTop: 2 },
+  // A shelf tile keeps its width in a horizontal row.
+  tile: { flex: 0 },
+  metaRow: { flexDirection: 'row', alignItems: 'center' },
+  metaText: { flex: 1, minWidth: 0 },
+  more: { alignItems: 'center', justifyContent: 'center', marginLeft: Spacing.xxs, marginRight: -Spacing.xxs },
   rowCheckbox: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
   bar: { height: 10, borderRadius: 5 },
 });

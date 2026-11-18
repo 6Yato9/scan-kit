@@ -69,3 +69,31 @@ describe('uniqueNamesAvoiding', () => {
     expect(uniqueNamesAvoiding(['Scan.pdf', 'Scan.pdf'], ['SCAN.PDF', 'scan 2.pdf'])).toEqual(['Scan 3.pdf', 'Scan 4.pdf']);
   });
 });
+
+describe('retrying a copy that could not be made (r11 #8)', () => {
+  const { mayAttemptWrite, noteWriteFailure, retryDelayMs, RETRY_BASE_MS, RETRY_MAX_MS } = require('../lib/files-copy-plan');
+
+  test('the delay doubles from 30 s and is capped at an hour', () => {
+    expect(retryDelayMs(1)).toBe(RETRY_BASE_MS);
+    expect(retryDelayMs(2)).toBe(2 * RETRY_BASE_MS);
+    expect(retryDelayMs(3)).toBe(4 * RETRY_BASE_MS);
+    expect(retryDelayMs(50)).toBe(RETRY_MAX_MS);
+  });
+
+  test('a failure holds off the same version until its delay is over', () => {
+    const f1 = noteWriteFailure(undefined, 7, 1000);
+    expect(f1).toEqual({ stamp: 7, count: 1, until: 1000 + RETRY_BASE_MS });
+    expect(mayAttemptWrite(f1, 7, 1000 + RETRY_BASE_MS - 1)).toBe(false);
+    expect(mayAttemptWrite(f1, 7, 1000 + RETRY_BASE_MS)).toBe(true);
+    const f2 = noteWriteFailure(f1, 7, 5000);
+    expect(f2.count).toBe(2);
+    expect(f2.until).toBe(5000 + 2 * RETRY_BASE_MS);
+  });
+
+  test('a changed document starts afresh', () => {
+    const f = noteWriteFailure(noteWriteFailure(undefined, 7, 0), 7, 0);
+    expect(mayAttemptWrite(f, 8, 1)).toBe(true);
+    expect(noteWriteFailure(f, 8, 0).count).toBe(1);
+    expect(mayAttemptWrite(undefined, 1, 0)).toBe(true);
+  });
+});

@@ -693,7 +693,7 @@ function FolderChip({
       accessibilityRole="button"
       accessibilityState={{ selected: active }}
       accessibilityLabel={label === 'All' ? 'All documents' : `Folder ${label}`}
-      accessibilityHint={onLongPress ? 'Long-press to rename or delete' : undefined}
+      accessibilityHint={onLongPress ? 'Touch and hold to rename or delete' : undefined}
       style={({ pressed }) => [
         styles.chip,
         { backgroundColor: active ? colors.accentFill : colors.card, borderColor: active ? colors.accentFill : colors.border },

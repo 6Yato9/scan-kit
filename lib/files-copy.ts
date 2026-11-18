@@ -38,7 +38,7 @@ import { getDocSettings, getDocuments } from './storage';
 import { generatePdf } from './pdf';
 import { ocrAvailable } from './ocr';
 import { exportFileName } from './share';
-import { planFilesCopy, type CopyEntry, type CopyManifest, type Fingerprint } from './files-copy-plan';
+import { mayAttemptWrite, noteWriteFailure, planFilesCopy, type CopyEntry, type CopyManifest, type Fingerprint, type WriteFailure } from './files-copy-plan';
 import { applicationSupportDir, FILES_COPY_MANIFEST_NAME, readJsonSync, writeJsonSync } from './storage-layout';
 
 const ENABLED_KEY = '@scan_kit_files_copy';
@@ -58,10 +58,20 @@ function workDir(): Directory {
 }
 
 /**
- * Built in. The Info.plist keys that make Documents visible in Files are set
- * (app.json), and the app's own data lives in Application Support.
+ * Staged rollout. This release ships the storage migration (app data moves
+ * from Documents to Application Support) with Files sharing OFF, so internal
+ * folders are never visible before they have moved on users' devices. The
+ * next release flips this to true and sets UIFileSharingEnabled and
+ * LSSupportsOpeningDocumentsInPlace in app.json.
  */
-export const FILES_COPY_AVAILABLE = true;
+export const FILES_COPY_AVAILABLE = false;
+
+let availableForTests: boolean | null = null;
+
+/** Tests only: run the feature as if FILES_COPY_AVAILABLE were `value` (null: the real flag). */
+export function setFilesCopyAvailableForTests(value: boolean | null): void {
+  availableForTests = value;
+}
 
 /**
  * Whether to offer the feature on this device: iOS only (the Files app). Not
@@ -70,7 +80,7 @@ export const FILES_COPY_AVAILABLE = true;
  * or copies already made could never be updated or removed.
  */
 export function filesCopyAvailable(): boolean {
-  if (!FILES_COPY_AVAILABLE || Platform.OS !== 'ios') return false;
+  if (!(availableForTests ?? FILES_COPY_AVAILABLE) || Platform.OS !== 'ios') return false;
   try {
     return applicationSupportDir() !== null;
   } catch {
@@ -230,6 +240,14 @@ let again = false;
 let timer: ReturnType<typeof setTimeout> | null = null;
 /** Bumped by turning the feature off: a pass in flight stops at its next step. */
 let generation = 0;
+/**
+ * Documents whose PDF couldn't be made, by id: retried with a growing delay
+ * (lib/files-copy-plan.ts) rather than on every pass, so a document that
+ * can't be rendered (a full disk, a page gone missing) doesn't rebuild a
+ * whole PDF each time the Home tab is focused (r11 #8). Forgotten when the
+ * document changes or its copy is placed.
+ */
+const failures = new Map<string, WriteFailure>();
 
 /**
  * Ask for a pass soon (debounced: a burst of edits makes one pass). Cheap to
@@ -314,14 +332,20 @@ async function syncOnce(): Promise<void> {
     if (gen !== generation) return; // turned off meanwhile
     const doc = byId.get(w.id);
     if (!doc) continue;
+    if (!mayAttemptWrite(failures.get(w.id), w.stamp, Date.now())) continue; // failed recently: later
+    // Checked before the (expensive) PDF is made, and again when it is placed.
+    if (placementBlocked(manifest, w)) continue;
     const temp = await makeCopy(doc);
-    if (!temp) continue; // tried again on the next pass
+    if (!temp) {
+      failures.set(w.id, noteWriteFailure(failures.get(w.id), w.stamp, Date.now()));
+      continue;
+    }
     // By URI: a moved handle follows its file (expo updates it on move), so
     // deleting through it would delete the placed copy.
     const tempUri = temp.uri;
     try {
       if (gen !== generation) return; // turned off while it was being made
-      placeCopy(manifest, w, temp);
+      if (placeCopy(manifest, w, temp)) failures.delete(w.id);
     } finally {
       deleteQuietly(new File(tempUri));
     }
@@ -352,29 +376,45 @@ async function makeCopy(doc: { pages: string[]; pdfUri?: string }): Promise<File
 }
 
 /**
+ * True when placeCopy would certainly refuse `w` right now, so its PDF isn't
+ * worth making this pass: the document's old copy (under another name)
+ * couldn't be removed yet, or — with no copy of ours to replace — a file is
+ * already there under the name. Read-only; placeCopy checks everything again.
+ */
+function placementBlocked(manifest: CopyManifest, w: { id: string; name: string }): boolean {
+  const prev = manifest[w.id];
+  if (prev) return prev.name !== w.name;
+  try {
+    return new File(copyDir(), w.name).exists;
+  } catch {
+    return true; // can't tell: hands off
+  }
+}
+
+/**
  * Renames a finished copy into the folder under `w.name` — replacing only a
  * copy of ours, checked right now — and records it. Synchronous, so nothing
- * else can run between the checks and the rename.
+ * else can run between the checks and the rename. True when it was placed.
  */
-function placeCopy(manifest: CopyManifest, w: { id: string; name: string; stamp: number }, temp: File): void {
+function placeCopy(manifest: CopyManifest, w: { id: string; name: string; stamp: number }, temp: File): boolean {
   const dest = new File(copyDir(), w.name);
   const prev = manifest[w.id];
   let replacing = false;
   // Its old copy (another name) couldn't be removed this pass: keep it listed
   // and write the new one once it's gone, so it is never lost track of.
-  if (prev && prev.name !== w.name) return;
+  if (prev && prev.name !== w.name) return false;
   if (prev) {
     const state = checkEntry(prev);
     if (state === 'not-ours') {
       delete manifest[w.id]; // edited meanwhile: the user's now; the next pass picks a free name
       writeManifest(manifest);
-      return;
+      return false;
     }
     replacing = state === 'ours';
   }
-  if (!replacing && dest.exists) return; // someone else's file has the name: never replace it
+  if (!replacing && dest.exists) return false; // someone else's file has the name: never replace it
   const fp = fingerprint(temp);
-  if (!fp) return;
+  if (!fp) return false;
   // Write-ahead: whatever is found under this name next time is recognised.
   manifest[w.id] = {
     name: w.name,
@@ -385,7 +425,7 @@ function placeCopy(manifest: CopyManifest, w: { id: string; name: string; stamp:
   if (!writeManifest(manifest)) {
     if (prev) manifest[w.id] = prev;
     else delete manifest[w.id];
-    return;
+    return false;
   }
   try {
     if (replacing) {
@@ -396,11 +436,12 @@ function placeCopy(manifest: CopyManifest, w: { id: string; name: string; stamp:
   } catch {
     // The old copy may be gone and the new one not in place: the manifest
     // still describes both; the next pass settles it and writes again.
-    return;
+    return false;
   }
   const placed = fingerprint(new File(copyDir(), w.name)) ?? fp;
   manifest[w.id] = { name: w.name, stamp: w.stamp, fp: placed };
   writeManifest(manifest);
+  return true;
 }
 
 // ── Turning it on and off ────────────────────────────────────────────────────

@@ -5,6 +5,7 @@ import {
   noteNewDocument,
   resetNewDocNotesForTests,
   takeNewDocumentNote,
+  looksLikeFlatPage,
   uncroppedMessage,
 } from '../lib/new-doc-note';
 
@@ -40,12 +41,28 @@ describe('new document notes', () => {
 
 describe('uncroppedMessage', () => {
   test('a one-page document: no page number', () => {
-    expect(uncroppedMessage([0], 1)).toBe('Couldn’t find the page edges');
+    expect(uncroppedMessage([0], 1)).toBe('No page edges found. Kept the whole photo.');
   });
   test('one page of several: names it (1-based)', () => {
-    expect(uncroppedMessage([2], 4)).toBe('Couldn’t find the edges of page 3');
+    expect(uncroppedMessage([2], 4)).toBe('No page edges found on page 3. Kept it whole.');
   });
   test('several pages: counts them', () => {
-    expect(uncroppedMessage([0, 3], 4)).toBe('Couldn’t find the edges of 2 pages');
+    expect(uncroppedMessage([0, 3], 4)).toBe('No page edges found on 2 pages. Kept them whole.');
+  });
+});
+
+describe('looksLikeFlatPage', () => {
+  test('page-shaped images (already flat) are not misses', () => {
+    expect(looksLikeFlatPage(2480, 3508)).toBe(true); // A4 at 300 dpi
+    expect(looksLikeFlatPage(3508, 2480)).toBe(true); // landscape A4
+    expect(looksLikeFlatPage(2550, 3300)).toBe(true); // US Letter
+    expect(looksLikeFlatPage(2550, 4200)).toBe(true); // US Legal
+  });
+  test('camera photos and screenshots are not page-shaped', () => {
+    expect(looksLikeFlatPage(3024, 4032)).toBe(false); // 4:3
+    expect(looksLikeFlatPage(4000, 6000)).toBe(false); // 3:2
+    expect(looksLikeFlatPage(1080, 1920)).toBe(false); // 16:9
+    expect(looksLikeFlatPage(1206, 2622)).toBe(false); // phone screenshot
+    expect(looksLikeFlatPage(0, 100)).toBe(false);
   });
 });

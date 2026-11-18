@@ -1,14 +1,15 @@
 // app/(tabs)/index.tsx
 // Home: where you pick up or start work, not a second library. Two ways to
 // bring documents in besides the tab bar's camera button (photos, or a PDF or
-// image file), shortcuts into folders, and the documents worked on most
-// recently as a list with their full names. Everything else has one home:
-// browsing, sorting, selecting and searching the whole library are in Files
-// (the search button here opens Files' search with the keyboard up), and scan
-// modes such as ID card, Book and Whiteboard are in Tools.
+// image file); "Continue editing", a shelf of the documents changed most
+// recently shown as pages (Files lists the whole library as a grid or list);
+// shortcuts into folders; and a few everyday tools. Everything else has one
+// home: browsing, sorting, selecting and searching the library are in Files
+// (the search button here opens Files' search with the keyboard up), and every
+// tool is in Tools.
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AppState, FlatList, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
-import { useRouter, useFocusEffect } from 'expo-router';
+import { AppState, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { useRouter, useFocusEffect, type Href } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Document } from '@/types/document';
@@ -18,7 +19,8 @@ import { useScan } from '@/contexts/scan-context';
 import { HeaderIconButton, LargeTitle } from '@/components/screen-header';
 import { useTheme } from '@/contexts/theme-context';
 import { EmptyState } from '@/components/empty-state';
-import { DocumentRow, DocumentRowSkeleton } from '@/components/document-card';
+import { DocumentTile, DocumentTileSkeleton } from '@/components/document-card';
+import { AppIcon, type AppIconName } from '@/components/app-icon';
 import { SectionLabel } from '@/components/section-label';
 import { useDocumentActions } from '@/components/document-actions';
 import { useImportDocuments } from '@/components/use-import';
@@ -27,7 +29,24 @@ import { HIT, Radius, Spacing, TAB_BAR_CLEARANCE, Type } from '@/lib/theme';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
-const RECENT_LIMIT = 6;
+/** Documents on the "Continue editing" shelf. */
+const SHELF_LIMIT = 8;
+
+/**
+ * Shelf tile width: two whole tiles and part of the third, so the row visibly
+ * continues past the edge.
+ */
+function shelfTileWidth(screenW: number): number {
+  return Math.floor((screenW - Spacing.gutter - Spacing.sm * 2) / 2.6);
+}
+
+/** Everyday tools, one tap from Home (every tool is in the Tools tab). */
+const SHORTCUTS: { icon: AppIconName; label: string; href: Href }[] = [
+  { icon: 'signature', label: 'Sign', href: '/tools/sign' },
+  { icon: 'id-card', label: 'ID card', href: '/tools/id-card' },
+  { icon: 'reader-outline', label: 'Extract text', href: '/tools/extract-text' },
+  { icon: 'watermark', label: 'Watermark', href: '/tools/watermark' },
+];
 
 /**
  * Folder card width when folders scroll (three or more): two whole cards and
@@ -78,9 +97,9 @@ export default function HomeScreen() {
     return () => { unsubscribe(); sub.remove(); };
   }, []);
 
-  // Recent means recently worked on, whatever the library's sort order is.
-  const recent = useMemo(() => sortDocuments(documents, 'dateModified').slice(0, RECENT_LIMIT), [documents]);
-  const capped = documents.length > RECENT_LIMIT;
+  // Recently worked on, whatever the library's sort order is.
+  const recent = useMemo(() => sortDocuments(documents, 'dateModified').slice(0, SHELF_LIMIT), [documents]);
+  const tileW = shelfTileWidth(screenW);
 
   const folderCounts = useMemo(() => {
     const counts = new Map<string, number>();
@@ -146,31 +165,73 @@ export default function HomeScreen() {
     </View>
   ) : null;
 
-  const header = (
+  const shelf = recent.length > 0 ? (
     <View>
-      {quickActions}
-      {folderShortcuts}
-      {recent.length > 0 && (
-        <View style={styles.sectionRow}>
-          <SectionLabel style={styles.sectionLabel}>Recent</SectionLabel>
-          {/* Only when Recent is a slice of the library; otherwise every
-              document is already listed here and the tab bar has Files. */}
-          {capped ? (
-            <Pressable
-              onPress={() => router.navigate('/files')}
-              hitSlop={10}
-              style={styles.seeAll}
-              accessibilityRole="button"
-              accessibilityLabel={`See all ${documents.length} documents in Files`}
-            >
-              <Text style={[Type.subhead, { color: colors.accent }]}>See all</Text>
-            </Pressable>
-          ) : null}
-        </View>
-      )}
+      <View style={styles.sectionRow}>
+        <SectionLabel style={styles.sectionLabel}>Continue editing</SectionLabel>
+        <Pressable
+          onPress={() => router.navigate('/files')}
+          hitSlop={10}
+          style={styles.seeAll}
+          accessibilityRole="button"
+          accessibilityLabel={`See all ${documents.length} ${documents.length === 1 ? 'document' : 'documents'} in Files`}
+        >
+          <Text style={[Type.subhead, { color: colors.accent }]}>See all</Text>
+        </Pressable>
+      </View>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.edgeScroll}
+        contentContainerStyle={styles.shelf}
+      >
+        {recent.map(d => (
+          <DocumentTile
+            key={d.id}
+            document={d}
+            width={tileW}
+            onPress={() => router.push({ pathname: '/viewer', params: { id: d.id } })}
+            onLongPress={() => actions.openActions(d)}
+          />
+        ))}
+      </ScrollView>
+    </View>
+  ) : null;
+
+  const shortcuts = (
+    <View>
+      <View style={styles.sectionRow}>
+        <SectionLabel style={styles.sectionLabel}>Tools</SectionLabel>
+        <Pressable
+          onPress={() => router.navigate('/tools')}
+          hitSlop={10}
+          style={styles.seeAll}
+          accessibilityRole="button"
+          accessibilityLabel="All tools"
+        >
+          <Text style={[Type.subhead, { color: colors.accent }]}>All tools</Text>
+        </Pressable>
+      </View>
+      <View style={[styles.toolCard, { backgroundColor: colors.card }]}>
+        {SHORTCUTS.map(t => (
+          <Pressable
+            key={t.label}
+            style={({ pressed }) => [styles.tool, pressed && { opacity: 0.6 }]}
+            onPress={() => router.push(t.href)}
+            accessibilityRole="button"
+            accessibilityLabel={t.label}
+          >
+            <View style={[styles.toolIcon, { backgroundColor: colors.accentLight }]}>
+              <AppIcon name={t.icon} size={24} color={colors.accent} />
+            </View>
+            <Text style={[styles.toolLabel, { color: colors.text }]} numberOfLines={1} maxFontSizeMultiplier={1.2}>
+              {t.label}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
     </View>
   );
-
 
   return (
     <View style={[styles.container, { paddingTop: insets.top, backgroundColor: colors.bg }]}>
@@ -186,37 +247,31 @@ export default function HomeScreen() {
         }
       />
 
-      {!loaded ? (
-        <View style={styles.listContent}>
-          {quickActions}
-          <SectionLabel style={styles.sectionLabel}>Recent</SectionLabel>
-          {[0, 1, 2].map(i => <DocumentRowSkeleton key={i} />)}
-        </View>
-      ) : (
-        <FlatList
-          data={recent}
-          keyExtractor={d => d.id}
-          contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + TAB_BAR_CLEARANCE }]}
-          ListHeaderComponent={header}
-          ListEmptyComponent={
-            noDocs ? (
-              <View style={styles.empty}>
-                <EmptyState
-                  variant="no-docs"
-                  subtitle="Tap the camera button to scan, or import photos or a PDF. Your newest documents show up here."
-                />
-              </View>
-            ) : null
-          }
-          renderItem={({ item }) => (
-            <DocumentRow
-              document={item}
-              onPress={() => router.push({ pathname: '/viewer', params: { id: item.id } })}
-              onLongPress={() => actions.openActions(item)}
-            />
-          )}
-        />
-      )}
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + TAB_BAR_CLEARANCE }]}
+      >
+        {quickActions}
+        {!loaded ? (
+          <View>
+            <SectionLabel style={styles.sectionLabel}>Continue editing</SectionLabel>
+            <View style={styles.shelfSkeleton}>
+              {[0, 1, 2].map(i => <DocumentTileSkeleton key={i} width={tileW} />)}
+            </View>
+          </View>
+        ) : noDocs ? (
+          <EmptyState
+            variant="no-docs"
+            subtitle="Tap the camera button to scan, or import photos or a PDF. What you work on shows up here."
+          />
+        ) : (
+          <>
+            {shelf}
+            {folderShortcuts}
+            {shortcuts}
+          </>
+        )}
+      </ScrollView>
 
       {actions.sheets}
     </View>
@@ -259,7 +314,15 @@ function QuickAction({
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  listContent: { paddingHorizontal: Spacing.gutter, flexGrow: 1 },
+  content: { paddingHorizontal: Spacing.gutter, flexGrow: 1 },
+  shelf: { paddingHorizontal: Spacing.gutter, gap: Spacing.sm, paddingBottom: Spacing.xs },
+  // Overflows to the right like the real shelf (clipped by the screen).
+  shelfSkeleton: { flexDirection: 'row', gap: Spacing.sm, overflow: 'hidden', marginRight: -Spacing.gutter },
+  // The Tools tab's tile, a size smaller: four in one card.
+  toolCard: { flexDirection: 'row', borderRadius: Radius.lg, paddingVertical: Spacing.md, paddingHorizontal: Spacing.xs },
+  tool: { flex: 1, alignItems: 'center', paddingHorizontal: Spacing.xxs },
+  toolIcon: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', marginBottom: Spacing.sm },
+  toolLabel: { fontSize: 12, lineHeight: 15, textAlign: 'center', fontWeight: '500' },
   quickRow: { flexDirection: 'row', gap: Spacing.sm, marginTop: Spacing.sm },
   quick: {
     flex: 1,
@@ -293,5 +356,4 @@ const styles = StyleSheet.create({
     minHeight: 64,
   },
   folderText: { flex: 1, minWidth: 0, gap: 1 },
-  empty: { flex: 1, paddingTop: Spacing.xxl },
 });

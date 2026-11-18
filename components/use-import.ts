@@ -11,7 +11,8 @@ import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import { autoCropDocument } from '@/lib/document-detect';
 import { deleteDisposableTemps } from '@/lib/files';
-import { noteNewDocument } from '@/lib/new-doc-note';
+import { looksLikeFlatPage, noteNewDocument } from '@/lib/new-doc-note';
+import { getImageSize } from '@/lib/image-size';
 import { VisionOcr } from '@/modules/vision-ocr/src';
 import { useScan } from '@/contexts/scan-context';
 import { documentNameFor, importKindOf, type ImportKind } from '@/lib/incoming-file';
@@ -37,7 +38,12 @@ async function autoCropWithMisses(uris: string[], quality: number): Promise<{ pa
   for (let i = 0; i < uris.length; i++) {
     const result = await autoCropDocument(uris[i], quality);
     pages.push(result.uri);
-    if (canDetect && !result.detected) uncropped.push(i);
+    // A page that is already flat (shaped like a sheet of paper: an exported
+    // page, another app's scan) has no edges to find; that is not a miss.
+    if (canDetect && !result.detected) {
+      const size = await getImageSize(uris[i]);
+      if (!size || !looksLikeFlatPage(size.width, size.height)) uncropped.push(i);
+    }
     // The picker's cache copy, replaced by its cropped copy: nothing reads it again.
     if (result.uri.split('?')[0] !== uris[i].split('?')[0]) deleteDisposableTemps([uris[i]]);
   }

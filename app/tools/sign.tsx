@@ -36,7 +36,7 @@ import { ToolDocPicker, useConvertiblePdfs, useToolDoc, type PickerConvert } fro
 import { FilterBaker } from '@/components/filter-baker';
 import { PageThumb } from '@/components/page-thumb';
 import { reportStampFailure, usePageStamper, useStampFinish } from '@/components/page-stamper';
-import { copyName, PDF_NOT_LISTED_NOTE, stampCopy, stampPages, targetPages } from '@/lib/page-stamp';
+import { copyName, stampCopy, stampPages, targetPages } from '@/lib/page-stamp';
 import { notifySuccess, tapLight } from '@/lib/haptics';
 import {
   clampPlacement,
@@ -350,7 +350,6 @@ export default function SignScreen() {
         disabled={!!progress}
         onPick={pickDoc}
         autoOpen={loaded && !fromViewer}
-        note={PDF_NOT_LISTED_NOTE}
         convert={convert}
       />
 

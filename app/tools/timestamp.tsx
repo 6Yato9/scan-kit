@@ -21,7 +21,7 @@ import {
 import { ToolDocPicker, useConvertiblePdfs, useToolDoc, type PickerConvert } from '@/components/tool-doc';
 import { FilterBaker } from '@/components/filter-baker';
 import { reportStampFailure, usePageStamper, useStampFinish } from '@/components/page-stamper';
-import { copyName, PDF_NOT_LISTED_NOTE, stampCopy, stampPages, targetPages } from '@/lib/page-stamp';
+import { copyName, stampCopy, stampPages, targetPages } from '@/lib/page-stamp';
 import { notifySuccess } from '@/lib/haptics';
 import {
   CORNER_INSET,
@@ -156,7 +156,6 @@ export default function TimestampScreen() {
         disabled={!!progress}
         onPick={d => setDocId(d.id)}
         autoOpen={loaded && !fromViewer}
-        note={PDF_NOT_LISTED_NOTE}
         convert={convert}
       />
 

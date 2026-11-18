@@ -6,7 +6,20 @@
 // while they run; the startup sweep (garbageCollectOrphans) finishes or undoes
 // an interrupted one from those files instead of deleting them.
 import { Directory, File, Paths } from 'expo-file-system';
-import { docDir, isAppDataUri, looksLikeDocFolder, scanRoots, storageLayout, SCAN_DIR_NAME, SIGNATURES_DIR_NAME } from './storage-layout';
+import {
+  docDir,
+  docDirs,
+  isAppDataUri,
+  isUserVisibleUri,
+  looksLikeDocFolder,
+  removeAppFiles,
+  resolveDocDir,
+  sameFileKey,
+  scanRoots,
+  storageLayout,
+  SCAN_DIR_NAME,
+  SIGNATURES_DIR_NAME,
+} from './storage-layout';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { cappedSize, getImageSize } from './image-size';
 import { forgetDocumentOcr, pruneDocumentOcr } from './ocr-cache';
@@ -46,13 +59,16 @@ function bumpLayout(docId: string): void {
 /**
  * Deletes a document's folder: its pages, their shadows and the text
  * recognised on them (lib/ocr-cache keeps it in the folder's ocr/), plus that
- * text's in-memory copy.
+ * text's in-memory copy. In every root the document has a folder in (two
+ * while the move out of Documents is part done). A folder still in the
+ * Documents folder Files shows loses only the app's own files: anything else
+ * in it is the user's, and it stays with its folder (r11 #6).
  */
 export function deleteDocumentFiles(docId: string): void {
   forgetDocumentOcr(docId);
-  const dir = docDir(docId);
-  if (dir.exists) {
-    dir.delete();
+  for (const dir of docDirs(docId)) {
+    if (isUserVisibleUri(dir.uri)) removeAppFiles(dir);
+    else dir.delete();
   }
 }
 
@@ -62,7 +78,7 @@ export function deleteDocumentFiles(docId: string): void {
  * page untouched), then renamed over the page. `newUri` is left in place.
  */
 export function replacePage(newUri: string, docId: string, pageIndex: number): string {
-  const dir = docDir(docId);
+  const dir = resolveDocDir(docId);
   const dest = new File(dir, `page-${pageIndex}.jpg`);
   stage(new File(stripQuery(newUri)), new File(dir, `page-${pageIndex}.new.jpg`));
   swapIn(new File(dir, `page-${pageIndex}.new.jpg`), dest);
@@ -75,7 +91,7 @@ export function replacePage(newUri: string, docId: string, pageIndex: number): s
  * when a shadow was replaced.
  */
 export function replaceOriginal(newUri: string, docId: string, pageIndex: number): boolean {
-  const dir = docDir(docId);
+  const dir = resolveDocDir(docId);
   const dest = new File(dir, `page-${pageIndex}.orig.jpg`);
   if (!dest.exists) return false;
   stage(new File(stripQuery(newUri)), new File(dir, `page-${pageIndex}.orig.new.jpg`));
@@ -115,7 +131,7 @@ export function restorePageWithShadow(srcUri: string, docId: string, pageIndex: 
   if (!src.exists) throw new Error('restorePageWithShadow: saved copy is gone');
   const shadowUri = shadowOf(srcUri);
   const srcOrig = shadowUri ? new File(shadowUri) : null;
-  const dir = docDir(docId);
+  const dir = resolveDocDir(docId);
   const dest = new File(dir, `page-${pageIndex}.jpg`);
   const destOrig = new File(dir, `page-${pageIndex}.orig.jpg`);
   const pageSide = new File(dir, `page-${pageIndex}.new.jpg`);
@@ -159,7 +175,7 @@ export function restorePageWithShadow(srcUri: string, docId: string, pageIndex: 
  * image the next time a filter is baked.
  */
 export function copyPageWithShadow(srcUri: string, destDocId: string, destIndex: number): string {
-  const dir = docDir(destDocId);
+  const dir = resolveDocDir(destDocId);
   dir.create({ intermediates: true, idempotent: true });
   const dest = new File(dir, `page-${destIndex}.jpg`);
   const destOrig = new File(dir, `page-${destIndex}.orig.jpg`);
@@ -202,8 +218,8 @@ export function deleteSinglePage(
   pageIndex: number,
   totalPages: number
 ): void {
+  const dir = resolveDocDir(docId); // throws (and nothing moves) if it can't be made one folder
   bumpLayout(docId);
-  const dir = docDir(docId);
 
   // Runs the shift for one file family. Called for the pages themselves and
   // again for their page-N.orig.jpg shadows, which must move in lockstep: the
@@ -249,7 +265,7 @@ export const REORDER_COMMIT_MARKER = 'reorder.commit';
  */
 export function reorderPages(docId: string, newOrderIndices: number[]): string[] {
   if (newOrderIndices.some((from, to) => from !== to)) bumpLayout(docId);
-  const dir = docDir(docId);
+  const dir = resolveDocDir(docId);
   const n = newOrderIndices.length;
   // `required` is false for .orig: a page that has never been filtered has none.
   const families: { suffix: string; required: boolean }[] = [
@@ -308,9 +324,9 @@ export function copyDocumentFiles(
   destId: string,
   pages: string[]
 ): string[] {
-  const destDir = docDir(destId);
+  const destDir = resolveDocDir(destId);
   destDir.create({ intermediates: true, idempotent: true });
-  const srcDir = docDir(sourceId);
+  const srcDir = resolveDocDir(sourceId);
   return pages.map((_, i) => {
     const src = new File(srcDir, `page-${i}.jpg`);
     const dest = new File(destDir, `page-${i}.jpg`);
@@ -338,7 +354,7 @@ export async function copyPageWithQuality(
   pageIndex: number,
   quality: number
 ): Promise<string> {
-  const dir = docDir(docId);
+  const dir = resolveDocDir(docId);
   dir.create({ intermediates: true, idempotent: true });
   const dest = new File(dir, `page-${pageIndex}.jpg`);
   const srcUri = stripQuery(tempUri);
@@ -373,7 +389,7 @@ export function originalUri(docId: string, pageIndex: number): string {
  * to Original is always possible. Returns the `.orig` URI either way.
  */
 export function ensureOriginal(docId: string, pageIndex: number): string {
-  const dir = docDir(docId);
+  const dir = resolveDocDir(docId);
   const orig = new File(dir, `page-${pageIndex}.orig.jpg`);
   if (!orig.exists) {
     // Copied under a `.part` name and renamed into place, so a crash mid-copy
@@ -391,23 +407,23 @@ export function ensureOriginal(docId: string, pageIndex: number): string {
  * JPEG if the app died mid-write.
  */
 export function pageSideUri(docId: string, pageIndex: number): string {
-  return new File(docDir(docId), `page-${pageIndex}.new.jpg`).uri;
+  return new File(resolveDocDir(docId), `page-${pageIndex}.new.jpg`).uri;
 }
 
 /** Renames the fully written side file (pageSideUri) over the page. */
 export function promotePageSide(docId: string, pageIndex: number): void {
-  const dir = docDir(docId);
+  const dir = resolveDocDir(docId);
   swapIn(new File(dir, `page-${pageIndex}.new.jpg`), new File(dir, `page-${pageIndex}.jpg`));
 }
 
 /** Where a direct write of a page's `.orig` shadow goes first (see promoteOriginalSide). */
 export function originalSideUri(docId: string, pageIndex: number): string {
-  return new File(docDir(docId), `page-${pageIndex}.orig.new.jpg`).uri;
+  return new File(resolveDocDir(docId), `page-${pageIndex}.orig.new.jpg`).uri;
 }
 
 /** Renames the fully written shadow side file (originalSideUri) over the page's `.orig`. */
 export function promoteOriginalSide(docId: string, pageIndex: number): void {
-  const dir = docDir(docId);
+  const dir = resolveDocDir(docId);
   swapIn(new File(dir, `page-${pageIndex}.orig.new.jpg`), new File(dir, `page-${pageIndex}.orig.jpg`));
 }
 
@@ -551,12 +567,21 @@ export async function garbageCollectOrphans(validDocIds: string[], now: number =
         const name = baseName(child.uri);
         if (valid.has(name)) {
           handled += recoverInterrupted(child, now);
-        } else if (mayDelete && !PROTECTED_DIR_NAMES.has(name) && isSettled(child, now) && looksLikeDocFolder(child, false, false)) {
-          // Orphan directory: its doc record is gone. Remove it entirely —
-          // only when it holds nothing but what the app puts in a document's
-          // folder: a folder with anything else in it is never the app's to
-          // delete (a move keeps old mtimes, so age alone proves nothing).
-          child.delete();
+        } else if (mayDelete && !PROTECTED_DIR_NAMES.has(name) && isSettled(child, now)) {
+          // Orphan directory: its doc record is gone. Removed only when it
+          // holds nothing but what the app puts in a document's folder: a
+          // folder with anything else in it is never the app's to delete (a
+          // move keeps old mtimes, so age alone proves nothing). In the
+          // Documents folder Files shows (a move that failed outright), only
+          // a document-id folder holding a page or PDF counts, and only the
+          // app's own files are removed from it (r11 #6).
+          if (isUserVisibleUri(child.uri)) {
+            if (!looksLikeDocFolder(child, true, true)) continue;
+            removeAppFiles(child);
+          } else {
+            if (!looksLikeDocFolder(child, false, false)) continue;
+            child.delete();
+          }
           forgetDocumentOcr(name);
           handled++;
         }
@@ -675,13 +700,30 @@ function containerRoot(): string {
 const FILES_COPY_TEMP = /^\.[0-9a-z]+-copy\.pdf$/;
 
 /** The document scanner writes its pages straight into Documents/. */
-const SCANNER_OUTPUT = /^DOCUMENT_SCAN_\d+_[^/]*\.jpe?g$/i;
+const SCANNER_OUTPUT = /^DOCUMENT_SCAN_\p{Nd}+_[^/]*\.jpe?g$/iu;
 /**
  * Exactly the name the scanner gives a page in the Documents root
  * (react-native-document-scanner-plugin FileUtil: DOCUMENT_SCAN_<n>_<yyyyMMdd_HHmmss>.jpg).
  * Documents is the user's folder, so only this is ever moved or deleted there.
+ * The date comes from a DateFormatter in the device's locale, so its digits
+ * are the locale's (Arabic-Indic ٢٠٢٦…, Persian ۲۰۲۶…), and a right-to-left
+ * locale may add direction marks: any decimal digit is accepted (r11 #2).
  */
-const SCANNER_OUTPUT_IN_DOCUMENTS = /^DOCUMENT_SCAN_\d+_\d{8}_\d{6}\.jpg$/;
+const SCANNER_OUTPUT_IN_DOCUMENTS = /^DOCUMENT_SCAN_\p{Nd}+_[\u061C\u200E\u200F]*(?:\p{Nd}[\u061C\u200E\u200F]*){8}_[\u061C\u200E\u200F]*(?:\p{Nd}[\u061C\u200E\u200F]*){6}\.jpg$/u;
+
+/** A file name as written: URIs carry it percent-escaped (non-ASCII digits always are). */
+function decodedName(name: string): string {
+  try {
+    return decodeURIComponent(name);
+  } catch {
+    return name;
+  }
+}
+
+/** True for exactly the scanner's own output name (see SCANNER_OUTPUT_IN_DOCUMENTS), escaped or not. */
+export function isScannerOutputName(name: string): boolean {
+  return SCANNER_OUTPUT_IN_DOCUMENTS.test(decodedName(name));
+}
 /** Caches/scanner: where the scanner's pages are moved the moment it returns them. */
 const SCANNER_DIR = 'scanner';
 
@@ -698,11 +740,14 @@ export function moveScannerOutputToCaches(uris: string[]): string[] {
   return uris.map(uri => {
     try {
       const clean = stripQuery(uri);
-      const docs = Paths.document.uri.replace(/\/*$/, '/');
-      if (!clean.startsWith(docs)) return uri;
-      const name = clean.slice(docs.length);
-      if (!SCANNER_OUTPUT_IN_DOCUMENTS.test(name)) return uri;
-      const src = new File(clean);
+      // Compared in one spelling (/private/var or /var, escaped or not).
+      const key = sameFileKey(clean);
+      const docs = sameFileKey(Paths.document.uri.replace(/\/*$/, '/'));
+      if (!key.startsWith(docs)) return uri;
+      const name = key.slice(docs.length);
+      if (!isScannerOutputName(name)) return uri;
+      // Made from the decoded name, so it is found however the URI was spelled.
+      const src = new File(Paths.document, name);
       if (!src.exists) return uri;
       const dir = new Directory(Paths.cache, SCANNER_DIR);
       dir.create({ intermediates: true, idempotent: true });
@@ -735,8 +780,9 @@ export function isDisposableTemp(uri: string | null | undefined): boolean {
     if (clean.startsWith(cache)) return true;
     const root = containerRoot();
     if (root && clean.startsWith(`${root}tmp/`)) return true;
-    const docs = Paths.document.uri.replace(/\/*$/, '/');
-    return clean.startsWith(docs) && SCANNER_OUTPUT_IN_DOCUMENTS.test(clean.slice(docs.length));
+    const key = sameFileKey(clean);
+    const docs = sameFileKey(Paths.document.uri.replace(/\/*$/, '/'));
+    return key.startsWith(docs) && isScannerOutputName(key.slice(docs.length));
   } catch {
     return false; // can't tell where it lives — keep it
   }
@@ -745,7 +791,7 @@ export function isDisposableTemp(uri: string | null | undefined): boolean {
 /** True for a page the document scanner wrote (it is already cropped and straightened). */
 export function isScannerOutput(uri: string): boolean {
   const clean = stripQuery(uri);
-  return SCANNER_OUTPUT.test(clean.slice(clean.lastIndexOf('/') + 1));
+  return SCANNER_OUTPUT.test(decodedName(clean.slice(clean.lastIndexOf('/') + 1)));
 }
 
 /** Deletes the disposable temps among `uris` (see isDisposableTemp); ignores the rest. */
@@ -897,7 +943,7 @@ export function sweepTempLeftovers(now: number = Date.now()): number {
   };
   // Documents is the user's folder: only the scanner's exact output name and
   // an older build's Files-copy temp (a dot-file) are ever removed there.
-  sweep(new Directory(Paths.document), name => SCANNER_OUTPUT_IN_DOCUMENTS.test(name) || FILES_COPY_TEMP.test(name));
+  sweep(new Directory(Paths.document), name => isScannerOutputName(name) || FILES_COPY_TEMP.test(name));
   for (const name of TEMP_DIRS) {
     sweep(new Directory(Paths.cache, name), () => true, name === 'incoming' ? isStagedSettled : isSettled);
   }
@@ -913,7 +959,7 @@ export function sweepTempLeftovers(now: number = Date.now()): number {
  * Returns the stored file:// URI.
  */
 export function copyPdfToStorage(tempUri: string, docId: string): string {
-  const dir = docDir(docId);
+  const dir = resolveDocDir(docId);
   dir.create({ intermediates: true, idempotent: true });
   const dest = new File(dir, 'document.pdf');
   const src = new File(tempUri);

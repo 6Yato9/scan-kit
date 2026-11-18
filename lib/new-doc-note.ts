@@ -2,7 +2,7 @@
 // What the viewer should say when it first shows a document that was just
 // created (a scan, imported photos or a file): "Saved as “Receipt”" with
 // Rename, or — when auto-crop found no page edges in an imported photo —
-// "Couldn’t find the page edges" with Crop. Whoever creates the document
+// "No page edges found. Kept the whole photo." with Crop. Whoever creates the document
 // notes it here; the viewer takes the note (once) when it shows that document.
 //
 // Read-only for the scan/import pipeline: a plain in-memory map, nothing
@@ -34,11 +34,33 @@ export function takeNewDocumentNote(docId: string, now = Date.now()): NewDocNote
   return { uncropped: note.uncropped };
 }
 
-/** The toast for a page whose edges weren't found: names the page in a longer document. */
+/**
+ * The toast for a page whose edges weren't found: names the page in a longer
+ * document. Says what was done (the photo was kept whole), not that something
+ * failed — the page may simply be fine as it is; Crop is offered beside it.
+ */
 export function uncroppedMessage(uncropped: number[], pageCount: number): string {
-  if (uncropped.length > 1) return `Couldn’t find the edges of ${uncropped.length} pages`;
-  if (pageCount > 1 && uncropped.length === 1) return `Couldn’t find the edges of page ${uncropped[0] + 1}`;
-  return 'Couldn’t find the page edges';
+  if (uncropped.length > 1) return `No page edges found on ${uncropped.length} pages. Kept them whole.`;
+  if (pageCount > 1 && uncropped.length === 1) return `No page edges found on page ${uncropped[0] + 1}. Kept it whole.`;
+  return 'No page edges found. Kept the whole photo.';
+}
+
+/** Long side ÷ short side of the paper sizes a flat page image comes in: A4/A-series, US Letter, US Legal. */
+const PAPER_ASPECTS = [Math.SQRT2, 11 / 8.5, 14 / 8.5];
+/** How close (relative) an image's shape must be to a paper size. Camera photos (4:3 = 1.333) are 3% off Letter. */
+const PAPER_TOLERANCE = 0.015;
+
+/**
+ * True when an image is shaped exactly like a sheet of paper: a page that is
+ * already flat and cropped (an exported page, a scan from another app, a
+ * rendered PDF page). Auto-crop finds no edges in it because the page IS the
+ * whole image, so there is nothing to warn about. Camera photos (4:3, 3:2,
+ * 16:9) and screenshots are never this shape.
+ */
+export function looksLikeFlatPage(width: number, height: number): boolean {
+  if (!(width > 0 && height > 0)) return false;
+  const ratio = Math.max(width, height) / Math.min(width, height);
+  return PAPER_ASPECTS.some(a => Math.abs(ratio - a) / a <= PAPER_TOLERANCE);
 }
 
 export function resetNewDocNotesForTests(): void {

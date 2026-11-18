@@ -446,6 +446,29 @@ export function documentIdsForCleanup(): Promise<string[] | null> {
 }
 
 /**
+ * Every document id that has a stored record (parsed or not, trashed or not,
+ * pending or not), or null when the keys can't be read. READ-ONLY: unlike
+ * documentIdsForCleanup it purges nothing, so screens can call it any time
+ * (Settings › Recovered files counts on every focus of the Me tab; purging
+ * there would delete a copy still being made, r11 #4).
+ */
+export function storedDocumentIds(): Promise<string[] | null> {
+  return withDocsLock(async () => {
+    await ensureMigrated();
+    const index = await readIndex();
+    let keys: readonly string[];
+    try {
+      keys = await AsyncStorage.getAllKeys();
+    } catch {
+      return null;
+    }
+    const ids = new Set(index);
+    for (const k of keys) if (k.startsWith(DOC_PREFIX)) ids.add(k.slice(DOC_PREFIX.length));
+    return [...ids];
+  });
+}
+
+/**
  * What each document's record points at (pages and PDF), trashed documents
  * included, for the startup sweep of files a record no longer references
  * (lib/files.ts sweepConvertLeftovers). Records that don't parse are left

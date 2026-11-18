@@ -9,7 +9,8 @@
 
 type Node = { type: 'dir' } | { type: 'file'; content: string; mtime: number };
 const mockFs = new Map<string, Node>();
-const mockClock = { t: 1000 };
+const mockClock = { t: 1000, now: 10 ** 12 };
+jest.spyOn(Date, 'now').mockImplementation(() => mockClock.now);
 const mockFailMoveTo = new Set<string>();
 
 jest.mock('expo-file-system', () => {
@@ -90,9 +91,10 @@ jest.mock('../lib/storage', () => ({
   getDocuments: async () => mockDocs.map(d => ({ ...d })),
   getDocSettings: async () => ({ pdfPageSize: 'A4' }),
 }));
-const mockPdf: { gate: Promise<void> | null; fail: boolean } = { gate: null, fail: false };
+const mockPdf: { gate: Promise<void> | null; fail: boolean; calls: number } = { gate: null, fail: false, calls: 0 };
 jest.mock('../lib/pdf', () => ({
   generatePdf: async (pages: string[]) => {
+    mockPdf.calls++;
     if (mockPdf.gate) await mockPdf.gate;
     if (mockPdf.fail) throw new Error('no space');
     const { File } = require('expo-file-system');
@@ -131,11 +133,16 @@ beforeEach(async () => {
   mockFailMoveTo.clear();
   mockPdf.gate = null;
   mockPdf.fail = false;
+  mockPdf.calls = 0;
+  mockClock.now = 10 ** 12;
   mockDocs = [];
   for (const d of ['file:///C', DOCS, 'file:///C/Library', 'file:///C/Library/Caches', SUPPORT]) mockFs.set(d, { type: 'dir' });
   const AS = require('@react-native-async-storage/async-storage');
   await AS.clear();
   FC = require('../lib/files-copy');
+  // Independent of the shipping value of FILES_COPY_AVAILABLE (a staged
+  // rollout): the feature's behaviour is tested as it will run when it is on.
+  FC.setFilesCopyAvailableForTests(true);
   await FC.setFilesCopyEnabled(true);
 });
 
@@ -219,8 +226,62 @@ test('a renumbering whose write fails never leaves a deleted document’s PDF be
   await pass();
   expect(Object.values(inDocs())).not.toContain('PDF(p-a-1)');
   mockPdf.fail = false;
+  mockClock.now += 60 * 1000; // past the retry delay
   await pass();
   expect(inDocs()).toEqual({ 'Receipt.pdf': 'PDF(p-b-2)' });
+});
+
+describe('r11 #8: no wasted work', () => {
+  test('a PDF that can’t be made is retried with a growing delay, not on every pass', async () => {
+    mockDocs = [doc('a', 'Lease', 1)];
+    mockPdf.fail = true;
+    await pass();
+    expect(mockPdf.calls).toBe(1);
+    await pass(); // the Home tab focused again moments later
+    expect(mockPdf.calls).toBe(1);
+    mockClock.now += 31 * 1000;
+    await pass();
+    expect(mockPdf.calls).toBe(2);
+    mockClock.now += 31 * 1000; // the second delay is twice as long
+    await pass();
+    expect(mockPdf.calls).toBe(2);
+    mockPdf.fail = false;
+    mockClock.now += 31 * 1000;
+    await pass();
+    expect(mockPdf.calls).toBe(3);
+    expect(inDocs()).toEqual({ 'Lease.pdf': 'PDF(p-a-1)' });
+  });
+
+  test('a document edited after a failure is tried again straight away', async () => {
+    mockDocs = [doc('a', 'Lease', 1)];
+    mockPdf.fail = true;
+    await pass();
+    mockPdf.fail = false;
+    mockDocs = [doc('a', 'Lease', 1, 2)];
+    await pass();
+    expect(inDocs()).toEqual({ 'Lease.pdf': 'PDF(p-a-2)' });
+  });
+
+  test('no PDF is made while its old copy (another name) can’t be removed yet', async () => {
+    mockDocs = [doc('a', 'Lease', 1)];
+    await pass();
+    expect(mockPdf.calls).toBe(1);
+    // Renamed; removing the old copy fails (the file is busy).
+    const old = `${DOCS}/Lease.pdf`;
+    const { File } = require('expo-file-system');
+    const realDelete = File.prototype.delete;
+    File.prototype.delete = function (this: any) { if (this.key === old) throw new Error('EBUSY'); return realDelete.call(this); };
+    try {
+      mockDocs = [doc('a', 'Contract', 1, 2)];
+      await pass();
+      expect(mockPdf.calls).toBe(1); // nothing built that couldn't be placed
+      expect(inDocs()).toEqual({ 'Lease.pdf': 'PDF(p-a-1)' });
+    } finally {
+      File.prototype.delete = realDelete;
+    }
+    await pass();
+    expect(inDocs()).toEqual({ 'Contract.pdf': 'PDF(p-a-2)' });
+  });
 });
 
 test('turned off mid-pass: the deleted document’s copy is already gone, and nothing new appears', async () => {
@@ -295,4 +356,15 @@ test('an unreadable manifest: nothing in the folder is touched', async () => {
 
 test('offered on iOS whatever state the move out of Documents is in', () => {
   expect(FC.filesCopyAvailable()).toBe(true);
+});
+
+test('follows FILES_COPY_AVAILABLE when not overridden, whatever its value (staged rollout)', async () => {
+  FC.setFilesCopyAvailableForTests(null);
+  expect(FC.filesCopyAvailable()).toBe(FC.FILES_COPY_AVAILABLE);
+  expect(await FC.getFilesCopyEnabled()).toBe(FC.FILES_COPY_AVAILABLE);
+  FC.setFilesCopyAvailableForTests(false);
+  mockDocs = [doc('a', 'Lease', 1)];
+  await pass();
+  expect(inDocs()).toEqual({}); // off: nothing is written
+  FC.setFilesCopyAvailableForTests(true);
 });

@@ -91,9 +91,36 @@ function deleteQuietly(uri: string) {
   }
 }
 
+/** One spelling per file: no ?query, escapes decoded, /private/var as /var. */
+function fileKey(uri: string): string {
+  let u = uri.split('?')[0];
+  try {
+    u = decodeURIComponent(u);
+  } catch {}
+  return u.replace(/^file:\/\/\/private\/var\//, 'file:///var/');
+}
+
+/**
+ * True only for a copy iOS made for us directly in THIS app's own
+ * Documents/Inbox. With open-in-place a file can come from anywhere — another
+ * app's or iCloud Drive's "Documents/Inbox" folder included — and that is the
+ * user's original, which must never be deleted (r11 #3).
+ */
+function isOwnInboxCopy(uri: string): boolean {
+  try {
+    const inbox = fileKey(`${Paths.document.uri.replace(/\/*$/, '/')}Inbox/`);
+    const key = fileKey(uri);
+    if (!key.startsWith(inbox)) return false;
+    const rest = key.slice(inbox.length);
+    return rest.length > 0 && !rest.includes('/') && rest !== '.' && rest !== '..';
+  } catch {
+    return false;
+  }
+}
+
 function removeInboxCopy(uri: string) {
-  // Only the copy iOS made for us in Documents/Inbox — never a file elsewhere.
-  if (!/\/Documents\/Inbox\//.test(uri)) return;
+  // Only the copy iOS made for us in our own Documents/Inbox — never a file elsewhere.
+  if (!isOwnInboxCopy(uri)) return;
   try {
     const f = new File(uri);
     if (f.exists) f.delete();

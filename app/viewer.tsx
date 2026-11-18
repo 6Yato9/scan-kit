@@ -105,9 +105,6 @@ const DEFAULT_ADJ: PageAdjustment = { brightness: 0, contrast: 0, saturation: 0 
 const isDefaultAdj = (a: PageAdjustment | undefined) =>
   !a || (a.brightness === 0 && a.contrast === 0 && a.saturation === 0);
 
-/** Height a two-line toast needs below its top edge, plus a margin. */
-const TOAST_ROOM = 66;
-
 type OcrState = { status: 'running' } | { status: 'done'; text: string };
 
 /**
@@ -122,16 +119,18 @@ export default function ViewerScreen() {
   // ever end up above it (work that finished while locked), it draws the lock
   // itself, so a document is never usable without unlocking (lock-gate.tsx).
   const locked = useAppLocked();
-  // Window y of the page counter row: toasts start there, over the counter
-  // and the controls below it, never over the page (null until laid out).
-  const [toastTop, setToastTop] = useState<number | null>(null);
+  // Toasts sit just above the toolbar, over the page counter in the margin
+  // under the page: never on the toolbar, where they'd hide its labels and
+  // swallow its taps. Distance of their bottom edge above the screen's bottom
+  // (null until the counter row is laid out).
+  const [toastBottom, setToastBottom] = useState<number | null>(null);
   // The viewer is always dark, so everything it presents (the … menu, export,
   // move to folder, recognized text) uses the dark palette too: a bright sheet
   // sliding over the dark page reads as a different app.
   return (
     <DarkThemeScope>
-      <ToastProvider onChrome offset={266} top={toastTop}>
-        <ViewerContent rootToast={rootToast} onToastAnchor={setToastTop} />
+      <ToastProvider onChrome offset={266} bottom={toastBottom}>
+        <ViewerContent rootToast={rootToast} onToastAnchor={setToastBottom} />
       </ToastProvider>
       {locked && (
         <View style={StyleSheet.absoluteFill} testID="viewer-lock">
@@ -147,7 +146,7 @@ function ViewerContent({
   onToastAnchor,
 }: {
   rootToast: ReturnType<typeof useToast>;
-  onToastAnchor: (top: number) => void;
+  onToastAnchor: (bottom: number) => void;
 }) {
   // `notice`: a message from the screen that opened this one (a tool's "Signed
   // copy saved"). The viewer covers the app-wide toast host, so it shows it.
@@ -190,18 +189,20 @@ function ViewerContent({
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const toast = useToast();
-  // The page counter row (image pages or PDF): ViewerScreen pins toasts to it.
+  // The page counter row (image pages or PDF), directly above the toolbar:
+  // ViewerScreen rests toasts on its bottom padding, so a toast covers the
+  // counter (and at most the foot of the page) while the toolbar under it
+  // stays fully visible and tappable.
   const counterRowRef = useRef<View>(null);
   const anchorToast = useCallback(() => {
     counterRowRef.current?.measureInWindow((_x, y, _w, h) => {
-      // Wholly on the toolbar under the counter row, never straddling its top
-      // edge: the toast starts a little below the row (the counter stays in
-      // view) and never so low that a two-line toast would run off the screen
-      // (it may cover the home indicator, never the page).
-      const below = y + (Number.isFinite(h) ? h : 0) + Spacing.md;
-      if (Number.isFinite(y) && y > 0) onToastAnchor(Math.min(below, windowH - TOAST_ROOM));
+      if (!Number.isFinite(y) || !Number.isFinite(h) || y <= 0) return;
+      // The row's own bottom padding: Spacing.sm over the toolbar, or the
+      // home indicator's inset under a PDF (which has no toolbar).
+      const pad = docRef.current?.pdfUri ? insets.bottom + Spacing.xs : Spacing.sm;
+      onToastAnchor(Math.max(0, windowH - (y + h)) + pad);
     });
-  }, [onToastAnchor, windowH]);
+  }, [onToastAnchor, windowH, insets.bottom]);
   const { bumpLastSaved } = useScan();
 
   const docRef = useRef<Document | null>(null);
@@ -1396,6 +1397,7 @@ function ViewerContent({
           <View style={styles.pdfEmpty} accessibilityLiveRegion="polite">
             <EmptyState
               chrome
+              placement="center"
               icon={pdfError === 'locked' ? 'lock-closed-outline' : 'document-text-outline'}
               title={pdfError === 'locked' ? 'This PDF is password protected' : 'Couldn’t open this PDF'}
               subtitle={

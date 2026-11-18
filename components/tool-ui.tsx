@@ -25,7 +25,9 @@ import { SectionLabel } from '@/components/section-label';
 import { HeaderTextButton, ScreenHeader } from '@/components/screen-header';
 import { BottomSheet, SheetHeader } from '@/components/bottom-sheet';
 import { PrimaryButton } from '@/components/primary-button';
-import { AppIcon, type AppIconName } from '@/components/app-icon';
+import type { AppIconName } from '@/components/app-icon';
+import { HeroIcon } from '@/components/empty-state';
+import { useToastAnchor } from '@/components/toast';
 import { getDocuments } from '@/lib/storage';
 import { usePdfThumbnail } from '@/lib/pdf-thumb';
 import { HIT, Radius, Spacing, Type } from '@/lib/theme';
@@ -131,6 +133,19 @@ export function ToolScreen({
   // an x rather than going back with a chevron.
   const { docId } = useLocalSearchParams<{ docId?: string }>();
 
+  // The app's toasts rest just above the pinned footer (or near the bottom
+  // edge when there is none), not at the tab bar's height, while this screen
+  // is the one on top.
+  const claimToast = useToastAnchor();
+  const [footerH, setFooterH] = useState(0);
+  const hasFooter = !!footer;
+  useFocusEffect(
+    useCallback(() => {
+      if (hasFooter && footerH === 0) return; // not laid out yet
+      return claimToast(hasFooter ? footerH + Spacing.sm : insets.bottom + Spacing.xl);
+    }, [claimToast, hasFooter, footerH, insets.bottom]),
+  );
+
   return (
     <KeyboardAvoidingView
       style={[styles.screen, { backgroundColor: colors.bg }]}
@@ -162,11 +177,30 @@ export function ToolScreen({
             styles.footer,
             { paddingBottom: insets.bottom + Spacing.md, borderTopColor: colors.border, backgroundColor: colors.bg },
           ]}
+          onLayout={e => setFooterH(Math.round(e.nativeEvent.layout.height))}
         >
+          {/* A short fade over the scrolling content, so a line half under
+              the footer melts away instead of peeking out, cut in half. */}
+          {scroll ? <FooterFade color={colors.bg} /> : null}
           {footer}
         </View>
       ) : null}
     </KeyboardAvoidingView>
+  );
+}
+
+/**
+ * Transparent to `color` over FOOTER_FADE points, drawn as 1pt bands (no
+ * gradient library in the build), eased so the steps don't show.
+ */
+function FooterFade({ color }: { color: string }) {
+  return (
+    <View style={styles.fade} pointerEvents="none">
+      {Array.from({ length: FOOTER_FADE }, (_, i) => {
+        const t = (i + 1) / FOOTER_FADE;
+        return <View key={i} style={[styles.fadeBand, { backgroundColor: color, opacity: t * t * (3 - 2 * t) }]} />;
+      })}
+    </View>
   );
 }
 
@@ -194,10 +228,8 @@ export function ToolIntro({
   return (
     <View>
       <View style={styles.intro}>
-        <View style={[styles.introIcon, { backgroundColor: colors.accentLight }]}>
-          <AppIcon name={icon} size={32} color={colors.accent} />
-        </View>
-        <Text style={[Type.title, styles.center, { color: colors.text }]} accessibilityRole="header">
+        <HeroIcon name={icon} tint={colors.accentLight} color={colors.accent} />
+        <Text style={[Type.title, styles.center, styles.introTitle, { color: colors.text }]} accessibilityRole="header">
           {title}
         </Text>
         <Text style={[Type.callout, styles.center, styles.introText, { color: colors.muted }]}>{text}</Text>
@@ -685,6 +717,12 @@ export function ToolProgress({ label, current, total }: { label: string; current
   );
 }
 
+/** A tip row's vertical padding and line height (one line = 48pt, HIT + 4). */
+const POINT_PAD = 14;
+const POINT_LINE = 20;
+/** Height of the fade above a pinned footer. */
+const FOOTER_FADE = 20;
+
 const styles = StyleSheet.create({
   screen: { flex: 1 },
   flex: { flex: 1 },
@@ -695,28 +733,35 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
     gap: Spacing.sm,
   },
+  fade: { position: 'absolute', left: 0, right: 0, top: -FOOTER_FADE - StyleSheet.hairlineWidth, height: FOOTER_FADE },
+  fadeBand: { flex: 1 },
   center: { textAlign: 'center' },
+  // Same metrics as EmptyState: the hero 24pt under the header, 20pt above
+  // the title, 8pt between title and text.
   intro: {
     alignItems: 'center',
     paddingHorizontal: Spacing.xl,
     paddingTop: Spacing.xxl,
     paddingBottom: Spacing.lg,
-    gap: Spacing.sm,
   },
-  introIcon: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: Spacing.md,
-  },
+  introTitle: { marginBottom: Spacing.sm },
   introText: { lineHeight: 21 },
   points: { marginTop: Spacing.sm },
-  point: { flexDirection: 'row', alignItems: 'center', paddingLeft: Spacing.lg },
-  pointIcon: { width: 30, height: 30, borderRadius: 8, alignItems: 'center', justifyContent: 'center', marginRight: Spacing.md },
-  pointBody: { flex: 1, paddingVertical: Spacing.md, paddingRight: Spacing.lg, minHeight: HIT + 4, justifyContent: 'center' },
-  pointText: { lineHeight: 20 },
+  // As in Settings and Help: the icon sits beside the first line, not in the
+  // middle of a wrapped tip (14pt padding + half the 20pt line - half the
+  // 30pt tile = 9pt). A one-line tip is a 48pt row with the icon centred.
+  point: { flexDirection: 'row', alignItems: 'flex-start', paddingLeft: Spacing.lg },
+  pointIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: Spacing.md,
+    marginTop: POINT_PAD + (POINT_LINE - 30) / 2,
+  },
+  pointBody: { flex: 1, paddingVertical: POINT_PAD, paddingRight: Spacing.lg },
+  pointText: { lineHeight: POINT_LINE },
   note: { marginTop: Spacing.sm, marginHorizontal: Spacing.xs, lineHeight: 18 },
   row: {
     flexDirection: 'row',

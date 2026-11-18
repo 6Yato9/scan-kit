@@ -70,11 +70,9 @@ export default function PrinterScreen() {
   return (
     <ToolScreen title="Printing">
       {/* Paper size has one home, Document settings, because it shapes every
-          PDF as well as every print job. This row shows it and links there. */}
-      <SettingsGroup
-        title="Paper"
-        footer="The same size is used for every PDF you export. Change it in Document settings."
-      >
+          PDF as well as every print job. This row shows it and opens it there
+          (the chevron says so; the footer doesn't repeat it). */}
+      <SettingsGroup title="Paper" footer="Also used for every PDF you export.">
         <SettingsRow
           icon="document-outline"
           label="Paper size"
