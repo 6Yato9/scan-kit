@@ -2,10 +2,11 @@
 // Grouped-list building blocks shared by the Settings tab and every settings
 // screen, so they all share one inset, radius, row height and accessory style.
 import { ReactNode } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/theme-context';
 import { AppIcon, type AppIconName } from '@/components/app-icon';
+import { AppSwitch } from '@/components/app-switch';
 import { SectionLabel } from '@/components/section-label';
 import { HIT, Radius, Spacing, Type } from '@/lib/theme';
 
@@ -76,11 +77,10 @@ export function SettingsRow({
           ))}
         {accessory.type === 'value' && onPress && <Ionicons name="chevron-forward" size={18} color={colors.muted} />}
         {isSwitch && (
-          <Switch
+          <AppSwitch
             value={accessory.value}
             onValueChange={accessory.onChange}
             disabled={accessory.disabled}
-            trackColor={{ true: colors.accentFill, false: undefined }}
             accessibilityLabel={label}
           />
         )}

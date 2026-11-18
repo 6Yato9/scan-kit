@@ -100,7 +100,7 @@ export function DocActionsSheet({
       <SheetGroup>
         {onShare && <SheetRow icon="share-outline" label="Share or export" onPress={run(onShare)} />}
         <SheetRow icon="rename" label="Rename" onPress={run(onRename)} />
-        <SheetRow icon="copy-outline" label="Duplicate" onPress={run(onDuplicate)} />
+        <SheetRow icon="duplicate-outline" label="Duplicate" onPress={run(onDuplicate)} />
         <SheetRow icon="folder-outline" label="Move to folder" onPress={run(onMoveToFolder)} />
         <SheetRow
           icon="git-merge-outline"

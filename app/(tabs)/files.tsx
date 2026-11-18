@@ -31,6 +31,7 @@ import {
 } from '@/lib/storage';
 import { mergeIntoNew } from '@/lib/doc-ops';
 import { matchesQuery, searchSnippet, sortDocuments } from '@/lib/doc-list';
+import { requestFilesCopySync } from '@/lib/files-copy';
 import { useScan } from '@/contexts/scan-context';
 import { useTheme } from '@/contexts/theme-context';
 import { notifySuccess, selection } from '@/lib/haptics';
@@ -146,6 +147,9 @@ export default function FilesScreen() {
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
   useEffect(() => { if (lastSaved > 0) load(); }, [lastSaved, load]);
+  // Renames, moves and deletes made here change the list: bring the copies
+  // in Files up to date (debounced; nothing while that setting is off).
+  useEffect(() => { requestFilesCopySync(); }, [documents]);
 
   // A folder that was deleted or renamed elsewhere can't stay selected.
   // (Only once the folders have loaded: a folder opened from Home arrives first.)

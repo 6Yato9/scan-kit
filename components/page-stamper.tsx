@@ -10,12 +10,24 @@
 // in the screen that is on top (an iOS WebView buried under a full-screen
 // modal never runs), then `await stamper.stamp(pageUri, origUri, spec)`.
 // One page at a time; a call made while another runs waits for it.
+//
+// Once the screen holding the host has closed, every call (running, queued or
+// new) fails at once with StampRenderError('closed'), and `stamper.signal`
+// reads aborted: pass it to stampPages / stampCopy so the run puts back what
+// it did instead of waiting out a page that will never be drawn.
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Alert, StyleSheet, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { useRouter } from 'expo-router';
 import { buildStampHtml, type StampSpec } from '@/lib/stamp';
-import { StampError, undoStamp, type StampedPixels, type StampUndo } from '@/lib/page-stamp';
+import {
+  discardStampUndo,
+  StampError,
+  undoStamp,
+  type StampedPixels,
+  type StampSignal,
+  type StampUndo,
+} from '@/lib/page-stamp';
 import { postViewerNotice } from '@/lib/viewer-notice';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
 import { notifyError, notifySuccess } from '@/lib/haptics';
@@ -38,13 +50,27 @@ export class StampRenderError extends Error {
   }
 }
 
+/** A signal that reads aborted once the component using it has unmounted. */
+function useUnmountSignal(): { mounted: { current: boolean }; signal: StampSignal } {
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  const signal = useMemo<StampSignal>(() => ({ get aborted() { return !mounted.current; } }), []);
+  return { mounted, signal };
+}
+
 export function usePageStamper(): {
   host: ReactNode;
   stamp: (pageUri: string, origUri: string | null, spec: StampSpec) => Promise<StampedPixels>;
+  /** Aborted once the screen has closed: hand it to stampPages / stampCopy. */
+  signal: StampSignal;
 } {
   const [job, setJob] = useState<Job | null>(null);
   const jobRef = useRef<Job | null>(null);
   const nextId = useRef(1);
+  const { mounted, signal } = useUnmountSignal();
   // Calls made while a page is drawing queue behind it.
   const chain = useRef<Promise<unknown>>(Promise.resolve());
 
@@ -70,6 +96,12 @@ export function usePageStamper(): {
 
   const runOne = useCallback((pageUri: string, origUri: string | null, spec: StampSpec) =>
     new Promise<StampedPixels>((resolve, reject) => {
+      // Closed: there is no WebView to draw in any more. Fail now rather than
+      // after the timeout (the run then puts its pages back straight away).
+      if (!mounted.current) {
+        reject(new StampRenderError('closed'));
+        return;
+      }
       const id = nextId.current++;
       // The query defeats WebKit's image cache after an in-place rewrite.
       const bust = `?t=${Date.now()}`;
@@ -82,7 +114,7 @@ export function usePageStamper(): {
       const next: Job = { id, html, resolve, reject, timer };
       jobRef.current = next;
       setJob(next);
-    }), [settle]);
+    }), [settle, mounted]);
 
   const stamp = useCallback((pageUri: string, origUri: string | null, spec: StampSpec) => {
     const run = chain.current.then(() => runOne(pageUri, origUri, spec));
@@ -131,10 +163,10 @@ export function usePageStamper(): {
     </View>
   ) : null), [job, onMessage, onCrash]);
 
-  return { host, stamp };
+  return { host, stamp, signal };
 }
 
-/** Runs a stamp Undo from the viewer's toast and reports how it went there. */
+/** Runs a stamp Undo and reports how it went in the viewer. */
 async function runStampUndo(undo: StampUndo, undoneMessage: string): Promise<void> {
   try {
     await undoStamp(undo);
@@ -148,12 +180,43 @@ async function runStampUndo(undo: StampUndo, undoneMessage: string): Promise<voi
 }
 
 /**
+ * The one way Sign / Watermark / Timestamp report a failed run, so the message
+ * is always true:
+ * - cancelled (the screen closed mid-run; the pages were put back): nothing.
+ * - partial (some pages carry the mark and couldn't be put back): says which,
+ *   and offers to try putting them back again.
+ * - anything else: the run already put every page back, so the document is
+ *   unchanged (a StampError carries its own reason).
+ */
+export function reportStampFailure(err: unknown, title: string, undoneMessage = 'Change undone'): void {
+  if (err instanceof StampError && err.kind === 'cancelled') return;
+  notifyError();
+  if (err instanceof StampError && err.kind === 'partial') {
+    const undo = err.partial?.undo ?? null;
+    Alert.alert(
+      title,
+      err.message,
+      undo
+        ? [
+            { text: 'Keep', style: 'cancel', onPress: () => discardStampUndo(undo) },
+            { text: 'Put back', onPress: () => { runStampUndo(undo, undoneMessage); } },
+          ]
+        : undefined,
+    );
+    return;
+  }
+  if (!(err instanceof StampError)) console.error(`${title}:`, err);
+  Alert.alert(title, err instanceof StampError ? err.message : 'Your document is unchanged. Try again.');
+}
+
+/**
  * Where a Sign / Watermark / Timestamp screen goes when it's done: back to the
  * viewer it was opened from, or (from the Tools tab) to the document's viewer,
  * which then shows `message` — with Undo for an in-place change.
  */
 export function useStampFinish(fromViewer: boolean) {
   const router = useRouter();
+  const { mounted } = useUnmountSignal();
   return useCallback(
     (result: {
       docId: string;
@@ -170,14 +233,22 @@ export function useStampFinish(fromViewer: boolean) {
         message,
         page,
         action: undo ? { label: 'Undo', onPress: () => { runStampUndo(undo, undoneMessage); } } : undefined,
+        // Undo wasn't used (the toast went, or a newer notice replaced it):
+        // its copy of the pages is no longer needed.
+        onExpire: undo ? () => discardStampUndo(undo) : undefined,
       });
+      // This screen is already gone (closed as the run finished): navigating
+      // from here would close whatever is on top now — the viewer itself.
+      // The viewer shows the notice whenever it is next on top.
+      if (!mounted.current) return;
       navigateWhenUnlocked(() => {
+        if (!mounted.current) return;
         // In place from the viewer: it is right underneath, showing this document.
         if (fromViewer && !openCopy) router.back();
         else router.replace({ pathname: '/viewer', params: { id: docId } });
       });
     },
-    [fromViewer, router],
+    [fromViewer, router, mounted],
   );
 }
 

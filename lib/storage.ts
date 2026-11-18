@@ -20,6 +20,8 @@ const LEGACY_AI_KEY = '@scan_kit_ai_key';
 const FOLDERS_KEY = '@scan_kit_folders';
 const SCAN_SETTINGS_KEY = '@scan_kit_scan_settings';
 const DOC_SETTINGS_KEY = '@scan_kit_doc_settings';
+/** Ids of documents still being made (savePendingDocument): hidden, and purged at startup. */
+const PENDING_KEY = '@scan_kit_pending_docs';
 
 export type SortKey = 'dateAdded' | 'dateModified' | 'nameAZ';
 
@@ -231,8 +233,82 @@ async function getDocumentsUnlocked(): Promise<Document[]> {
 export function getDocuments(): Promise<Document[]> {
   return withDocsLock(async () => {
     await ensureMigrated();
-    return (await getDocumentsUnlocked()).filter(d => d.trashedAt == null);
+    const pending = new Set(await readPendingUnlocked());
+    return (await getDocumentsUnlocked()).filter(d => d.trashedAt == null && !pending.has(d.id));
   });
+}
+
+// ── Pending documents ────────────────────────────────────────────────────────
+// A document that is saved before it is finished (Sign / Watermark / Timestamp
+// "Save as a copy" draws into the copy's pages after creating it) is saved as
+// pending: getDocument finds it, so the work can run on it, but no list shows
+// it. commitPendingDocument makes it a normal document. A crash before that
+// leaves it pending, and the startup sweep (documentIdsForCleanup) deletes it,
+// so a half-made copy never shows up.
+
+async function readPendingUnlocked(): Promise<string[]> {
+  try {
+    const raw = await AsyncStorage.getItem(PENDING_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+async function writePendingUnlocked(ids: string[]): Promise<void> {
+  if (ids.length) await AsyncStorage.setItem(PENDING_KEY, JSON.stringify(ids));
+  else await AsyncStorage.removeItem(PENDING_KEY);
+}
+
+async function unmarkPendingUnlocked(ids: string[]): Promise<void> {
+  const pending = await readPendingUnlocked();
+  if (!pending.some(id => ids.includes(id))) return;
+  await writePendingUnlocked(pending.filter(id => !ids.includes(id)));
+}
+
+/** Saves a new document hidden and marked pending (see above). The mark is written first. */
+export function savePendingDocument(doc: Document): Promise<void> {
+  return withDocsLock(async () => {
+    await ensureMigrated();
+    const pending = await readPendingUnlocked();
+    if (!pending.includes(doc.id)) await writePendingUnlocked([...pending, doc.id]);
+    await AsyncStorage.setItem(docKey(doc.id), JSON.stringify(doc));
+    const index = await readIndex();
+    await writeIndex([doc.id, ...index.filter(id => id !== doc.id)]);
+  });
+}
+
+/**
+ * Makes a pending document a normal one, merging `patch` in under the same
+ * lock. False (and nothing written) when its record is gone.
+ */
+export function commitPendingDocument(id: string, patch: Partial<Document> = {}): Promise<boolean> {
+  return withDocsLock(async () => {
+    await ensureMigrated();
+    const raw = await AsyncStorage.getItem(docKey(id));
+    if (raw == null) return false;
+    try {
+      await AsyncStorage.setItem(docKey(id), JSON.stringify({ ...(JSON.parse(raw) as Document), ...patch, id }));
+    } catch {
+      return false;
+    }
+    await unmarkPendingUnlocked([id]);
+    return true;
+  }).then(ok => {
+    if (ok) notifyDocumentChanged(id);
+    return ok;
+  });
+}
+
+/** Deletes every pending document (record, then files). Caller holds withDocsLock. */
+async function purgePendingUnlocked(): Promise<string[]> {
+  const pending = await readPendingUnlocked();
+  if (!pending.length) return [];
+  await removeRecordsUnlocked(pending);
+  deleteFilesQuietly(pending);
+  await writePendingUnlocked([]);
+  return pending;
 }
 
 /** One live document by id, or null when it is missing or in the trash. */
@@ -359,6 +435,12 @@ export function documentIdsForCleanup(): Promise<string[] | null> {
       await purgeExpiredTrashUnlocked(TRASH_RETENTION_DAYS, Date.now());
     } catch (e) {
       console.warn('storage: trash purge failed', e);
+    }
+    try {
+      // Copies whose making was interrupted (see savePendingDocument).
+      await purgePendingUnlocked();
+    } catch (e) {
+      console.warn('storage: pending purge failed', e);
     }
     const index = await readIndex();
     let keys: readonly string[];
@@ -533,6 +615,7 @@ async function removeRecordsUnlocked(ids: string[]): Promise<void> {
   await AsyncStorage.multiRemove(ids.map(docKey));
   const index = await readIndex();
   await writeIndex(index.filter(x => !set.has(x)));
+  await unmarkPendingUnlocked(ids);
 }
 
 function deleteFilesQuietly(ids: string[]): void {
@@ -705,21 +788,13 @@ export async function pendingBakeMigrations(): Promise<
 }
 
 export function deleteDocument(id: string): Promise<void> {
-  return withDocsLock(async () => {
-    await ensureMigrated();
-    await AsyncStorage.removeItem(docKey(id));
-    const index = await readIndex();
-    await writeIndex(index.filter(x => x !== id));
-  });
+  return deleteDocuments([id]);
 }
 
 export function deleteDocuments(ids: string[]): Promise<void> {
   return withDocsLock(async () => {
     await ensureMigrated();
-    const set = new Set(ids);
-    await AsyncStorage.multiRemove(ids.map(docKey));
-    const index = await readIndex();
-    await writeIndex(index.filter(x => !set.has(x)));
+    await removeRecordsUnlocked(ids);
   });
 }
 

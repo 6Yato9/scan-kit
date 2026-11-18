@@ -5,6 +5,7 @@
 // makes the tools look like one product instead of fifteen.
 import { Children, createContext, Fragment, ReactNode, useCallback, useContext, useEffect, useState } from 'react';
 import {
+  BackHandler,
   Image,
   KeyboardAvoidingView,
   Platform,
@@ -15,7 +16,7 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/theme-context';
 import { PageThumb } from '@/components/page-thumb';
@@ -90,6 +91,7 @@ export function ToolScreen({
   scroll = true,
   scrollEnabled = true,
   right,
+  busy = false,
 }: {
   title: string;
   children: ReactNode;
@@ -99,8 +101,24 @@ export function ToolScreen({
   /** Temporarily lock scrolling (e.g. while drawing a signature). */
   scrollEnabled?: boolean;
   right?: ReactNode;
+  /**
+   * A change is being written to the document: the screen can't be closed
+   * (back/close dimmed, swipe-back and Android back off) until it finishes,
+   * so it is never left half-done (Sign / Watermark / Timestamp).
+   */
+  busy?: boolean;
 }) {
   const router = useRouter();
+  const navigation = useNavigation();
+  useEffect(() => {
+    if (!busy) return;
+    navigation.setOptions({ gestureEnabled: false });
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
+    return () => {
+      sub.remove();
+      navigation.setOptions({ gestureEnabled: true });
+    };
+  }, [busy, navigation]);
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
   // Opened on a specific document from the viewer, a tool is presented as a
@@ -117,6 +135,7 @@ export function ToolScreen({
         title={title}
         onBack={() => router.back()}
         backIcon={docId ? 'close' : 'back'}
+        backDisabled={busy}
         right={right}
       />
       {scroll ? (

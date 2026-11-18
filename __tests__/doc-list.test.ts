@@ -1,4 +1,4 @@
-import { compactMeta, matchesQuery, searchSnippet } from '../lib/doc-list';
+import { compactMeta, matchesQuery, searchSnippet, windowAround } from '../lib/doc-list';
 
 const doc = (name: string, ocrText?: string): any => ({ id: 'x', name, pages: [], ocrText, createdAt: 1, updatedAt: 1 });
 
@@ -39,6 +39,45 @@ describe('searchSnippet', () => {
     expect(s.length).toBeLessThanOrEqual(62);
     // Every word in the window is whole.
     for (const w of s.replace(/…/g, '').trim().split(' ')) expect(words).toContain(w);
+  });
+});
+
+describe('windowAround', () => {
+  const line = 'Payment is due within thirty days of the invoice date and late fees apply after that';
+
+  test('keeps the hit whole and near the middle of a narrow window', () => {
+    for (const max of [14, 18, 24, 30, 40]) {
+      const s = windowAround(line, 'invoice', max);
+      expect(s).toContain('invoice');
+      expect(Array.from(s).length).toBeLessThanOrEqual(Math.max(max, 'invoice'.length + 2));
+      const at = s.indexOf('invoice');
+      // Roughly centred: about as much before the hit as after it.
+      expect(Math.abs(at - (s.length - at - 'invoice'.length))).toBeLessThanOrEqual(max / 2);
+    }
+  });
+
+  test('ellipses mark both cut edges, and whole words only', () => {
+    const s = windowAround(line, 'invoice', 30);
+    expect(s.startsWith('…')).toBe(true);
+    expect(s.endsWith('…')).toBe(true);
+    for (const w of s.replace(/…/g, '').trim().split(' ')) expect(line.split(' ')).toContain(w);
+  });
+
+  test('a hit inside a word shows the whole word; short text is left alone', () => {
+    expect(windowAround(line, 'voic', 20)).toContain('invoice');
+    expect(windowAround('Tenant: Jane Doe', 'jane', 40)).toBe('Tenant: Jane Doe');
+  });
+
+  test('re-windowing an earlier snippet keeps its outer ellipses', () => {
+    const wide = windowAround(line, 'late', 50);
+    const narrow = windowAround(wide, 'late', 20);
+    expect(narrow).toContain('late');
+    expect(narrow.startsWith('…') && narrow.endsWith('…')).toBe(true);
+  });
+
+  test('a hit at the very start or end', () => {
+    expect(windowAround(line, 'payment', 20).startsWith('Payment')).toBe(true);
+    expect(windowAround(line, 'that', 20).endsWith('that')).toBe(true);
   });
 });
 

@@ -10,7 +10,6 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   View,
   useWindowDimensions,
@@ -20,6 +19,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
+import { AppSwitch } from '@/components/app-switch';
 import {
   NoDocumentsScreen,
   PagePreview,
@@ -33,9 +33,9 @@ import {
 } from '@/components/tool-ui';
 import { ToolDocPicker, useToolDoc } from '@/components/tool-doc';
 import { FilterBaker } from '@/components/filter-baker';
-import { usePageStamper, useStampFinish } from '@/components/page-stamper';
-import { copyName, PDF_NOT_LISTED_NOTE, stampCopy, stampPages, StampError, targetPages } from '@/lib/page-stamp';
-import { notifyError, notifySuccess, tapLight } from '@/lib/haptics';
+import { reportStampFailure, usePageStamper, useStampFinish } from '@/components/page-stamper';
+import { copyName, PDF_NOT_LISTED_NOTE, stampCopy, stampPages, targetPages } from '@/lib/page-stamp';
+import { notifySuccess, tapLight } from '@/lib/haptics';
 import {
   clampPlacement,
   defaultPlacement,
@@ -254,12 +254,12 @@ export default function SignScreen() {
     setProgress({ current: 0, total: pages.length });
     try {
       if (mode === 'copy') {
-        const copy = await stampCopy(doc, copyName(doc.name, 'signed'), pages, render, onProgress);
+        const copy = await stampCopy(doc, copyName(doc.name, 'signed'), pages, render, onProgress, stamper.signal);
         await rememberSignature(sig);
         notifySuccess();
         finish({ docId: copy.id, message: 'Signed copy saved. The original is unchanged.', page: pages[0], openCopy: true });
       } else {
-        const { undo } = await stampPages(doc.id, pages, render, { onProgress });
+        const { undo } = await stampPages(doc.id, pages, render, { onProgress, signal: stamper.signal });
         // Remembered for next time (moves up if it was a saved one already).
         await rememberSignature(sig);
         notifySuccess();
@@ -272,12 +272,8 @@ export default function SignScreen() {
         });
       }
     } catch (err) {
-      notifyError();
-      if (!(err instanceof StampError)) console.error('Sign failed', err);
-      Alert.alert(
-        'Couldn’t sign the document',
-        err instanceof StampError ? err.message : 'Your document is unchanged. Try again.',
-      );
+      // Says only what is true: cancelled (closed), partly done, or unchanged.
+      reportStampFailure(err, 'Couldn’t sign the document', 'Signature removed');
     } finally {
       setProgress(null);
     }
@@ -303,6 +299,7 @@ export default function SignScreen() {
   return (
     <ToolScreen
       title="Sign"
+      busy={!!progress}
       scrollEnabled={!drawing}
       footer={
         <>
@@ -365,12 +362,7 @@ export default function SignScreen() {
           </ScrollView>
           <View style={[styles.switchRow, { backgroundColor: colors.card }]}>
             <Text style={[Type.body, styles.flex, { color: colors.text }]}>Sign every page</Text>
-            <Switch
-              value={everyPage}
-              onValueChange={setEveryPage}
-              trackColor={{ true: colors.accentFill, false: colors.border }}
-              accessibilityLabel="Sign every page"
-            />
+            <AppSwitch value={everyPage} onValueChange={setEveryPage} accessibilityLabel="Sign every page" />
           </View>
         </>
       ) : null}

@@ -55,18 +55,42 @@ jest.mock('../lib/files', () => ({
     return pageUri(doc, i);
   },
   pageLayoutGeneration: () => mockLayout,
-  deleteDocumentFiles: jest.fn(),
+  deleteDocumentFiles: jest.fn((id: string) => {
+    for (const k of [...mockFs.keys()]) if (k.startsWith(`${root}/${id}/`)) mockFs.delete(k);
+  }),
+  copyDocumentFiles: (from: string, to: string, pages: string[]) =>
+    pages.map((_, i) => {
+      mockFs.set(pageUri(to, i), mockFs.get(pageUri(from, i))!);
+      if (mockFs.has(origUri(from, i))) mockFs.set(origUri(to, i), mockFs.get(origUri(from, i))!);
+      return pageUri(to, i);
+    }),
 }));
+jest.mock('expo-crypto', () => ({ randomUUID: () => 'copy1' }));
 jest.mock('../lib/image', () => ({ pageFileUri: (doc: string, i: number) => pageUri(doc, i) }));
 
 let mockDoc: any;
-const mockUpdate = jest.fn(async (d: any) => { mockDoc = d; return true; });
-const mockPatch = jest.fn(async (_id: string, p: any) => { mockDoc = { ...mockDoc, ...p }; return true; });
+// Other documents (a "Save as a copy" copy), and which of them are still pending.
+const mockOthers = new Map<string, any>();
+const mockPending = new Set<string>();
+const mockUpdate = jest.fn(async (d: any) => { if (d.id === 'd1') mockDoc = d; else mockOthers.set(d.id, d); return true; });
+const mockPatch = jest.fn(async (id: string, p: any) => {
+  if (id === 'd1') mockDoc = { ...mockDoc, ...p };
+  else if (mockOthers.has(id)) mockOthers.set(id, { ...mockOthers.get(id), ...p });
+  else return false;
+  return true;
+});
 jest.mock('../lib/storage', () => ({
-  getDocument: jest.fn(async () => mockDoc),
+  getDocument: jest.fn(async (id: string) => (id === 'd1' ? mockDoc : mockOthers.get(id) ?? null)),
   updateDocument: (d: any) => mockUpdate(d),
   patchDocument: (id: string, p: any) => mockPatch(id, p),
-  deleteDocument: jest.fn(async () => {}),
+  deleteDocument: jest.fn(async (id: string) => { mockOthers.delete(id); mockPending.delete(id); }),
+  savePendingDocument: jest.fn(async (d: any) => { mockPending.add(d.id); mockOthers.set(d.id, d); }),
+  commitPendingDocument: jest.fn(async (id: string, p: any) => {
+    if (!mockOthers.has(id)) return false;
+    mockPending.delete(id);
+    mockOthers.set(id, { ...mockOthers.get(id), ...p });
+    return true;
+  }),
 }));
 const mockEdits: unknown[] = [];
 const mockBakePage = jest.fn(async (..._args: unknown[]) => true);
@@ -78,9 +102,16 @@ jest.mock('../lib/bake', () => ({
 }));
 const mockIndex = jest.fn(async (..._args: unknown[]) => {});
 jest.mock('../lib/save-scan', () => ({ indexDocText: (...a: unknown[]) => mockIndex(...a) }));
-jest.mock('../lib/doc-ops', () => ({ duplicateDocument: jest.fn() }));
-
-import { lookOf, stampPages, StampError, targetPages, undoStamp } from '../lib/page-stamp';
+import {
+  lookOf,
+  pagesPhrase,
+  partialMessage,
+  stampCopy,
+  stampPages,
+  StampError,
+  targetPages,
+  undoStamp,
+} from '../lib/page-stamp';
 
 /** A fake renderer: "draws" the mark by tagging the bytes it was given. */
 const render = jest.fn(async (page: string, orig: string | null) => ({
@@ -88,11 +119,15 @@ const render = jest.fn(async (page: string, orig: string | null) => ({
   orig: orig ? `data:image/jpeg;base64,SIGNED(${mockFs.get(orig)})` : null,
 }));
 
+const baseRender = render.getMockImplementation()!;
+
 beforeEach(() => {
   jest.clearAllMocks();
   mockFs.clear();
   mockLayout = 0;
   mockEdits.length = 0;
+  mockOthers.clear();
+  mockPending.clear();
   for (let i = 0; i < 3; i++) mockFs.set(pageUri('d1', i), `page${i}-enhanced`);
   mockFs.set(origUri('d1', 1), 'page1-raw');
   mockFs.set(origUri('d1', 2), 'page2-raw');
@@ -196,4 +231,132 @@ test('without undo nothing is stashed (Save as a copy)', async () => {
 test('lookOf tells a re-filtered page apart', () => {
   expect(lookOf(mockDoc, 1)).not.toBe(lookOf({ ...mockDoc, filters: ['original', 'bw', 'bw'] }, 1));
   expect(lookOf({}, 0)).toBe(JSON.stringify(['original', null]));
+});
+
+const stashKeys = () => [...mockFs.keys()].filter(k => k.includes('stamp-undo'));
+
+describe('closing the screen mid-run (r9 code #1)', () => {
+  test('a cancelled run puts back the pages it did and says so with kind cancelled', async () => {
+    const signal = { aborted: false };
+    render.mockImplementationOnce(render.getMockImplementation()!);
+    // The screen closes while page 2 is being drawn: the stamper fails it.
+    render.mockImplementationOnce(async () => { signal.aborted = true; throw new Error('closed'); });
+    await expect(stampPages('d1', [0, 1, 2], render, { signal })).rejects.toMatchObject({ kind: 'cancelled' });
+    expect(mockFs.get(pageUri('d1', 0))).toBe('page0-enhanced');
+    expect(mockFs.get(pageUri('d1', 1))).toBe('page1-enhanced');
+    expect(stashKeys()).toEqual([]);
+  });
+
+  test('closed while the last page was written: the whole change goes back', async () => {
+    const signal = { aborted: false };
+    render.mockImplementationOnce(render.getMockImplementation()!);
+    render.mockImplementationOnce(async (page: string, orig: string | null) => {
+      const out = await render.getMockImplementation()!(page, orig);
+      signal.aborted = true; // closed after drawing, before / while writing
+      return out;
+    });
+    await expect(stampPages('d1', [0, 1], render, { signal })).rejects.toMatchObject({ kind: 'cancelled' });
+    expect(mockFs.get(pageUri('d1', 0))).toBe('page0-enhanced');
+    expect(mockFs.get(pageUri('d1', 1))).toBe('page1-enhanced');
+    expect(mockFs.get(origUri('d1', 1))).toBe('page1-raw');
+  });
+
+  test('already closed: nothing is drawn or stashed', async () => {
+    await expect(stampPages('d1', [0], render, { signal: { aborted: true } })).rejects.toMatchObject({ kind: 'cancelled' });
+    expect(render).not.toHaveBeenCalled();
+    expect(stashKeys()).toEqual([]);
+  });
+
+  test('a second run started while the first rolls back waits for it, and keeps its stash intact', async () => {
+    let failFirst!: (e: Error) => void;
+    render.mockImplementationOnce(render.getMockImplementation()!);
+    render.mockImplementationOnce(() => new Promise((_, reject) => { failFirst = reject; }));
+    const first = stampPages('d1', [0, 1, 2], render);
+    await new Promise(r => setTimeout(r, 0));
+    expect(mockFs.get(pageUri('d1', 0))).toBe('b64:SIGNED(page0-enhanced)');
+    // A watermark started now must not see (or stash) the half-signed page 0.
+    const second = stampPages('d1', [0], render);
+    await new Promise(r => setTimeout(r, 0));
+    expect(render).toHaveBeenCalledTimes(2);
+    failFirst(new Error('closed'));
+    await expect(first).rejects.toThrow('closed');
+    const { undo } = await second;
+    // The first rolled back cleanly (its stash was there), the second drew on the clean page.
+    expect(mockFs.get(pageUri('d1', 0))).toBe('b64:SIGNED(page0-enhanced)');
+    expect(mockFs.get(pageUri('d1', 1))).toBe('page1-enhanced');
+    // And the second's Undo goes back to the clean page, not the half-signed one.
+    await undoStamp(undo!);
+    expect(mockFs.get(pageUri('d1', 0))).toBe('page0-enhanced');
+  });
+
+  test('a new run never deletes an earlier run’s Undo', async () => {
+    const a = await stampPages('d1', [0], render);
+    const b = await stampPages('d1', [1], render);
+    expect(a.undo!.dir).not.toBe(b.undo!.dir);
+    await undoStamp(a.undo!);
+    expect(mockFs.get(pageUri('d1', 0))).toBe('page0-enhanced');
+    expect(mockFs.get(pageUri('d1', 1))).toBe('b64:SIGNED(page1-enhanced)');
+  });
+});
+
+describe('a rollback that fails is reported truthfully (r9 code #2)', () => {
+  test('kind partial names the changed pages and keeps their stash', async () => {
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    render.mockImplementationOnce(render.getMockImplementation()!);
+    render.mockImplementationOnce(async (page: string, orig: string | null) => {
+      mockLayout = 1; // pages reordered meanwhile: neither the write nor the rollback may go on
+      return render.getMockImplementation()!(page, orig);
+    });
+    const err = await stampPages('d1', [0, 1, 2], render).catch(e => e);
+    expect(err).toBeInstanceOf(StampError);
+    expect(err.kind).toBe('partial');
+    expect(err.message).toBe('Page 1 was changed before the error and couldn’t be put back. The other pages weren’t changed.');
+    expect(err.message).not.toMatch(/unchanged/);
+    expect(err.partial.changed).toEqual([0]);
+    expect(err.partial.undo.pages.map((p: any) => p.index)).toEqual([0]);
+    expect(mockFs.has(err.partial.undo.pages[0].stash)).toBe(true);
+    // Once the pages are back where they were, putting them back works.
+    mockLayout = 0;
+    await undoStamp(err.partial.undo);
+    expect(mockFs.get(pageUri('d1', 0))).toBe('page0-enhanced');
+  });
+
+  test('messages', () => {
+    expect(pagesPhrase([1])).toBe('page 2');
+    expect(pagesPhrase([2, 0])).toBe('pages 1 and 3');
+    expect(pagesPhrase([0, 1, 3])).toBe('pages 1, 2 and 4');
+    expect(partialMessage([0, 1], 2)).toBe('Pages 1 and 2 were changed before the error and couldn’t be put back.');
+  });
+});
+
+describe('Save as a copy (r9 code #4)', () => {
+  test('the copy is pending (hidden) until every page carries the mark', async () => {
+    const storage = jest.requireMock('../lib/storage');
+    const pendingWhileDrawing: boolean[] = [];
+    render.mockImplementation(async (page: string, orig: string | null) => {
+      pendingWhileDrawing.push(mockPending.has('copy1'));
+      return {
+        page: `data:image/jpeg;base64,SIGNED(${mockFs.get(page)})`,
+        orig: orig ? `data:image/jpeg;base64,SIGNED(${mockFs.get(orig)})` : null,
+      };
+    });
+    const copy = await stampCopy(mockDoc, 'Lease (signed)', [0, 1], render);
+    expect(storage.savePendingDocument).toHaveBeenCalledTimes(1);
+    expect(pendingWhileDrawing).toEqual([true, true]);
+    expect(mockPending.has('copy1')).toBe(false);
+    expect(copy.name).toBe('Lease (signed)');
+    expect(mockFs.get(pageUri('copy1', 1))).toBe('b64:SIGNED(page1-enhanced)');
+    expect(mockFs.get(origUri('copy1', 1))).toBe('b64:SIGNED(page1-raw)');
+    // The original is untouched.
+    expect(mockFs.get(pageUri('d1', 1))).toBe('page1-enhanced');
+    render.mockImplementation(baseRender);
+  });
+
+  test('a failure removes the copy (record and files)', async () => {
+    render.mockImplementationOnce(render.getMockImplementation()!);
+    render.mockImplementationOnce(async () => { throw new Error('webview died'); });
+    await expect(stampCopy(mockDoc, 'Lease (signed)', [0, 1], render)).rejects.toThrow('webview died');
+    expect(mockOthers.has('copy1')).toBe(false);
+    expect([...mockFs.keys()].some(k => k.includes('/copy1/'))).toBe(false);
+  });
 });

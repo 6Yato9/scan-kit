@@ -12,6 +12,7 @@ import { useToast } from '@/components/toast';
 import type { Document } from '@/types/document';
 import { authenticate, biometricKind, BiometricKind, canAuthenticate } from '@/lib/biometrics';
 import { tapLight } from '@/lib/haptics';
+import { FILES_COPY_AVAILABLE, getFilesCopyEnabled, removeFilesCopies, setFilesCopyEnabled } from '@/lib/files-copy';
 import { useTheme } from '@/contexts/theme-context';
 import { LargeTitle } from '@/components/screen-header';
 import { SectionLabel } from '@/components/section-label';
@@ -75,6 +76,37 @@ export default function SettingsScreen() {
   }, [toast]);
 
   useEffect(() => { biometricKind().then(setLockKind); }, []);
+
+  // Keep a copy in Files: a searchable PDF of every document in the app's
+  // folder in the Files app, kept up to date (lib/files-copy.ts).
+  const [filesCopy, setFilesCopy] = useState(false);
+  useEffect(() => { getFilesCopyEnabled().then(setFilesCopy); }, []);
+  const handleToggleFilesCopy = (next: boolean) => {
+    tapLight();
+    setFilesCopy(next);
+    if (next) {
+      setFilesCopyEnabled(true)
+        .then(() => toast.show('Saving your documents to Files'))
+        .catch(() => {
+          setFilesCopy(false);
+          Alert.alert('Couldn’t turn this on', 'Try again.');
+        });
+      return;
+    }
+    void setFilesCopyEnabled(false);
+    Alert.alert('Remove the copies from Files?', 'Your documents in Scan Kit stay as they are.', [
+      { text: 'Keep copies', style: 'cancel' },
+      {
+        text: 'Remove copies',
+        style: 'destructive',
+        onPress: () => {
+          removeFilesCopies()
+            .then(n => toast.show(n === 1 ? 'Removed 1 copy from Files' : `Removed ${n} copies from Files`))
+            .catch(() => Alert.alert('Couldn’t remove the copies', 'Delete them in the Files app instead.'));
+        },
+      },
+    ]);
+  };
 
   useFocusEffect(useCallback(() => {
     let cancelled = false;
@@ -173,6 +205,16 @@ export default function SettingsScreen() {
               accessory={{ type: 'chevron' }}
               onPress={openExportAll}
             />
+            {FILES_COPY_AVAILABLE && <SettingsRow
+              icon="copy-outline"
+              label="Keep a copy in Files"
+              description={
+                appLock
+                  ? 'A PDF of every document in the Files app, kept up to date. App lock doesn’t cover it.'
+                  : 'A PDF of every document in the Files app, kept up to date'
+              }
+              accessory={{ type: 'switch', value: filesCopy, onChange: handleToggleFilesCopy }}
+            />}
             <SettingsRow
               icon="trash-outline"
               label="Recently deleted"

@@ -26,8 +26,75 @@ export function matchesQuery(d: Document, q: string): boolean {
   return foldForSearch(d.name).includes(query) || (!!d.ocrText && foldForSearch(d.ocrText).includes(query));
 }
 
-/** Longest snippet shown under a result; the row truncates anything wider anyway. */
+/**
+ * Longest snippet handed to a result row. The row then windows it again to
+ * the width it actually has (`windowAround`), keeping the hit in the middle.
+ */
 const SNIPPET_MAX = 90;
+
+/** Maps each character of `text` to its folded form, with an index back. */
+function foldWithOwners(chars: string[]): { folded: string; owner: number[] } {
+  const owner: number[] = [];
+  const folded = chars
+    .map((c, i) => {
+      const f = foldForSearch(c);
+      for (let k = 0; k < f.length; k++) owner.push(i);
+      return f;
+    })
+    .join('');
+  return { folded, owner };
+}
+
+/**
+ * A window of at most `max` characters (ellipses included) of `text` with the
+ * first hit of `query` in the middle: "…net 30 days. Invoice total…". Whole
+ * words only at both cut edges, and a leading or trailing "…" already on
+ * `text` (an earlier, wider window) is kept. When the query isn't found the
+ * window covers the first of its words that is, else the start of the text.
+ * Used for search snippets, so the matched word is never cut off by the
+ * row's tail truncation however narrow the row is.
+ */
+export function windowAround(text: string, query: string, max: number): string {
+  let body = text;
+  const lead = body.startsWith('…');
+  const trail = body.endsWith('…') && body.length > 1;
+  if (lead) body = body.slice(1);
+  if (trail) body = body.slice(0, -1);
+  const chars = Array.from(body);
+  const room = Math.max(4, Math.floor(max));
+  if (chars.length + (lead ? 1 : 0) + (trail ? 1 : 0) <= room) return text;
+
+  const { folded, owner } = foldWithOwners(chars);
+  const q = foldForSearch(query.trim());
+  let at = q ? folded.indexOf(q) : -1;
+  let len = q.length;
+  if (at < 0) {
+    for (const term of q.split(/\s+/).filter(Boolean)) {
+      const i = folded.indexOf(term);
+      if (i >= 0) { at = i; len = term.length; break; }
+    }
+  }
+  const hitStart = at >= 0 ? owner[at] : 0;
+  const hitEnd = at >= 0 ? owner[Math.min(at + len, owner.length) - 1] + 1 : 0;
+
+  // Two characters for the ellipses either side; the hit sits in the middle.
+  const span = Math.max(1, room - 2);
+  let start = Math.max(0, hitStart - Math.floor((span - (hitEnd - hitStart)) / 2));
+  if (start > hitStart) start = hitStart; // a hit wider than the window starts it
+  const end = Math.min(chars.length, start + span);
+  start = Math.max(0, Math.min(start, end - span, hitStart));
+  // Don't cut a word in half at either edge (never moving past the hit).
+  // A hit inside a word ("voice" in "invoice") shows that whole word.
+  let wordStart = hitStart;
+  while (wordStart > 0 && chars[wordStart - 1] !== ' ') wordStart--;
+  let from = Math.min(start, wordStart);
+  while (from > 0 && from < wordStart && chars[from - 1] !== ' ') from++;
+  let stop = end;
+  while (stop < chars.length && stop > hitEnd && chars[stop] !== ' ') stop--;
+  if (stop < chars.length && stop <= hitEnd) stop = end;
+  const out = chars.slice(from, stop).join('').trim();
+  return `${from > 0 || lead ? '…' : ''}${out}${stop < chars.length || trail ? '…' : ''}`;
+}
 
 /**
  * Why a document matched a search, when it matched on its text rather than
@@ -43,32 +110,8 @@ export function searchSnippet(d: Document, q: string, max = SNIPPET_MAX): string
   for (const raw of d.ocrText.split(/\r?\n/)) {
     const line = raw.replace(/\s+/g, ' ').trim();
     if (!line) continue;
-    // Fold character by character so a hit's index maps back to the line.
-    const chars = Array.from(line);
-    const owner: number[] = [];
-    const folded = chars
-      .map((c, i) => {
-        const f = foldForSearch(c);
-        for (let k = 0; k < f.length; k++) owner.push(i);
-        return f;
-      })
-      .join('');
-    const at = folded.indexOf(query);
-    if (at < 0) continue;
-    if (chars.length <= max) return line;
-
-    // Window around the hit: a little context before, the rest after.
-    const hitStart = owner[at];
-    const hitEnd = owner[Math.min(at + query.length, owner.length) - 1] + 1;
-    let start = Math.max(0, hitStart - Math.floor((max - (hitEnd - hitStart)) / 3));
-    const end = Math.min(chars.length, start + max);
-    start = Math.max(0, end - max);
-    // Don't cut a word in half at either edge.
-    while (start > 0 && start < hitStart && chars[start - 1] !== ' ') start++;
-    let stop = end;
-    while (stop < chars.length && stop > hitEnd && chars[stop] !== ' ') stop--;
-    const body = chars.slice(start, stop).join('').trim();
-    return `${start > 0 ? '…' : ''}${body}${stop < chars.length ? '…' : ''}`;
+    if (!foldWithOwners(Array.from(line)).folded.includes(query)) continue;
+    return windowAround(line, q, max);
   }
   // The query spans a line break: the text matched, but no single line does.
   return undefined;

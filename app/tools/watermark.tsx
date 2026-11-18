@@ -3,7 +3,7 @@
 // pages, so they stay searchable and re-filterable; the viewer offers Undo —
 // lib/page-stamp.ts), or on a copy with "Save as a copy".
 import { useEffect, useState } from 'react';
-import { Alert, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import { StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
@@ -20,9 +20,9 @@ import {
 } from '@/components/tool-ui';
 import { ToolDocPicker, useToolDoc } from '@/components/tool-doc';
 import { FilterBaker } from '@/components/filter-baker';
-import { usePageStamper, useStampFinish } from '@/components/page-stamper';
-import { copyName, PDF_NOT_LISTED_NOTE, stampCopy, stampPages, StampError, targetPages } from '@/lib/page-stamp';
-import { notifyError, notifySuccess } from '@/lib/haptics';
+import { reportStampFailure, usePageStamper, useStampFinish } from '@/components/page-stamper';
+import { copyName, PDF_NOT_LISTED_NOTE, stampCopy, stampPages, targetPages } from '@/lib/page-stamp';
+import { notifySuccess } from '@/lib/haptics';
 import {
   STAMP_RGB,
   WATERMARK_ANGLE,
@@ -46,7 +46,7 @@ const COLORS: { value: StampColor; label: string }[] = [
 
 export default function WatermarkScreen() {
   const { colors } = useTheme();
-  const { width: screenW } = useWindowDimensions();
+  const { width: screenW, height: screenH } = useWindowDimensions();
   const { docs, loaded } = useToolDocuments();
   const [text, setText] = useState('CONFIDENTIAL');
   const [style, setStyle] = useState<WatermarkStyle>('diagonal');
@@ -74,11 +74,11 @@ export default function WatermarkScreen() {
     setProgress({ current: 0, total: pages.length });
     try {
       if (mode === 'copy') {
-        const copy = await stampCopy(doc, copyName(doc.name, 'watermarked'), pages, render, onProgress);
+        const copy = await stampCopy(doc, copyName(doc.name, 'watermarked'), pages, render, onProgress, stamper.signal);
         notifySuccess();
         finish({ docId: copy.id, message: 'Watermarked copy saved. The original is unchanged.', openCopy: true });
       } else {
-        const { undo } = await stampPages(doc.id, pages, render, { onProgress });
+        const { undo } = await stampPages(doc.id, pages, render, { onProgress, signal: stamper.signal });
         notifySuccess();
         finish({
           docId: doc.id,
@@ -88,12 +88,8 @@ export default function WatermarkScreen() {
         });
       }
     } catch (err) {
-      notifyError();
-      if (!(err instanceof StampError)) console.error('Watermark failed', err);
-      Alert.alert(
-        'Couldn’t add the watermark',
-        err instanceof StampError ? err.message : 'Your document is unchanged. Try again.',
-      );
+      // Says only what is true: cancelled (closed), partly done, or unchanged.
+      reportStampFailure(err, 'Couldn’t add the watermark', 'Watermark removed');
     } finally {
       setProgress(null);
     }
@@ -109,13 +105,18 @@ export default function WatermarkScreen() {
     );
   }
 
-  // Small enough that the text and style controls stay above the fold.
-  const previewW = Math.min(screenW * 0.5, 220);
+  // Small enough that the text and style controls stay above the fold, also
+  // with the two-button footer (Add watermark, Save as a copy): the page's
+  // height is capped as well as its width, so a tall page doesn't push Style
+  // under the footer.
+  const previewMaxH = Math.round(screenH * 0.25);
+  const previewW = Math.min(screenW * 0.5, 220, previewMaxH / aspect);
   const [r, g, b] = STAMP_RGB[color];
 
   return (
     <ToolScreen
       title="Watermark"
+      busy={!!progress}
       footer={
         <>
           {progress ? (

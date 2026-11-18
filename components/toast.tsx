@@ -35,11 +35,18 @@ export const ACTION_VISIBLE_MS_SCREEN_READER = 10000;
 export function ToastProvider({
   children,
   offset = 140,
+  top = null,
   onChrome = false,
 }: {
   children: ReactNode;
   /** Distance above the bottom safe area. Raise it to clear a screen's own bottom bar. */
   offset?: number;
+  /**
+   * When set, the toast's top edge sits at this window y instead (it then
+   * covers what is below that line, never what is above it). The viewer pins
+   * it to its page counter row so a toast never covers the page.
+   */
+  top?: number | null;
   /**
    * Over the always-dark viewer chrome: the chrome's own raised pill with a
    * hairline edge, matching the viewer's other overlays in both themes.
@@ -118,7 +125,8 @@ export function ToastProvider({
           pointerEvents={action ? 'box-none' : 'none'}
           style={[
             styles.wrapper,
-            { bottom: insets.bottom + offset, opacity, transform: [{ translateY }] },
+            top !== null ? { top } : { bottom: insets.bottom + offset },
+            { opacity, transform: [{ translateY }] },
           ]}
         >
           <View

@@ -84,6 +84,7 @@ export function ScreenHeader({
   dark = false,
   withInset = true,
   fillLeft = false,
+  backDisabled = false,
 }: {
   title?: string;
   /** Renders a back (or close) button in the left slot. */
@@ -103,6 +104,8 @@ export function ScreenHeader({
    * title). For a left-aligned document title next to a few actions (viewer).
    */
   fillLeft?: boolean;
+  /** Show the back/close button dimmed and inert (e.g. while a change is being written). */
+  backDisabled?: boolean;
 }) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
@@ -117,6 +120,7 @@ export function ScreenHeader({
         onPress={onBack}
         label={backIcon === 'close' ? 'Close' : backLabel}
         color={fg}
+        disabled={backDisabled}
       />
     ) : null);
 

@@ -3,7 +3,7 @@
 // document itself (drawn into the pages, so they stay searchable and
 // re-filterable; the viewer offers Undo — lib/page-stamp.ts), or of a copy.
 import { useEffect, useState } from 'react';
-import { Alert, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
 import {
@@ -19,9 +19,9 @@ import {
 } from '@/components/tool-ui';
 import { ToolDocPicker, useToolDoc } from '@/components/tool-doc';
 import { FilterBaker } from '@/components/filter-baker';
-import { usePageStamper, useStampFinish } from '@/components/page-stamper';
-import { copyName, PDF_NOT_LISTED_NOTE, stampCopy, stampPages, StampError, targetPages } from '@/lib/page-stamp';
-import { notifyError, notifySuccess } from '@/lib/haptics';
+import { reportStampFailure, usePageStamper, useStampFinish } from '@/components/page-stamper';
+import { copyName, PDF_NOT_LISTED_NOTE, stampCopy, stampPages, targetPages } from '@/lib/page-stamp';
+import { notifySuccess } from '@/lib/haptics';
 import {
   CORNER_INSET,
   TIMESTAMP_FONT_FRACTION,
@@ -71,11 +71,11 @@ export default function TimestampScreen() {
     setProgress({ current: 0, total: pages.length });
     try {
       if (mode === 'copy') {
-        const copy = await stampCopy(doc, copyName(doc.name, 'timestamped'), pages, render, onProgress);
+        const copy = await stampCopy(doc, copyName(doc.name, 'timestamped'), pages, render, onProgress, stamper.signal);
         notifySuccess();
         finish({ docId: copy.id, message: 'Timestamped copy saved. The original is unchanged.', openCopy: true });
       } else {
-        const { undo } = await stampPages(doc.id, pages, render, { onProgress });
+        const { undo } = await stampPages(doc.id, pages, render, { onProgress, signal: stamper.signal });
         notifySuccess();
         finish({
           docId: doc.id,
@@ -85,12 +85,8 @@ export default function TimestampScreen() {
         });
       }
     } catch (err) {
-      notifyError();
-      if (!(err instanceof StampError)) console.error('Timestamp failed', err);
-      Alert.alert(
-        'Couldn’t add the timestamp',
-        err instanceof StampError ? err.message : 'Your document is unchanged. Try again.',
-      );
+      // Says only what is true: cancelled (closed), partly done, or unchanged.
+      reportStampFailure(err, 'Couldn’t add the timestamp', 'Timestamp removed');
     } finally {
       setProgress(null);
     }
@@ -112,6 +108,7 @@ export default function TimestampScreen() {
   return (
     <ToolScreen
       title="Timestamp"
+      busy={!!progress}
       footer={
         <>
           {progress ? (

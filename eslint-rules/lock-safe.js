@@ -71,6 +71,7 @@ const PRESENTER_METHODS = new Set([
   'saveToLibraryAsync', // expo-media-library
   'createAssetAsync', // expo-media-library
   'showShareActionSheetWithOptions', // ActionSheetIOS
+  'shareFiles', // modules/vision-ocr native multi-file share
 ]);
 const PRESENTER_IMPORTS = {
   'expo-sharing': new Set(['shareAsync']),

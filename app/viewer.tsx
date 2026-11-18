@@ -104,6 +104,9 @@ const DEFAULT_ADJ: PageAdjustment = { brightness: 0, contrast: 0, saturation: 0 
 const isDefaultAdj = (a: PageAdjustment | undefined) =>
   !a || (a.brightness === 0 && a.contrast === 0 && a.saturation === 0);
 
+/** Height a two-line toast needs below its top edge, plus a margin. */
+const TOAST_ROOM = 66;
+
 type OcrState = { status: 'running' } | { status: 'done'; text: string };
 
 /**
@@ -118,13 +121,16 @@ export default function ViewerScreen() {
   // ever end up above it (work that finished while locked), it draws the lock
   // itself, so a document is never usable without unlocking (lock-gate.tsx).
   const locked = useAppLocked();
+  // Window y of the page counter row: toasts start there, over the counter
+  // and the controls below it, never over the page (null until laid out).
+  const [toastTop, setToastTop] = useState<number | null>(null);
   // The viewer is always dark, so everything it presents (the … menu, export,
   // move to folder, recognized text) uses the dark palette too: a bright sheet
   // sliding over the dark page reads as a different app.
   return (
     <DarkThemeScope>
-      <ToastProvider onChrome offset={266}>
-        <ViewerContent rootToast={rootToast} />
+      <ToastProvider onChrome offset={266} top={toastTop}>
+        <ViewerContent rootToast={rootToast} onToastAnchor={setToastTop} />
       </ToastProvider>
       {locked && (
         <View style={StyleSheet.absoluteFill} testID="viewer-lock">
@@ -135,11 +141,17 @@ export default function ViewerScreen() {
   );
 }
 
-function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }) {
+function ViewerContent({
+  rootToast,
+  onToastAnchor,
+}: {
+  rootToast: ReturnType<typeof useToast>;
+  onToastAnchor: (top: number) => void;
+}) {
   // `notice`: a message from the screen that opened this one (a tool's "Signed
   // copy saved"). The viewer covers the app-wide toast host, so it shows it.
   const { id, notice } = useLocalSearchParams<{ id: string; notice?: string }>();
-  const { width: screenWidth } = useWindowDimensions();
+  const { width: screenWidth, height: windowH } = useWindowDimensions();
   const { colors } = useTheme();
   const [document, setDocument] = useState<Document | null>(null);
   // 'loading' until the first read; 'missing' when the document is gone.
@@ -177,6 +189,15 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const toast = useToast();
+  // The page counter row (image pages or PDF): ViewerScreen pins toasts to it.
+  const counterRowRef = useRef<View>(null);
+  const anchorToast = useCallback(() => {
+    counterRowRef.current?.measureInWindow((_x, y) => {
+      // Never so low that a two-line toast would run off the screen (it may
+      // cover the home indicator, never the page).
+      if (Number.isFinite(y) && y > 0) onToastAnchor(Math.min(y, windowH - TOAST_ROOM));
+    });
+  }, [onToastAnchor, windowH]);
   const { bumpLastSaved } = useScan();
 
   const docRef = useRef<Document | null>(null);
@@ -240,6 +261,15 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
     toast.show(notice);
   }, [notice, status, toast]);
 
+  // The page a notice asked for, while the pager may not have laid out yet.
+  const jumpTo = useRef<number | null>(null);
+  const jumpTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (jumpTimer.current) clearTimeout(jumpTimer.current); }, []);
+  const applyJump = useCallback(() => {
+    const target = jumpTo.current;
+    if (target != null) flatListRef.current?.scrollToOffset({ offset: target * screenWidth, animated: false });
+  }, [screenWidth]);
+
   // A tool that changed this document in place (Sign, Watermark, Timestamp)
   // leaves its message, often with Undo, for whichever viewer shows the
   // document next (lib/viewer-notice). Taken only while this screen is on top,
@@ -254,14 +284,19 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
         if (n.page != null && n.page >= 0 && n.page < count) {
           const target = n.page;
           setCurrentPage(target);
-          // After the pager has laid out the (possibly reloaded) pages.
-          requestAnimationFrame(() => flatListRef.current?.scrollToIndex({ index: target, animated: false }));
+          // Kept until the pager has laid out far enough to show it (a viewer
+          // just opened has no layout yet, and a scroll asked for then is
+          // dropped): tried now, and again as the pager's content arrives.
+          jumpTo.current = target;
+          if (jumpTimer.current) clearTimeout(jumpTimer.current);
+          jumpTimer.current = setTimeout(() => { jumpTo.current = null; }, 1500);
+          requestAnimationFrame(() => applyJump());
         }
         toast.show(n.message, n.action ? { action: n.action } : undefined);
       };
       show();
       return subscribeViewerNotices(show);
-    }, [id, status, toast]),
+    }, [id, status, toast, applyJump]),
   );
 
   // Imported PDFs: read their embedded text into the search index the first
@@ -1243,8 +1278,9 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
           { key: 'duplicate', icon: 'duplicate-outline', label: 'Duplicate', onPress: handleDuplicate },
         ],
         [
-          // Retake is a per-page action: it lives in the page menu (touch and
-          // hold a thumbnail), where it is clear which page it replaces.
+          // Page actions name the page they act on, like Delete page N below
+          // (the same actions are in the thumbnail's touch-and-hold menu).
+          { key: 'retake', icon: 'camera-reverse-outline', label: pageCount > 1 ? `Retake page ${page + 1}` : 'Retake page', onPress: () => handleRetake(page) },
           // A one-page document as an image is Export, JPEG image.
           ...(pageCount > 1
             ? [{ key: 'share-page', icon: 'image-outline' as const, label: `Share ${pageLabel} as image`, onPress: handleSharePage }]
@@ -1357,7 +1393,12 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
               }}
             />
             {/* The same counter as image pages, in its own row under the pages. */}
-            <View style={[styles.counterRow, { paddingBottom: insets.bottom + Spacing.xs }]} pointerEvents="none">
+            <View
+              ref={counterRowRef}
+              onLayout={anchorToast}
+              style={[styles.counterRow, styles.counterRowFixed, { paddingBottom: insets.bottom + Spacing.xs }]}
+              pointerEvents="none"
+            >
               {pdfPage && pdfPage.count > 1 ? (
                 <View style={[styles.counter, { backgroundColor: colors.chromeRaised }]}>
                   <Text style={[Type.footnote, styles.counterText, { color: colors.chromeText }]}>
@@ -1420,6 +1461,11 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
           horizontal
           pagingEnabled
           showsHorizontalScrollIndicator={false}
+          // A notice's page (see applyJump), once the content is wide enough to show it.
+          onContentSizeChange={w => {
+            if (jumpTo.current != null && w >= (jumpTo.current + 1) * screenWidth - 1) applyJump();
+          }}
+          onScrollBeginDrag={() => { jumpTo.current = null; }}
           onMomentumScrollEnd={e => {
             const next = Math.round(e.nativeEvent.contentOffset.x / screenWidth);
             if (next !== pageRef.current) flushAdjust();
@@ -1451,7 +1497,7 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
       {/* Its own row under the page, never on top of it: the page counter and,
           while pages are being enhanced, the "Enhancing…" pill beside it. The
           row keeps its height when both are hidden, so the page never jumps. */}
-      <View style={[styles.counterRow, styles.counterRowFixed]} pointerEvents="none">
+      <View ref={counterRowRef} onLayout={anchorToast} style={[styles.counterRow, styles.counterRowFixed]} pointerEvents="none">
         <BakeIndicator placement="inline" />
         {pageCount > 1 ? (
           <View style={[styles.counter, { backgroundColor: colors.chromeRaised }]}>

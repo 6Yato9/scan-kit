@@ -84,7 +84,7 @@ export default function BookScreen() {
         text="Capture an open book one spread at a time. Each spread becomes two pages."
         points={[
           { icon: 'phone-portrait-outline', text: 'Hold the phone level above the open book, with both pages in view.' },
-          { icon: 'git-compare-outline', text: 'Each spread is split down the middle into a left and a right page.' },
+          { icon: 'cut-outline', text: 'Each spread is split down the middle into a left and a right page.' },
           { icon: 'documents-outline', text: 'All spreads are saved, in order, as one document.' },
         ]}
       />

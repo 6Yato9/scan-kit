@@ -1,6 +1,6 @@
 // app/_layout.tsx
 import { useEffect, useRef, useState } from 'react';
-import { AppState, StatusBar as RNStatusBar, useColorScheme } from 'react-native';
+import { AppState, LogBox, StatusBar as RNStatusBar, useColorScheme } from 'react-native';
 import { Stack, usePathname, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -26,6 +26,16 @@ import { documentFileRefsForCleanup, documentIdsForCleanup, getOnboarded, getOnb
 export const unstable_settings = {
   anchor: '(tabs)',
 };
+
+// Dev-only warning from a library race, not from app code: native-stack
+// (@react-navigation/native-stack 7.14 onHeaderHeightChange) and
+// react-native-screens 4.16 (Screen onTransitionProgress) build a native-driven
+// Animated.event on every render, and RN 0.81's Fabric animated props hook
+// (createAnimatedPropsHook) re-attaches a no-op listener to its values each
+// time. The native module can emit a value update in the gap between the old
+// listener's removal and the new one's arrival (cold start, modal transitions)
+// and logs this warning. Nothing is lost: the next update reaches the new listener.
+LogBox.ignoreLogs(['Sending `onAnimatedValueUpdate` with no listeners registered']);
 
 // First-run gate: after mount, read the onboarding flag and redirect to the
 // onboarding screen if it hasn't been completed. Kept separate from the tabs

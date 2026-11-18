@@ -939,3 +939,35 @@ test('startup removes the API key older builds stored for the removed Ask AI fea
   expect(await AsyncStorage.getItem('@scan_kit_ai_key')).toBeNull();
   expect('getAiKey' in storage).toBe(false);
 });
+
+describe('pending documents (Save as a copy, r9 code #4)', () => {
+  const copy: Document = { ...doc, id: 'copy-1', name: 'Lease (signed)' };
+
+  test('a pending document is found by id but listed nowhere until committed', async () => {
+    await storage.saveDocument(doc);
+    await storage.savePendingDocument(copy);
+    expect((await storage.getDocuments()).map(d => d.id)).toEqual(['test-id']);
+    expect(await storage.getDocument('copy-1')).toMatchObject({ name: 'Lease (signed)' });
+    expect(await storage.commitPendingDocument('copy-1', { updatedAt: 5 })).toBe(true);
+    expect((await storage.getDocuments()).map(d => d.id)).toEqual(['copy-1', 'test-id']);
+    expect((await storage.getDocument('copy-1'))?.updatedAt).toBe(5);
+    expect(await AsyncStorage.getItem('@scan_kit_pending_docs')).toBeNull();
+  });
+
+  test('one left pending by a crash is deleted by the startup sweep, record and files', async () => {
+    await storage.saveDocument(doc);
+    await storage.savePendingDocument(copy);
+    const keep = await storage.documentIdsForCleanup();
+    expect(keep).toEqual(['test-id']);
+    expect(mockDeletedDirs).toEqual(['copy-1']);
+    expect(await storage.getDocument('copy-1')).toBeNull();
+    expect(await AsyncStorage.getItem('@scan_kit_pending_docs')).toBeNull();
+  });
+
+  test('deleting a pending document clears its mark; committing a gone one is refused', async () => {
+    await storage.savePendingDocument(copy);
+    await storage.deleteDocument('copy-1');
+    expect(await AsyncStorage.getItem('@scan_kit_pending_docs')).toBeNull();
+    expect(await storage.commitPendingDocument('copy-1')).toBe(false);
+  });
+});

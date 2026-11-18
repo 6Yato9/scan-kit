@@ -28,6 +28,7 @@ import * as Print from 'expo-print';
 import * as FileSystem from 'expo-file-system/legacy';
 import { safeFileName } from './auto-name';
 import { whenUnlocked } from './nav-guard';
+import { VisionOcr } from '../modules/vision-ocr/src';
 
 /** Strip any `?v=` cache-bust query (or other query) before handing a URI to native code. */
 export function cleanFileUri(uri: string): string {
@@ -137,6 +138,72 @@ export async function shareText(message: string): Promise<void> {
   } catch {
     // dismissed, or the sheet couldn't open: nothing to tell the user
   }
+}
+
+// ---------------------------------------------------------------------------
+// Several files in one share sheet
+// ---------------------------------------------------------------------------
+// expo-sharing and React Native's Share take ONE item, so a document's pages
+// can only go out as images (to Messages, Mail, WhatsApp) through a native
+// UIActivityViewController with every file URL as an activity item. The local
+// vision-ocr module provides that as `shareFiles` in builds that have it.
+
+type ShareFilesNative = (uris: string[], title?: string | null) => Promise<void>;
+
+function nativeShareFiles(): ShareFilesNative | null {
+  const fn = (VisionOcr as unknown as { shareFiles?: ShareFilesNative } | null)?.shareFiles;
+  return typeof fn === 'function' ? fn : null;
+}
+
+/** True when several files can be shared together (else share a ZIP instead). */
+export function canShareFiles(): boolean {
+  return nativeShareFiles() !== null;
+}
+
+/**
+ * Share several local files in one share sheet (the pages of a document as
+ * JPEG images). Same contract as `shareFile`: resolves once the sheet is up
+ * or finished, waits while the app is locked, presents nothing if `signal`
+ * was aborted meanwhile, rejects with a ShareError when it can't start.
+ */
+export async function shareFiles(uris: string[], options: ShareOptions = {}): Promise<ShareOutcome> {
+  const share = nativeShareFiles();
+  if (!share) throw new ShareError('Sharing several files isn’t available. Try the ZIP file instead.');
+  const clean = uris.map(cleanFileUri);
+  for (const uri of clean) {
+    const info = await FileSystem.getInfoAsync(uri).catch(() => null);
+    if (!info?.exists) throw new ShareError('The files to share couldn’t be found. Try exporting again.');
+  }
+  // Last await before presenting: nothing can lock the app between this and
+  // the native call below.
+  await whenUnlocked();
+  if (options.signal?.aborted) return 'skipped';
+
+  let settled = false;
+  const native = share(clean, options.dialogTitle ?? null).then(
+    () => {
+      settled = true;
+      options.onFinish?.();
+      return 'finished' as const;
+    },
+    (err: unknown) => {
+      settled = true;
+      options.onFinish?.();
+      throw err;
+    },
+  );
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const grace = new Promise<'presented'>(resolve => {
+    timer = setTimeout(() => resolve('presented'), options.graceMs ?? 1200);
+  });
+  const outcome = await Promise.race([
+    native.catch(() => {
+      throw new ShareError('Couldn’t open the share sheet. Try again.');
+    }),
+    grace,
+  ]).finally(() => clearTimeout(timer));
+  if (!settled) native.catch(() => {});
+  return outcome;
 }
 
 /** True for the errors iOS/Android raise when the user simply backs out. */

@@ -51,7 +51,7 @@ describe('timestamp overlay', () => {
   test('anchors to the chosen corner and escapes the text', () => {
     const html = timestampOverlay('<now>', 'top-left', 600);
     expect(html).toMatch(/top:calc\(/);
-    expect(html).toMatch(/left:3\.00%/);
+    expect(html).toMatch(/left:1\.60%/);
     expect(html).toContain('&lt;now&gt;');
   });
 

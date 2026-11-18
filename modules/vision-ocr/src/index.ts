@@ -18,6 +18,8 @@ type VisionOcrNative = {
   pdfPageTexts?: (uri: string, password?: string | null) => Promise<string[]>;
   /** Unencrypted copy of a protected PDF; rejects with "wrong-password". */
   unlockPdf?: (inputUri: string, outputUri: string, password: string) => Promise<string>;
+  /** One share sheet with several files; only lib/share.ts may call it (lock gate). */
+  shareFiles?: (uris: string[], title?: string | null) => Promise<void>;
 };
 
 /** null on Android, on web, and in a dev client built before this module existed. */

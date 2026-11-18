@@ -96,6 +96,26 @@ public class VisionOcrModule: Module {
       }
     }
 
+    /// One share sheet with several files (a document's pages as images).
+    /// Resolves when the sheet is dismissed, whatever the user chose.
+    AsyncFunction("shareFiles") { (uris: [String], title: String?, promise: Promise) in
+      let urls = uris.compactMap { URL(string: $0) }.filter { $0.isFileURL }
+      guard !urls.isEmpty else { promise.reject("ERR_SHARE_FILES", "No files"); return }
+      guard var top = self.appContext?.utilities?.currentViewController() else {
+        promise.reject("ERR_SHARE_FILES", "No view controller"); return
+      }
+      // Present from the top-most controller that isn't being dismissed.
+      while let next = top.presentedViewController, !next.isBeingDismissed { top = next }
+      let vc = UIActivityViewController(activityItems: urls, applicationActivities: nil)
+      vc.title = title
+      vc.completionWithItemsHandler = { _, _, _, _ in promise.resolve(nil) }
+      if let pop = vc.popoverPresentationController {
+        pop.sourceView = top.view
+        pop.sourceRect = CGRect(x: top.view.bounds.midX, y: top.view.bounds.maxY, width: 0, height: 0)
+      }
+      top.present(vc, animated: true)
+    }.runOnQueue(.main)
+
     /// Detect a document in a photo and return a perspective-corrected copy.
     /// Resolves to { uri, detected }. When nothing confident is found, resolves
     /// with the input uri and detected: false.

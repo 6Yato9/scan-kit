@@ -11,10 +11,21 @@
 // app/annotate.tsx).
 //
 // Undo: before anything is written, each target page and its shadow are copied
-// to Caches/stamp-undo with the page's filter and adjustments (one stash at a
-// time; the startup sweep clears leftovers). undoStamp puts them back exactly,
-// unless the pages have been reordered or deleted since (then the indices mean
-// other pages and nothing is touched).
+// to their own folder in Caches/stamp-undo with the page's filter and
+// adjustments. undoStamp puts them back exactly, unless the pages have been
+// reordered or deleted since (then the indices mean other pages and nothing is
+// touched). A stash lives until it is used, thrown away (discardStampUndo: the
+// run failed, or the viewer's Undo offer expired) or swept at startup; a newer
+// run never deletes another run's stash, which may still be rolling back.
+//
+// Runs on one document are serialized: a second Sign / Watermark / Timestamp
+// started while the first is still rolling back waits for it, so its stash and
+// Undo never capture the first run's half-done pages.
+//
+// Cancelling: a run is given a `signal` (the screen that drew the pages closed).
+// It is checked before every page and once more after the last: a cancelled
+// run puts back the pages it already did and fails with kind 'cancelled', so a
+// document is never left half-signed and the closed screen never navigates.
 //
 // Writes go through runPageEdit (lib/bake.ts): under the per-document lock,
 // beside the page and renamed over it (a crash can't leave a truncated page),
@@ -24,6 +35,7 @@ import { writeAsStringAsync } from 'expo-file-system/legacy';
 import type { Document, PageAdjustment, PageFilter } from '../types/document';
 import { bakePage, runPageEdit, waitForPendingBakes, withDocLock } from './bake';
 import {
+  copyDocumentFiles,
   deleteDocumentFiles,
   originalSideUri,
   originalUri,
@@ -34,8 +46,15 @@ import {
   restorePageWithShadow,
 } from './files';
 import { pageFileUri } from './image';
-import { duplicateDocument } from './doc-ops';
-import { deleteDocument, getDocument, patchDocument, updateDocument } from './storage';
+import * as Crypto from 'expo-crypto';
+import {
+  commitPendingDocument,
+  deleteDocument,
+  getDocument,
+  patchDocument,
+  savePendingDocument,
+  updateDocument,
+} from './storage';
 import { indexDocText } from './save-scan';
 
 /** A page and its shadow with the mark drawn in, as JPEG data URLs (orig null when the page has none). */
@@ -57,14 +76,44 @@ export type StampUndo = {
   layout: number;
 };
 
+/** Something a run can be cancelled through; an AbortSignal fits. */
+export type StampSignal = { readonly aborted: boolean };
+
+/** What a failed run left behind when the pages it changed couldn't be put back. */
+export type StampPartial = {
+  /** Zero-based indices of the pages that carry the mark. */
+  changed: number[];
+  /** How many pages the run was meant to change. */
+  total: number;
+  /** A stash of just the changed pages, kept for another try at putting them back. */
+  undo: StampUndo | null;
+};
+
 export class StampError extends Error {
   constructor(
-    readonly kind: 'missing-doc' | 'missing-page' | 'pages-moved' | 'expired' | 'render',
+    readonly kind: 'missing-doc' | 'missing-page' | 'pages-moved' | 'expired' | 'render' | 'cancelled' | 'partial',
     message: string,
+    /** Only for kind 'partial'. */
+    readonly partial?: StampPartial,
   ) {
     super(message);
     this.name = 'StampError';
   }
+}
+
+/** "page 2", "pages 1 and 2", "pages 1, 2 and 4" (zero-based in). */
+export function pagesPhrase(indices: number[]): string {
+  const n = [...indices].sort((a, b) => a - b).map(i => String(i + 1));
+  if (n.length === 1) return `page ${n[0]}`;
+  return `pages ${n.slice(0, -1).join(', ')} and ${n[n.length - 1]}`;
+}
+
+/** The truthful message for a run that stopped part-way and couldn't put its pages back. */
+export function partialMessage(changed: number[], total: number): string {
+  const what = pagesPhrase(changed);
+  const verb = changed.length === 1 ? 'was' : 'were';
+  const rest = total > changed.length ? ' The other pages weren’t changed.' : '';
+  return `${what[0].toUpperCase()}${what.slice(1)} ${verb} changed before the error and couldn’t be put back.${rest}`;
 }
 
 /** Which pages a "this page" / "every page" choice means, clamped to the document. */
@@ -88,16 +137,6 @@ function withEntry<T>(list: T[] | undefined, length: number, index: number, valu
 const allOriginal = (f: PageFilter[]) => f.every(x => x === 'original');
 const allDefaultAdj = (a: PageAdjustment[]) => a.every(x => !x.brightness && !x.contrast && !x.saturation);
 
-/** Removes every stamp stash: one Undo at a time. Best effort. */
-function clearStashes(): void {
-  try {
-    const root = new Directory(Paths.cache, STASH_ROOT);
-    if (root.exists) root.delete();
-  } catch {
-    // An old stash that can't be removed is harmless; the startup sweep retries.
-  }
-}
-
 /** Throws away an Undo nobody will use (best effort). */
 export function discardStampUndo(undo: StampUndo | null | undefined): void {
   if (!undo) return;
@@ -112,9 +151,11 @@ export function discardStampUndo(undo: StampUndo | null | undefined): void {
  * Each page gets its own folder and is named page-0, so restorePageWithShadow
  * finds the `.orig` next to it.
  */
+let stashSeq = 0;
 function stashPages(doc: Document, indices: number[]): StampUndo {
-  clearStashes();
-  const dir = new Directory(Paths.cache, STASH_ROOT, String(Date.now()));
+  // Its own folder: another run's stash (still needed for its rollback or its
+  // Undo) is never touched.
+  const dir = new Directory(Paths.cache, STASH_ROOT, `${Date.now()}-${++stashSeq}`);
   dir.create({ intermediates: true, idempotent: true });
   const srcDir = new Directory(Paths.document, 'scan-kit', doc.id);
   const pages = indices.map(index => {
@@ -138,7 +179,22 @@ export type StampPagesOptions = {
   /** Keep a copy of the pages for undoStamp (default true). */
   undo?: boolean;
   onProgress?: (done: number, total: number) => void;
+  /** Aborted (the screen closed): stop, put back what was done, fail with kind 'cancelled'. */
+  signal?: StampSignal;
 };
+
+// One run per document at a time (see the header). Keyed by document id.
+const runTails = new Map<string, Promise<unknown>>();
+function serialPerDoc<T>(docId: string, fn: () => Promise<T>): Promise<T> {
+  const prev = runTails.get(docId) ?? Promise.resolve();
+  const run = prev.then(fn, fn);
+  const tail = run.catch(() => undefined);
+  runTails.set(docId, tail);
+  tail.then(() => { if (runTails.get(docId) === tail) runTails.delete(docId); });
+  return run;
+}
+
+const cancelled = () => new StampError('cancelled', 'The change was cancelled. Your document is unchanged.');
 
 export type StampPagesResult = { doc: Document; undo: StampUndo | null };
 
@@ -148,13 +204,23 @@ export type StampPagesResult = { doc: Document; undo: StampUndo | null };
  * before it are put back, so a document is never left half-signed. Re-indexes
  * the text afterwards (only the changed pages are read again: lib/ocr-cache).
  */
-export async function stampPages(
+export function stampPages(
   docId: string,
   indices: number[],
   render: StampRender,
   options: StampPagesOptions = {},
 ): Promise<StampPagesResult> {
-  const { undo: keepUndo = true, onProgress } = options;
+  return serialPerDoc(docId, () => stampPagesNow(docId, indices, render, options));
+}
+
+async function stampPagesNow(
+  docId: string,
+  indices: number[],
+  render: StampRender,
+  options: StampPagesOptions,
+): Promise<StampPagesResult> {
+  const { undo: keepUndo = true, onProgress, signal } = options;
+  if (signal?.aborted) throw cancelled();
   // A filter still being baked would land on top of the mark (it re-derives
   // from the .orig it read before) — let those finish first.
   await waitForPendingBakes(docId, { timeoutMs: 60_000 });
@@ -172,11 +238,13 @@ export async function stampPages(
 
   try {
     for (const index of targets) {
+      if (signal?.aborted) throw cancelled();
       const before = await getDocument(docId);
       if (!before) throw new StampError('missing-doc', 'This document is no longer available.');
       const look = lookOf(before, index);
       const origFile = new File(originalUri(docId, index));
       const pixels = await render(pageFileUri(docId, index), origFile.exists ? origFile.uri : null);
+      if (signal?.aborted) throw cancelled();
 
       await runPageEdit(docId, { pages: [index] }, async () => {
         if (pageLayoutGeneration(docId) !== layout) {
@@ -207,16 +275,37 @@ export async function stampPages(
       });
       onProgress?.(done.length, targets.length);
     }
+    // Closed while the last page was being written: nobody is left to offer
+    // Undo, so the whole change goes back.
+    if (signal?.aborted) throw cancelled();
   } catch (err) {
     if (undo && done.length) {
       try {
         await restoreStashed(undo, done);
       } catch (restoreErr) {
+        // The pages done so far still carry the mark. Say so, and keep their
+        // stash so putting them back can be tried again.
         console.warn('Stamp: putting the pages back failed', restoreErr);
+        const changed = [...done];
+        const kept: StampUndo = { ...undo, pages: undo.pages.filter(p => changed.includes(p.index)) };
+        for (const p of undo.pages) {
+          if (changed.includes(p.index)) continue;
+          try {
+            const sub = new Directory(undo.dir, String(p.index));
+            if (sub.exists) sub.delete();
+          } catch {}
+        }
+        throw new StampError('partial', partialMessage(changed, targets.length), {
+          changed,
+          total: targets.length,
+          undo: kept,
+        });
       }
     }
     discardStampUndo(undo);
-    throw err;
+    // The screen closed (its stamper fails whatever was drawing): what was done
+    // is back, and there is no one to tell — report it as cancelled.
+    throw signal?.aborted ? cancelled() : err;
   }
 
   for (const r of rebake) {
@@ -277,7 +366,10 @@ export async function undoStamp(undo: StampUndo): Promise<Document> {
 /**
  * "Save as a copy": duplicates `source` (pages, shadows, filters, text) under
  * `name`, then draws the mark into the copy's pages. The original is not
- * touched. The copy is removed again if drawing fails.
+ * touched. The copy is created hidden and pending (lib/storage
+ * savePendingDocument) and only shown once every page carries the mark: a
+ * failure removes it, and a crash part-way leaves a pending record the startup
+ * sweep deletes — never a half-signed copy in the list.
  */
 export async function stampCopy(
   source: Document,
@@ -285,17 +377,48 @@ export async function stampCopy(
   indices: number[],
   render: StampRender,
   onProgress?: (done: number, total: number) => void,
+  signal?: StampSignal,
 ): Promise<Document> {
+  if (signal?.aborted) throw cancelled();
   await waitForPendingBakes(source.id, { timeoutMs: 60_000 });
-  const fresh = (await getDocument(source.id)) ?? source;
-  const copy = await duplicateDocument(fresh);
+  // After any run still going on the source (it may be rolling back).
+  const copy = await serialPerDoc(source.id, () =>
+    withDocLock(source.id, async () => {
+      const fresh = await getDocument(source.id);
+      if (!fresh || fresh.pdfUri || fresh.pages.length === 0) {
+        throw new StampError('missing-doc', 'This document is no longer available.');
+      }
+      const id = Crypto.randomUUID();
+      const now = Date.now();
+      const doc: Document = {
+        id,
+        name,
+        folder: fresh.folder,
+        ocrText: fresh.ocrText,
+        createdAt: now,
+        updatedAt: now,
+        pages: copyDocumentFiles(fresh.id, id, fresh.pages),
+        filters: fresh.filters ? [...fresh.filters] : undefined,
+        adjustments: fresh.adjustments ? fresh.adjustments.map(a => ({ ...a })) : undefined,
+      };
+      try {
+        await savePendingDocument(doc);
+      } catch (err) {
+        try { deleteDocumentFiles(id); } catch {}
+        throw err;
+      }
+      return doc;
+    }),
+  );
   try {
-    await patchDocument(copy.id, { name });
-    const { doc } = await stampPages(copy.id, indices, render, { undo: false, onProgress });
-    return doc;
+    await stampPages(copy.id, indices, render, { undo: false, onProgress, signal });
+    if (!(await commitPendingDocument(copy.id, { updatedAt: Date.now() }))) {
+      throw new StampError('missing-doc', 'This document is no longer available.');
+    }
+    return (await getDocument(copy.id)) ?? copy;
   } catch (err) {
-    try { deleteDocumentFiles(copy.id); } catch {}
     await deleteDocument(copy.id).catch(() => {});
+    try { deleteDocumentFiles(copy.id); } catch {}
     throw err;
   }
 }

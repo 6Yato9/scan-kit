@@ -35,7 +35,9 @@ import {
   makeExportDir,
   placeExportFile,
   printFile,
+  canShareFiles,
   shareFile,
+  shareFiles,
   shareText,
   ShareError,
 } from '@/lib/share';
@@ -60,11 +62,13 @@ type Props = {
   onClose: () => void;
 };
 
-type Action = 'pdf' | 'small' | 'protected' | 'images' | 'photos' | 'print';
+type Action = 'pdf' | 'small' | 'protected' | 'images' | 'zip' | 'photos' | 'print';
 
 type Busy = { title: string; label: string; progress: number };
 
 type BuiltFile = { uri: string; mimeType: string; UTI: string };
+/** The pages as separate JPEG files, shared together (Messages, Mail, Photos-friendly apps). */
+type BuiltImages = { uris: string[] };
 
 class CancelledError extends Error {}
 
@@ -128,7 +132,7 @@ function errorMessage(err: unknown, action: Action): { title: string; body: stri
     if (err.kind === 'empty') return { title, body: 'This document has no pages to export.' };
     return { title, body: 'Something went wrong while creating the PDF. Try again.' };
   }
-  if (action === 'images') return { title, body: 'Couldn’t prepare the images. Check that your device has free space and try again.' };
+  if (action === 'images' || action === 'zip') return { title, body: 'Couldn’t prepare the images. Check that your device has free space and try again.' };
   if (action === 'photos') return { title: 'Couldn’t save to Photos', body: 'Check that your device has free space and try again.' };
   return { title, body: 'Something went wrong. Try again.' };
 }
@@ -201,6 +205,10 @@ export function ExportSheet({ visible, document, onClose }: Props) {
   const docText = document.ocrText?.trim() ?? '';
   const canSearchable = !isPdfDoc && pageCount > 0 && ocrAvailable();
   const canProtect = canProtectPdf() && (isPdfDoc || pageCount > 0);
+  // Several pages go out as separate images (what Messages, Mail and photo
+  // apps want) when this build can share several files at once; the ZIP stays
+  // as its own option for many pages or for saving to Files.
+  const shareImagesApart = !isPdfDoc && pageCount > 1 && canShareFiles();
 
   const cancelWork = useCallback(() => {
     abortRef.current?.abort();
@@ -232,12 +240,24 @@ export function ExportSheet({ visible, document, onClose }: Props) {
     });
   }
 
-  async function buildImages(signal: AbortSignal, dir: string): Promise<BuiltFile> {
+  async function buildImages(signal: AbortSignal, dir: string, asZip: boolean): Promise<BuiltFile | BuiltImages> {
     const title = pageCount === 1 ? 'Preparing image' : 'Preparing images';
     if (pageCount === 1) {
       setBusy({ title, label: 'Preparing image', progress: 0.5 });
       const uri = await placeExportFile(document.pages[0], dir, exportFileName(document.name, 'jpg'), 'copy');
       return { uri, mimeType: 'image/jpeg', UTI: 'public.jpeg' };
+    }
+    if (!asZip) {
+      // Each page under the document's name, numbered so they sort in order.
+      const digits = String(pageCount).length;
+      const uris: string[] = [];
+      for (let i = 0; i < pageCount; i++) {
+        if (signal.aborted) throw new CancelledError();
+        setBusy({ title, label: `Adding page ${i + 1} of ${pageCount}`, progress: (i / pageCount) * 0.95 });
+        const name = exportFileName(`${document.name} - page ${String(i + 1).padStart(digits, '0')}`, 'jpg');
+        uris.push(await placeExportFile(document.pages[i], dir, name, 'copy'));
+      }
+      return { uris };
     }
     // JPEGs don't compress further, so STORE them: far less CPU, and bytes are
     // added as binary instead of base64 strings to keep peak memory down.
@@ -369,7 +389,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
       }
 
       const dir = await makeExportDir();
-      let file: BuiltFile;
+      let file: BuiltFile | BuiltImages;
       if (action === 'protected') {
         // The normal PDF first (the imported file itself for a PDF document),
         // then a protected copy under the document's name. The unprotected
@@ -395,8 +415,8 @@ export function ExportSheet({ visible, document, onClose }: Props) {
         setBusy({ title: 'Preparing PDF', label: 'Preparing PDF', progress: 0.5 });
         const uri = await placeExportFile(document.pdfUri!, dir, exportFileName(document.name, 'pdf'), 'copy');
         file = { uri, ...PDF_FILE };
-      } else if (action === 'images') {
-        file = await buildImages(signal, dir);
+      } else if (action === 'images' || action === 'zip') {
+        file = await buildImages(signal, dir, action === 'zip' || !shareImagesApart);
       } else {
         // Every PDF is searchable when text recognition is available: that is
         // what people expect from a scanner app's PDF.
@@ -414,16 +434,21 @@ export function ExportSheet({ visible, document, onClose }: Props) {
       // Waits while App Lock is on (an export that finishes behind the lock
       // screen must not present over it), and presents nothing if this sheet
       // was closed meanwhile (closing aborts `signal`).
-      await shareFile(file.uri, {
-        mimeType: file.mimeType,
-        UTI: file.UTI,
-        dialogTitle: document.name,
-        signal,
-        // Close once the share sheet is done, unless the user has moved on.
-        onFinish: () => {
-          if (sessionRef.current === session) onClose();
-        },
-      });
+      // Close once the share sheet is done, unless the user has moved on.
+      const onFinish = () => {
+        if (sessionRef.current === session) onClose();
+      };
+      if ('uris' in file) {
+        await shareFiles(file.uris, { dialogTitle: document.name, signal, onFinish });
+      } else {
+        await shareFile(file.uri, {
+          mimeType: file.mimeType,
+          UTI: file.UTI,
+          dialogTitle: document.name,
+          signal,
+          onFinish,
+        });
+      }
     } catch (err) {
       if (err instanceof CancelledError || err instanceof PdfCancelledError || signal.aborted) return;
       if (sessionRef.current !== session) return;
@@ -599,10 +624,22 @@ export function ExportSheet({ visible, document, onClose }: Props) {
                 <SheetRow
                   icon="image-outline"
                   label={pageCount === 1 ? 'JPEG image' : 'JPEG images'}
-                  detail={detailLine([pageCount === 1 ? 'One image' : `${pageCount} images in a ZIP`, sizeLabel])}
+                  detail={detailLine([
+                    pageCount === 1 ? 'One image' : shareImagesApart ? `${pageCount} images` : `${pageCount} images in a ZIP`,
+                    sizeLabel,
+                  ])}
                   onPress={() => run('images')}
-                  last={!docText}
+                  last={!docText && !shareImagesApart}
                 />
+                {shareImagesApart ? (
+                  <SheetRow
+                    icon="archive-outline"
+                    label="JPEG images in a ZIP"
+                    detail={detailLine(['One file', sizeLabel])}
+                    onPress={() => run('zip')}
+                    last={!docText}
+                  />
+                ) : null}
                 {docText ? (
                   <SheetRow icon="reader-outline" label="Text" detail={textDetail(docText)} onPress={runShareText} last />
                 ) : null}

@@ -68,9 +68,15 @@ export function watermarkOverlay(
 
 export type Corner = 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left';
 
-/** Inset from the page edges, as a fraction of the page width. */
-export const CORNER_INSET = 0.03;
-export const TIMESTAMP_FONT_FRACTION = 0.024;
+/**
+ * Inset from the page edges, as a fraction of the page width. The stamp lives
+ * in the page's outer margin: about 10pt from the edge and about 10pt type on
+ * a Letter or A4 page, so its whole box (≈3% of the width) stays clear of a
+ * border or text that starts 5% in, where the old 3% inset and 2.4% type
+ * drew it across the page's border line.
+ */
+export const CORNER_INSET = 0.016;
+export const TIMESTAMP_FONT_FRACTION = 0.016;
 
 export function timestampOverlay(text: string, corner: Corner, pageWidthPt: number): string {
   const fontPt = TIMESTAMP_FONT_FRACTION * pageWidthPt;

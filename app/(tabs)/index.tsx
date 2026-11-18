@@ -7,12 +7,13 @@
 // (the search button here opens Files' search with the keyboard up), and scan
 // modes such as ID card, Book and Whiteboard are in Tools.
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { FlatList, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { AppState, FlatList, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Document } from '@/types/document';
-import { getDocuments, getFolders } from '@/lib/storage';
+import { getDocuments, getFolders, subscribeDocumentChanges } from '@/lib/storage';
+import { requestFilesCopySync } from '@/lib/files-copy';
 import { useScan } from '@/contexts/scan-context';
 import { HeaderIconButton, LargeTitle } from '@/components/screen-header';
 import { useTheme } from '@/contexts/theme-context';
@@ -62,6 +63,20 @@ export default function HomeScreen() {
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
   useEffect(() => { if (lastSaved > 0) load(); }, [lastSaved, load]);
+  // Any change to the list (a save, a rename or delete made here, coming
+  // back from the viewer) brings the copies in Files up to date.
+  useEffect(() => { requestFilesCopySync(); }, [documents]);
+
+  // Keep a copy in Files (lib/files-copy.ts) catches up after any change:
+  // Home is the first tab, so it stays mounted for the app's whole life. The
+  // pass is debounced and does nothing while the setting is off.
+  useEffect(() => {
+    const unsubscribe = subscribeDocumentChanges(() => requestFilesCopySync());
+    const sub = AppState.addEventListener('change', s => {
+      if (s === 'active' || s === 'background') requestFilesCopySync(s === 'background' ? 0 : 2000);
+    });
+    return () => { unsubscribe(); sub.remove(); };
+  }, []);
 
   // Recent means recently worked on, whatever the library's sort order is.
   const recent = useMemo(() => sortDocuments(documents, 'dateModified').slice(0, RECENT_LIMIT), [documents]);
@@ -101,7 +116,9 @@ export default function HomeScreen() {
         accessibilityRole="button"
         accessibilityLabel={`Folder ${f}, ${n} ${n === 1 ? 'document' : 'documents'}`}
       >
-        <Ionicons name="folder-outline" size={22} color={colors.accent} />
+        <View style={[styles.quickIcon, { backgroundColor: colors.accentLight }]}>
+          <Ionicons name="folder-outline" size={20} color={colors.accent} />
+        </View>
         <View style={styles.folderText}>
           <Text style={[Type.subhead, { color: colors.text, fontWeight: '600' }]} numberOfLines={1}>{f}</Text>
           <Text style={[Type.caption, { color: colors.muted }]}>{n === 0 ? 'Empty' : `${n} ${n === 1 ? 'document' : 'documents'}`}</Text>
@@ -136,15 +153,19 @@ export default function HomeScreen() {
       {recent.length > 0 && (
         <View style={styles.sectionRow}>
           <SectionLabel style={styles.sectionLabel}>Recent</SectionLabel>
-          <Pressable
-            onPress={() => router.navigate('/files')}
-            hitSlop={10}
-            style={styles.seeAll}
-            accessibilityRole="button"
-            accessibilityLabel={capped ? `See all ${documents.length} documents in Files` : 'Open Files'}
-          >
-            <Text style={[Type.subhead, { color: colors.accent }]}>{capped ? 'See all' : 'Files'}</Text>
-          </Pressable>
+          {/* Only when Recent is a slice of the library; otherwise every
+              document is already listed here and the tab bar has Files. */}
+          {capped ? (
+            <Pressable
+              onPress={() => router.navigate('/files')}
+              hitSlop={10}
+              style={styles.seeAll}
+              accessibilityRole="button"
+              accessibilityLabel={`See all ${documents.length} documents in Files`}
+            >
+              <Text style={[Type.subhead, { color: colors.accent }]}>See all</Text>
+            </Pressable>
+          ) : null}
         </View>
       )}
     </View>
@@ -261,14 +282,16 @@ const styles = StyleSheet.create({
   folderRow: { paddingHorizontal: Spacing.gutter, gap: Spacing.sm },
   folderGrid: { flexDirection: 'row', gap: Spacing.sm },
   folderFill: { flex: 1, minWidth: 0 },
+  // Same card as the quick actions above: radius, height, tinted icon disc.
   folder: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.md,
-    padding: Spacing.md,
-    borderRadius: Radius.md,
-    minHeight: 60,
+    gap: Spacing.md - 2,
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.md,
+    borderRadius: Radius.lg,
+    minHeight: 64,
   },
-  folderText: { flex: 1 },
+  folderText: { flex: 1, minWidth: 0, gap: 1 },
   empty: { flex: 1, paddingTop: Spacing.xxl },
 });

@@ -175,7 +175,7 @@ describe('in-place stamp geometry', () => {
 
   test('timestamp and signature', () => {
     expect(resolveStamp({ kind: 'timestamp', text: '18 Nov 2026', corner: 'top-left' })).toMatchObject({
-      corner: 'top-left', fontFrac: 0.024, insetFrac: 0.03, ink: '#222222',
+      corner: 'top-left', fontFrac: 0.016, insetFrac: 0.016, ink: '#222222',
     });
     expect(resolveStamp({ kind: 'signature', signature: { dataUri: 'data:image/png;base64,AA==', width: 2, height: 1 }, placement: { x: 0.1, y: 0.2, w: 0.3 } }))
       .toEqual({ kind: 'signature', x: 0.1, y: 0.2, w: 0.3 });

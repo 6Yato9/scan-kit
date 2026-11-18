@@ -68,7 +68,7 @@ export default function WhiteboardScreen() {
         text="Marker writing stays crisp and the board comes out clean and bright."
         points={[
           { icon: 'scan-outline', text: 'Stand square to the board so its edges are detected.' },
-          { icon: 'contrast-outline', text: 'Contrast and color are boosted automatically.' },
+          { icon: 'sparkles-outline', text: 'Contrast and color are boosted automatically.' },
           { icon: 'color-filter-outline', text: 'Change the filter for one page, or all of them, later in the viewer.' },
         ]}
       />

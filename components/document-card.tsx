@@ -1,16 +1,17 @@
 // components/document-card.tsx
 // Grid card (Files) plus the list row (Home) and their loading skeletons, so
 // both tabs present a document the same way.
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Document } from '@/types/document';
 import { useTheme } from '@/contexts/theme-context';
 import { formatDocDate, formatPageCount } from '@/lib/format';
 import { highlightRuns } from '@/lib/highlight';
-import { compactMeta } from '@/lib/doc-list';
+import { compactMeta, windowAround } from '@/lib/doc-list';
 import { WordClampText } from '@/components/word-clamp-text';
 import { PageThumb } from '@/components/page-thumb';
+import { usePdfThumbnail } from '@/lib/pdf-thumb';
 import { Radius, Spacing, Type } from '@/lib/theme';
 
 type Props = {
@@ -32,6 +33,11 @@ function Thumb({ document, iconSize, style }: { document: Document; iconSize: nu
   const { colors } = useTheme();
   // A hairline keeps a white page from melting into the white card.
   const edge = { borderColor: colors.thumbBorder };
+  // A PDF shows its first page once rendered (lib/pdf-thumb.ts), else the icon.
+  const pdfThumb = usePdfThumbnail(document.id, document.pdfUri);
+  if (document.pdfUri && pdfThumb) {
+    return <PageThumb uri={pdfThumb} style={[style, edge, { backgroundColor: colors.placeholder }]} />;
+  }
   if (document.pdfUri) {
     return (
       <View style={[style, edge, styles.pdfThumb, { backgroundColor: colors.placeholder }]}>
@@ -50,12 +56,35 @@ export function documentMeta(document: Document): string {
   return `${formatPageCount(document)}, ${formatDocDate(document.updatedAt)}`;
 }
 
-/** The matched line under a search result, with the hits in bold. */
-function Snippet({ text, query, style }: { text: string; query?: string; style?: object }) {
+/**
+ * Average advance of a character as a share of the font size, leaning wide
+ * (recognized text is often capitals and digits, and the hit is bold), so the
+ * window rather than the row's tail truncation decides what is cut.
+ */
+const SNIPPET_CHAR_EM = 0.6;
+
+/**
+ * The matched line under a search result, with the hits in bold. It is cut to
+ * the width the row really has, with the hit in the middle and "…" on each cut
+ * side, so the matched word is visible in a narrow grid card as in a list row.
+ */
+function Snippet({ text, query, style }: { text: string; query?: string; style?: { fontSize: number } }) {
   const { colors } = useTheme();
+  const [width, setWidth] = useState(0);
+  const fontSize = style?.fontSize ?? Type.caption.fontSize;
+  // Until the row is laid out, a window that fits the narrowest grid card.
+  const capacity = width > 0 ? Math.floor(width / (fontSize * SNIPPET_CHAR_EM)) : 18;
+  const shown = query ? windowAround(text, query, capacity) : text;
   return (
-    <Text style={[Type.caption, styles.snippet, { color: colors.muted }, style]} numberOfLines={1}>
-      {highlightRuns(text, query).map((run, i) =>
+    <Text
+      style={[Type.caption, styles.snippet, { color: colors.muted }, style]}
+      numberOfLines={1}
+      onLayout={e => {
+        const w = Math.round(e.nativeEvent.layout.width);
+        if (w !== width) setWidth(w);
+      }}
+    >
+      {highlightRuns(shown, query).map((run, i) =>
         run.match ? (
           <Text key={i} style={[styles.snippetHit, { color: colors.text }]}>{run.text}</Text>
         ) : (
