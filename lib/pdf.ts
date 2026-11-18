@@ -2,10 +2,11 @@
 // Page images -> PDF via expo-print (WKWebView print renderer).
 //
 // Layout: every page image becomes one "sheet" that is exactly one sheet of
-// paper (A4, Letter, or with 'Auto' a size shaped like the scans — see
+// paper (A4, Letter, or with 'Auto' a size shaped like the scan — see
 // autoPaperSize). The image is scaled to fit inside it (contain, centred), so a
 // page can never spill onto a second sheet. expo-print renders every page of
-// one PDF at the same size, so 'Auto' picks one size per export.
+// one print job at the same size, so mixed documents are printed in runs and
+// stitched natively — see planPaperRuns.
 //
 // Units matter here. WebKit's print renderer lays the document out wider than
 // the paper (its minimum shrink factor is 1.25: an A4 page is ~744 CSS px wide)
@@ -396,6 +397,167 @@ export function deleteLateRender(uri: string): Promise<void> {
   return FileSystem.deleteAsync(cleanUri(uri), { idempotent: true }).catch(() => {});
 }
 
+// ── Paper per page ──────────────────────────────────────────────────────────
+//
+// expo-print renders one HTML document at one @page size, so a document that
+// mixes shapes (a landscape page among portrait ones, a receipt among letters)
+// is rendered as consecutive runs of same-size pages, one print job each, and
+// the runs are concatenated natively (VisionOcr.mergePdfs, PDFKit: pages keep
+// their own size and text layer). One run → today's single render, no merge.
+
+/** A run of consecutive pages [start, end) printed on one paper size. */
+export type PaperRun = { start: number; end: number; paper: Paper };
+
+/** Pages whose papers differ by at most this much (each edge) share a run. */
+const RUN_TOLERANCE = 0.03;
+
+function closePaper(a: Paper, b: Paper): boolean {
+  return (
+    Math.abs(a.width / b.width - 1) <= RUN_TOLERANCE && Math.abs(a.height / b.height - 1) <= RUN_TOLERANCE
+  );
+}
+
+/** A4 / Letter turned landscape for a landscape page. */
+function orientPaper(paper: Paper, img: { width: number; height: number }): Paper {
+  return img.width > img.height ? { width: paper.height, height: paper.width } : paper;
+}
+
+/**
+ * Splits pages into runs that share one paper size.
+ *
+ * `perPage: false` (the renderer can't merge PDFs): one run for the whole
+ * document — the median shape for 'Auto', portrait A4 / Letter otherwise.
+ *
+ * `perPage: true`: 'Auto' shapes each page's paper like the page (see
+ * autoPaperSize) and A4 / Letter turn landscape for landscape pages.
+ * Consecutive pages whose papers are within 3% join one run (an 'Auto' run's
+ * paper is the median of its pages), so near-identical scans don't each cost a
+ * render. Unreadable sizes count as portrait A4-shaped pages.
+ */
+export function planPaperRuns(
+  sizes: ({ width: number; height: number } | null | undefined)[],
+  pageSize: PageSize,
+  perPage: boolean,
+): PaperRun[] {
+  const n = sizes.length;
+  if (n === 0) return [];
+  const fixed = pageSize === 'Auto' ? null : PAPER_SIZES_PT[pageSize];
+  if (!perPage) return [{ start: 0, end: n, paper: fixed ?? autoPaperSize(sizes) }];
+
+  const usable = (s: (typeof sizes)[number]) => !!s && s.width > 0 && s.height > 0;
+  const pageAt = (i: number) => (usable(sizes[i]) ? sizes[i]! : PAPER_SIZES_PT.A4);
+  const candidate = (i: number) => (fixed ? orientPaper(fixed, pageAt(i)) : autoPaperSize([pageAt(i)]));
+
+  const runs: PaperRun[] = [];
+  let start = 0;
+  let first = candidate(0);
+  const close = (end: number) =>
+    runs.push({
+      start,
+      end,
+      paper: fixed ? first : autoPaperSize(Array.from({ length: end - start }, (_, k) => pageAt(start + k))),
+    });
+  for (let i = 1; i < n; i++) {
+    const c = candidate(i);
+    if (closePaper(c, first)) continue;
+    close(i);
+    start = i;
+    first = c;
+  }
+  close(n);
+  return runs;
+}
+
+/** True when this build can stitch PDFs together, so every page can keep its own paper size. */
+function canMergePdfs(): boolean {
+  return typeof VisionOcr?.mergePdfs === 'function';
+}
+
+/** The native merge failed (not cancelled, not timed out): fall back to one paper size. */
+class MergeFailed extends Error {}
+
+/** One page, read and (when searchable) recognised; its sheet is built per paper. */
+type PreparedPage = {
+  img: PreparedImage;
+  ocr: { lines: OcrLine[]; original: { width: number; height: number } } | null;
+};
+
+function buildSheet(
+  page: PreparedPage,
+  pageIndex: number,
+  paper: Paper,
+  overlayHtml: GeneratePdfOptions['overlayHtml'],
+): string {
+  const { img } = page;
+  const box = fitContain(img, paper);
+  const boxPt = { width: r4(box.width * paper.width), height: r4(box.height * paper.height) };
+  const text = page.ocr ? ocrSpans(page.ocr.lines, page.ocr.original, boxPt.height) : '';
+  const overlay = overlayHtml ? `<div class="o">${overlayHtml(pageIndex, boxPt)}</div>` : '';
+  return (
+    `<div class="s"><div class="b" style="left:${r4(box.left * 100)}%;top:${r4(box.top * 100)}%;` +
+    `width:${r4(box.width * 100)}%;height:${r4(box.height * 100)}%">` +
+    `<img src="data:${img.mime};base64,${img.b64}">${text}${overlay}</div></div>`
+  );
+}
+
+/** Print pages [start, end) on one paper; resolves to the rendered file's URI. */
+async function renderRun(
+  pages: PreparedPage[],
+  run: PaperRun,
+  opts: GeneratePdfOptions,
+): Promise<string> {
+  const { signal } = opts;
+  throwIfAborted(signal);
+  const { paper } = run;
+  const sheets: string[] = [];
+  for (let i = run.start; i < run.end; i++) sheets.push(buildSheet(pages[i], i, paper, opts.overlayHtml));
+  const html = buildPdfHtml(sheets, paper);
+  sheets.length = 0; // let the per-page strings go before the native call
+
+  const render = Print.printToFileAsync({
+    html,
+    width: paper.width,
+    height: paper.height,
+    margins: { left: 0, right: 0, top: 0, bottom: 0 },
+  }).then(r => r.uri);
+  render.catch(() => {}); // a late failure after timeout/cancel must not be unhandled
+
+  try {
+    return await guard(render, signal, opts.timeoutMs ?? 30_000 + 3_000 * (run.end - run.start));
+  } catch (err) {
+    // Cancelled or timed out: the native render can't be stopped and still
+    // writes its PDF (unprotected, even when a password-protected export was
+    // asked for) into Caches/Print. Nobody will ever receive that file, so
+    // delete it the moment it lands instead of leaving a copy behind.
+    render.then(deleteLateRender, () => {});
+    if (err instanceof PdfCancelledError || err instanceof PdfError) throw err;
+    throw new PdfError('Couldn’t create the PDF.', 'render');
+  }
+}
+
+/** Render every run, then stitch them into one PDF. Intermediate files never outlive the call. */
+async function renderAndMerge(pages: PreparedPage[], runs: PaperRun[], opts: GeneratePdfOptions): Promise<string> {
+  const { signal } = opts;
+  const parts: string[] = [];
+  try {
+    for (const run of runs) parts.push(await renderRun(pages, run, opts));
+    throwIfAborted(signal);
+    const name = `merged-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.pdf`;
+    const out = cleanUri(parts[0]).replace(/[^/]*$/, name);
+    const merge = VisionOcr!.mergePdfs!(parts.map(cleanUri), out);
+    merge.catch(() => {});
+    try {
+      return await guard(merge, signal, opts.timeoutMs ?? 30_000 + 500 * pages.length);
+    } catch (err) {
+      merge.then(deleteLateRender, () => {});
+      if (err instanceof PdfCancelledError || err instanceof PdfError) throw err;
+      throw new MergeFailed();
+    }
+  } finally {
+    await Promise.all(parts.map(deleteLateRender));
+  }
+}
+
 /**
  * Render page images to a PDF file in the app cache and return its file:// URI.
  *
@@ -415,16 +577,8 @@ export async function generatePdf(
   const { signal, onProgress } = opts;
   if (pages.length === 0) throw new PdfError('There are no pages to export.', 'empty');
 
-  let paper: Paper;
-  if (pageSize === 'Auto') {
-    const sizes = await Promise.all(pages.map(p => getImageSize(cleanUri(p))));
-    throwIfAborted(signal);
-    paper = autoPaperSize(sizes);
-  } else {
-    paper = PAPER_SIZES_PT[pageSize];
-  }
   const maxEdge = maxEdgeFor(quality, pages.length);
-  const sheets: string[] = [];
+  const prepared: PreparedPage[] = [];
 
   for (let i = 0; i < pages.length; i++) {
     throwIfAborted(signal);
@@ -440,61 +594,35 @@ export async function generatePdf(
     if (!img.b64) throw new PdfError(`Couldn’t read page ${i + 1}.`, 'read');
     throwIfAborted(signal);
 
-    const box = fitContain(img, paper);
-    const boxPt = { width: r4(box.width * paper.width), height: r4(box.height * paper.height) };
-
-    let text = '';
+    let ocr: PreparedPage['ocr'] = null;
     if (opts.searchable) {
       onProgress?.(i, pages.length, 'reading-text');
       try {
         const { lines } = await recognizeLines(uri, signal);
         // OCR coordinates are in the original image's pixels; map via the
         // original size (same aspect ratio as the downscaled copy).
-        const original = (await getImageSize(uri)) ?? img;
-        text = ocrSpans(lines, original, boxPt.height);
+        const original = (await getImageSize(uri)) ?? { width: img.width, height: img.height };
+        ocr = { lines, original };
       } catch {
         // A page without a text layer is still a valid page.
       }
     }
-
-    let overlay = '';
-    if (opts.overlayHtml) {
-      overlay = `<div class="o">${opts.overlayHtml(i, boxPt)}</div>`;
-    }
-
-    sheets.push(
-      `<div class="s"><div class="b" style="left:${r4(box.left * 100)}%;top:${r4(box.top * 100)}%;` +
-        `width:${r4(box.width * 100)}%;height:${r4(box.height * 100)}%">` +
-        `<img src="data:${img.mime};base64,${img.b64}">${text}${overlay}</div></div>`,
-    );
+    prepared.push({ img, ocr });
   }
 
   throwIfAborted(signal);
   onProgress?.(pages.length, pages.length, 'rendering');
-  const html = buildPdfHtml(sheets, paper);
-  sheets.length = 0; // let the per-page strings go before the native call
-
-  const render = Print.printToFileAsync({
-    html,
-    width: paper.width,
-    height: paper.height,
-    margins: { left: 0, right: 0, top: 0, bottom: 0 },
-  }).then(r => r.uri);
-  render.catch(() => {}); // a late failure after timeout/cancel must not be unhandled
-
-  let uri: string;
-  try {
-    uri = await guard(render, signal, opts.timeoutMs ?? 30_000 + 3_000 * pages.length);
-  } catch (err) {
-    // Cancelled or timed out: the native render can't be stopped and still
-    // writes its PDF (unprotected, even when a password-protected export was
-    // asked for) into Caches/Print. Nobody will ever receive that file, so
-    // delete it the moment it lands instead of leaving a copy behind.
-    render.then(deleteLateRender, () => {});
-    if (err instanceof PdfCancelledError || err instanceof PdfError) throw err;
-    throw new PdfError('Couldn’t create the PDF.', 'render');
+  const sizes = prepared.map(p => ({ width: p.img.width, height: p.img.height }));
+  const runs = planPaperRuns(sizes, pageSize, canMergePdfs());
+  if (runs.length > 1) {
+    try {
+      return await renderAndMerge(prepared, runs, opts);
+    } catch (err) {
+      if (!(err instanceof MergeFailed)) throw err;
+      // Stitching failed: one paper size for everything still beats no PDF.
+    }
   }
-  return uri;
+  return renderRun(prepared, runs.length === 1 ? runs[0] : planPaperRuns(sizes, pageSize, false)[0], opts);
 }
 
 /**

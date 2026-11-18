@@ -14,8 +14,10 @@ import {
   PAPER_SIZES_PT,
   PdfCancelledError,
   PdfError,
+  planPaperRuns,
 } from '../lib/pdf';
 import { recognizeLines } from '../lib/ocr';
+import { VisionOcr } from '../modules/vision-ocr/src';
 
 // lib/pdf.ts reads page files via the legacy filesystem API (the v19 main-export
 // functions throw at runtime), so the mock targets the legacy subpath.
@@ -46,17 +48,28 @@ jest.mock('../lib/ocr', () => ({
   }),
 }));
 
+// The native module is optional: a mutable fake so tests can add or remove mergePdfs.
+jest.mock('../modules/vision-ocr/src', () => ({ VisionOcr: {} }));
+const native = VisionOcr as unknown as { mergePdfs?: jest.Mock };
+
 const mockReadAs = FileSystem.readAsStringAsync as jest.Mock;
 const mockPrint = Print.printToFileAsync as jest.Mock;
 const mockManip = ImageManipulator.manipulateAsync as jest.Mock;
 const mockOcr = recognizeLines as jest.Mock;
 
 let imageSize = { width: 1200, height: 1600 };
+/** Per-URI image sizes (falls back to imageSize). */
+let sizesByUri: Record<string, { width: number; height: number }> = {};
 
 beforeEach(() => {
   jest.clearAllMocks();
   imageSize = { width: 1200, height: 1600 };
-  jest.spyOn(Image, 'getSize').mockImplementation((_uri, ok) => ok(imageSize.width, imageSize.height));
+  sizesByUri = {};
+  delete native.mergePdfs;
+  jest.spyOn(Image, 'getSize').mockImplementation((uri, ok) => {
+    const s = sizesByUri[uri] ?? imageSize;
+    ok(s.width, s.height);
+  });
 });
 
 const htmlOf = () => mockPrint.mock.calls[0][0].html as string;
@@ -333,4 +346,168 @@ test('roundUpEstimate rounds up to two significant figures, never down', () => {
   for (const b of [1, 5_000, 99_999, 140_000, 1_234_567, 25_000_000]) {
     expect(roundUpEstimate(b)).toBeGreaterThanOrEqual(b);
   }
+});
+
+// ── Paper per page (runs + native merge) ───────────────────────────────────
+
+const PORTRAIT = { width: 1240, height: 1754 }; // A4-shaped scan
+const LANDSCAPE = { width: 1754, height: 1240 };
+const RECEIPT = { width: 620, height: 1860 };
+const A4_LAND = { width: 842, height: 595 };
+
+test('planPaperRuns without merging: one run, median shape for Auto, portrait for A4', () => {
+  const sizes = [PORTRAIT, LANDSCAPE, PORTRAIT];
+  expect(planPaperRuns(sizes, 'Auto', false)).toEqual([{ start: 0, end: 3, paper: PAPER_SIZES_PT.A4 }]);
+  expect(planPaperRuns(sizes, 'A4', false)).toEqual([{ start: 0, end: 3, paper: PAPER_SIZES_PT.A4 }]);
+  expect(planPaperRuns([], 'Auto', true)).toEqual([]);
+});
+
+test('planPaperRuns gives each shape its own paper and groups consecutive pages', () => {
+  expect(planPaperRuns([PORTRAIT, LANDSCAPE, PORTRAIT], 'Auto', true)).toEqual([
+    { start: 0, end: 1, paper: PAPER_SIZES_PT.A4 },
+    { start: 1, end: 2, paper: A4_LAND },
+    { start: 2, end: 3, paper: PAPER_SIZES_PT.A4 },
+  ]);
+  expect(planPaperRuns([PORTRAIT, PORTRAIT, RECEIPT, RECEIPT, PORTRAIT], 'Auto', true)).toEqual([
+    { start: 0, end: 2, paper: PAPER_SIZES_PT.A4 },
+    { start: 2, end: 4, paper: { width: 281, height: 842 } },
+    { start: 4, end: 5, paper: PAPER_SIZES_PT.A4 },
+  ]);
+});
+
+test('planPaperRuns keeps near-identical scans in one run (no render per page)', () => {
+  const runs = planPaperRuns([RECEIPT, { width: 625, height: 1860 }, { width: 615, height: 1850 }], 'Auto', true);
+  expect(runs).toHaveLength(1);
+  expect(runs[0]).toMatchObject({ start: 0, end: 3 });
+});
+
+test('planPaperRuns turns A4 / Letter landscape for landscape pages only', () => {
+  expect(planPaperRuns([PORTRAIT, LANDSCAPE, RECEIPT], 'A4', true)).toEqual([
+    { start: 0, end: 1, paper: PAPER_SIZES_PT.A4 },
+    { start: 1, end: 2, paper: A4_LAND },
+    { start: 2, end: 3, paper: PAPER_SIZES_PT.A4 },
+  ]);
+  expect(planPaperRuns([LANDSCAPE, LANDSCAPE], 'Letter', true)).toEqual([
+    { start: 0, end: 2, paper: { width: 792, height: 612 } },
+  ]);
+});
+
+test('planPaperRuns treats unreadable sizes as A4 portrait pages', () => {
+  expect(planPaperRuns([null, PORTRAIT, { width: 0, height: 0 }], 'Auto', true)).toEqual([
+    { start: 0, end: 3, paper: PAPER_SIZES_PT.A4 },
+  ]);
+});
+
+describe('generatePdf with mixed page shapes', () => {
+  const pages = ['file:///p0.jpg', 'file:///p1.jpg', 'file:///p2.jpg'];
+  beforeEach(() => {
+    sizesByUri = { 'file:///p0.jpg': PORTRAIT, 'file:///p1.jpg': LANDSCAPE, 'file:///p2.jpg': PORTRAIT };
+    let n = 0;
+    mockPrint.mockImplementation(() => Promise.resolve({ uri: `file:///Caches/Print/run${n++}.pdf` }));
+    native.mergePdfs = jest.fn((_inputs: string[], out: string) => Promise.resolve(out));
+  });
+  afterEach(() => {
+    mockPrint.mockReset();
+    mockPrint.mockResolvedValue({ uri: 'file:///output.pdf' });
+  });
+
+  test('renders one print job per run and merges them in order', async () => {
+    const uri = await generatePdf(pages, { pageSize: 'Auto', searchable: true });
+    expect(mockPrint).toHaveBeenCalledTimes(3);
+    expect(mockPrint.mock.calls.map(c => [c[0].width, c[0].height])).toEqual([[595, 842], [842, 595], [595, 842]]);
+    expect(mockPrint.mock.calls[1][0].html).toContain('@page{size:842pt 595pt;margin:0}');
+    // Each run carries only its own pages, with the text layer.
+    expect(mockPrint.mock.calls.map(c => c[0].html.match(/class="s"/g).length)).toEqual([1, 1, 1]);
+    expect(mockPrint.mock.calls[1][0].html).toContain('Total &lt;due&gt;');
+    expect(native.mergePdfs).toHaveBeenCalledWith(
+      ['file:///Caches/Print/run0.pdf', 'file:///Caches/Print/run1.pdf', 'file:///Caches/Print/run2.pdf'],
+      expect.stringMatching(/^file:\/\/\/Caches\/Print\/merged-[a-z0-9]+\.pdf$/),
+    );
+    expect(uri).toMatch(/merged-/);
+    // The intermediate runs are gone; the result is not.
+    for (const r of ['run0', 'run1', 'run2']) {
+      expect(FileSystem.deleteAsync).toHaveBeenCalledWith(`file:///Caches/Print/${r}.pdf`, { idempotent: true });
+    }
+    expect(FileSystem.deleteAsync).not.toHaveBeenCalledWith(uri, expect.anything());
+  });
+
+  test('overlays get each page index and its own box size', async () => {
+    const overlay = jest.fn(() => '');
+    await generatePdf(pages, { pageSize: 'Auto', overlayHtml: overlay });
+    const calls = overlay.mock.calls as unknown as [number, { width: number; height: number }][];
+    expect(calls.map(c => c[0])).toEqual([0, 1, 2]);
+    // The scans are within the A4 snap, so each box nearly fills its own sheet.
+    expect(calls.map(([, b]) => [Math.round(b.width), Math.round(b.height)])).toEqual([
+      [595, 842],
+      [842, 595],
+      [595, 842],
+    ]);
+  });
+
+  test('progress runs once through the pages, then reports rendering once', async () => {
+    const onProgress = jest.fn();
+    await generatePdf(pages, { pageSize: 'Auto', onProgress });
+    expect(onProgress.mock.calls).toEqual([
+      [0, 3, 'preparing'],
+      [1, 3, 'preparing'],
+      [2, 3, 'preparing'],
+      [3, 3, 'rendering'],
+    ]);
+  });
+
+  test('a document of one shape keeps the single render (no merge)', async () => {
+    sizesByUri = {};
+    await generatePdf(pages, { pageSize: 'Auto' });
+    expect(mockPrint).toHaveBeenCalledTimes(1);
+    expect(native.mergePdfs).not.toHaveBeenCalled();
+  });
+
+  test('A4 setting: the landscape page gets A4 landscape', async () => {
+    await generatePdf(pages, { pageSize: 'A4' });
+    expect(mockPrint.mock.calls.map(c => [c[0].width, c[0].height])).toEqual([[595, 842], [842, 595], [595, 842]]);
+  });
+
+  test('older builds without mergePdfs keep one paper size for everything', async () => {
+    delete native.mergePdfs;
+    await generatePdf(pages, { pageSize: 'Auto' });
+    expect(mockPrint).toHaveBeenCalledTimes(1);
+    expect(mockPrint.mock.calls[0][0]).toMatchObject({ width: 595, height: 842 });
+    expect(mockPrint.mock.calls[0][0].html.match(/class="s"/g)).toHaveLength(3);
+  });
+
+  test('a failed merge falls back to one paper size and cleans up the runs', async () => {
+    native.mergePdfs = jest.fn(() => Promise.reject(new Error('ERR_PDF_MERGE')));
+    const uri = await generatePdf(pages, { pageSize: 'Auto' });
+    expect(mockPrint).toHaveBeenCalledTimes(4);
+    expect(mockPrint.mock.calls[3][0].html.match(/class="s"/g)).toHaveLength(3);
+    expect(uri).toBe('file:///Caches/Print/run3.pdf');
+    for (const r of ['run0', 'run1', 'run2']) {
+      expect(FileSystem.deleteAsync).toHaveBeenCalledWith(`file:///Caches/Print/${r}.pdf`, { idempotent: true });
+    }
+  });
+
+  test('cancelling between runs deletes the finished runs and never merges', async () => {
+    const c = new AbortController();
+    let n = 0;
+    mockPrint.mockImplementation(() => {
+      const uri = `file:///Caches/Print/run${n++}.pdf`;
+      if (n === 1) setTimeout(() => c.abort(), 0);
+      return new Promise(r => setTimeout(() => r({ uri }), 5));
+    });
+    await expect(generatePdf(pages, { pageSize: 'Auto', signal: c.signal })).rejects.toBeInstanceOf(PdfCancelledError);
+    await new Promise(r => setTimeout(r, 20));
+    expect(native.mergePdfs).not.toHaveBeenCalled();
+    expect(mockPrint).toHaveBeenCalledTimes(1);
+    expect(FileSystem.deleteAsync).toHaveBeenCalledWith('file:///Caches/Print/run0.pdf', { idempotent: true });
+  });
+
+  test('a render error in a later run deletes the earlier runs', async () => {
+    let n = 0;
+    mockPrint.mockImplementation(() =>
+      n++ === 1 ? Promise.reject(new Error('WebKit died')) : Promise.resolve({ uri: `file:///Caches/Print/run${n - 1}.pdf` }),
+    );
+    await expect(generatePdf(pages, { pageSize: 'Auto' })).rejects.toMatchObject({ kind: 'render' });
+    expect(FileSystem.deleteAsync).toHaveBeenCalledWith('file:///Caches/Print/run0.pdf', { idempotent: true });
+    expect(native.mergePdfs).not.toHaveBeenCalled();
+  });
 });
