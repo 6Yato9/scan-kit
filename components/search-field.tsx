@@ -1,0 +1,47 @@
+// components/search-field.tsx
+// Search field with a leading search icon, shared by Home and Files.
+import { StyleSheet, TextInput, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useTheme } from '@/contexts/theme-context';
+import { Radius, Spacing, Type } from '@/lib/theme';
+
+export function SearchField({
+  value,
+  onChangeText,
+  placeholder = 'Search documents and text',
+}: {
+  value: string;
+  onChangeText: (s: string) => void;
+  placeholder?: string;
+}) {
+  const { colors } = useTheme();
+  return (
+    <View style={[styles.search, { backgroundColor: colors.input }]}>
+      <Ionicons name="search" size={17} color={colors.muted} />
+      <TextInput
+        style={[Type.body, styles.input, { color: colors.text }]}
+        placeholder={placeholder}
+        placeholderTextColor={colors.muted}
+        value={value}
+        onChangeText={onChangeText}
+        clearButtonMode="while-editing"
+        returnKeyType="search"
+        autoCorrect={false}
+        autoCapitalize="none"
+        accessibilityLabel="Search documents"
+      />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  search: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    borderRadius: Radius.md,
+    paddingHorizontal: Spacing.md,
+    height: 40,
+  },
+  input: { flex: 1, paddingVertical: 0, height: 40 },
+});

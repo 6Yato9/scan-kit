@@ -16,11 +16,13 @@ import { useScan } from '@/contexts/scan-context';
 import { useTheme } from '@/contexts/theme-context';
 import { selection, tapMedium } from '@/lib/haptics';
 
-const TAB_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
-  index: 'home',
-  files: 'document-text',
-  tools: 'grid',
-  me: 'settings-outline',
+// Filled glyph for the active tab, outline for the rest.
+type IconName = keyof typeof Ionicons.glyphMap;
+const TAB_ICONS: Record<string, { active: IconName; inactive: IconName }> = {
+  index: { active: 'home', inactive: 'home-outline' },
+  files: { active: 'documents', inactive: 'documents-outline' },
+  tools: { active: 'grid', inactive: 'grid-outline' },
+  me: { active: 'settings', inactive: 'settings-outline' },
 };
 
 const TAB_LABELS: Record<string, string> = {
@@ -33,7 +35,7 @@ const TAB_LABELS: Record<string, string> = {
 // Number of routes including the non-navigable scan button
 const ROUTE_COUNT = 5;
 
-function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
+function FloatingTabBar({ state, navigation, descriptors }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
   const { width: screenWidth } = useWindowDimensions();
   const { isDark, colors } = useTheme();
@@ -115,6 +117,12 @@ function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
     };
   }, []);
 
+  // A screen can hide the bar (Files does while selecting, so its own action
+  // bar takes this place, like the toolbar in Photos).
+  const focusedOptions = descriptors[state.routes[state.index].key]?.options;
+  const hidden = (focusedOptions?.tabBarStyle as { display?: string } | undefined)?.display === 'none';
+  if (hidden) return null;
+
   return (
     <View
       onLayout={onBarLayout}
@@ -168,15 +176,16 @@ function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
                 if (id) router.push({ pathname: '/viewer', params: { id } });
               }}
               style={styles.scanBtn}
-              accessibilityLabel="Scan document"
+              accessibilityRole="button"
+              accessibilityLabel="Scan a document"
             >
               <View
                 style={[
                   styles.scanCircle,
-                  { backgroundColor: colors.accent, shadowColor: colors.accent },
+                  { backgroundColor: colors.accentFill, shadowColor: colors.accentFill },
                 ]}
               >
-                <Ionicons name="camera" size={30} color="#fff" />
+                <Ionicons name="camera" size={30} color={colors.onAccent} />
               </View>
             </Pressable>
           );
@@ -191,11 +200,12 @@ function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
               if (!isFocused) { selection(); navigation.navigate(route.name); }
             }}
             style={styles.tabBtn}
-            accessibilityRole="button"
+            accessibilityRole="tab"
+            accessibilityState={{ selected: isFocused }}
             accessibilityLabel={TAB_LABELS[route.name] ?? route.name}
           >
             <Ionicons
-              name={TAB_ICONS[route.name] ?? 'help-circle'}
+              name={TAB_ICONS[route.name] ? TAB_ICONS[route.name][isFocused ? 'active' : 'inactive'] : 'ellipse-outline'}
               size={22}
               color={color}
             />
@@ -261,6 +271,7 @@ const styles = StyleSheet.create({
   },
   tabLabel: {
     fontSize: 10,
+    fontWeight: '500',
     marginBottom: 4,
   },
   scanBtn: {

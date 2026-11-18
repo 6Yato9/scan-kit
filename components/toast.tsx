@@ -11,7 +11,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { Animated, StyleSheet, Text, View } from 'react-native';
+import { AccessibilityInfo, Animated, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/theme-context';
 
@@ -23,7 +23,7 @@ const VISIBLE_MS = 1800;
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const insets = useSafeAreaInsets();
-  const { isDark } = useTheme();
+  const { colors } = useTheme();
   const [message, setMessage] = useState<string | null>(null);
 
   const opacity = useRef(new Animated.Value(0)).current;
@@ -33,6 +33,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const show = useCallback((msg: string) => {
     if (hideTimer.current) clearTimeout(hideTimer.current);
     setMessage(msg);
+    AccessibilityInfo.announceForAccessibility(msg);
     opacity.setValue(0);
     translateY.setValue(20);
     Animated.parallel([
@@ -64,19 +65,20 @@ export function ToastProvider({ children }: { children: ReactNode }) {
           pointerEvents="none"
           style={[
             styles.wrapper,
-            { bottom: insets.bottom + 96, opacity, transform: [{ translateY }] },
+            { bottom: insets.bottom + 140, opacity, transform: [{ translateY }] },
           ]}
         >
           <View
             style={[
               styles.toast,
-              { backgroundColor: isDark ? 'rgba(245,245,245,0.96)' : 'rgba(28,28,30,0.94)' },
+              // Inverse surface: dark pill in light mode, light pill in dark mode.
+              { backgroundColor: colors.text },
             ]}
           >
             <Text
-              allowFontScaling={false}
+              maxFontSizeMultiplier={1.4}
               numberOfLines={2}
-              style={[styles.text, { color: isDark ? '#1a1a1a' : '#fff' }]}
+              style={[styles.text, { color: colors.bg }]}
             >
               {message}
             </Text>

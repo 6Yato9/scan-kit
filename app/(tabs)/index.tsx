@@ -1,273 +1,138 @@
 // app/(tabs)/index.tsx
+// Home: search everything, and the most recent documents.
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import {
-  Alert,
-  FlatList,
-  Image,
-  Pressable,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import * as Crypto from 'expo-crypto';
-import { Document, PageFilter } from '@/types/document';
-import {
-  getDocuments,
-  deleteDocument,
-  updateDocument,
-  saveDocument,
-  getSortPreference,
-  saveSortPreference,
-  getFolders,
-  SortKey,
-} from '@/lib/storage';
-import { deleteDocumentFiles, copyDocumentFiles, appendPages } from '@/lib/files';
+import { Document } from '@/types/document';
+import { getDocuments, getSortPreference, saveSortPreference, getFolders, SortKey } from '@/lib/storage';
 import { useScan } from '@/contexts/scan-context';
 import { useTheme } from '@/contexts/theme-context';
-import { notifySuccess } from '@/lib/haptics';
 import { EmptyState } from '@/components/empty-state';
-import { DocActionsSheet } from '@/components/doc-actions-sheet';
-import { RenameSheet } from '@/components/rename-sheet';
-import { MergeSheet } from '@/components/merge-sheet';
-import { MoveFolderSheet } from '@/components/move-folder-sheet';
+import { DocumentRow, DocumentRowSkeleton } from '@/components/document-card';
 import { SortSheet } from '@/components/sort-sheet';
+import { SectionLabel } from '@/components/section-label';
+import { HeaderIconButton } from '@/components/screen-header';
+import { useDocumentActions } from '@/components/document-actions';
+import { SearchField } from '@/components/search-field';
+import { matchesQuery, sortDocuments } from '@/lib/doc-list';
+import { HIT, Spacing, Type } from '@/lib/theme';
 
-function sortDocuments(docs: Document[], key: SortKey): Document[] {
-  switch (key) {
-    case 'dateModified':
-      return [...docs].sort((a, b) => b.updatedAt - a.updatedAt);
-    case 'nameAZ':
-      return [...docs].sort((a, b) => a.name.localeCompare(b.name));
-    default:
-      return [...docs].sort((a, b) => b.createdAt - a.createdAt);
-  }
-}
+const RECENT_LIMIT = 10;
 
 export default function HomeScreen() {
   const [documents, setDocuments] = useState<Document[]>([]);
   const [sortKey, setSortKey] = useState<SortKey>('dateAdded');
   const [sortSheetVisible, setSortSheetVisible] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [docActionsTarget, setDocActionsTarget] = useState<Document | null>(null);
-  const [renameTarget, setRenameTarget] = useState<Document | null>(null);
-  const [mergeTarget, setMergeTarget] = useState<Document | null>(null);
-  const [moveFolderTarget, setMoveFolderTarget] = useState<Document | null>(null);
   const [folders, setFolders] = useState<string[]>([]);
   const [loaded, setLoaded] = useState(false);
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { lastSaved, triggerScan } = useScan();
   const { colors } = useTheme();
+  const actions = useDocumentActions({ documents, setDocuments, folders, setFolders });
 
   const load = useCallback(async () => {
-    const [docs, sort, fldrs] = await Promise.all([getDocuments(), getSortPreference(), getFolders()]);
-    setDocuments(docs);
-    setSortKey(sort);
-    setFolders(fldrs);
-    setLoaded(true);
+    try {
+      const [docs, sort, fldrs] = await Promise.all([getDocuments(), getSortPreference(), getFolders()]);
+      setDocuments(docs);
+      setSortKey(sort);
+      setFolders(fldrs);
+    } finally {
+      setLoaded(true);
+    }
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
   useEffect(() => { if (lastSaved > 0) load(); }, [lastSaved, load]);
 
-  const displayed = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    const filtered = q
-      ? documents.filter(d => d.name.toLowerCase().includes(q) || (d.ocrText?.toLowerCase().includes(q) ?? false))
-      : documents;
+  const q = searchQuery.trim().toLowerCase();
+  const { displayed, capped } = useMemo(() => {
+    const filtered = q ? documents.filter(d => matchesQuery(d, q)) : documents;
     const sorted = sortDocuments(filtered, sortKey);
-    return q ? sorted : sorted.slice(0, 10);
-  }, [documents, searchQuery, sortKey]);
-
-  const handleDelete = useCallback(async (doc: Document) => {
-    Alert.alert('Delete document?', `"${doc.name}" will be permanently deleted.`, [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          await deleteDocument(doc.id);
-          deleteDocumentFiles(doc.id);
-          setDocuments(prev => prev.filter(d => d.id !== doc.id));
-          notifySuccess();
-        },
-      },
-    ]);
-  }, []);
-
-  const handleDuplicate = useCallback(async (doc: Document) => {
-    try {
-      const newId = Crypto.randomUUID();
-      const now = Date.now();
-      if (doc.pdfUri) {
-        const { copyPdfToStorage } = await import('@/lib/files');
-        const storedUri = copyPdfToStorage(doc.pdfUri, newId);
-        const newDoc: Document = {
-          id: newId,
-          name: `Copy of ${doc.name}`,
-          pages: [],
-          pdfUri: storedUri,
-          folder: doc.folder,
-          createdAt: now,
-          updatedAt: now,
-        };
-        await saveDocument(newDoc);
-        setDocuments(prev => [newDoc, ...prev]);
-      } else {
-        const newPages = copyDocumentFiles(doc.id, newId, doc.pages);
-        const newDoc: Document = {
-          id: newId,
-          name: `Copy of ${doc.name}`,
-          pages: newPages,
-          filters: doc.filters ? [...doc.filters] : undefined,
-          adjustments: doc.adjustments ? doc.adjustments.map(a => ({ ...a })) : undefined,
-          folder: doc.folder,
-          createdAt: now,
-          updatedAt: now,
-        };
-        await saveDocument(newDoc);
-        setDocuments(prev => [newDoc, ...prev]);
-      }
-    } catch (err) {
-      console.error('Duplicate failed', err);
-      Alert.alert('Duplicate Failed', 'Could not duplicate the document.');
-    }
-  }, []);
-
-  const handleRename = useCallback(async (doc: Document, newName: string) => {
-    try {
-      const updated = { ...doc, name: newName, updatedAt: Date.now() };
-      await updateDocument(updated);
-      setDocuments(prev => prev.map(d => (d.id === doc.id ? updated : d)));
-      setRenameTarget(null);
-    } catch (err) {
-      console.error('Rename failed', err);
-      Alert.alert('Rename failed', err instanceof Error ? err.message : 'Could not rename document.');
-    }
-  }, []);
-
-  const handleMerge = useCallback(async (targetDoc: Document, sourceDoc: Document) => {
-    try {
-      // Non-destructive merge: source document is preserved. Pages are copied into target.
-      const newPageUris = appendPages(sourceDoc.pages, targetDoc.id, targetDoc.pages.length);
-      const targetFilters: PageFilter[] = targetDoc.filters ?? targetDoc.pages.map(() => 'original' as PageFilter);
-      const sourceFilters: PageFilter[] = sourceDoc.filters ?? sourceDoc.pages.map(() => 'original' as PageFilter);
-      const combinedFilters = [...targetFilters, ...sourceFilters];
-      const allOriginal = combinedFilters.every(f => f === 'original');
-
-      const defaultAdj = { brightness: 0, contrast: 0, saturation: 0 };
-      const targetAdj = targetDoc.adjustments ?? targetDoc.pages.map(() => ({ ...defaultAdj }));
-      const sourceAdj = sourceDoc.adjustments ?? sourceDoc.pages.map(() => ({ ...defaultAdj }));
-      const combinedAdj = [...targetAdj, ...sourceAdj];
-      const allDefault = combinedAdj.every(a => a.brightness === 0 && a.contrast === 0 && a.saturation === 0);
-
-      const updated: Document = {
-        ...targetDoc,
-        pages: [...targetDoc.pages, ...newPageUris],
-        filters: allOriginal ? undefined : combinedFilters,
-        adjustments: allDefault ? undefined : combinedAdj,
-        updatedAt: Date.now(),
-      };
-      await updateDocument(updated);
-      setDocuments(prev => prev.map(d => (d.id === updated.id ? updated : d)));
-    } catch (err) {
-      console.error('Merge failed', err);
-      Alert.alert('Merge failed', err instanceof Error ? err.message : 'Could not merge documents.');
-    }
-  }, []);
+    if (q) return { displayed: sorted, capped: false };
+    return { displayed: sorted.slice(0, RECENT_LIMIT), capped: sorted.length > RECENT_LIMIT };
+  }, [documents, q, sortKey]);
 
   const handleSort = useCallback(async (key: SortKey) => {
     setSortKey(key);
     await saveSortPreference(key);
   }, []);
 
-  const handleMoveToFolder = useCallback(async (doc: Document, folder: string | null) => {
-    try {
-      const updated: Document = { ...doc, folder: folder ?? undefined, updatedAt: Date.now() };
-      await updateDocument(updated);
-      setDocuments(prev => prev.map(d => (d.id === doc.id ? updated : d)));
-      setMoveFolderTarget(null);
-    } catch (err) {
-      console.error('Move to folder failed', err);
-      Alert.alert('Move failed', err instanceof Error ? err.message : 'Could not move document.');
-    }
-  }, []);
+  const scan = useCallback(async () => {
+    const id = await triggerScan();
+    if (id) router.push({ pathname: '/viewer', params: { id } });
+  }, [triggerScan, router]);
+
+  const showList = loaded && (documents.length > 0 || !!q);
 
   return (
     <View style={[styles.container, { paddingTop: insets.top, backgroundColor: colors.bg }]}>
       <View style={styles.header}>
-        <Text style={[styles.title, { color: colors.text }]}>Recent</Text>
-        <Pressable style={styles.sortBtnRow} onPress={() => setSortSheetVisible(true)} hitSlop={12} accessibilityRole="button" accessibilityLabel="Sort">
-          <Ionicons name="swap-vertical" size={16} color={colors.accent} />
-          <Text style={[styles.sortBtn, { color: colors.accent }]}>Sort</Text>
-        </Pressable>
+        <Text style={[styles.title, { color: colors.text }]} accessibilityRole="header">Home</Text>
+        <HeaderIconButton icon="swap-vertical" label="Sort documents" color={colors.accent} size={22} onPress={() => setSortSheetVisible(true)} />
       </View>
 
       <View style={styles.searchRow}>
-        <TextInput
-          style={[styles.searchInput, { backgroundColor: colors.input, color: colors.text }]}
-          placeholder="Search documents…"
-          placeholderTextColor={colors.muted}
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-          clearButtonMode="while-editing"
-          returnKeyType="search"
-        />
+        <SearchField value={searchQuery} onChangeText={setSearchQuery} />
       </View>
 
-      <FlatList
-        data={displayed}
-        keyExtractor={d => d.id}
-        contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + 110 }, displayed.length === 0 && styles.listContentEmpty]}
-        ListEmptyComponent={
-          !loaded ? (
-            <View style={styles.empty}>
-              <Text style={[styles.emptyText, { color: colors.muted }]}>Loading…</Text>
-            </View>
-          ) : searchQuery.trim() ? (
-            <EmptyState variant="no-search-results" query={searchQuery.trim()} />
-          ) : (
-            <EmptyState
-              variant="no-docs"
-              actionLabel="Scan a document"
-              onAction={async () => {
-                const id = await triggerScan();
-                if (id) router.push({ pathname: '/viewer', params: { id } });
-              }}
-            />
-          )
-        }
-        renderItem={({ item }) => (
-          <Pressable
-            style={[styles.row, { backgroundColor: colors.card }]}
-            onPress={() => router.push({ pathname: '/viewer', params: { id: item.id } })}
-            onLongPress={() => setDocActionsTarget(item)}
-          >
-            {item.pdfUri ? (
-              <View style={[styles.thumb, { backgroundColor: colors.placeholder, alignItems: 'center', justifyContent: 'center' }]}>
-                <Ionicons name="document-text" size={28} color={colors.muted} />
+      {!loaded ? (
+        <View style={styles.listContent}>
+          <SectionLabel style={styles.sectionLabel}>Recent</SectionLabel>
+          {[0, 1, 2, 3].map(i => <DocumentRowSkeleton key={i} />)}
+        </View>
+      ) : !showList ? (
+        <View style={[styles.flex, { paddingBottom: insets.bottom + 72 }]}>
+        <EmptyState
+          variant="no-docs"
+          actionLabel="Scan a document"
+          actionIcon="camera-outline"
+          onAction={scan}
+          secondaryLabel="Import from Photos"
+          onSecondaryAction={() => router.navigate({ pathname: '/files', params: { action: 'importImages' } })}
+        />
+        </View>
+      ) : (
+        <FlatList
+          data={displayed}
+          keyExtractor={d => d.id}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + 110 }, displayed.length === 0 && styles.listContentEmpty]}
+          ListHeaderComponent={
+            displayed.length > 0 ? (
+              <View style={styles.sectionRow}>
+                <SectionLabel style={styles.sectionLabel}>{q ? 'Results' : 'Recent'}</SectionLabel>
+                {capped && (
+                  <Pressable
+                    onPress={() => router.navigate('/files')}
+                    hitSlop={10}
+                    style={styles.seeAll}
+                    accessibilityRole="button"
+                    accessibilityLabel={`See all ${documents.length} documents`}
+                  >
+                    <Text style={[Type.subhead, { color: colors.accent }]}>See all</Text>
+                  </Pressable>
+                )}
               </View>
-            ) : item.pages[0] ? (
-              <Image source={{ uri: `${item.pages[0]}?v=${item.updatedAt}` }} style={styles.thumb} resizeMode="cover" />
-            ) : (
-              <View style={[styles.thumb, { backgroundColor: colors.placeholder }]} />
-            )}
-            <View style={styles.rowInfo}>
-              <Text style={[styles.rowName, { color: colors.text }]} numberOfLines={1}>{item.name}</Text>
-              <Text style={[styles.rowMeta, { color: colors.muted }]}>
-                {item.pdfUri ? 'PDF' : `${item.pages.length} page${item.pages.length !== 1 ? 's' : ''}`}
-                {' · '}
-                {new Date(item.updatedAt).toLocaleDateString()}
-              </Text>
+            ) : null
+          }
+          ListEmptyComponent={
+            <View style={[styles.flex, { paddingBottom: insets.bottom + 72 }]}>
+              <EmptyState variant="no-search-results" query={searchQuery.trim()} />
             </View>
-            <Text style={[styles.chevron, { color: colors.border }]}>›</Text>
-          </Pressable>
-        )}
-      />
+          }
+          renderItem={({ item }) => (
+            <DocumentRow
+              document={item}
+              onPress={() => router.push({ pathname: '/viewer', params: { id: item.id } })}
+              onLongPress={() => actions.openActions(item)}
+            />
+          )}
+        />
+      )}
 
       <SortSheet
         visible={sortSheetVisible}
@@ -275,93 +140,28 @@ export default function HomeScreen() {
         onSort={handleSort}
         onClose={() => setSortSheetVisible(false)}
       />
-
-      <DocActionsSheet
-        visible={docActionsTarget !== null}
-        document={docActionsTarget}
-        onRename={doc => { setDocActionsTarget(null); setRenameTarget(doc); }}
-        onDuplicate={doc => { setDocActionsTarget(null); handleDuplicate(doc).catch(console.error); }}
-        onMerge={doc => {
-          setDocActionsTarget(null);
-          if (doc.pdfUri) {
-            Alert.alert('Cannot merge', 'PDF documents can\'t be merged. Only scanned image documents support merging.');
-            return;
-          }
-          setMergeTarget(doc);
-        }}
-        onDelete={doc => { setDocActionsTarget(null); handleDelete(doc); }}
-        onMoveToFolder={doc => { setDocActionsTarget(null); setMoveFolderTarget(doc); }}
-        onClose={() => setDocActionsTarget(null)}
-      />
-
-      <RenameSheet
-        visible={renameTarget !== null}
-        document={renameTarget}
-        onRename={handleRename}
-        onDelete={handleDelete}
-        onClose={() => setRenameTarget(null)}
-      />
-
-      <MergeSheet
-        visible={mergeTarget !== null}
-        targetDoc={mergeTarget}
-        allDocs={documents}
-        onMerge={handleMerge}
-        onClose={() => setMergeTarget(null)}
-      />
-
-      <MoveFolderSheet
-        visible={moveFolderTarget !== null}
-        document={moveFolderTarget}
-        folders={folders}
-        onMove={handleMoveToFolder}
-        onClose={() => setMoveFolderTarget(null)}
-      />
+      {actions.sheets}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  flex: { flex: 1 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
+    paddingLeft: 20,
+    paddingRight: Spacing.sm,
     paddingTop: 14,
-    paddingBottom: 8,
+    paddingBottom: Spacing.sm,
   },
   title: { fontSize: 30, fontWeight: '800', letterSpacing: -0.5 },
-  sortBtnRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  sortBtn: { fontSize: 14, fontWeight: '600' },
-  searchRow: { paddingHorizontal: 14, paddingBottom: 10 },
-  searchInput: {
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    fontSize: 15,
-  },
-  listContent: { paddingHorizontal: 14 },
+  searchRow: { paddingHorizontal: Spacing.gutter, paddingBottom: Spacing.xs },
+  listContent: { paddingHorizontal: Spacing.gutter },
   listContentEmpty: { flexGrow: 1 },
-  empty: { alignItems: 'center', paddingTop: 60 },
-  emptyText: { fontSize: 15, textAlign: 'center' },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderRadius: 12,
-    marginBottom: 8,
-    padding: 10,
-    gap: 12,
-  },
-  thumb: {
-    width: 48,
-    height: 64,
-    borderRadius: 6,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  rowInfo: { flex: 1 },
-  rowName: { fontSize: 15, fontWeight: '600' },
-  rowMeta: { fontSize: 12, marginTop: 2 },
-  chevron: { fontSize: 20 },
+  sectionRow: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' },
+  sectionLabel: { marginTop: Spacing.lg },
+  seeAll: { minHeight: HIT / 2, justifyContent: 'flex-end', marginBottom: Spacing.sm, marginRight: Spacing.xs },
 });

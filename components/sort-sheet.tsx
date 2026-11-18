@@ -1,9 +1,6 @@
 // components/sort-sheet.tsx
-import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import { BottomSheet } from '@/components/bottom-sheet';
+import { BottomSheet, SheetGroup, SheetHeader, SheetRow } from '@/components/bottom-sheet';
 import { SortKey } from '@/lib/storage';
-import { useTheme } from '@/contexts/theme-context';
 
 type Props = {
   visible: boolean;
@@ -12,43 +9,29 @@ type Props = {
   onClose: () => void;
 };
 
-const OPTIONS: { key: SortKey; label: string; sub: string }[] = [
-  { key: 'dateAdded', label: 'Date Added', sub: 'Newest first' },
-  { key: 'dateModified', label: 'Last Modified', sub: 'Recently edited first' },
-  { key: 'nameAZ', label: 'Name A–Z', sub: 'Alphabetical order' },
+const OPTIONS: { key: SortKey; label: string; sub: string; icon: 'calendar-outline' | 'time-outline' | 'text-outline' }[] = [
+  { key: 'dateAdded', label: 'Date added', sub: 'Newest first', icon: 'calendar-outline' },
+  { key: 'dateModified', label: 'Last modified', sub: 'Recently edited first', icon: 'time-outline' },
+  { key: 'nameAZ', label: 'Name', sub: 'A to Z', icon: 'text-outline' },
 ];
 
 export function SortSheet({ visible, current, onSort, onClose }: Props) {
-  const { colors } = useTheme();
   return (
-    <BottomSheet visible={visible} onClose={onClose}>
-      <Text style={[styles.heading, { color: colors.text }]}>Sort by</Text>
-      {OPTIONS.map(({ key, label, sub }) => (
-        <Pressable
-          key={key}
-          style={[styles.option, { borderBottomColor: colors.border }]}
-          onPress={() => { onSort(key); onClose(); }}
-        >
-          <View style={styles.optionText}>
-            <Text style={[styles.optionLabel, { color: colors.text }]}>{label}</Text>
-            <Text style={[styles.optionSub, { color: colors.faint }]}>{sub}</Text>
-          </View>
-          {current === key && <Ionicons name="checkmark" size={20} color={colors.accent} />}
-        </Pressable>
-      ))}
+    <BottomSheet visible={visible} onClose={onClose} variant="grouped">
+      <SheetHeader title="Sort by" />
+      <SheetGroup style={{ marginBottom: 0 }}>
+        {OPTIONS.map(({ key, label, sub, icon }, i) => (
+          <SheetRow
+            key={key}
+            icon={icon}
+            label={label}
+            detail={sub}
+            selected={current === key}
+            last={i === OPTIONS.length - 1}
+            onPress={() => { onSort(key); onClose(); }}
+          />
+        ))}
+      </SheetGroup>
     </BottomSheet>
   );
 }
-
-const styles = StyleSheet.create({
-  heading: { fontSize: 18, fontWeight: '700', marginBottom: 12 },
-  option: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 14,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  optionText: { flex: 1 },
-  optionLabel: { fontSize: 16, fontWeight: '500' },
-  optionSub: { fontSize: 12, marginTop: 2 },
-});

@@ -1,17 +1,20 @@
 // components/error-boundary.tsx
+// Last-resort screen when rendering throws. It reads colors straight from
+// lib/theme (not the theme context) so it still works if the provider itself
+// is what failed, and it follows the system appearance. The raw error is never
+// shown to users; in development builds a "Show details" toggle reveals it.
 import { Component, ErrorInfo, ReactNode } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Appearance, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { Colors, HIT, Radius, Spacing, Type } from '@/lib/theme';
 
 type Props = { children: ReactNode };
-type State = { hasError: boolean; error: Error | null };
+type State = { hasError: boolean; error: Error | null; showDetails: boolean };
 
-// Deliberately uses no theme context: the boundary must keep working even if
-// the theme provider itself is what threw. Neutral dark card with light text,
-// readable in both light and dark system appearances.
 export class ErrorBoundary extends Component<Props, State> {
-  state: State = { hasError: false, error: null };
+  state: State = { hasError: false, error: null, showDetails: false };
 
-  static getDerivedStateFromError(error: Error): State {
+  static getDerivedStateFromError(error: Error): Partial<State> {
     return { hasError: true, error };
   }
 
@@ -20,71 +23,66 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   reset = () => {
-    this.setState({ hasError: false, error: null });
+    this.setState({ hasError: false, error: null, showDetails: false });
   };
 
   render() {
-    if (this.state.hasError) {
-      return (
-        <View style={styles.container}>
-          <View style={styles.card}>
-            <Text style={styles.title}>Something went wrong</Text>
-            <Text style={styles.message}>
-              {this.state.error?.message ?? 'An unexpected error occurred.'}
-            </Text>
-            <Pressable
-              style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}
-              onPress={this.reset}
-            >
-              <Text style={styles.buttonText}>Try Again</Text>
-            </Pressable>
+    if (!this.state.hasError) return this.props.children;
+
+    const c = Colors[Appearance.getColorScheme() === 'dark' ? 'dark' : 'light'];
+    return (
+      <View style={[styles.container, { backgroundColor: c.bg }]}>
+        <View style={styles.card}>
+          <View style={[styles.iconCircle, { backgroundColor: c.accentLight }]}>
+            <Ionicons name="alert-circle-outline" size={40} color={c.accent} />
           </View>
+          <Text style={[Type.title, styles.title, { color: c.text }]} accessibilityRole="header">
+            Something went wrong
+          </Text>
+          <Text style={[Type.callout, styles.message, { color: c.muted }]}>
+            Your documents are safe. Try again, and if this keeps happening, restart Scan Kit.
+          </Text>
+          <Pressable
+            style={({ pressed }) => [styles.button, { backgroundColor: c.accentFill }, pressed && styles.pressed]}
+            onPress={this.reset}
+            accessibilityRole="button"
+          >
+            <Text style={[Type.headline, { color: c.onAccent }]}>Try again</Text>
+          </Pressable>
+          {__DEV__ && this.state.error ? (
+            <>
+              <Pressable
+                onPress={() => this.setState(s => ({ showDetails: !s.showDetails }))}
+                style={styles.details}
+                accessibilityRole="button"
+              >
+                <Text style={[Type.subhead, { color: c.accent }]}>
+                  {this.state.showDetails ? 'Hide details' : 'Show details'}
+                </Text>
+              </Pressable>
+              {this.state.showDetails && (
+                <ScrollView style={[styles.detailBox, { backgroundColor: c.card }]}>
+                  <Text selectable style={[Type.caption, { color: c.subtext }]}>
+                    {String(this.state.error.stack ?? this.state.error.message)}
+                  </Text>
+                </ScrollView>
+              )}
+            </>
+          ) : null}
         </View>
-      );
-    }
-    return this.props.children;
+      </View>
+    );
   }
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#111',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 24,
-  },
-  card: {
-    width: '100%',
-    maxWidth: 360,
-    alignItems: 'center',
-  },
-  title: {
-    color: '#fff',
-    fontSize: 20,
-    fontWeight: '700',
-    marginBottom: 10,
-    textAlign: 'center',
-  },
-  message: {
-    color: '#9ca3af',
-    fontSize: 13,
-    lineHeight: 18,
-    textAlign: 'center',
-    marginBottom: 24,
-  },
-  button: {
-    backgroundColor: '#2563eb',
-    paddingVertical: 12,
-    paddingHorizontal: 28,
-    borderRadius: 10,
-  },
-  buttonPressed: {
-    opacity: 0.8,
-  },
-  buttonText: {
-    color: '#fff',
-    fontSize: 15,
-    fontWeight: '600',
-  },
+  container: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: Spacing.xxl },
+  card: { width: '100%', maxWidth: 360, alignItems: 'center' },
+  iconCircle: { width: 80, height: 80, borderRadius: 40, alignItems: 'center', justifyContent: 'center', marginBottom: Spacing.xl },
+  title: { textAlign: 'center', marginBottom: Spacing.sm },
+  message: { textAlign: 'center', lineHeight: 21, marginBottom: Spacing.xxl },
+  button: { alignSelf: 'stretch', height: 50, borderRadius: Radius.md, alignItems: 'center', justifyContent: 'center' },
+  pressed: { opacity: 0.8 },
+  details: { minHeight: HIT, justifyContent: 'center', marginTop: Spacing.sm },
+  detailBox: { alignSelf: 'stretch', maxHeight: 200, borderRadius: Radius.sm, padding: Spacing.md },
 });

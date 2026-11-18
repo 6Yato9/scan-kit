@@ -1,9 +1,13 @@
 // components/empty-state.tsx
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+// Every empty list uses this, with an action wherever one makes sense.
+import { StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/theme-context';
+import { PrimaryButton } from '@/components/primary-button';
+import { Spacing, Type } from '@/lib/theme';
 
 type Variant = 'no-docs' | 'empty-folder' | 'no-search-results';
+type IconName = keyof typeof Ionicons.glyphMap;
 
 type Props = {
   variant?: Variant;
@@ -11,37 +15,55 @@ type Props = {
   query?: string;
   onAction?: () => void;
   actionLabel?: string;
+  actionIcon?: IconName;
+  /** Optional second, quieter action (e.g. "Import from Photos"). */
+  onSecondaryAction?: () => void;
+  secondaryLabel?: string;
+  /** Override the variant's copy. */
+  title?: string;
+  subtitle?: string;
+  icon?: IconName;
 };
 
-const COPY: Record<Variant, { title: string; subtitle: string; icon: keyof typeof Ionicons.glyphMap }> = {
-  'no-docs':           { icon: 'scan-outline',        title: 'No scans yet',         subtitle: 'Tap the camera button to scan your first document' },
-  'empty-folder':      { icon: 'folder-open-outline', title: 'This folder is empty', subtitle: 'Long-press a document elsewhere to move it here' },
-  'no-search-results': { icon: 'search-outline',      title: 'No results',           subtitle: 'Try a different search term' },
+const COPY: Record<Variant, { title: string; subtitle: string; icon: IconName }> = {
+  'no-docs':           { icon: 'scan-outline',        title: 'No documents yet',      subtitle: 'Scan a document with the camera or import one to get started.' },
+  'empty-folder':      { icon: 'folder-open-outline', title: 'This folder is empty',  subtitle: 'Long-press a document and choose Move to folder to add it here.' },
+  'no-search-results': { icon: 'search-outline',      title: 'No results',            subtitle: 'Try a different search term.' },
 };
 
-export function EmptyState({ variant = 'no-docs', folderName, query, onAction, actionLabel }: Props) {
+export function EmptyState({
+  variant = 'no-docs',
+  folderName,
+  query,
+  onAction,
+  actionLabel,
+  actionIcon,
+  onSecondaryAction,
+  secondaryLabel,
+  title,
+  subtitle,
+  icon,
+}: Props) {
   const { colors } = useTheme();
   const copy = COPY[variant];
-  const title = variant === 'empty-folder' && folderName
-    ? `"${folderName}" is empty`
-    : copy.title;
-  const subtitle = variant === 'no-search-results' && query
-    ? `No documents match "${query}"`
-    : copy.subtitle;
+  const heading = title
+    ?? (variant === 'empty-folder' && folderName ? `“${folderName}” is empty` : copy.title);
+  const body = subtitle
+    ?? (variant === 'no-search-results' && query ? `No documents match “${query}”.` : copy.subtitle);
   return (
     <View style={styles.container}>
-      <Ionicons name={copy.icon} size={64} color={colors.muted} style={styles.icon} />
-      <Text style={[styles.title, { color: colors.text }]}>{title}</Text>
-      <Text style={[styles.subtitle, { color: colors.faint }]}>{subtitle}</Text>
+      <View style={[styles.iconCircle, { backgroundColor: colors.accentLight }]}>
+        <Ionicons name={icon ?? copy.icon} size={36} color={colors.accent} />
+      </View>
+      <Text style={[Type.title, styles.title, { color: colors.text }]}>{heading}</Text>
+      <Text style={[Type.callout, styles.subtitle, { color: colors.muted }]}>{body}</Text>
       {onAction && actionLabel ? (
-        <Pressable
-          onPress={onAction}
-          style={[styles.cta, { backgroundColor: colors.accent }]}
-          accessibilityRole="button"
-          accessibilityLabel={actionLabel}
-        >
-          <Text style={styles.ctaText}>{actionLabel}</Text>
-        </Pressable>
+        <View style={styles.actions}>
+          <PrimaryButton title={actionLabel} icon={actionIcon} onPress={onAction} />
+          {onSecondaryAction && secondaryLabel ? (
+            <PrimaryButton title={secondaryLabel} variant="secondary" onPress={onSecondaryAction} />
+          ) : null}
+        </View>
       ) : null}
     </View>
   );
@@ -52,31 +74,18 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 48,
+    paddingHorizontal: Spacing.xxxl + Spacing.sm,
+    paddingVertical: Spacing.xxxl,
   },
-  icon: {
-    marginBottom: 20,
+  iconCircle: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: Spacing.xl,
   },
-  title: {
-    fontSize: 22,
-    fontWeight: '700',
-    marginBottom: 10,
-    textAlign: 'center',
-  },
-  subtitle: {
-    fontSize: 15,
-    textAlign: 'center',
-    lineHeight: 22,
-  },
-  cta: {
-    marginTop: 24,
-    paddingHorizontal: 24,
-    paddingVertical: 13,
-    borderRadius: 14,
-  },
-  ctaText: {
-    color: '#fff',
-    fontSize: 15,
-    fontWeight: '700',
-  },
+  title: { marginBottom: Spacing.sm, textAlign: 'center' },
+  subtitle: { textAlign: 'center', lineHeight: 21 },
+  actions: { marginTop: Spacing.xxl, alignSelf: 'stretch', gap: Spacing.sm },
 });

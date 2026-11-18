@@ -1,4 +1,5 @@
 // app/(tabs)/files.tsx
+// Files: every document, in folders, with search, sort, import and multi-select.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
@@ -10,107 +11,134 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
+import { useLocalSearchParams, useNavigation, useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { BottomSheet } from '@/components/bottom-sheet';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
-import * as Crypto from 'expo-crypto';
-import { Document, PageFilter } from '@/types/document';
+import { Document } from '@/types/document';
 import {
   getDocuments,
-  saveDocument,
-  updateDocument,
-  deleteDocument,
   deleteDocuments,
+  deleteFolder,
   getSortPreference,
   saveSortPreference,
   getFolders,
+  patchDocument,
+  renameFolder,
   saveFolder,
   getScanSettings,
   SortKey,
 } from '@/lib/storage';
-import {
-  copyDocumentFiles,
-  deleteDocumentFiles,
-  appendPages,
-  copyPdfToStorage,
-} from '@/lib/files';
+import { deleteDocumentFiles } from '@/lib/files';
+import { mergeIntoNew } from '@/lib/doc-ops';
+import { matchesQuery, sortDocuments } from '@/lib/doc-list';
 import { useScan } from '@/contexts/scan-context';
 import { useTheme } from '@/contexts/theme-context';
-import { notifySuccess } from '@/lib/haptics';
-import { DocumentCard } from '@/components/document-card';
+import { notifySuccess, selection } from '@/lib/haptics';
+import { BottomSheet, SheetGroup, SheetHeader, SheetRow } from '@/components/bottom-sheet';
+import { DocumentCard, DocumentCardSkeleton } from '@/components/document-card';
 import { EmptyState } from '@/components/empty-state';
-import { RenameSheet } from '@/components/rename-sheet';
 import { SortSheet } from '@/components/sort-sheet';
-import { DocActionsSheet } from '@/components/doc-actions-sheet';
-import { MergeSheet } from '@/components/merge-sheet';
 import { MoveFolderSheet } from '@/components/move-folder-sheet';
+import { HeaderIconButton, HeaderTextButton } from '@/components/screen-header';
+import { PrimaryButton } from '@/components/primary-button';
+import { SearchField } from '@/components/search-field';
+import { useDocumentActions } from '@/components/document-actions';
+import { useToast } from '@/components/toast';
+import { HIT, Radius, Spacing, Type } from '@/lib/theme';
 
-function sortDocuments(docs: Document[], key: SortKey): Document[] {
-  switch (key) {
-    case 'dateModified':
-      return [...docs].sort((a, b) => b.updatedAt - a.updatedAt);
-    case 'nameAZ':
-      return [...docs].sort((a, b) => a.name.localeCompare(b.name));
-    default:
-      return [...docs].sort((a, b) => b.createdAt - a.createdAt);
-  }
+type IconName = React.ComponentProps<typeof Ionicons>['name'];
+
+function countLabel(n: number): string {
+  return n === 0 ? 'Empty' : `${n} document${n === 1 ? '' : 's'}`;
 }
+type FolderPrompt = { mode: 'create' } | { mode: 'rename'; folder: string };
 
 export default function FilesScreen() {
   const [documents, setDocuments] = useState<Document[]>([]);
   const [folders, setFolders] = useState<string[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [activeFolder, setActiveFolder] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>('dateAdded');
   const [sortSheetVisible, setSortSheetVisible] = useState(false);
+  const [addSheetVisible, setAddSheetVisible] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [docActionsTarget, setDocActionsTarget] = useState<Document | null>(null);
-  const [renameTarget, setRenameTarget] = useState<Document | null>(null);
-  const [mergeTarget, setMergeTarget] = useState<Document | null>(null);
-  const [moveFolderTarget, setMoveFolderTarget] = useState<Document | null>(null);
-  const [newFolderVisible, setNewFolderVisible] = useState(false);
-  const [newFolderName, setNewFolderName] = useState('');
-  const newFolderInputRef = useRef<TextInput>(null);
+  const [selecting, setSelecting] = useState(false);
+  const [bulkMoveVisible, setBulkMoveVisible] = useState(false);
+  const [folderActions, setFolderActions] = useState<string | null>(null);
+  const [folderPrompt, setFolderPrompt] = useState<FolderPrompt | null>(null);
+  const [folderName, setFolderNameState] = useState('');
+  const folderNameRef = useRef('');
+  const setFolderName = useCallback((v: string) => { folderNameRef.current = v; setFolderNameState(v); }, []);
+  const pendingAfterSheet = useRef<(() => void) | null>(null);
+  const importing = useRef(false);
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const params = useLocalSearchParams<{ action?: string }>();
   const { lastSaved, saveAndOpen } = useScan();
   const { colors } = useTheme();
+  const toast = useToast();
+
+  const enterSelect = useCallback((doc?: Document) => {
+    setSelecting(true);
+    setSelectedIds(doc ? new Set([doc.id]) : new Set());
+  }, []);
+  const exitSelect = useCallback(() => {
+    setSelecting(false);
+    setSelectedIds(new Set());
+  }, []);
+
+  const actions = useDocumentActions({ documents, setDocuments, folders, setFolders, onSelect: enterSelect });
+
+  // While selecting, the selection toolbar replaces the tab bar.
+  const navigation = useNavigation();
+  useEffect(() => {
+    navigation.setOptions({ tabBarStyle: selecting ? { display: 'none' } : undefined });
+  }, [navigation, selecting]);
+  // Leaving the tab ends selection, so the tab bar is never left hidden.
+  useFocusEffect(useCallback(() => () => exitSelect(), [exitSelect]));
 
   const load = useCallback(async () => {
-    const [docs, sort, fldrs] = await Promise.all([
-      getDocuments(),
-      getSortPreference(),
-      getFolders(),
-    ]);
-    setDocuments(docs);
-    setSortKey(sort);
-    setFolders(fldrs);
-    // Don't clear selectedIds here — the user might be mid-multi-select and just
-    // switched tabs / came back. Selection is only cleared on explicit Cancel or
-    // after a bulk action.
+    try {
+      const [docs, sort, fldrs] = await Promise.all([getDocuments(), getSortPreference(), getFolders()]);
+      setDocuments(docs);
+      setSortKey(sort);
+      setFolders(fldrs);
+      // Keep the selection across tab switches, minus anything that vanished.
+      const ids = new Set(docs.map(d => d.id));
+      setSelectedIds(prev => new Set([...prev].filter(id => ids.has(id))));
+    } finally {
+      setLoaded(true);
+    }
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
   useEffect(() => { if (lastSaved > 0) load(); }, [lastSaved, load]);
 
-  const displayedDocuments = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    let filtered = q
-      ? documents.filter(d => d.name.toLowerCase().includes(q) || (d.ocrText?.toLowerCase().includes(q) ?? false))
-      : documents;
-    if (activeFolder !== null) {
-      filtered = filtered.filter(d => d.folder === activeFolder);
-    }
-    return sortDocuments(filtered, sortKey);
-  }, [documents, searchQuery, sortKey, activeFolder]);
+  // A folder that was deleted or renamed elsewhere can't stay selected.
+  useEffect(() => {
+    if (activeFolder !== null && !folders.includes(activeFolder)) setActiveFolder(null);
+  }, [folders, activeFolder]);
 
-  const isMultiSelectMode = selectedIds.size > 0;
+  const q = searchQuery.trim().toLowerCase();
+  const displayedDocuments = useMemo(() => {
+    let filtered = q ? documents.filter(d => matchesQuery(d, q)) : documents;
+    if (activeFolder !== null) filtered = filtered.filter(d => d.folder === activeFolder);
+    return sortDocuments(filtered, sortKey);
+  }, [documents, q, sortKey, activeFolder]);
+
+  const selectedDocs = useMemo(
+    () => documents.filter(d => selectedIds.has(d.id)),
+    [documents, selectedIds],
+  );
+
+  // ── Import ────────────────────────────────────────────────────────────────
 
   const handleImportImages = useCallback(async () => {
+    if (importing.current) return;
+    importing.current = true;
     try {
       // Honor the user's Scan Quality preference when importing from the library.
       const settings = await getScanSettings();
@@ -118,6 +146,7 @@ export default function FilesScreen() {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
         allowsMultipleSelection: true,
+        orderedSelection: true,
         quality: qualityMap[settings.quality],
       });
       if (result.canceled || !result.assets.length) return;
@@ -125,11 +154,15 @@ export default function FilesScreen() {
       if (id) router.push({ pathname: '/viewer', params: { id } });
     } catch (err) {
       console.error('Import images failed', err);
-      Alert.alert('Import Failed', 'Could not import images.');
+      Alert.alert("Couldn't import photos", 'Check that Scan Kit can access your photos, then try again.');
+    } finally {
+      importing.current = false;
     }
   }, [saveAndOpen, router]);
 
   const handleImportFiles = useCallback(async () => {
+    if (importing.current) return;
+    importing.current = true;
     try {
       const result = await DocumentPicker.getDocumentAsync({
         type: ['application/pdf', 'image/*'],
@@ -143,12 +176,14 @@ export default function FilesScreen() {
       if (id) router.push({ pathname: '/viewer', params: { id } });
     } catch (err) {
       console.error('Import files failed', err);
-      Alert.alert('Import Failed', 'Could not import file.');
+      Alert.alert("Couldn't import file", 'Choose a PDF or an image and try again.');
+    } finally {
+      importing.current = false;
     }
   }, [saveAndOpen, router]);
 
-  // Handle URL params from Tools tab shortcuts. Clear the param after firing so
-  // it doesn't re-trigger every time the tab regains focus.
+  // Handle URL params from Tools / Home shortcuts. Clear the param after firing
+  // so it doesn't re-trigger every time the tab regains focus.
   useEffect(() => {
     if (!params.action) return;
     const action = params.action;
@@ -157,152 +192,94 @@ export default function FilesScreen() {
     else if (action === 'importFiles') handleImportFiles();
   }, [params.action, router, handleImportImages, handleImportFiles]);
 
-  const handleNewFolder = useCallback(() => {
-    setNewFolderName('');
-    setNewFolderVisible(true);
-    setTimeout(() => newFolderInputRef.current?.focus(), 400);
-  }, []);
+  /** Close a sheet, then run `fn` once it is fully gone (native pickers need that). */
+  const afterAddSheet = (fn: () => void) => () => {
+    pendingAfterSheet.current = fn;
+    setAddSheetVisible(false);
+  };
 
-  const handleCreateFolder = useCallback(async () => {
-    if (!newFolderName.trim()) return;
-    await saveFolder(newFolderName.trim());
-    setFolders(await getFolders());
-    setNewFolderVisible(false);
-  }, [newFolderName]);
+  // ── Folders ───────────────────────────────────────────────────────────────
+
+  const openFolderPrompt = useCallback((p: FolderPrompt) => {
+    setFolderName(p.mode === 'rename' ? p.folder : '');
+    setFolderPrompt(p);
+  }, [setFolderName]);
+
+  const submitFolderPrompt = useCallback(async () => {
+    // Read the ref: a Return key press can arrive before the last keystroke's
+    // re-render, and the state captured here would miss that character.
+    const name = folderNameRef.current.trim();
+    if (!name || !folderPrompt) return;
+    try {
+      if (folderPrompt.mode === 'create') {
+        await saveFolder(name);
+        setFolders(await getFolders());
+        setActiveFolder(name);
+      } else {
+        await renameFolder(folderPrompt.folder, name);
+        setFolders(await getFolders());
+        if (activeFolder === folderPrompt.folder) setActiveFolder(name);
+        setDocuments(prev => prev.map(d => (d.folder === folderPrompt.folder ? { ...d, folder: name } : d)));
+      }
+      setFolderPrompt(null);
+    } catch (err) {
+      console.error('Folder update failed', err);
+      Alert.alert(folderPrompt.mode === 'create' ? "Couldn't create folder" : "Couldn't rename folder", 'Please try again.');
+    }
+  }, [folderPrompt, activeFolder]);
+
+  const confirmDeleteFolder = useCallback((folder: string) => {
+    const count = documents.filter(d => d.folder === folder).length;
+    Alert.alert(
+      `Delete “${folder}”?`,
+      count > 0
+        ? `The ${count} document${count === 1 ? '' : 's'} in it will be kept and moved out of the folder.`
+        : 'This folder is empty.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete folder',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteFolder(folder);
+              if (activeFolder === folder) setActiveFolder(null);
+              setDocuments(prev => prev.map(d => (d.folder === folder ? { ...d, folder: undefined } : d)));
+              setFolders(await getFolders());
+              toast.show('Folder deleted');
+            } catch (err) {
+              console.error('Delete folder failed', err);
+              Alert.alert("Couldn't delete folder", 'Please try again.');
+            }
+          },
+        },
+      ],
+    );
+  }, [documents, activeFolder, toast]);
+
+  // ── Selection ─────────────────────────────────────────────────────────────
+
+  const toggleSelected = useCallback((doc: Document) => {
+    selection();
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(doc.id)) next.delete(doc.id);
+      else next.add(doc.id);
+      return next;
+    });
+  }, []);
 
   const handleCardPress = useCallback((doc: Document) => {
-    if (isMultiSelectMode) {
-      setSelectedIds(prev => {
-        const next = new Set(prev);
-        if (next.has(doc.id)) next.delete(doc.id);
-        else next.add(doc.id);
-        return next;
-      });
-    } else {
-      router.push({ pathname: '/viewer', params: { id: doc.id } });
-    }
-  }, [isMultiSelectMode, router]);
+    if (selecting) toggleSelected(doc);
+    else router.push({ pathname: '/viewer', params: { id: doc.id } });
+  }, [selecting, toggleSelected, router]);
 
   const handleCardLongPress = useCallback((doc: Document) => {
-    if (isMultiSelectMode) {
-      setSelectedIds(prev => {
-        const next = new Set(prev);
-        if (next.has(doc.id)) next.delete(doc.id);
-        else next.add(doc.id);
-        return next;
-      });
-    } else {
-      setDocActionsTarget(doc);
-    }
-  }, [isMultiSelectMode]);
+    if (selecting) toggleSelected(doc);
+    else actions.openActions(doc);
+  }, [selecting, toggleSelected, actions]);
 
-  const handleRename = useCallback(async (doc: Document, newName: string) => {
-    try {
-      const updated = { ...doc, name: newName, updatedAt: Date.now() };
-      await updateDocument(updated);
-      setDocuments(prev => prev.map(d => (d.id === doc.id ? updated : d)));
-      setRenameTarget(null);
-    } catch (err) {
-      console.error('Rename failed', err);
-      Alert.alert('Rename failed', err instanceof Error ? err.message : 'Could not rename document.');
-    }
-  }, []);
-
-  const handleDelete = useCallback(async (doc: Document) => {
-    Alert.alert('Delete document?', `"${doc.name}" will be permanently deleted.`, [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          await deleteDocument(doc.id);
-          deleteDocumentFiles(doc.id);
-          setDocuments(prev => prev.filter(d => d.id !== doc.id));
-          notifySuccess();
-        },
-      },
-    ]);
-  }, []);
-
-  const handleDuplicate = useCallback(async (doc: Document) => {
-    try {
-      const newId = Crypto.randomUUID();
-      const now = Date.now();
-      if (doc.pdfUri) {
-        const storedUri = copyPdfToStorage(doc.pdfUri, newId);
-        const newDoc: Document = {
-          id: newId,
-          name: `Copy of ${doc.name}`,
-          pages: [],
-          pdfUri: storedUri,
-          folder: doc.folder,
-          createdAt: now,
-          updatedAt: now,
-        };
-        await saveDocument(newDoc);
-        setDocuments(prev => [newDoc, ...prev]);
-      } else {
-        const newPages = copyDocumentFiles(doc.id, newId, doc.pages);
-        const newDoc: Document = {
-          id: newId,
-          name: `Copy of ${doc.name}`,
-          pages: newPages,
-          filters: doc.filters ? [...doc.filters] : undefined,
-          adjustments: doc.adjustments ? doc.adjustments.map(a => ({ ...a })) : undefined,
-          folder: doc.folder,
-          createdAt: now,
-          updatedAt: now,
-        };
-        await saveDocument(newDoc);
-        setDocuments(prev => [newDoc, ...prev]);
-      }
-    } catch (err) {
-      console.error('Duplicate failed', err);
-      Alert.alert('Duplicate Failed', 'Could not duplicate the document.');
-    }
-  }, []);
-
-  const handleMerge = useCallback(async (targetDoc: Document, sourceDoc: Document) => {
-    try {
-      // Non-destructive merge: source document is preserved. Pages are copied into target.
-      const newPageUris = appendPages(sourceDoc.pages, targetDoc.id, targetDoc.pages.length);
-      const targetFilters: PageFilter[] = targetDoc.filters ?? targetDoc.pages.map(() => 'original' as PageFilter);
-      const sourceFilters: PageFilter[] = sourceDoc.filters ?? sourceDoc.pages.map(() => 'original' as PageFilter);
-      const combinedFilters = [...targetFilters, ...sourceFilters];
-      const allOriginal = combinedFilters.every(f => f === 'original');
-
-      const defaultAdj = { brightness: 0, contrast: 0, saturation: 0 };
-      const targetAdj = targetDoc.adjustments ?? targetDoc.pages.map(() => ({ ...defaultAdj }));
-      const sourceAdj = sourceDoc.adjustments ?? sourceDoc.pages.map(() => ({ ...defaultAdj }));
-      const combinedAdj = [...targetAdj, ...sourceAdj];
-      const allDefault = combinedAdj.every(a => a.brightness === 0 && a.contrast === 0 && a.saturation === 0);
-
-      const updated: Document = {
-        ...targetDoc,
-        pages: [...targetDoc.pages, ...newPageUris],
-        filters: allOriginal ? undefined : combinedFilters,
-        adjustments: allDefault ? undefined : combinedAdj,
-        updatedAt: Date.now(),
-      };
-      await updateDocument(updated);
-      setDocuments(prev => prev.map(d => (d.id === updated.id ? updated : d)));
-    } catch (err) {
-      console.error('Merge failed', err);
-      Alert.alert('Merge failed', err instanceof Error ? err.message : 'Could not merge documents.');
-    }
-  }, []);
-
-  const handleMoveToFolder = useCallback(async (doc: Document, folder: string | null) => {
-    try {
-      const updated: Document = { ...doc, folder: folder ?? undefined, updatedAt: Date.now() };
-      await updateDocument(updated);
-      setDocuments(prev => prev.map(d => (d.id === doc.id ? updated : d)));
-      setMoveFolderTarget(null);
-    } catch (err) {
-      console.error('Move to folder failed', err);
-      Alert.alert('Move failed', err instanceof Error ? err.message : 'Could not move document.');
-    }
-  }, []);
+  const allShownSelected = displayedDocuments.length > 0 && displayedDocuments.every(d => selectedIds.has(d.id));
 
   const handleSort = useCallback(async (key: SortKey) => {
     setSortKey(key);
@@ -310,67 +287,117 @@ export default function FilesScreen() {
   }, []);
 
   const handleBatchDelete = useCallback(() => {
+    const n = selectedIds.size;
+    if (n === 0) return;
     Alert.alert(
-      `Delete ${selectedIds.size} document${selectedIds.size !== 1 ? 's' : ''}?`,
-      'This cannot be undone.',
+      `Delete ${n} document${n !== 1 ? 's' : ''}?`,
+      'This can’t be undone.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
-            const ids = Array.from(selectedIds);
-            const idSet = new Set(ids);
-            await deleteDocuments(ids);
-            ids.forEach(id => deleteDocumentFiles(id));
-            setDocuments(prev => prev.filter(d => !idSet.has(d.id)));
-            setSelectedIds(new Set());
-            notifySuccess();
+            try {
+              const ids = Array.from(selectedIds);
+              const idSet = new Set(ids);
+              await deleteDocuments(ids);
+              ids.forEach(id => { try { deleteDocumentFiles(id); } catch {} });
+              setDocuments(prev => prev.filter(d => !idSet.has(d.id)));
+              exitSelect();
+              notifySuccess();
+              toast.show(`${n} document${n !== 1 ? 's' : ''} deleted`);
+            } catch (err) {
+              console.error('Batch delete failed', err);
+              Alert.alert("Couldn't delete documents", 'Please try again.');
+            }
           },
         },
-      ]
+      ],
     );
-  }, [selectedIds]);
+  }, [selectedIds, exitSelect, toast]);
+
+  const handleBatchMove = useCallback(async (docs: Document[], folder: string | null) => {
+    setBulkMoveVisible(false);
+    try {
+      const updatedAt = Date.now();
+      await Promise.all(docs.map(d => patchDocument(d.id, { folder: folder ?? undefined, updatedAt })));
+      const ids = new Set(docs.map(d => d.id));
+      setDocuments(prev => prev.map(d => (ids.has(d.id) ? { ...d, folder: folder ?? undefined, updatedAt } : d)));
+      exitSelect();
+      toast.show(folder ? `Moved to “${folder}”` : 'Removed from folder');
+    } catch (err) {
+      console.error('Batch move failed', err);
+      Alert.alert("Couldn't move documents", 'Please try again.');
+    }
+  }, [exitSelect, toast]);
+
+  const mergeable = selectedDocs.filter(d => !d.pdfUri && d.pages.length > 0);
+  const canMerge = selectedDocs.length >= 2 && mergeable.length === selectedDocs.length;
+
+  const handleBatchMerge = useCallback(async () => {
+    if (!canMerge) {
+      Alert.alert('Choose two or more scans', 'Imported PDFs can’t be merged. Select at least two scanned documents.');
+      return;
+    }
+    // Oldest first reads naturally as one document.
+    const ordered = [...mergeable].sort((a, b) => a.createdAt - b.createdAt);
+    try {
+      const merged = await mergeIntoNew(ordered, `Merged ${ordered[0].name}`);
+      setDocuments(prev => [merged, ...prev]);
+      exitSelect();
+      notifySuccess();
+      toast.show(`Merged ${ordered.length} documents`);
+    } catch (err) {
+      console.error('Batch merge failed', err);
+      Alert.alert("Couldn't merge documents", 'There may not be enough free space. Please try again.');
+    }
+  }, [canMerge, mergeable, exitSelect, toast]);
+
+  const createFolderFromMove = useCallback(async (name: string) => {
+    await saveFolder(name);
+    setFolders(await getFolders());
+  }, []);
+
+  // ── Render ────────────────────────────────────────────────────────────────
+
+  const tabBarClearance = insets.bottom + 8 + 64;
+  const empty = loaded && displayedDocuments.length === 0;
+  const selCount = selectedIds.size;
 
   return (
     <View style={[styles.container, { paddingTop: insets.top, backgroundColor: colors.bg }]}>
       <View style={styles.header}>
-        <Text style={[styles.title, { color: colors.text }]}>Files</Text>
-        <Pressable style={styles.sortBtnRow} onPress={() => setSortSheetVisible(true)} hitSlop={12} accessibilityRole="button" accessibilityLabel="Sort">
-          <Ionicons name="swap-vertical" size={16} color={colors.accent} />
-          <Text style={[styles.sortBtn, { color: colors.accent }]}>Sort</Text>
-        </Pressable>
+        {selecting ? (
+          <>
+            <Text style={[styles.title, { color: colors.text }]} accessibilityRole="header" numberOfLines={1}>
+              {selCount === 0 ? 'Select' : `${selCount} selected`}
+            </Text>
+            <View style={styles.headerActions}>
+              <HeaderTextButton
+                title={allShownSelected ? 'Deselect all' : 'Select all'}
+                onPress={() => setSelectedIds(allShownSelected ? new Set() : new Set(displayedDocuments.map(d => d.id)))}
+              />
+              <HeaderTextButton title="Done" emphasis onPress={exitSelect} />
+            </View>
+          </>
+        ) : (
+          <>
+            <Text style={[styles.title, { color: colors.text }]} accessibilityRole="header">Files</Text>
+            <View style={styles.headerActions}>
+              <HeaderIconButton icon="checkmark-circle-outline" label="Select documents" color={colors.accent} size={23} onPress={() => enterSelect()} disabled={documents.length === 0} />
+              <HeaderIconButton icon="swap-vertical" label="Sort documents" color={colors.accent} size={22} onPress={() => setSortSheetVisible(true)} />
+              <HeaderIconButton icon="add" label="Add documents or a folder" color={colors.accent} size={28} onPress={() => setAddSheetVisible(true)} />
+            </View>
+          </>
+        )}
       </View>
 
       <View style={styles.searchRow}>
-        <TextInput
-          style={[styles.searchInput, { backgroundColor: colors.input, color: colors.text }]}
-          placeholder="Search documents…"
-          placeholderTextColor={colors.muted}
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-          clearButtonMode="while-editing"
-          returnKeyType="search"
-        />
+        <SearchField value={searchQuery} onChangeText={setSearchQuery} />
       </View>
 
-      {/* Quick action bar */}
-      <View style={styles.actionBar}>
-        <Pressable style={[styles.actionBtn, { backgroundColor: colors.card }]} onPress={handleImportImages} accessibilityRole="button" accessibilityLabel="Import Images">
-          <Ionicons name="images-outline" size={16} color={colors.accent} />
-          <Text allowFontScaling={false} style={[styles.actionBtnText, { color: colors.text }]}>Import Images</Text>
-        </Pressable>
-        <Pressable style={[styles.actionBtn, { backgroundColor: colors.card }]} onPress={handleImportFiles} accessibilityRole="button" accessibilityLabel="Import Files">
-          <Ionicons name="cloud-download-outline" size={16} color={colors.accent} />
-          <Text allowFontScaling={false} style={[styles.actionBtnText, { color: colors.text }]}>Import Files</Text>
-        </Pressable>
-        <Pressable style={[styles.actionBtn, { backgroundColor: colors.card }]} onPress={handleNewFolder} accessibilityRole="button" accessibilityLabel="New Folder">
-          <Ionicons name="folder-open-outline" size={16} color={colors.accent} />
-          <Text allowFontScaling={false} style={[styles.actionBtnText, { color: colors.text }]}>New Folder</Text>
-        </Pressable>
-      </View>
-
-      {/* Folder chips */}
+      {/* Folder chips. Long-press a folder to rename or delete it. */}
       {folders.length > 0 && (
         <ScrollView
           horizontal
@@ -378,73 +405,77 @@ export default function FilesScreen() {
           style={styles.chipsScroll}
           contentContainerStyle={styles.chips}
         >
-          <Pressable
-            style={[styles.chip, { backgroundColor: colors.input }, activeFolder === null && { borderColor: colors.accent, backgroundColor: colors.accentLight }]}
-            onPress={() => setActiveFolder(null)}
-          >
-            <Text style={[styles.chipText, { color: colors.subtext }, activeFolder === null && { color: colors.accent, fontWeight: '700' }]}>All</Text>
-          </Pressable>
+          <FolderChip label="All" icon="albums-outline" active={activeFolder === null} onPress={() => setActiveFolder(null)} />
           {folders.map(f => (
-            <Pressable
+            <FolderChip
               key={f}
-              style={[styles.chip, { backgroundColor: colors.input }, activeFolder === f && { borderColor: colors.accent, backgroundColor: colors.accentLight }]}
-              onPress={() => setActiveFolder(f)}
-            >
-              <Text style={[styles.chipText, { color: colors.subtext }, activeFolder === f && { color: colors.accent, fontWeight: '700' }]}>{f}</Text>
-            </Pressable>
+              label={f}
+              icon={activeFolder === f ? 'folder-open' : 'folder-outline'}
+              active={activeFolder === f}
+              onPress={() => setActiveFolder(activeFolder === f ? null : f)}
+              onLongPress={() => setFolderActions(f)}
+            />
           ))}
         </ScrollView>
       )}
 
-      <FlatList
-        data={displayedDocuments}
-        keyExtractor={d => d.id}
-        numColumns={2}
-        style={styles.list}
-        contentContainerStyle={
-          displayedDocuments.length === 0
-            ? styles.emptyContent
-            // Clear the floating tab bar (insets.bottom + 8 + 64 tall), and the
-            // multi-select action bar when it's up. A static paddingBottom can't
-            // see insets, so it only cleared these by ~10px on a home-indicator device.
-            : [styles.gridContent, { paddingBottom: insets.bottom + (isMultiSelectMode ? 130 : 110) }]
-        }
-        ListEmptyComponent={
-          searchQuery.trim() ? (
-            <View style={styles.noResults}>
-              <Text style={[styles.noResultsText, { color: colors.muted }]}>No results for &ldquo;{searchQuery.trim()}&rdquo;</Text>
+      {!loaded ? (
+        <View style={styles.gridContent}>
+          {[0, 1].map(r => (
+            <View key={r} style={styles.skeletonRow}>
+              <DocumentCardSkeleton />
+              <DocumentCardSkeleton />
             </View>
-          ) : (
-            <EmptyState
-              variant={
-                searchQuery.trim() ? 'no-search-results'
-                : activeFolder !== null ? 'empty-folder'
-                : 'no-docs'
-              }
-              folderName={activeFolder ?? undefined}
-              query={searchQuery.trim()}
-            />
-          )
-        }
-        renderItem={({ item }) => (
-          <DocumentCard
-            document={item}
-            onPress={() => handleCardPress(item)}
-            onLongPress={() => handleCardLongPress(item)}
-            isSelected={selectedIds.has(item.id)}
-            isMultiSelectMode={isMultiSelectMode}
+          ))}
+        </View>
+      ) : empty ? (
+        <View style={[styles.flex, { paddingBottom: tabBarClearance }]}>{q ? (
+          <EmptyState variant="no-search-results" query={searchQuery.trim()} />
+        ) : activeFolder !== null ? (
+          <EmptyState variant="empty-folder" folderName={activeFolder} />
+        ) : (
+          <EmptyState
+            variant="no-docs"
+            subtitle="Import photos or PDFs, or scan a document with the camera button."
+            actionLabel="Import from Photos"
+            actionIcon="images-outline"
+            onAction={handleImportImages}
+            secondaryLabel="Import a file"
+            onSecondaryAction={handleImportFiles}
           />
-        )}
-      />
+        )}</View>
+      ) : (
+        <FlatList
+          data={displayedDocuments}
+          keyExtractor={d => d.id}
+          numColumns={2}
+          style={styles.list}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          // Clear the floating tab bar, and the selection bar when it's up.
+          contentContainerStyle={[styles.gridContent, { paddingBottom: tabBarClearance + 40 }]}
+          renderItem={({ item }) => (
+            <DocumentCard
+              document={item}
+              onPress={() => handleCardPress(item)}
+              onLongPress={() => handleCardLongPress(item)}
+              isSelected={selectedIds.has(item.id)}
+              isMultiSelectMode={selecting}
+            />
+          )}
+        />
+      )}
 
-      {isMultiSelectMode && (
-        <View style={[styles.multiBar, { paddingBottom: insets.bottom + 12, backgroundColor: colors.card }]}>
-          <Pressable style={[styles.cancelBtn, { backgroundColor: colors.secondary }]} onPress={() => setSelectedIds(new Set())}>
-            <Text style={[styles.cancelBtnText, { color: colors.text }]}>Cancel</Text>
-          </Pressable>
-          <Pressable style={[styles.deleteBtn, { backgroundColor: colors.dangerBg, borderColor: colors.dangerBorder }]} onPress={handleBatchDelete}>
-            <Text style={[styles.deleteBtnText, { color: colors.danger }]}>Delete ({selectedIds.size})</Text>
-          </Pressable>
+      {selecting && (
+        <View
+          style={[
+            styles.multiBar,
+            { bottom: insets.bottom + 8, backgroundColor: colors.card, borderColor: colors.border },
+          ]}
+        >
+          <BarButton icon="folder-outline" label="Move" disabled={selCount === 0} onPress={() => setBulkMoveVisible(true)} />
+          <BarButton icon="git-merge-outline" label="Merge" disabled={selCount < 2} onPress={handleBatchMerge} />
+          <BarButton icon="trash-outline" label="Delete" destructive disabled={selCount === 0} onPress={handleBatchDelete} />
         </View>
       )}
 
@@ -455,75 +486,173 @@ export default function FilesScreen() {
         onClose={() => setSortSheetVisible(false)}
       />
 
-      <DocActionsSheet
-        visible={docActionsTarget !== null}
-        document={docActionsTarget}
-        onRename={doc => { setDocActionsTarget(null); setRenameTarget(doc); }}
-        onDuplicate={doc => { setDocActionsTarget(null); handleDuplicate(doc).catch(console.error); }}
-        onMerge={doc => {
-          setDocActionsTarget(null);
-          if (doc.pdfUri) {
-            Alert.alert('Cannot merge', 'PDF documents can\'t be merged. Only scanned image documents support merging.');
-            return;
-          }
-          setMergeTarget(doc);
+      {/* Add: import or create a folder. Pickers open after the sheet is gone. */}
+      <BottomSheet
+        visible={addSheetVisible}
+        onClose={() => { pendingAfterSheet.current = null; setAddSheetVisible(false); }}
+        variant="grouped"
+        onDismissed={() => {
+          const fn = pendingAfterSheet.current;
+          pendingAfterSheet.current = null;
+          fn?.();
         }}
-        onSelect={doc => { setDocActionsTarget(null); setSelectedIds(new Set([doc.id])); }}
-        onDelete={doc => { setDocActionsTarget(null); handleDelete(doc); }}
-        onClose={() => setDocActionsTarget(null)}
-        onMoveToFolder={doc => { setDocActionsTarget(null); setMoveFolderTarget(doc); }}
-      />
+      >
+        <SheetHeader title="Add to Files" />
+        <SheetGroup>
+          <SheetRow icon="images-outline" label="Import from Photos" detail="One or more photos become one document" onPress={afterAddSheet(handleImportImages)} />
+          <SheetRow icon="document-attach-outline" label="Import a file" detail="A PDF or an image from Files" onPress={afterAddSheet(handleImportFiles)} last />
+        </SheetGroup>
+        <SheetGroup style={{ marginBottom: 0 }}>
+          <SheetRow icon="folder-outline" label="New folder" onPress={afterAddSheet(() => openFolderPrompt({ mode: 'create' }))} last />
+        </SheetGroup>
+      </BottomSheet>
 
-      <RenameSheet
-        visible={renameTarget !== null}
-        document={renameTarget}
-        onRename={handleRename}
-        onDelete={handleDelete}
-        onClose={() => setRenameTarget(null)}
-      />
+      {/* Folder actions (long-press a chip). */}
+      <BottomSheet
+        visible={folderActions !== null}
+        onClose={() => { pendingAfterSheet.current = null; setFolderActions(null); }}
+        variant="grouped"
+        onDismissed={() => {
+          const fn = pendingAfterSheet.current;
+          pendingAfterSheet.current = null;
+          fn?.();
+        }}
+      >
+        <SheetHeader
+          title={folderActions ?? ''}
+          subtitle={folderActions ? countLabel(documents.filter(d => d.folder === folderActions).length) : undefined}
+        />
+        <SheetGroup>
+          <SheetRow
+            icon="pencil-outline"
+            label="Rename folder"
+            onPress={() => {
+              const f = folderActions;
+              pendingAfterSheet.current = () => f && openFolderPrompt({ mode: 'rename', folder: f });
+              setFolderActions(null);
+            }}
+            last
+          />
+        </SheetGroup>
+        <SheetGroup style={{ marginBottom: 0 }}>
+          <SheetRow
+            icon="trash-outline"
+            label="Delete folder"
+            destructive
+            onPress={() => {
+              const f = folderActions;
+              pendingAfterSheet.current = () => f && confirmDeleteFolder(f);
+              setFolderActions(null);
+            }}
+            last
+          />
+        </SheetGroup>
+      </BottomSheet>
 
-      <MergeSheet
-        visible={mergeTarget !== null}
-        targetDoc={mergeTarget}
-        allDocs={documents}
-        onMerge={handleMerge}
-        onClose={() => setMergeTarget(null)}
-      />
-
-      <MoveFolderSheet
-        visible={moveFolderTarget !== null}
-        document={moveFolderTarget}
-        folders={folders}
-        onMove={handleMoveToFolder}
-        onClose={() => setMoveFolderTarget(null)}
-      />
-
-      <BottomSheet visible={newFolderVisible} onClose={() => setNewFolderVisible(false)}>
-        <Text style={[styles.sheetHeading, { color: colors.text }]}>New Folder</Text>
+      {/* New / rename folder. */}
+      <BottomSheet visible={folderPrompt !== null} onClose={() => setFolderPrompt(null)}>
+        <SheetHeader title={folderPrompt?.mode === 'rename' ? 'Rename folder' : 'New folder'} />
         <TextInput
-          ref={newFolderInputRef}
-          style={[styles.sheetInput, { borderColor: colors.border, color: colors.text, backgroundColor: colors.input }]}
-          value={newFolderName}
-          onChangeText={setNewFolderName}
+          autoFocus
+          style={[Type.body, styles.sheetInput, { color: colors.text, backgroundColor: colors.input }]}
+          value={folderName}
+          onChangeText={setFolderName}
           placeholder="Folder name"
-          placeholderTextColor={colors.faint}
+          placeholderTextColor={colors.muted}
           selectTextOnFocus
           returnKeyType="done"
-          onSubmitEditing={handleCreateFolder}
+          onSubmitEditing={submitFolderPrompt}
+          accessibilityLabel="Folder name"
         />
         <View style={styles.sheetRow}>
-          <Pressable style={[styles.sheetCancelBtn, { backgroundColor: colors.secondary }]} onPress={() => setNewFolderVisible(false)}>
-            <Text style={[styles.sheetCancelText, { color: colors.text }]}>Cancel</Text>
-          </Pressable>
-          <Pressable
-            style={[styles.sheetCreateBtn, { backgroundColor: colors.accent }, !newFolderName.trim() && styles.sheetBtnDisabled]}
-            onPress={handleCreateFolder}
-          >
-            <Text style={styles.sheetCreateText}>Create</Text>
-          </Pressable>
+          <PrimaryButton title="Cancel" variant="secondary" onPress={() => setFolderPrompt(null)} style={styles.flex} />
+          <PrimaryButton
+            title={folderPrompt?.mode === 'rename' ? 'Save' : 'Create'}
+            onPress={submitFolderPrompt}
+            disabled={!folderName.trim()}
+            style={styles.flex}
+          />
         </View>
       </BottomSheet>
+
+      <MoveFolderSheet
+        visible={bulkMoveVisible}
+        document={null}
+        documents={selectedDocs}
+        folders={folders}
+        onMove={() => {}}
+        onMoveMany={handleBatchMove}
+        onCreateFolder={createFolderFromMove}
+        onClose={() => setBulkMoveVisible(false)}
+      />
+
+      {actions.sheets}
     </View>
+  );
+}
+
+function FolderChip({
+  label,
+  icon,
+  active,
+  onPress,
+  onLongPress,
+}: {
+  label: string;
+  icon: IconName;
+  active: boolean;
+  onPress: () => void;
+  onLongPress?: () => void;
+}) {
+  const { colors } = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      onLongPress={onLongPress}
+      hitSlop={{ top: 4, bottom: 4 }}
+      accessibilityRole="button"
+      accessibilityState={{ selected: active }}
+      accessibilityLabel={label === 'All' ? 'All documents' : `Folder ${label}`}
+      accessibilityHint={onLongPress ? 'Long-press to rename or delete' : undefined}
+      style={({ pressed }) => [
+        styles.chip,
+        { backgroundColor: active ? colors.accentFill : colors.card, borderColor: active ? colors.accentFill : colors.border },
+        pressed && { opacity: 0.7 },
+      ]}
+    >
+      <Ionicons name={icon} size={16} color={active ? colors.onAccent : colors.muted} />
+      <Text style={[Type.subhead, { color: active ? colors.onAccent : colors.text }]} numberOfLines={1}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function BarButton({
+  icon,
+  label,
+  onPress,
+  disabled,
+  destructive,
+}: {
+  icon: IconName;
+  label: string;
+  onPress: () => void;
+  disabled?: boolean;
+  destructive?: boolean;
+}) {
+  const { colors } = useTheme();
+  const color = destructive ? colors.danger : colors.accent;
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled: !!disabled }}
+      style={({ pressed }) => [styles.barBtn, (pressed || disabled) && { opacity: disabled ? 0.35 : 0.6 }]}
+    >
+      <Ionicons name={icon} size={22} color={color} />
+      <Text style={[Type.caption, { color, fontWeight: '600' }]}>{label}</Text>
+    </Pressable>
   );
 }
 
@@ -533,98 +662,46 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
+    paddingLeft: 20,
+    paddingRight: Spacing.sm,
     paddingTop: 14,
-    paddingBottom: 8,
+    paddingBottom: Spacing.sm,
+    minHeight: 14 + HIT + Spacing.sm,
   },
-  title: { fontSize: 30, fontWeight: '800', letterSpacing: -0.5 },
-  sortBtnRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  sortBtn: { fontSize: 14, fontWeight: '600' },
-  searchRow: { paddingHorizontal: 14, paddingBottom: 6 },
-  searchInput: {
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    fontSize: 15,
-  },
-  actionBar: {
-    flexDirection: 'row',
-    paddingHorizontal: 14,
-    paddingBottom: 8,
-    gap: 8,
-  },
-  actionBtn: {
-    flex: 1,
-    borderRadius: 10,
-    paddingVertical: 9,
-    alignItems: 'center',
-    gap: 4,
-    shadowColor: '#000',
-    shadowOpacity: 0.06,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 2,
-  },
-  actionBtnText: { fontSize: 11, fontWeight: '600' },
-  chipsScroll: { maxHeight: 40, flexShrink: 0 },
-  list: { flex: 1 },
-  chips: { paddingHorizontal: 14, paddingBottom: 8, gap: 8, flexDirection: 'row' },
+  title: { fontSize: 30, fontWeight: '800', letterSpacing: -0.5, flexShrink: 1 },
+  headerActions: { flexDirection: 'row', alignItems: 'center' },
+  searchRow: { paddingHorizontal: Spacing.gutter, paddingBottom: Spacing.md },
+  chipsScroll: { flexGrow: 0, flexShrink: 0 },
+  chips: { paddingHorizontal: Spacing.gutter, paddingTop: Spacing.xs, paddingBottom: Spacing.sm, gap: Spacing.sm, flexDirection: 'row' },
   chip: {
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 20,
-    borderWidth: 1.5,
-    borderColor: 'transparent',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    height: 36,
+    paddingHorizontal: Spacing.md + 2,
+    borderRadius: Radius.pill,
+    borderWidth: StyleSheet.hairlineWidth,
   },
-  chipText: { fontSize: 13, fontWeight: '500' },
-  gridContent: { padding: 10 },
-  emptyContent: { flex: 1 },
-  noResults: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 80 },
-  noResultsText: { fontSize: 16 },
+  list: { flex: 1 },
+  gridContent: { paddingHorizontal: Spacing.gutter - 6, paddingTop: Spacing.xs },
+  skeletonRow: { flexDirection: 'row' },
   multiBar: {
     position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
+    left: Spacing.gutter,
+    right: Spacing.gutter,
+    height: 64,
+    borderRadius: 32,
+    borderWidth: StyleSheet.hairlineWidth,
     flexDirection: 'row',
-    gap: 12,
-    paddingHorizontal: 20,
-    paddingTop: 14,
+    alignItems: 'center',
     shadowColor: '#000',
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
     elevation: 8,
   },
-  cancelBtn: {
-    flex: 1,
-    borderRadius: 12,
-    padding: 15,
-    alignItems: 'center',
-  },
-  cancelBtnText: { fontSize: 16, fontWeight: '600' },
-  deleteBtn: {
-    flex: 1,
-    borderRadius: 12,
-    padding: 15,
-    alignItems: 'center',
-    borderWidth: 1.5,
-  },
-  deleteBtnText: { fontSize: 16, fontWeight: '600' },
-  sheetHeading: { fontSize: 17, fontWeight: '700', marginBottom: 14 },
-  sheetInput: {
-    borderWidth: 1.5,
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-    fontSize: 16,
-    marginBottom: 18,
-    minHeight: 52,
-  },
-  sheetRow: { flexDirection: 'row', gap: 12 },
-  sheetCancelBtn: { flex: 1, borderRadius: 12, padding: 15, alignItems: 'center' },
-  sheetCancelText: { fontSize: 16, fontWeight: '600' },
-  sheetCreateBtn: { flex: 1, borderRadius: 12, padding: 15, alignItems: 'center' },
-  sheetCreateText: { fontSize: 16, fontWeight: '700', color: '#fff' },
-  sheetBtnDisabled: { opacity: 0.4 },
+  barBtn: { flex: 1, height: 64, alignItems: 'center', justifyContent: 'center', gap: 2 },
+  sheetInput: { borderRadius: Radius.md, paddingHorizontal: Spacing.lg, minHeight: 50, marginBottom: Spacing.lg },
+  sheetRow: { flexDirection: 'row', gap: Spacing.md },
+  flex: { flex: 1 },
 });

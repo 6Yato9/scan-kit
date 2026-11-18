@@ -1,35 +1,123 @@
 // components/lock-gate.tsx
-// Whole-app biometric lock overlay. Wraps the app's navigator; when the lock is
-// enabled it covers ALL screens with a themed lock screen until the user
-// authenticates.
+// Whole-app biometric lock. The navigator underneath always stays mounted;
+// unmounting it (as an earlier version did) threw the user back to Home and
+// lost viewer / crop / annotate state and the viewer's baker.
+//
+// How the lock is drawn:
+//   - Cold start: an opaque in-tree overlay above the tabs (nothing native is
+//     presented yet).
+//   - Returning from the background: the `/lock` route, pushed as a
+//     full-screen modal. Native-stack presents it on top of whatever is
+//     already presented (viewer, annotate, tools), which an in-tree overlay or
+//     an RN <Modal> owned by the root cannot do. Bottom sheets hide themselves
+//     while locked (see useAppLocked in BottomSheet).
+//
+// Behaviour:
+//   - Locks on a cold start and whenever the app goes to the BACKGROUND. It
+//     does not lock on 'inactive' (Face ID prompt, Control Center, app
+//     switcher peek), which used to cause a double prompt.
+//   - Reacts to the setting immediately (subscribeAppLock), no restart needed.
 //
 // SAFETY: the user's documents are local-only with no backup, so this gate is
 // biased toward never trapping them:
-//   - No biometric hardware / auth throws → FAIL OPEN (unlock).
+//   - Nothing to authenticate with (no passcode, nothing enrolled, no
+//     hardware) or auth throws → FAIL OPEN (unlock).
 //   - Auth returns failure (cancel/fail) → stay locked but ALWAYS show a
-//     manual "Unlock" button. Never auto-loop the prompt.
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { AppState, AppStateStatus, Pressable, StyleSheet, Text, View } from 'react-native';
+//     manual Unlock button. Never auto-loop the prompt.
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { AppState, AppStateStatus, StyleSheet, Text, View } from 'react-native';
+import { usePathname, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/theme-context';
-import { authenticate } from '@/lib/biometrics';
-import { getAppLockEnabled } from '@/lib/storage';
+import { PrimaryButton } from '@/components/primary-button';
+import { authenticate, biometricKind, BiometricKind } from '@/lib/biometrics';
+import { getAppLockEnabled, subscribeAppLock } from '@/lib/storage';
+import { Spacing, Type } from '@/lib/theme';
+
+const LOCK_ROUTE = '/lock';
+
+type LockState = { locked: boolean; kind: BiometricKind; tryUnlock: () => void };
+
+const LockContext = createContext<LockState>({ locked: false, kind: 'passcode', tryUnlock: () => {} });
+
+/** True while the app lock is engaged. Sheets use it to step aside. */
+export function useAppLocked(): boolean {
+  return useContext(LockContext).locked;
+}
+
+export function useLockState(): LockState {
+  return useContext(LockContext);
+}
+
+const METHOD_LABEL: Record<BiometricKind, string> = {
+  faceId: 'Face ID',
+  touchId: 'Touch ID',
+  passcode: 'your passcode',
+};
+
+/** The lock screen itself, used by the cold-start overlay and the /lock route. */
+export function LockScreen() {
+  const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
+  const { kind, tryUnlock } = useLockState();
+  const method = METHOD_LABEL[kind];
+  return (
+    <View
+      style={[styles.lockScreen, { backgroundColor: colors.bg, paddingTop: insets.top, paddingBottom: insets.bottom + Spacing.xxl }]}
+      accessibilityViewIsModal
+    >
+      <View style={styles.lockBody}>
+        <View style={[styles.iconCircle, { backgroundColor: colors.accentLight }]}>
+          <Ionicons name="lock-closed" size={40} color={colors.accent} />
+        </View>
+        <Text style={[Type.title, styles.title, { color: colors.text }]} accessibilityRole="header">
+          Scan Kit is locked
+        </Text>
+        <Text style={[Type.callout, styles.subtitle, { color: colors.muted }]}>
+          Use {method} to see your documents.
+        </Text>
+      </View>
+      <View style={styles.footer}>
+        <PrimaryButton
+          title={kind === 'passcode' ? 'Unlock' : `Unlock with ${method}`}
+          icon={kind === 'touchId' ? 'finger-print' : 'lock-open-outline'}
+          onPress={tryUnlock}
+        />
+      </View>
+    </View>
+  );
+}
 
 export function LockGate({ children }: { children: React.ReactNode }) {
   const { colors } = useTheme();
-  const insets = useSafeAreaInsets();
+  const router = useRouter();
+  const pathname = usePathname();
 
-  // null = still loading the persisted flag (avoid flashing app content first).
+  // null = still loading the persisted flag (cover the app so nothing flashes).
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [locked, setLocked] = useState(false);
+  // True while the /lock route is on screen (pushed by us, not yet popped).
+  const [routeShown, setRouteShown] = useState(false);
+  const [kind, setKind] = useState<BiometricKind>('passcode');
 
-  // Prevents concurrent authenticate() prompts (mount + AppState 'active' could
-  // otherwise fire two prompts on top of each other).
+  // Prevents concurrent authenticate() prompts.
   const authingRef = useRef(false);
-  // Read the latest `locked` inside the AppState listener without re-subscribing.
   const lockedRef = useRef(locked);
   lockedRef.current = locked;
+  const appStateRef = useRef<AppStateStatus>(AppState.currentState);
+  const pathnameRef = useRef(pathname);
+  pathnameRef.current = pathname;
+  const routePushed = useRef(false);
+
+  const unlock = useCallback(() => {
+    setLocked(false);
+    if (routePushed.current) {
+      routePushed.current = false;
+      setRouteShown(false);
+      if (pathnameRef.current === LOCK_ROUTE) router.back();
+    }
+  }, [router]);
 
   const tryUnlock = useCallback(async () => {
     if (authingRef.current) return;
@@ -37,18 +125,20 @@ export function LockGate({ children }: { children: React.ReactNode }) {
     try {
       const result = await authenticate('Unlock Scan Kit');
       if (result === 'success' || result === 'unavailable') {
-        // 'unavailable' → FAIL OPEN: a missing/broken sensor must never brick.
-        setLocked(false);
+        // 'unavailable' → FAIL OPEN: a missing/broken sensor or a removed
+        // passcode must never brick the app.
+        unlock();
       }
       // 'failed' → stay locked; the Unlock button lets the user retry.
     } finally {
       authingRef.current = false;
     }
-  }, []);
+  }, [unlock]);
 
-  // On mount: load the flag. If enabled, lock immediately and prompt once.
+  // Load the flag once, then follow every change made in Settings.
   useEffect(() => {
     let cancelled = false;
+    biometricKind().then(k => { if (!cancelled) setKind(k); });
     getAppLockEnabled().then(on => {
       if (cancelled) return;
       setEnabled(on);
@@ -57,56 +147,66 @@ export function LockGate({ children }: { children: React.ReactNode }) {
         tryUnlock();
       }
     });
-    return () => { cancelled = true; };
-  }, [tryUnlock]);
+    const unsubscribe = subscribeAppLock(on => {
+      setEnabled(on);
+      biometricKind().then(setKind);
+      // Turning the lock on doesn't lock the current session (the user just
+      // authenticated to enable it); turning it off unlocks immediately.
+      if (!on) unlock();
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [tryUnlock, unlock]);
 
-  // Re-lock on background; re-prompt when returning to foreground (if locked).
+  // Lock when the app is backgrounded; prompt once when it comes back.
   useEffect(() => {
     if (!enabled) return;
     const sub = AppState.addEventListener('change', (next: AppStateStatus) => {
-      if (next === 'background' || next === 'inactive') {
+      const prev = appStateRef.current;
+      appStateRef.current = next;
+      if (next === 'background') {
         setLocked(true);
-      } else if (next === 'active') {
-        if (lockedRef.current) tryUnlock();
+        if (!routePushed.current && pathnameRef.current !== LOCK_ROUTE) {
+          routePushed.current = true;
+          setRouteShown(true);
+          router.push(LOCK_ROUTE);
+        }
+      } else if (next === 'active' && prev === 'background' && lockedRef.current) {
+        // Only after a real background trip: the Face ID sheet itself makes the
+        // app go inactive → active, and re-prompting then would loop.
+        tryUnlock();
       }
     });
     return () => sub.remove();
-  }, [enabled, tryUnlock]);
+  }, [enabled, tryUnlock, router]);
 
-  // Brief: don't flash app content before the lock can engage.
-  if (enabled === null) return null;
+  const isLocked = enabled === true && locked;
+  const value: LockState = { locked: isLocked, kind, tryUnlock };
 
-  if (enabled && locked) {
-    return (
-      <View style={[styles.lockScreen, { backgroundColor: colors.bg, paddingTop: insets.top, paddingBottom: insets.bottom }]}>
-        <View style={styles.lockBody}>
-          <View style={[styles.iconCircle, { backgroundColor: colors.accentLight }]}>
-            <Ionicons name="lock-closed" size={44} color={colors.accent} />
+  return (
+    <LockContext.Provider value={value}>
+      <View style={styles.root}>
+        {children}
+        {enabled === null && <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.bg }]} />}
+        {/* In-tree cover for a cold start, and a backstop under the /lock route. */}
+        {isLocked && (
+          <View style={StyleSheet.absoluteFill} pointerEvents={routeShown ? 'none' : 'auto'}>
+            <LockScreen />
           </View>
-          <Text style={[styles.title, { color: colors.text }]}>Scan Kit is locked</Text>
-          <Pressable
-            onPress={tryUnlock}
-            style={({ pressed }) => [
-              styles.unlockBtn,
-              { backgroundColor: colors.accent, opacity: pressed ? 0.85 : 1 },
-            ]}
-          >
-            <Ionicons name="finger-print" size={18} color="#fff" style={{ marginRight: 8 }} />
-            <Text style={styles.unlockText}>Unlock</Text>
-          </Pressable>
-        </View>
+        )}
       </View>
-    );
-  }
-
-  return <>{children}</>;
+    </LockContext.Provider>
+  );
 }
 
 const styles = StyleSheet.create({
-  lockScreen: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', zIndex: 1000 },
-  lockBody: { alignItems: 'center', paddingHorizontal: 32 },
-  iconCircle: { width: 96, height: 96, borderRadius: 48, alignItems: 'center', justifyContent: 'center', marginBottom: 24 },
-  title: { fontSize: 20, fontWeight: '700', marginBottom: 32 },
-  unlockBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 14, paddingHorizontal: 36, borderRadius: 12 },
-  unlockText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  root: { flex: 1 },
+  lockScreen: { flex: 1 },
+  lockBody: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: Spacing.xxxl },
+  iconCircle: { width: 88, height: 88, borderRadius: 44, alignItems: 'center', justifyContent: 'center', marginBottom: Spacing.xxl },
+  title: { textAlign: 'center', marginBottom: Spacing.sm },
+  subtitle: { textAlign: 'center' },
+  footer: { paddingHorizontal: Spacing.xxl },
 });

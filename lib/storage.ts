@@ -44,12 +44,14 @@ function withDocsLock<T>(fn: () => Promise<T>): Promise<T> {
 const docKey = (id: string) => `${DOC_PREFIX}${id}`;
 
 // ── Index helpers ────────────────────────────────────────────────────────────
-// Read the id index. If the index JSON is missing, treat as empty. If it's
-// corrupt, recover by scanning for `@scan_kit_doc:` keys rather than nuking data
-// (only fall back to [] when there are genuinely no doc keys).
+// Read the id index. If the index is missing or corrupt, recover it by
+// scanning for `@scan_kit_doc:` keys rather than reporting "no documents" —
+// an empty answer here is what the startup orphan sweep acts on, so treating a
+// lost index as empty would delete every document's files. Only fall back to
+// [] when there are genuinely no doc keys.
 async function readIndex(): Promise<string[]> {
   const raw = await AsyncStorage.getItem(DOC_INDEX_KEY);
-  if (raw == null) return [];
+  if (raw == null) return recoverIndexFromKeys();
   try {
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) return parsed.filter((x): x is string => typeof x === 'string');
@@ -232,13 +234,21 @@ export function saveDocument(doc: Document): Promise<void> {
   });
 }
 
-export function updateDocument(doc: Document): Promise<void> {
+/**
+ * Replaces an EXISTING document. Refuses (resolves false, writes nothing) when
+ * the id is no longer stored — a stale screen saving a document that was
+ * deleted meanwhile must not resurrect it as a "ghost" whose files are gone.
+ * Use saveDocument to create a document.
+ */
+export function updateDocument(doc: Document): Promise<boolean> {
   return withDocsLock(async () => {
     await ensureMigrated();
+    if ((await AsyncStorage.getItem(docKey(doc.id))) == null) return false;
     await AsyncStorage.setItem(docKey(doc.id), JSON.stringify(doc));
     const index = await readIndex();
     // Ensure the id is present (append if somehow missing) without reordering.
     if (!index.includes(doc.id)) await writeIndex([...index, doc.id]);
+    return true;
   });
 }
 
@@ -247,19 +257,36 @@ export function updateDocument(doc: Document): Promise<void> {
  * so a concurrent write can't be lost to a stale read-modify-write. No-op if the
  * document no longer exists (e.g. deleted while a background pass was running).
  */
-export function patchDocument(id: string, patch: Partial<Document>): Promise<void> {
+export function patchDocument(id: string, patch: Partial<Document>): Promise<boolean> {
   return withDocsLock(async () => {
     await ensureMigrated();
     const raw = await AsyncStorage.getItem(docKey(id));
-    if (raw == null) return; // deleted or never existed — don't resurrect
+    if (raw == null) return false; // deleted or never existed — don't resurrect
     let current: Document;
     try {
       current = JSON.parse(raw) as Document;
     } catch {
       console.warn(`storage: corrupt doc ${id}, skipping patch`);
-      return;
+      return false;
     }
     await AsyncStorage.setItem(docKey(id), JSON.stringify({ ...current, ...patch }));
+    return true;
+  });
+}
+
+/**
+ * Document ids that the startup orphan sweep may treat as "valid", or null
+ * when it is not safe to sweep at all. Sweeping deletes every doc folder not
+ * in the list, so an empty answer is only trusted when there are also no
+ * per-document records — otherwise a lost index would wipe the library.
+ */
+export function documentIdsForCleanup(): Promise<string[] | null> {
+  return withDocsLock(async () => {
+    await ensureMigrated();
+    const ids = (await getDocumentsUnlocked()).map(d => d.id);
+    if (ids.length > 0) return ids;
+    const keys = await AsyncStorage.getAllKeys();
+    return keys.some(k => k.startsWith(DOC_PREFIX)) ? null : [];
   });
 }
 
@@ -418,6 +445,30 @@ export function saveFolder(name: string): Promise<void> {
   });
 }
 
+/**
+ * Renames a folder and moves every document in it to the new name, under one
+ * lock. If `to` already exists the two folders are merged. Returns false when
+ * the new name is empty or unchanged.
+ */
+export function renameFolder(from: string, to: string): Promise<boolean> {
+  const next = to.trim();
+  return withDocsLock(async () => {
+    if (!next || next === from) return false;
+    await ensureMigrated();
+    const folders = await getFolders();
+    const renamed = folders.filter(f => f !== from && f !== next);
+    await AsyncStorage.setItem(FOLDERS_KEY, JSON.stringify([...renamed, next]));
+    const docs = await getDocumentsUnlocked();
+    const changed: [string, string][] = [];
+    for (const d of docs) {
+      if (d.folder !== from) continue;
+      changed.push([docKey(d.id), JSON.stringify({ ...d, folder: next })]);
+    }
+    if (changed.length > 0) await AsyncStorage.multiSet(changed);
+    return true;
+  });
+}
+
 export function deleteFolder(name: string): Promise<void> {
   return withDocsLock(async () => {
     await ensureMigrated();
@@ -556,11 +607,24 @@ export async function getAppLockEnabled(): Promise<boolean> {
   }
 }
 
+// Listeners so the lock gate reacts the moment the setting changes, without
+// waiting for a restart.
+const _appLockListeners = new Set<(enabled: boolean) => void>();
+
+/** Subscribe to App Lock on/off changes. Returns an unsubscribe function. */
+export function subscribeAppLock(listener: (enabled: boolean) => void): () => void {
+  _appLockListeners.add(listener);
+  return () => { _appLockListeners.delete(listener); };
+}
+
 export async function setAppLockEnabled(enabled: boolean): Promise<void> {
   if (enabled) {
     await AsyncStorage.setItem(APP_LOCK_KEY, '1');
   } else {
     await AsyncStorage.removeItem(APP_LOCK_KEY);
+  }
+  for (const l of Array.from(_appLockListeners)) {
+    try { l(enabled); } catch {}
   }
 }
 

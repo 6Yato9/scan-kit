@@ -1,36 +1,34 @@
 // app/settings/scan-settings.tsx
 import { useCallback, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { ScrollView, StyleSheet } from 'react-native';
+import { Stack, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getScanSettings, saveScanSettings, ScanSettings } from '@/lib/storage';
 import { PageFilter } from '@/types/document';
 import { useTheme } from '@/contexts/theme-context';
+import { SettingsGroup, SettingsRow } from '@/components/settings-list';
+import { Spacing } from '@/lib/theme';
 
 type Quality = ScanSettings['quality'];
-type FilterOrOriginal = PageFilter | 'original';
 
 const QUALITY_OPTIONS: { label: string; value: Quality; desc: string }[] = [
-  { label: 'Low', value: 'low', desc: '~0.5 MB/page' },
-  { label: 'Medium', value: 'medium', desc: '~1 MB/page' },
-  { label: 'High', value: 'high', desc: '~2 MB/page' },
+  { label: 'Standard', value: 'low', desc: 'Smallest files, about 0.5 MB a page' },
+  { label: 'High', value: 'medium', desc: 'About 1 MB a page' },
+  { label: 'Best', value: 'high', desc: 'Sharpest text, about 2 MB a page' },
 ];
 
-const FILTER_OPTIONS: { label: string; value: FilterOrOriginal }[] = [
-  { label: 'Color', value: 'original' },
-  { label: 'Grayscale', value: 'grayscale' },
-  { label: 'Black & White', value: 'bw' },
-  { label: 'Enhanced', value: 'enhanced' },
+// Labels match the filter names in the viewer.
+const FILTER_OPTIONS: { label: string; value: PageFilter; desc: string }[] = [
+  { label: 'Enhanced', value: 'enhanced', desc: 'Brighter paper and crisper text' },
+  { label: 'Original', value: 'original', desc: 'Colors exactly as captured' },
+  { label: 'Grayscale', value: 'grayscale', desc: 'Shades of gray' },
+  { label: 'Black and white', value: 'bw', desc: 'High contrast, best for text' },
 ];
 
 export default function ScanSettingsScreen() {
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
-  const [settings, setSettings] = useState<ScanSettings>({
-    quality: 'high',
-    autoCrop: true,
-    defaultFilter: 'original',
-  });
+  const [settings, setSettings] = useState<ScanSettings | null>(null);
 
   useFocusEffect(useCallback(() => {
     let cancelled = false;
@@ -39,6 +37,7 @@ export default function ScanSettingsScreen() {
   }, []));
 
   const update = async (patch: Partial<ScanSettings>) => {
+    if (!settings) return;
     const next = { ...settings, ...patch };
     setSettings(next);
     await saveScanSettings(next);
@@ -46,98 +45,39 @@ export default function ScanSettingsScreen() {
 
   return (
     <ScrollView
-      style={[styles.container, { backgroundColor: colors.bg }]}
-      contentContainerStyle={{ paddingBottom: insets.bottom + 40 }}
+      style={{ backgroundColor: colors.bg }}
+      contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + Spacing.xxxl }]}
     >
-      <View style={[styles.section, { backgroundColor: colors.card }]}>
-        <Text style={[styles.sectionTitle, { color: colors.muted }]}>SCAN QUALITY</Text>
-        {QUALITY_OPTIONS.map(opt => (
-          <Pressable
+      <Stack.Screen options={{ title: 'Scan settings' }} />
+      <SettingsGroup title="Image quality" footer="Applies to new scans and imported photos.">
+        {QUALITY_OPTIONS.map((opt, i) => (
+          <SettingsRow
             key={opt.value}
-            style={[styles.row, { borderTopColor: colors.separator }]}
+            label={opt.label}
+            description={opt.desc}
+            accessory={{ type: 'check', selected: settings?.quality === opt.value }}
             onPress={() => update({ quality: opt.value })}
-          >
-            <View style={styles.rowLeft}>
-              <Text style={[styles.rowLabel, { color: colors.text }]}>{opt.label}</Text>
-              <Text style={[styles.rowDesc, { color: colors.muted }]}>{opt.desc}</Text>
-            </View>
-            <View style={[styles.radio, { borderColor: settings.quality === opt.value ? colors.accent : colors.border }]}>
-              {settings.quality === opt.value && <View style={[styles.radioDot, { backgroundColor: colors.accent }]} />}
-            </View>
-          </Pressable>
-        ))}
-      </View>
-
-      <View style={[styles.section, { backgroundColor: colors.card }]}>
-        <Text style={[styles.sectionTitle, { color: colors.muted }]}>CROP PRECISION</Text>
-        <View style={[styles.row, { borderTopColor: colors.separator }]}>
-          <View style={{ flex: 1, paddingRight: 12 }}>
-            <Text style={[styles.rowLabel, { color: colors.text }]}>Confirm crop after capture</Text>
-            <Text style={[styles.rowDesc, { color: colors.muted }]}>
-              Adds a step after each shot so you can fine-tune the corners. Helps when the auto-shutter fires before the page is framed perfectly.
-            </Text>
-          </View>
-          <Switch
-            value={settings.autoCrop}
-            onValueChange={v => update({ autoCrop: v })}
-            trackColor={{ true: colors.accent }}
+            last={i === QUALITY_OPTIONS.length - 1}
           />
-        </View>
-      </View>
-
-      <View style={[styles.section, { backgroundColor: colors.card }]}>
-        <Text style={[styles.sectionTitle, { color: colors.muted }]}>DEFAULT COLOR MODE</Text>
-        {FILTER_OPTIONS.map(opt => (
-          <Pressable
-            key={opt.value}
-            style={[styles.row, { borderTopColor: colors.separator }]}
-            onPress={() => update({ defaultFilter: opt.value })}
-          >
-            <Text style={[styles.rowLabel, { color: colors.text }]}>{opt.label}</Text>
-            <View style={[styles.radio, { borderColor: settings.defaultFilter === opt.value ? colors.accent : colors.border }]}>
-              {settings.defaultFilter === opt.value && <View style={[styles.radioDot, { backgroundColor: colors.accent }]} />}
-            </View>
-          </Pressable>
         ))}
-      </View>
+      </SettingsGroup>
+
+      <SettingsGroup title="Default filter" footer="Every new page gets this filter. You can change it per page in the viewer.">
+        {FILTER_OPTIONS.map((opt, i) => (
+          <SettingsRow
+            key={opt.value}
+            label={opt.label}
+            description={opt.desc}
+            accessory={{ type: 'check', selected: settings?.defaultFilter === opt.value }}
+            onPress={() => update({ defaultFilter: opt.value })}
+            last={i === FILTER_OPTIONS.length - 1}
+          />
+        ))}
+      </SettingsGroup>
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  section: {
-    marginHorizontal: 14,
-    marginTop: 20,
-    borderRadius: 14,
-    overflow: 'hidden',
-  },
-  sectionTitle: {
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.8,
-    paddingHorizontal: 16,
-    paddingTop: 14,
-    paddingBottom: 6,
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 13,
-    paddingHorizontal: 16,
-    borderTopWidth: StyleSheet.hairlineWidth,
-  },
-  rowLeft: { flex: 1 },
-  rowLabel: { fontSize: 16 },
-  rowDesc: { fontSize: 12, marginTop: 1 },
-  radio: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    borderWidth: 2,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  radioDot: { width: 10, height: 10, borderRadius: 5 },
+  content: { paddingHorizontal: Spacing.gutter },
 });

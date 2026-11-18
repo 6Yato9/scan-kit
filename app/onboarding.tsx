@@ -1,4 +1,5 @@
 // app/onboarding.tsx
+// First-run introduction: welcome, what the app does, and camera priming.
 import { useRef, useState } from 'react';
 import {
   Pressable,
@@ -8,55 +9,55 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useCameraPermissions } from 'expo-camera';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/theme-context';
 import { setOnboarded } from '@/lib/storage';
+import { BrandMark } from '@/components/brand-mark';
+import { PrimaryButton } from '@/components/primary-button';
+import { HIT, Radius, Spacing, Type } from '@/lib/theme';
 
 const SLIDE_COUNT = 3;
 
-type Feature = { icon: keyof typeof MaterialCommunityIcons.glyphMap; text: string };
+type Feature = { icon: keyof typeof Ionicons.glyphMap; title: string; text: string };
 
 const FEATURES: Feature[] = [
-  { icon: 'scan-helper', text: 'Auto edge detection & filters' },
-  { icon: 'file-export-outline', text: 'PDF, long-image & ZIP export' },
-  { icon: 'shape-plus', text: 'ID card, QR, sign, watermark & more' },
+  { icon: 'scan-outline', title: 'Clean scans', text: 'Edges are found for you, and filters make text crisp.' },
+  { icon: 'share-outline', title: 'Share anywhere', text: 'Export as PDF, images, or a ZIP, or print directly.' },
+  { icon: 'construct-outline', title: 'Handy tools', text: 'ID cards, QR codes, signatures, watermarks, and more.' },
+  { icon: 'lock-closed-outline', title: 'Private by design', text: 'Everything stays on your device. No account needed.' },
 ];
 
 export default function OnboardingScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
   const { width } = useWindowDimensions();
   const scrollRef = useRef<ScrollView>(null);
   const [page, setPage] = useState(0);
   const [, requestPermission] = useCameraPermissions();
   const [finishing, setFinishing] = useState(false);
 
-  function goToTabs() {
+  async function finish(askCamera: boolean) {
+    if (finishing) return;
+    setFinishing(true);
+    if (askCamera) {
+      try {
+        // Primes the OS camera prompt shared by the scanner (same NSCameraUsageDescription).
+        await requestPermission();
+      } catch {
+        // Ignore — proceed regardless of grant/deny.
+      }
+    }
+    await setOnboarded();
     router.replace('/(tabs)');
   }
 
-  async function handleSkip() {
-    if (finishing) return;
-    setFinishing(true);
-    await setOnboarded();
-    goToTabs();
-  }
-
-  async function handleAllowCamera() {
-    if (finishing) return;
-    setFinishing(true);
-    try {
-      // Primes the OS camera prompt shared by the scanner (same NSCameraUsageDescription).
-      await requestPermission();
-    } catch {
-      // Ignore — proceed regardless of grant/deny.
-    }
-    await setOnboarded();
-    goToTabs();
+  function goTo(i: number) {
+    scrollRef.current?.scrollTo({ x: width * i, animated: true });
+    setPage(i);
   }
 
   function onMomentumEnd(e: { nativeEvent: { contentOffset: { x: number } } }) {
@@ -68,19 +69,17 @@ export default function OnboardingScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.bg, paddingTop: insets.top }]}>
-      {/* Skip (slides 1–2 only) */}
       <View style={styles.topBar}>
-        {!isLast ? (
+        {!isLast && (
           <Pressable
-            onPress={handleSkip}
-            hitSlop={12}
+            onPress={() => finish(false)}
+            hitSlop={8}
+            style={styles.skipBtn}
             accessibilityRole="button"
-            accessibilityLabel="Skip onboarding"
+            accessibilityLabel="Skip introduction"
           >
-            <Text style={[styles.skip, { color: colors.muted }]}>Skip</Text>
+            <Text style={[Type.body, { color: colors.muted, fontWeight: '500' }]}>Skip</Text>
           </Pressable>
-        ) : (
-          <View style={styles.skipPlaceholder} />
         )}
       </View>
 
@@ -94,79 +93,81 @@ export default function OnboardingScreen() {
       >
         {/* Slide 1 — Welcome */}
         <View style={[styles.slide, { width }]}>
-          <View style={[styles.iconCircle, { backgroundColor: colors.accentLight }]}>
-            <MaterialCommunityIcons name="file-document-multiple-outline" size={84} color={colors.accent} />
-          </View>
-          <Text style={[styles.appName, { color: colors.text }]}>Scan Kit</Text>
+          <BrandMark size={128} />
+          <Text style={[styles.appName, { color: colors.text }]} accessibilityRole="header">Scan Kit</Text>
           <Text style={[styles.tagline, { color: colors.subtext }]}>
-            Scan, organise, and share documents — right on your phone.
+            Scan, organize, and share your documents, right from your phone.
           </Text>
         </View>
 
         {/* Slide 2 — Features */}
         <View style={[styles.slide, { width }]}>
-          <Text style={[styles.slideHeading, { color: colors.text }]}>Everything you need</Text>
-          <View style={styles.featureList}>
-            {FEATURES.map(f => (
-              <View key={f.text} style={[styles.featureRow, { backgroundColor: colors.card }]}>
+          <Text style={[styles.slideHeading, { color: colors.text }]} accessibilityRole="header">Everything in one place</Text>
+          <View style={[styles.featureCard, { backgroundColor: colors.card }]}>
+            {FEATURES.map((f, i) => (
+              <View
+                key={f.title}
+                style={[
+                  styles.featureRow,
+                  i < FEATURES.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+                ]}
+              >
                 <View style={[styles.featureIcon, { backgroundColor: colors.accentLight }]}>
-                  <MaterialCommunityIcons name={f.icon} size={24} color={colors.accent} />
+                  <Ionicons name={f.icon} size={22} color={colors.accent} />
                 </View>
-                <Text style={[styles.featureText, { color: colors.text }]}>{f.text}</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={[Type.headline, { color: colors.text }]}>{f.title}</Text>
+                  <Text style={[Type.footnote, { color: colors.muted, marginTop: 2, lineHeight: 18 }]}>{f.text}</Text>
+                </View>
               </View>
             ))}
           </View>
         </View>
 
-        {/* Slide 3 — Permission priming */}
+        {/* Slide 3 — Camera priming */}
         <View style={[styles.slide, { width }]}>
           <View style={[styles.iconCircle, { backgroundColor: colors.accentLight }]}>
-            <Ionicons name="camera" size={78} color={colors.accent} />
+            <Ionicons name="camera-outline" size={56} color={colors.accent} />
           </View>
-          <Text style={[styles.slideHeading, { color: colors.text }]}>Camera access</Text>
+          <Text style={[styles.slideHeading, { color: colors.text }]} accessibilityRole="header">Allow camera access</Text>
           <Text style={[styles.tagline, { color: colors.subtext }]}>
-            Scan Kit needs camera access to scan documents. Your scans stay on your device.
+            Scan Kit uses the camera only to scan documents. Your scans never leave your device.
           </Text>
         </View>
       </ScrollView>
 
-      {/* Dots */}
-      <View style={styles.dots}>
+      {/* Page dots */}
+      <View style={styles.dots} accessibilityRole="adjustable" accessibilityLabel={`Page ${page + 1} of ${SLIDE_COUNT}`}>
         {Array.from({ length: SLIDE_COUNT }).map((_, i) => (
           <View
             key={i}
             style={[
               styles.dot,
-              {
-                backgroundColor: i === page ? colors.accent : isDark ? '#444' : '#ccc',
-                width: i === page ? 20 : 8,
-              },
+              { backgroundColor: i === page ? colors.accent : colors.muted, opacity: i === page ? 1 : 0.3, width: i === page ? 22 : 8 },
             ]}
           />
         ))}
       </View>
 
-      {/* Bottom controls */}
-      <View style={[styles.controls, { paddingBottom: insets.bottom + 16 }]}>
+      <View style={[styles.controls, { paddingBottom: insets.bottom + Spacing.sm }]}>
         {isLast ? (
-          <Pressable
-            style={[styles.primaryBtn, { backgroundColor: colors.accent }, finishing && styles.btnDisabled]}
-            onPress={handleAllowCamera}
-            disabled={finishing}
-            accessibilityRole="button"
-            accessibilityLabel="Allow Camera"
-          >
-            <Text style={styles.primaryText}>Allow Camera</Text>
-          </Pressable>
+          <>
+            <PrimaryButton title="Continue" icon="camera-outline" onPress={() => finish(true)} loading={finishing} />
+            <Pressable
+              onPress={() => finish(false)}
+              disabled={finishing}
+              style={styles.notNow}
+              accessibilityRole="button"
+            >
+              <Text style={[Type.body, { color: colors.accent, fontWeight: '500' }]}>Not now</Text>
+            </Pressable>
+          </>
         ) : (
-          <Pressable
-            style={[styles.primaryBtn, { backgroundColor: colors.accent }]}
-            onPress={() => scrollRef.current?.scrollTo({ x: width * (page + 1), animated: true })}
-            accessibilityRole="button"
-            accessibilityLabel="Next"
-          >
-            <Text style={styles.primaryText}>Next</Text>
-          </Pressable>
+          <>
+            <PrimaryButton title="Next" onPress={() => goTo(page + 1)} />
+            {/* Keeps the button at the same height on every slide. */}
+            <View style={styles.notNow} />
+          </>
         )}
       </View>
     </View>
@@ -176,40 +177,40 @@ export default function OnboardingScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   topBar: {
-    height: 44,
-    paddingHorizontal: 20,
+    height: HIT,
+    paddingHorizontal: Spacing.sm,
     flexDirection: 'row',
     justifyContent: 'flex-end',
     alignItems: 'center',
   },
-  skip: { fontSize: 16, fontWeight: '600' },
-  skipPlaceholder: { height: 20 },
+  skipBtn: { minHeight: HIT, minWidth: HIT, paddingHorizontal: Spacing.md, justifyContent: 'center', alignItems: 'center' },
   pager: { flex: 1 },
   slide: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 36,
+    paddingHorizontal: Spacing.xxxl,
   },
   iconCircle: {
-    width: 168,
-    height: 168,
-    borderRadius: 84,
+    width: 128,
+    height: 128,
+    borderRadius: 64,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 32,
+    marginBottom: Spacing.xxxl,
   },
   appName: {
     fontSize: 38,
     fontWeight: '800',
     letterSpacing: -0.5,
-    marginBottom: 14,
+    marginTop: Spacing.xxxl,
+    marginBottom: Spacing.md,
   },
   slideHeading: {
-    fontSize: 26,
+    fontSize: 28,
     fontWeight: '800',
     letterSpacing: -0.3,
-    marginBottom: 28,
+    marginBottom: Spacing.lg,
     textAlign: 'center',
   },
   tagline: {
@@ -217,36 +218,17 @@ const styles = StyleSheet.create({
     lineHeight: 25,
     textAlign: 'center',
   },
-  featureList: { width: '100%', gap: 14 },
-  featureRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 16,
-    borderRadius: 16,
-    gap: 16,
-  },
-  featureIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  featureText: { flex: 1, fontSize: 16, fontWeight: '600' },
+  featureCard: { alignSelf: 'stretch', borderRadius: Radius.lg, paddingHorizontal: Spacing.lg, marginTop: Spacing.sm },
+  featureRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md + 2, paddingVertical: Spacing.lg },
+  featureIcon: { width: 44, height: 44, borderRadius: Radius.md, alignItems: 'center', justifyContent: 'center' },
   dots: {
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
-    gap: 8,
-    paddingVertical: 24,
+    gap: Spacing.sm,
+    paddingVertical: Spacing.xl,
   },
   dot: { height: 8, borderRadius: 4 },
-  controls: { paddingHorizontal: 24 },
-  primaryBtn: {
-    borderRadius: 16,
-    paddingVertical: 17,
-    alignItems: 'center',
-  },
-  btnDisabled: { opacity: 0.6 },
-  primaryText: { color: '#fff', fontSize: 17, fontWeight: '700' },
+  controls: { paddingHorizontal: Spacing.xxl },
+  notNow: { height: HIT, alignItems: 'center', justifyContent: 'center', marginTop: Spacing.xs },
 });

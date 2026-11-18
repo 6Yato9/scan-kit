@@ -643,3 +643,78 @@ describe('stored page paths survive a container change', () => {
     expect(doc.pages).toEqual(['file:///somewhere/else/photo.jpg']);
   });
 });
+
+describe('ghost documents and lost indexes (core #6, #14)', () => {
+  test('updateDocument refuses an id that was deleted and does not resurrect it', async () => {
+    await storage.saveDocument(doc);
+    await storage.deleteDocument(doc.id);
+    const ok = await storage.updateDocument({ ...doc, name: 'Ghost' });
+    expect(ok).toBe(false);
+    expect(await storage.getDocuments()).toEqual([]);
+    expect(await AsyncStorage.getItem(`@scan_kit_doc:${doc.id}`)).toBeNull();
+  });
+
+  test('updateDocument reports success for an existing document', async () => {
+    await storage.saveDocument(doc);
+    expect(await storage.updateDocument({ ...doc, name: 'Renamed' })).toBe(true);
+  });
+
+  test('patchDocument reports whether it applied', async () => {
+    await storage.saveDocument(doc);
+    expect(await storage.patchDocument(doc.id, { name: 'X' })).toBe(true);
+    expect(await storage.patchDocument('missing', { name: 'X' })).toBe(false);
+  });
+
+  test('a missing index is recovered from the per-document keys', async () => {
+    await storage.saveDocument({ ...doc, id: 'A' });
+    await storage.saveDocument({ ...doc, id: 'B' });
+    await AsyncStorage.removeItem('@scan_kit_doc_index');
+
+    const docs = await storage.getDocuments();
+    expect(docs.map(d => d.id).sort()).toEqual(['A', 'B']);
+    const index = JSON.parse((await AsyncStorage.getItem('@scan_kit_doc_index')) as string);
+    expect(index.sort()).toEqual(['A', 'B']);
+  });
+
+  test('documentIdsForCleanup returns the stored ids', async () => {
+    await storage.saveDocument({ ...doc, id: 'A' });
+    expect(await storage.documentIdsForCleanup()).toEqual(['A']);
+  });
+
+  test('documentIdsForCleanup returns [] only for a genuinely empty library', async () => {
+    expect(await storage.documentIdsForCleanup()).toEqual([]);
+  });
+
+  test('documentIdsForCleanup refuses (null) when doc records exist but none can be read', async () => {
+    await AsyncStorage.setItem('@scan_kit_schema_version', '3');
+    await AsyncStorage.setItem('@scan_kit_doc:A', '{corrupt');
+    expect(await storage.documentIdsForCleanup()).toBeNull();
+  });
+});
+
+describe('renameFolder', () => {
+  test('renames the folder and moves its documents', async () => {
+    await storage.saveFolder('Old');
+    await storage.saveDocument({ ...doc, id: 'in', folder: 'Old' });
+    await storage.saveDocument({ ...doc, id: 'out', folder: 'Other' });
+    expect(await storage.renameFolder('Old', '  New ')).toBe(true);
+    expect(await storage.getFolders()).toEqual(['New']);
+    const docs = await storage.getDocuments();
+    expect(docs.find(d => d.id === 'in')?.folder).toBe('New');
+    expect(docs.find(d => d.id === 'out')?.folder).toBe('Other');
+  });
+
+  test('merges into an existing folder without duplicating it', async () => {
+    await storage.saveFolder('A');
+    await storage.saveFolder('B');
+    await storage.renameFolder('A', 'B');
+    expect(await storage.getFolders()).toEqual(['B']);
+  });
+
+  test('refuses an empty or unchanged name', async () => {
+    await storage.saveFolder('A');
+    expect(await storage.renameFolder('A', '  ')).toBe(false);
+    expect(await storage.renameFolder('A', 'A')).toBe(false);
+    expect(await storage.getFolders()).toEqual(['A']);
+  });
+});

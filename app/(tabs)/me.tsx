@@ -1,15 +1,17 @@
 // app/(tabs)/me.tsx
-import { useCallback, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+// Settings tab.
+import { useCallback, useEffect, useState } from 'react';
+import { Alert, InteractionManager, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
 import { Directory, File, Paths } from 'expo-file-system';
 import { SortSheet } from '@/components/sort-sheet';
+import { SegmentedControl, SettingsGroup, SettingsRow } from '@/components/settings-list';
 import { getAppLockEnabled, getSortPreference, saveSortPreference, setAppLockEnabled, SortKey } from '@/lib/storage';
-import { authenticate } from '@/lib/biometrics';
+import { authenticate, biometricKind, BiometricKind, canAuthenticate } from '@/lib/biometrics';
 import { tapLight } from '@/lib/haptics';
 import { useTheme } from '@/contexts/theme-context';
+import { Spacing } from '@/lib/theme';
 
 /** Recursively sums the byte size of every file under a directory. */
 function dirSize(dir: Directory): number {
@@ -25,7 +27,7 @@ function dirSize(dir: Directory): number {
 }
 
 function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024) return `${bytes} bytes`;
   const units = ['KB', 'MB', 'GB', 'TB'];
   let value = bytes / 1024;
   let i = 0;
@@ -33,202 +35,166 @@ function formatBytes(bytes: number): string {
     value /= 1024;
     i++;
   }
-  return `${value.toFixed(1)} ${units[i]}`;
+  return `${value.toFixed(value < 10 ? 1 : 0)} ${units[i]}`;
 }
 
-type Row = {
-  icon: keyof typeof Ionicons.glyphMap;
-  label: string;
-  route?: string;
-  action?: 'sort' | 'help';
+const SORT_LABEL: Record<SortKey, string> = {
+  dateAdded: 'Date added',
+  dateModified: 'Last modified',
+  nameAZ: 'Name',
 };
 
-const ROWS: Row[] = [
-  { icon: 'camera-outline', label: 'Scan Settings', route: '/settings/scan-settings' },
-  { icon: 'document-text-outline', label: 'Document Settings', route: '/settings/document-settings' },
-  { icon: 'print-outline', label: 'My Printer', route: '/settings/printer' },
-  { icon: 'swap-vertical-outline', label: 'Sort Preference', action: 'sort' },
-  { icon: 'help-circle-outline', label: 'Help', action: 'help' },
-  { icon: 'information-circle-outline', label: 'About', route: '/settings/about' },
-];
+const LOCK_METHOD: Record<BiometricKind, string> = {
+  faceId: 'Face ID',
+  touchId: 'Touch ID',
+  passcode: 'your passcode',
+};
 
-export default function MeScreen() {
+export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const [sortSheetVisible, setSortSheetVisible] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>('dateAdded');
-  const [storageUsed, setStorageUsed] = useState<string>('—');
+  const [storageUsed, setStorageUsed] = useState<string | null>(null);
   const [appLock, setAppLock] = useState(false);
+  const [lockKind, setLockKind] = useState<BiometricKind>('passcode');
   const { preference, setPreference, colors } = useTheme();
+
+  useEffect(() => { biometricKind().then(setLockKind); }, []);
 
   useFocusEffect(useCallback(() => {
     let cancelled = false;
     getSortPreference().then(k => { if (!cancelled) setSortKey(k); });
     getAppLockEnabled().then(v => { if (!cancelled) setAppLock(v); });
-    try {
-      const root = new Directory(Paths.document, 'scan-kit');
-      const bytes = root.exists ? dirSize(root) : 0;
-      if (!cancelled) setStorageUsed(formatBytes(bytes));
-    } catch {
-      if (!cancelled) setStorageUsed('—');
-    }
-    return () => { cancelled = true; };
+    // Walking the folder is synchronous; let the screen paint (with its
+    // spinner) first.
+    const task = InteractionManager.runAfterInteractions(() => {
+      let text = 'Unavailable';
+      try {
+        const root = new Directory(Paths.document, 'scan-kit');
+        text = formatBytes(root.exists ? dirSize(root) : 0);
+      } catch {}
+      if (!cancelled) setStorageUsed(text);
+    });
+    return () => { cancelled = true; task.cancel(); };
   }, []));
-
-  const handleRow = (row: Row) => {
-    if (row.route) {
-      router.push(row.route as any);
-    } else if (row.action === 'sort') {
-      setSortSheetVisible(true);
-    } else if (row.action === 'help') {
-      Alert.alert(
-        'Help',
-        '• Tap the camera button to scan a document.\n• Tap any document to view it.\n• Long-press a document for actions.\n• Use Tools tab to import files or images.\n• Adjust quality and defaults in Scan Settings.',
-        [{ text: 'Got it' }]
-      );
-    }
-  };
 
   const handleSort = async (key: SortKey) => {
     setSortKey(key);
     await saveSortPreference(key);
   };
 
-  // Toggle the whole-app lock. Both directions require an auth gate so a user
-  // can't enable a lock they can't pass, nor leave one stuck on with a broken
-  // sensor (fail-open on 'unavailable' when turning OFF).
+  // Toggle the whole-app lock. Turning it on requires a successful check so a
+  // user can't enable a lock they can't pass. Turning it off fails open when
+  // the device can't authenticate, so a broken sensor never traps the lock on.
   const handleToggleAppLock = async (next: boolean) => {
     tapLight();
     if (next) {
-      const result = await authenticate('Enable App Lock');
+      if (!(await canAuthenticate())) {
+        Alert.alert(
+          'Set up a passcode first',
+          'App lock uses Face ID, Touch ID or your device passcode. Turn one on in the Settings app, then try again.',
+        );
+        return;
+      }
+      const result = await authenticate('Turn on app lock');
       if (result === 'success') {
         await setAppLockEnabled(true);
         setAppLock(true);
       } else if (result === 'unavailable') {
-        Alert.alert('Biometrics not available', 'This device has no biometric or passcode authentication set up.');
-      } else {
-        Alert.alert('Authentication failed', 'App Lock was not enabled.');
+        Alert.alert('App lock isn’t available', 'This device can’t verify your identity right now.');
       }
+      // 'failed' (cancelled): leave it off silently.
     } else {
-      const result = await authenticate('Disable App Lock');
-      // Fail open when turning OFF: a broken sensor must not trap the lock on.
+      const result = await authenticate('Turn off app lock');
       if (result === 'success' || result === 'unavailable') {
         await setAppLockEnabled(false);
         setAppLock(false);
-      } else {
-        Alert.alert('Authentication failed', 'App Lock is still on.');
       }
     }
   };
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
-    <ScrollView
-      style={[styles.container, { backgroundColor: colors.bg }]}
-      contentContainerStyle={{ paddingBottom: insets.bottom + 110 }}
-    >
-      <View style={{ paddingTop: insets.top + 16 }} />
-      <Text style={[styles.screenTitle, { color: colors.text }]}>Settings</Text>
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={[styles.content, { paddingTop: insets.top + 14, paddingBottom: insets.bottom + 110 }]}
+      >
+        <Text style={[styles.screenTitle, { color: colors.text }]} accessibilityRole="header">Settings</Text>
 
-      <View style={[styles.section, { marginBottom: 12 }]}>
-        <Text style={[styles.sectionLabel, { color: colors.muted }]}>APPEARANCE</Text>
-        <View style={[styles.themeRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          {(['system', 'light', 'dark'] as const).map((opt, i) => (
-            <Pressable
-              key={opt}
-              style={[
-                styles.themeBtn,
-                preference === opt && { backgroundColor: colors.accent },
-                i < 2 && { borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: colors.border },
+        <SettingsGroup title="Appearance">
+          <View style={styles.segmentWrap}>
+            <SegmentedControl
+              value={preference}
+              onChange={setPreference}
+              options={[
+                { value: 'system', label: 'Automatic', icon: 'phone-portrait-outline' },
+                { value: 'light', label: 'Light', icon: 'sunny-outline' },
+                { value: 'dark', label: 'Dark', icon: 'moon-outline' },
               ]}
-              onPress={() => setPreference(opt)}
-            >
-              <Text style={[styles.themeBtnText, { color: preference === opt ? '#fff' : colors.text }]}>
-                {opt === 'system' ? 'Auto' : opt === 'light' ? 'Light' : 'Dark'}
-              </Text>
-            </Pressable>
-          ))}
-        </View>
-      </View>
+            />
+          </View>
+        </SettingsGroup>
 
-      <View style={[styles.section, { marginBottom: 12 }]}>
-        <Text style={[styles.sectionLabel, { color: colors.muted }]}>SECURITY</Text>
-        <View style={[styles.lockRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <Ionicons name="lock-closed-outline" size={20} color={colors.muted} style={styles.rowIcon} />
-          <Text style={[styles.rowLabel, { color: colors.text }]}>App Lock</Text>
-          <Switch value={appLock} onValueChange={handleToggleAppLock} />
-        </View>
-      </View>
+        <SettingsGroup
+          title="Security"
+          footer={`When on, Scan Kit asks for ${LOCK_METHOD[lockKind]} each time you return to it.`}
+        >
+          <SettingsRow
+            icon="lock-closed-outline"
+            label="App lock"
+            accessory={{ type: 'switch', value: appLock, onChange: handleToggleAppLock }}
+            last
+          />
+        </SettingsGroup>
 
-      <View style={[styles.settingsSection, { backgroundColor: colors.card }]}>
-        {ROWS.map((row, i) => (
-          <Pressable
-            key={row.label}
-            style={[styles.row, { borderBottomColor: colors.border }]}
-            onPress={() => handleRow(row)}
-          >
-            <Ionicons name={row.icon} size={20} color={colors.muted} style={styles.rowIcon} />
-            <Text style={[styles.rowLabel, { color: colors.text }]}>{row.label}</Text>
-            <Ionicons name="chevron-forward" size={16} color={colors.border} />
-          </Pressable>
-        ))}
-        <View style={[styles.row, styles.rowLast, { borderBottomColor: colors.border }]}>
-          <Ionicons name="server-outline" size={20} color={colors.muted} style={styles.rowIcon} />
-          <Text style={[styles.rowLabel, { color: colors.text }]}>Storage</Text>
-          <Text style={[styles.rowValue, { color: colors.muted }]}>{storageUsed}</Text>
-        </View>
-      </View>
+        <SettingsGroup title="Scanning and documents">
+          <SettingsRow icon="camera-outline" label="Scan settings" accessory={{ type: 'chevron' }} onPress={() => router.push('/settings/scan-settings')} />
+          <SettingsRow icon="document-text-outline" label="Document settings" accessory={{ type: 'chevron' }} onPress={() => router.push('/settings/document-settings')} />
+          <SettingsRow icon="print-outline" label="Printing" accessory={{ type: 'chevron' }} onPress={() => router.push('/settings/printer')} />
+          <SettingsRow
+            icon="swap-vertical-outline"
+            label="Sort documents by"
+            accessory={{ type: 'value', text: SORT_LABEL[sortKey] }}
+            onPress={() => setSortSheetVisible(true)}
+            last
+          />
+        </SettingsGroup>
 
-      <SortSheet
-        visible={sortSheetVisible}
-        current={sortKey}
-        onSort={handleSort}
-        onClose={() => setSortSheetVisible(false)}
-      />
-    </ScrollView>
-      {/* Opaque mask over the status bar. This screen scrolls its whole content,
-          including its title, so without it text passes under the clock and
-          battery — the section headers visibly collided with them mid-scroll. */}
-    <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: insets.top, backgroundColor: colors.bg }} pointerEvents="none" />
+        <SettingsGroup title="Storage" footer="Everything is stored on this device only.">
+          <SettingsRow icon="server-outline" label="Space used" accessory={{ type: 'value', text: storageUsed }} last />
+        </SettingsGroup>
+
+        <SettingsGroup title="Support">
+          <SettingsRow icon="help-circle-outline" label="Help" accessory={{ type: 'chevron' }} onPress={() => router.push('/settings/help')} />
+          <SettingsRow icon="information-circle-outline" label="About Scan Kit" accessory={{ type: 'chevron' }} onPress={() => router.push('/settings/about')} last />
+        </SettingsGroup>
+
+        <SortSheet
+          visible={sortSheetVisible}
+          current={sortKey}
+          onSort={handleSort}
+          onClose={() => setSortSheetVisible(false)}
+        />
+      </ScrollView>
+      {/* Opaque mask over the status bar so the scrolling title and section
+          labels never pass under the clock and battery. */}
+      <View style={[styles.statusMask, { height: insets.top, backgroundColor: colors.bg }]} pointerEvents="none" />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  container: { flex: 1 },
+  content: { paddingHorizontal: Spacing.gutter },
   // Matches the large title on Home / Files / Tools.
   screenTitle: {
     fontSize: 30,
     fontWeight: '800',
     letterSpacing: -0.5,
-    paddingHorizontal: 20,
-    marginBottom: 20,
+    paddingHorizontal: 20 - Spacing.gutter,
+    marginBottom: Spacing.xs,
   },
-  container: { flex: 1 },
-  section: {
-    marginHorizontal: 14,
-    borderRadius: 14,
-    overflow: 'hidden',
-  },
-  sectionLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 0.8, marginHorizontal: 14, marginBottom: 6 },
-  themeRow: { flexDirection: 'row', marginHorizontal: 14, borderRadius: 10, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
-  lockRow: { flexDirection: 'row', alignItems: 'center', marginHorizontal: 14, borderRadius: 10, borderWidth: StyleSheet.hairlineWidth, paddingVertical: 11, paddingHorizontal: 14, gap: 12 },
-  themeBtn: { flex: 1, paddingVertical: 10, alignItems: 'center' },
-  themeBtnText: { fontSize: 14, fontWeight: '600' },
-  settingsSection: {
-    marginHorizontal: 14,
-    borderRadius: 14,
-    overflow: 'hidden',
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 15,
-    paddingHorizontal: 16,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    gap: 12,
-  },
-  rowLast: { borderBottomWidth: 0 },
-  rowIcon: { width: 24, textAlign: 'center' },
-  rowLabel: { flex: 1, fontSize: 16 },
-  rowValue: { fontSize: 15 },
+  segmentWrap: { padding: 0 },
+  statusMask: { position: 'absolute', top: 0, left: 0, right: 0 },
 });
