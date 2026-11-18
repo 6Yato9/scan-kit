@@ -281,6 +281,29 @@ export function patchDocument(id: string, patch: Partial<Document>): Promise<boo
   return updateDocumentWith(id, () => patch);
 }
 
+// ── Change notifications ──────────────────────────────────────────────────────
+// Background writes (OCR indexing, auto-rename) land while a screen is showing
+// the document; screens subscribe so they re-read instead of showing stale data.
+const docChangeListeners = new Set<(id: string) => void>();
+
+/** Subscribe to background updates of stored documents. Returns an unsubscribe fn. */
+export function subscribeDocumentChanges(listener: (id: string) => void): () => void {
+  docChangeListeners.add(listener);
+  return () => {
+    docChangeListeners.delete(listener);
+  };
+}
+
+function notifyDocumentChanged(id: string): void {
+  for (const l of docChangeListeners) {
+    try {
+      l(id);
+    } catch {
+      // a listener's failure must not affect the write or other listeners
+    }
+  }
+}
+
 /**
  * Like patchDocument, but the patch is computed from the CURRENT stored record
  * inside the same lock acquisition — for conditional updates such as "rename
@@ -306,6 +329,9 @@ export function updateDocumentWith(
     if (!patch) return false;
     await AsyncStorage.setItem(docKey(id), JSON.stringify({ ...current, ...patch }));
     return true;
+  }).then(written => {
+    if (written) notifyDocumentChanged(id);
+    return written;
   });
 }
 

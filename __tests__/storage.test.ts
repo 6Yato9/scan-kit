@@ -875,3 +875,17 @@ describe('renameFolder', () => {
     expect(await storage.getFolders()).toEqual(['A']);
   });
 });
+
+describe('subscribeDocumentChanges', () => {
+  test('notifies after a background patch is written, not when nothing is written', async () => {
+    await storage.saveDocument({ ...doc, id: 'watch-1' });
+    const seen: string[] = [];
+    const off = storage.subscribeDocumentChanges((id: string) => seen.push(id));
+    await storage.patchDocument('watch-1', { name: 'Invoice #2026-0417' });
+    await storage.updateDocumentWith('watch-1', () => null);
+    await storage.patchDocument('missing-id', { name: 'x' });
+    off();
+    await storage.patchDocument('watch-1', { name: 'after unsubscribe' });
+    expect(seen).toEqual(['watch-1']);
+  });
+});

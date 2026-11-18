@@ -23,7 +23,7 @@ import { WebView } from 'react-native-webview';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import DocumentScanner from 'react-native-document-scanner-plugin';
-import { getDocuments, updateDocument, getScanSettings, patchDocument, restoreDocument, trashDocument } from '@/lib/storage';
+import { getDocuments, updateDocument, getScanSettings, patchDocument, restoreDocument, trashDocument, subscribeDocumentChanges } from '@/lib/storage';
 import { deleteSinglePage, reorderPages } from '@/lib/files';
 import { cropPage, pageFileUri, rotatePage } from '@/lib/image';
 import {
@@ -168,6 +168,20 @@ function ViewerContent({ rootToast }: { rootToast: ReturnType<typeof useToast> }
       reload().catch(err => console.error('viewer reload', err));
     }, [reload]),
   );
+
+  // Background writes to this document (OCR indexing renames a new scan from
+  // its first line of text) must show up without leaving the screen.
+  useEffect(() => {
+    let scheduled = false;
+    return subscribeDocumentChanges(docId => {
+      if (docId !== id || scheduled) return;
+      scheduled = true;
+      setTimeout(() => {
+        scheduled = false;
+        reload().catch(err => console.error('viewer reload', err));
+      }, 50);
+    });
+  }, [id, reload]);
 
   // Show each page as soon as its bake lands (a fresh scan's "Enhancing 3
   // pages…", or a filter picked here). Coalesced so a burst of events is one read.
