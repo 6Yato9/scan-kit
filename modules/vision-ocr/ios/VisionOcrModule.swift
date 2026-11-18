@@ -116,6 +116,36 @@ public class VisionOcrModule: Module {
       top.present(vc, animated: true)
     }.runOnQueue(.main)
 
+    /// Copy a file the system handed us (Open in / Files, possibly a
+    /// security-scoped URL outside the sandbox when opened in place) into the
+    /// app. Uses NSFileCoordinator so iCloud/provider files are materialised.
+    AsyncFunction("copyIncomingFile") { (sourceUri: String, destUri: String, promise: Promise) in
+      DispatchQueue.global(qos: .userInitiated).async {
+        guard let src = URL(string: sourceUri), src.isFileURL,
+              let dst = URL(string: destUri), dst.isFileURL else {
+          promise.reject("ERR_COPY_INCOMING", "Bad file URL"); return
+        }
+        let scoped = src.startAccessingSecurityScopedResource()
+        defer { if scoped { src.stopAccessingSecurityScopedResource() } }
+        var coordError: NSError?
+        var copyError: Error?
+        NSFileCoordinator().coordinate(readingItemAt: src, options: [.withoutChanges], error: &coordError) { readURL in
+          do {
+            try FileManager.default.createDirectory(at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? FileManager.default.removeItem(at: dst)
+            try FileManager.default.copyItem(at: readURL, to: dst)
+            // A fresh modification date: the startup sweep ages staged files by it.
+            try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: dst.path)
+          } catch { copyError = error }
+        }
+        if let e = coordError ?? (copyError as NSError?) {
+          promise.reject("ERR_COPY_INCOMING", e.localizedDescription)
+        } else {
+          promise.resolve(dst.absoluteString)
+        }
+      }
+    }
+
     /// Detect a document in a photo and return a perspective-corrected copy.
     /// Resolves to { uri, detected }. When nothing confident is found, resolves
     /// with the input uri and detected: false.
