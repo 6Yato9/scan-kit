@@ -8,6 +8,8 @@
 // The old page is stashed first (lib/page-undo), so the viewer can offer Undo,
 // and its `.orig` shadow is removed: the new pixels are unfiltered, so the
 // first filter bake must take its original from them, not from the old photo.
+// The old page's source photo and geometry (lib/page-source.ts) go too; a new
+// page made from a photo gets that photo as its source instead.
 import { File } from 'expo-file-system';
 import { docDir } from './storage-layout';
 import { Document, PageAdjustment, PageFilter } from '../types/document';
@@ -20,10 +22,20 @@ import {
   replacePage,
   restorePageWithShadow,
 } from './files';
-import { getDocument, updateDocument } from './storage';
+import { getDocument, keepSourcesEnabled, updateDocument } from './storage';
 import { bakePage, pendingBakesFor, runPageEdit } from './bake';
-import { autoCropDocument } from './document-detect';
 import { stashPage } from './page-undo';
+import { resolvePageInput } from './add-pages';
+import {
+  discardPrepared,
+  inputUri,
+  installPreparedSource,
+  isSourceInput,
+  prepareSourcePage,
+  removePageSource,
+  type PreparedSourcePage,
+  type ScanPageInput,
+} from './page-source';
 
 const DEFAULT_ADJ: PageAdjustment = { brightness: 0, contrast: 0, saturation: 0 };
 /** Scratch "document" the new pixels are encoded into before they replace the page. */
@@ -59,7 +71,7 @@ function setAt<T>(list: T[] | undefined, length: number, index: number, value: T
 }
 
 const isOriginalFilter = (f: PageFilter) => f === 'original';
-const isDefaultAdj = (a: PageAdjustment) => !a.brightness && !a.contrast && !a.saturation;
+const isDefaultAdj = (a: PageAdjustment) => !a.brightness && !a.contrast && !a.saturation && !a.sharpness;
 
 /**
  * Replaces page `index` of `docId` with `uri`. The page keeps its position;
@@ -69,15 +81,18 @@ const isDefaultAdj = (a: PageAdjustment) => !a.brightness && !a.contrast && !a.s
 export async function retakePage(
   docId: string,
   index: number,
-  rawUri: string,
+  rawPage: ScanPageInput,
   quality: number,
   options: { autoCrop?: boolean } = {},
 ): Promise<RetakeResult> {
   // A scanner page lands in Documents (shown in the Files app): out of there first.
-  const [uri] = moveScannerOutputToCaches([rawUri]);
-  // Auto-crop before taking the page lock: it's slow and touches no stored file.
-  const crop = options.autoCrop ?? !isScannerOutput(uri);
-  const input = crop ? (await autoCropDocument(uri, quality)).uri : uri;
+  const page = isSourceInput(rawPage) ? rawPage : moveScannerOutputToCaches([rawPage])[0];
+  const uri = inputUri(page);
+  // Auto-crop / render before taking the page lock: it's slow and touches no stored file.
+  const resolved = await resolvePageInput(page, quality, options.autoCrop ?? (isSourceInput(page) ? undefined : !isScannerOutput(uri)));
+  let prepared: PreparedSourcePage | null = null;
+  if (isSourceInput(resolved)) prepared = await prepareSourcePage(resolved, quality, await keepSourcesEnabled());
+  const input = prepared ? prepared.page : (resolved as string);
 
   try {
     const result = await runPageEdit(docId, { pages: [index] }, async () => {
@@ -87,7 +102,7 @@ export async function retakePage(
       if (index < 0 || index >= n) throw new RetakeError('missing-page', 'That page no longer exists.');
 
       // Encode first, away from the document: a failure here leaves the page untouched.
-      const staged = await copyPageWithQuality(input, STAGING_ID, 0, quality);
+      const staged = await copyPageWithQuality(input, STAGING_ID, 0, prepared ? 1 : quality);
 
       let undo: RetakeUndo | null = null;
       try {
@@ -107,7 +122,10 @@ export async function retakePage(
       const dir = docDir(docId);
       const shadow = new File(dir, `page-${index}.orig.jpg`);
       if (shadow.exists) shadow.delete();
+      // The old photo's source and geometry describe the old page.
+      removePageSource(docId, index);
       const pageUri = replacePage(staged, docId, index);
+      if (prepared) installPreparedSource(prepared, docId, index);
 
       const pages = [...current.pages];
       pages[index] = pageUri;
@@ -126,6 +144,7 @@ export async function retakePage(
     supersedeStaleBake(docId, index);
     return result;
   } finally {
+    discardPrepared(prepared);
     deleteDisposableTemps([uri, input]);
     try {
       const staging = docDir(STAGING_ID);
@@ -165,6 +184,10 @@ export async function undoRetake(docId: string, index: number, undo: RetakeUndo)
     if (!new File(undo.stash.split('?')[0]).exists) {
       throw new RetakeError('expired', 'The replaced page is no longer available to put back.');
     }
+    // The stash carries the old page's source photo when it had one; when it
+    // didn't, the retake's source must not stay paired with the old page.
+    const stashHasSource = new File(undo.stash.split('?')[0].replace(/\.jpg$/, '.src.jpg')).exists;
+    if (!stashHasSource) removePageSource(docId, index);
     const pageUri = restorePageWithShadow(undo.stash, docId, index);
     const pages = [...current.pages];
     pages[index] = pageUri;

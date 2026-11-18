@@ -11,7 +11,8 @@ const lockSafe = require('./eslint-rules/lock-safe');
  */
 const LOCK_SAFE_ALLOWLIST = {
   // The lock-aware wrappers themselves: they await whenUnlocked() first.
-  'native-presenter': ['lib/share.ts', 'lib/photos.ts'],
+  // lib/text-actions.ts: the system New Event / New Contact forms, same pattern.
+  'native-presenter': ['lib/share.ts', 'lib/photos.ts', 'lib/text-actions.ts'],
   // Pushes and pops the /lock route itself.
   'navigation-after-await': ['components/lock-gate.tsx', 'app/lock.tsx'],
 };

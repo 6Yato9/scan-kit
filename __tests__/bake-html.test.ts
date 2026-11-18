@@ -21,7 +21,7 @@ test('the preview page embeds the same pixel kernels and passes the preview size
   const html = buildPreviewHtml(SRC, [[], [{ magic: 1 }]], 360);
   expect(html).toContain('function docMagic');
   // The filters run on the whole page, then every tile shows the same crop.
-  expect(html).toContain('applyOps(id.data, pw, ph, LIST[k])');
+  expect(html).toContain('applyOps(work.data, pw, ph, LIST[j])');
   expect(html).toContain('function previewCrop');
   expect(html).toContain(`var ASPECT = ${PREVIEW_ASPECT}`);
 });

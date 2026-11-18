@@ -10,6 +10,7 @@ import { File } from 'expo-file-system';
 import { docDir } from './storage-layout';
 import { Document, PageAdjustment, PageFilter } from '../types/document';
 import { copyDocumentFiles, copyPageWithShadow, copyPdfToStorage, deleteDocumentFiles, reorderPages } from './files';
+import { PAGE_FAMILY_SUFFIXES, PAGE_SHADOW_SUFFIXES } from './page-family';
 import { getDocument, patchDocument, saveDocument } from './storage';
 import { remapForReorder, runPageEdit, withDocLock } from './bake';
 import { indexDocText } from './save-scan';
@@ -17,8 +18,9 @@ import { indexDocText } from './save-scan';
 const DEFAULT_ADJ: PageAdjustment = { brightness: 0, contrast: 0, saturation: 0 };
 
 /**
- * Copies `source`'s pages (and their `.orig` shadows) into `destId`'s folder
- * starting at `startIndex`. Returns the new page URIs.
+ * Copies `source`'s pages (and their shadows: `.orig`, and the source photo
+ * and crop geometry of lib/page-source.ts) into `destId`'s folder starting at
+ * `startIndex`. Returns the new page URIs.
  */
 export function copyPagesWithOriginals(source: Document, destId: string, startIndex: number): string[] {
   const dest = docDir(destId);
@@ -28,10 +30,12 @@ export function copyPagesWithOriginals(source: Document, destId: string, startIn
     const to = new File(dest, `page-${startIndex + i}.jpg`);
     if (to.exists) to.delete();
     new File(uri.split('?')[0]).copy(to);
-    const srcOrig = new File(srcDir, `page-${i}.orig.jpg`);
-    const destOrig = new File(dest, `page-${startIndex + i}.orig.jpg`);
-    if (destOrig.exists) destOrig.delete();
-    if (srcOrig.exists) srcOrig.copy(destOrig);
+    for (const suffix of PAGE_SHADOW_SUFFIXES) {
+      const from = new File(srcDir, `page-${i}${suffix}`);
+      const destShadow = new File(dest, `page-${startIndex + i}${suffix}`);
+      if (destShadow.exists) destShadow.delete();
+      if (from.exists) from.copy(destShadow);
+    }
     return to.uri;
   });
 }
@@ -41,7 +45,7 @@ export function combinePageMeta(docs: Document[]): Pick<Document, 'filters' | 'a
   const filters: PageFilter[] = docs.flatMap(d => d.filters ?? d.pages.map((): PageFilter => 'original'));
   const adjustments: PageAdjustment[] = docs.flatMap(d => d.adjustments ?? d.pages.map(() => ({ ...DEFAULT_ADJ })));
   const allOriginal = filters.every(f => f === 'original');
-  const allDefault = adjustments.every(a => a.brightness === 0 && a.contrast === 0 && a.saturation === 0);
+  const allDefault = adjustments.every(a => a.brightness === 0 && a.contrast === 0 && a.saturation === 0 && !a.sharpness);
   return {
     filters: allOriginal ? undefined : filters,
     adjustments: allDefault ? undefined : adjustments,
@@ -105,7 +109,7 @@ export async function mergeInto(target: Document, source: Document): Promise<Doc
 function removePageFiles(docId: string, start: number, count: number): void {
   const dir = docDir(docId);
   for (let i = start; i < start + count; i++) {
-    for (const name of [`page-${i}.jpg`, `page-${i}.orig.jpg`]) {
+    for (const name of PAGE_FAMILY_SUFFIXES.map(suffix => `page-${i}${suffix}`)) {
       try {
         const f = new File(dir, name);
         if (f.exists) f.delete();
@@ -186,7 +190,7 @@ export async function extractPages(source: Document, indices: number[]): Promise
         name: `${fresh.name} (${label})`.slice(0, 120),
         pages,
         filters: filters.every(f => f === 'original') ? undefined : filters,
-        adjustments: adjustments.every(a => !a.brightness && !a.contrast && !a.saturation) ? undefined : adjustments,
+        adjustments: adjustments.every(a => !a.brightness && !a.contrast && !a.saturation && !a.sharpness) ? undefined : adjustments,
         folder: fresh.folder,
         createdAt: now,
         updatedAt: now,

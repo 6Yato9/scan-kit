@@ -1153,3 +1153,28 @@ describe('r11 #2: scanner pages named in a locale’s own digits', () => {
     expect(F.isDisposableTemp(`${DOCS}/Scan ٢٠٢٦١١١٨_١٠٣٠٠٠.jpg`)).toBe(false);
   });
 });
+
+// ── Round 12: source photos (lib/page-source.ts) are the app's own files ──
+
+describe('r12: source photos and geometry belong to their document folder', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { Directory } = require('expo-file-system');
+  test('a folder with .src photos, geometry and their side files still counts as a document folder', () => {
+    put(`${SUPPORT}/scan-kit/${U1}/page-0.jpg`, 'P');
+    put(`${SUPPORT}/scan-kit/${U1}/page-0.orig.jpg`, 'O');
+    put(`${SUPPORT}/scan-kit/${U1}/page-0.src.jpg`, 'S');
+    put(`${SUPPORT}/scan-kit/${U1}/page-0.src.json`, '{}');
+    put(`${SUPPORT}/scan-kit/${U1}/page-1.src.part.jpg`, 'half');
+    put(`${SUPPORT}/scan-kit/${U1}/page-tmp-0.src.json`, '{}');
+    expect(L.looksLikeDocFolder(new Directory(`${SUPPORT}/scan-kit/${U1}`), true)).toBe(true);
+  });
+
+  test('removeAppFiles removes them too, and still leaves a user\'s file alone', () => {
+    put(`${DOCS}/scan-kit/${U1}/page-0.jpg`, 'P');
+    put(`${DOCS}/scan-kit/${U1}/page-0.src.jpg`, 'S');
+    put(`${DOCS}/scan-kit/${U1}/page-0.src.json`, '{}');
+    put(`${DOCS}/scan-kit/${U1}/mine.txt`, 'user');
+    L.removeAppFiles(new Directory(`${DOCS}/scan-kit/${U1}`));
+    expect(files(`${DOCS}/scan-kit/${U1}`)).toEqual({ 'mine.txt': 'user' });
+  });
+});

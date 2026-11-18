@@ -71,9 +71,13 @@ const MAX_LEFTOVER_ATTEMPTS = 3;
 
 /** A document id (every id the app has ever made is Crypto.randomUUID()). */
 export const DOC_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-/** Every file name the app writes directly into a document's folder. */
+/**
+ * Every file name the app writes directly into a document's folder: pages,
+ * their .orig shadows and (R12) .src source photos with .src.json geometry
+ * (lib/page-source.ts), their side and reorder-temp files, the PDF.
+ */
 const DOC_FOLDER_FILE =
-  /^(?:page-\d+(?:\.orig)?(?:\.new|\.part|\.shifting|\.tmp)?\.jpg|page-tmp-\d+(?:\.orig)?\.jpg|document\.pdf|reorder\.commit)$/;
+  /^(?:page-\d+(?:\.orig|\.src)?(?:\.new|\.part|\.shifting|\.tmp)?\.jpg|page-tmp-\d+(?:\.orig|\.src)?\.jpg|page-(?:tmp-)?\d+\.src\.json|document\.pdf|reorder\.commit)$/;
 /** A page or a PDF: what makes a folder a document's rather than an empty look-alike. */
 const DOC_CONTENT = /^(?:page-\d+\.jpg|document\.pdf)$/;
 const OCR_DIR = 'ocr';
@@ -1045,7 +1049,8 @@ function groupOf(dir: Directory, savedAt: number | null, referenced: Set<string>
   const all = filesUnder(dir);
   // A file a document still uses (legacy-documents) is not "recovered": it is in use.
   if (all.some(f => referenced.has(sameFileKey(f.uri)))) return null;
-  const visible = all.filter(f => !/\.json$/i.test(nameOf(f)) && !/\.orig\.jpg$/i.test(nameOf(f)));
+  // Shadows (.orig) and source photos (.src) belong to their page: not shown on their own.
+  const visible = all.filter(f => !/\.json$/i.test(nameOf(f)) && !/\.(?:orig|src)\.jpg$/i.test(nameOf(f)));
   if (visible.length === 0) return null;
   const bytes = all.reduce((s, f) => s + sizeOf(f), 0);
   const pages = visible

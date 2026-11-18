@@ -119,7 +119,42 @@ export type GeneratePdfOptions = {
   signal?: AbortSignal;
   /** Give up waiting for the renderer after this long. Default 30 s + 3 s per page. */
   timeoutMs?: number;
+  /**
+   * Page numbers printed bottom-centre on every sheet: 'number' ("3") or
+   * 'of-total' ("3 of 12"). Drawn into the PDF only; the stored pages are
+   * untouched. Default 'off'.
+   */
+  pageNumbers?: PageNumberStyle;
 };
+
+// ── Page numbers ────────────────────────────────────────────────────────────
+
+/** Page numbers on export: none, "3", or "3 of 12". */
+export type PageNumberStyle = 'off' | 'number' | 'of-total';
+
+export const PAGE_NUMBER_STYLES: readonly PageNumberStyle[] = ['off', 'number', 'of-total'];
+
+/** The number printed on page `index` (zero-based) of `total`, or '' when off. */
+export function pageNumberLabel(style: PageNumberStyle | undefined, index: number, total: number): string {
+  if (style === 'number') return String(index + 1);
+  if (style === 'of-total') return `${index + 1} of ${total}`;
+  return '';
+}
+
+/** Type size of the number and its distance from the bottom edge of the paper, in points. */
+export const PAGE_NUMBER_FONT_PT = 9;
+export const PAGE_NUMBER_BOTTOM_PT = 14;
+
+/**
+ * The page number, centred at the bottom of the SHEET (the paper, not the
+ * image on it), inside the usual 0.2-inch printer margin. It sits on a small
+ * white label so it reads on a scan that runs to the edge of the paper too.
+ */
+export function pageNumberHtml(style: PageNumberStyle | undefined, index: number, total: number): string {
+  const label = pageNumberLabel(style, index, total);
+  if (!label) return '';
+  return `<div class="pn"><span>${escapeHtml(label)}</span></div>`;
+}
 
 export class PdfError extends Error {
   constructor(message: string, readonly kind: 'read' | 'render' | 'timeout' | 'empty') {
@@ -254,7 +289,7 @@ export function estimatePdfBytes(pages: PageStat[], quality: PdfQuality, searcha
   return Math.round(total);
 }
 
-type PreparedImage = { b64: string; mime: string; width: number; height: number };
+export type PreparedImage = { b64: string; mime: string; width: number; height: number };
 
 /** Read one page, downscaling / re-encoding it first when the preset asks for it. */
 async function prepareImage(
@@ -383,7 +418,11 @@ export function buildPdfHtml(sheets: string[], pageSize: 'A4' | 'Letter' | Paper
     `.b>img{position:absolute;left:0;top:0;width:100%;height:100%;display:block}` +
     `.o{position:absolute;left:0;top:0;right:0;bottom:0}` +
     `.t{position:absolute;color:transparent;white-space:pre;overflow:hidden;font-family:Helvetica,Arial,sans-serif;` +
-    `transform-origin:0 0}`;
+    `transform-origin:0 0}` +
+    `.pn{position:absolute;left:0;right:0;bottom:calc(${PAGE_NUMBER_BOTTOM_PT} * var(--pt));text-align:center;` +
+    `font:500 calc(${PAGE_NUMBER_FONT_PT} * var(--pt))/1.2 Helvetica,Arial,sans-serif;color:#333}` +
+    `.pn>span{display:inline-block;background:rgba(255,255,255,0.9);padding:calc(1.5 * var(--pt)) calc(5 * var(--pt));` +
+    `border-radius:calc(3 * var(--pt))}`;
   // OCR boxes and the font's natural width never match exactly; stretch each
   // text run to its box so nothing is clipped and selections line up. Runs in
   // the renderer's web view before it prints.
@@ -502,16 +541,18 @@ function canMergePdfs(): boolean {
 class MergeFailed extends Error {}
 
 /** One page, read and (when searchable) recognised; its sheet is built per paper. */
-type PreparedPage = {
+export type PreparedPage = {
   img: PreparedImage;
   ocr: { lines: OcrLine[]; original: { width: number; height: number } } | null;
 };
 
-function buildSheet(
+/** One sheet of paper: the page image, its text layer, overlay and page number. Exported for tests. */
+export function buildSheet(
   page: PreparedPage,
   pageIndex: number,
   paper: Paper,
   overlayHtml: GeneratePdfOptions['overlayHtml'],
+  numbering?: { style: PageNumberStyle | undefined; total: number },
 ): string {
   const { img } = page;
   const box = fitContain(img, paper);
@@ -521,7 +562,8 @@ function buildSheet(
   return (
     `<div class="s"><div class="b" style="left:${r4(box.left * 100)}%;top:${r4(box.top * 100)}%;` +
     `width:${r4(box.width * 100)}%;height:${r4(box.height * 100)}%">` +
-    `<img src="data:${img.mime};base64,${img.b64}">${text}${overlay}</div></div>`
+    `<img src="data:${img.mime};base64,${img.b64}">${text}${overlay}</div>` +
+    `${numbering ? pageNumberHtml(numbering.style, pageIndex, numbering.total) : ''}</div>`
   );
 }
 
@@ -533,12 +575,14 @@ async function renderRun(
   pages: PreparedPage[],
   run: PaperRun,
   opts: GeneratePdfOptions,
+  total: number,
 ): Promise<string> {
   const { signal } = opts;
   throwIfAborted(signal);
   const { paper } = run;
   const sheets: string[] = [];
-  for (let i = run.start; i < run.end; i++) sheets.push(buildSheet(pages[i - run.start], i, paper, opts.overlayHtml));
+  const numbering = { style: opts.pageNumbers, total };
+  for (let i = run.start; i < run.end; i++) sheets.push(buildSheet(pages[i - run.start], i, paper, opts.overlayHtml, numbering));
   const html = buildPdfHtml(sheets, paper);
   sheets.length = 0; // let the per-page strings go before the native call
 
@@ -577,7 +621,7 @@ async function renderAndMerge(
   const { signal } = opts;
   const parts: string[] = [];
   try {
-    for (const run of runs) parts.push(await renderRun(await prepareRun(run), run, opts));
+    for (const run of runs) parts.push(await renderRun(await prepareRun(run), run, opts, pageCount));
     throwIfAborted(signal);
     const name = `merged-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.pdf`;
     const out = cleanUri(parts[0]).replace(/[^/]*$/, name);
@@ -682,7 +726,7 @@ export async function generatePdf(
     }
   }
   const single = runs.length === 1 ? runs[0] : planPaperRuns(naturals, pageSize, false)[0];
-  return renderRun(await prepareRun(runs.length === 1)(single), single, opts);
+  return renderRun(await prepareRun(runs.length === 1)(single), single, opts, n);
 }
 
 /**

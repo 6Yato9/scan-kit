@@ -3,6 +3,7 @@ import { File } from 'expo-file-system';
 import { docDir } from './storage-layout';
 import { replaceOriginal, replacePage } from './files';
 import { cappedSize, getImageSize } from './image-size';
+import { noteRotation, readPageSource } from './page-source';
 
 /**
  * Rotates a stored page JPEG by 90° and overwrites the original file.
@@ -19,6 +20,10 @@ export async function rotatePage(
   pageIndex: number
 ): Promise<string> {
   const degrees = direction === 'cw' ? 90 : -90;
+  // A page with a source photo (lib/page-source.ts) records the turn in its
+  // geometry, so a later re-crop comes out turned the same way. Read before
+  // the turn: afterwards the stamp no longer matches the old geometry.
+  const source = readPageSource(docId, pageIndex);
   const result = await manipulateAsync(uri, [{ rotate: degrees }], {
     compress: 0.9,
     format: SaveFormat.JPEG,
@@ -33,6 +38,7 @@ export async function rotatePage(
   // the file at the canonical doc location already contains the rotated bytes.
   if (resultPath === inputPath) {
     await mirrorGeometryToOriginal(docId, pageIndex, [{ rotate: degrees }]);
+    noteRotation(docId, pageIndex, source, degrees);
     const dir = docDir(docId);
     return new File(dir, `page-${pageIndex}.jpg`).uri;
   }
@@ -40,6 +46,7 @@ export async function rotatePage(
   const stored = replacePage(resultPath, docId, pageIndex);
   // Keep the unfiltered shadow the same shape as the page it backs.
   await mirrorGeometryToOriginal(docId, pageIndex, [{ rotate: degrees }]);
+  noteRotation(docId, pageIndex, source, degrees);
   // Clean up the manipulator temp file so it doesn't accumulate in cache.
   try {
     const tmp = new File(resultPath);

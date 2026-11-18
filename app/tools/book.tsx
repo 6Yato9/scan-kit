@@ -1,6 +1,9 @@
 // app/tools/book.tsx
 // Photograph open book spreads; each spread is split down the middle into its
 // left and right page and saved as one document (all captures, in order).
+// With Scan Kit's camera each half keeps the photo, split down the page's
+// true middle in perspective (lib/capture-session.ts splitSpread), so either
+// page can be re-cropped later.
 import { useRef, useState } from 'react';
 import { Alert } from 'react-native';
 import { useRouter } from 'expo-router';
@@ -9,7 +12,10 @@ import { PrimaryButton } from '@/components/primary-button';
 import { ToolIntro, ToolScreen } from '@/components/tool-ui';
 import { splitSpreads } from '@/lib/book-split';
 import { notifyError } from '@/lib/haptics';
-import { alertScanError, deleteTempFiles, pickPhotos, scanWithCamera } from '@/lib/tool-scan';
+import { alertScanError, deleteTempFiles, pickPhotos, scanPagesWithCamera } from '@/lib/tool-scan';
+import { geometryOfInput, isSourceInput, type ScanPageInput } from '@/lib/page-source';
+import { getImageSize } from '@/lib/image-size';
+import { splitSpread, toSourceInput } from '@/lib/capture-session';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
 import { noteNewDocument } from '@/lib/new-doc-note';
 
@@ -25,22 +31,34 @@ export default function BookScreen() {
     setBusy(source);
     let temps: string[] = [];
     try {
-      let shots: string[] | null;
+      let shots: ScanPageInput[] | null;
       try {
         // No auto-crop: page detection would pick one page out of a two-page spread.
-        shots = source === 'camera' ? await scanWithCamera() : await pickPhotos(true, { autoCrop: false });
+        shots = source === 'camera'
+          ? await scanPagesWithCamera({ title: 'Book mode', guidance: 'Fit the open book in the frame' })
+          : await pickPhotos(true, { autoCrop: false });
       } catch (err) {
         alertScanError(err);
         return;
       }
       if (!shots?.length) return;
-      if (source === 'photos') temps.push(...shots);
+      if (source === 'photos') temps.push(...(shots as string[]));
 
-      let pages: string[];
+      let pages: ScanPageInput[];
       try {
-        const split = await splitSpreads(shots);
-        pages = split.pages;
-        temps = temps.concat(split.temps);
+        pages = [];
+        for (const shot of shots) {
+          if (isSourceInput(shot)) {
+            // A photo and its reviewed crop: split the crop, keep the photo.
+            const size = await getImageSize(shot.sourceUri);
+            const halves = size ? splitSpread(geometryOfInput(shot), size.width, size.height) : [geometryOfInput(shot)];
+            pages.push(...halves.map(g => toSourceInput(shot.sourceUri, g)));
+          } else {
+            const split = await splitSpreads([shot]);
+            pages.push(...split.pages);
+            temps = temps.concat(split.temps);
+          }
+        }
       } catch {
         notifyError();
         Alert.alert('Couldn’t split the pages', 'The photo couldn’t be processed. Try again with a clearer shot.');

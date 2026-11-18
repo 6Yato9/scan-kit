@@ -1,10 +1,18 @@
 // types/document.ts
-export type PageFilter = 'original' | 'grayscale' | 'bw' | 'enhanced';
+// Stored per page and in Scan settings: never rename or remove an id, and an
+// id must keep producing the same pixels (lib/pixel-kernels.ts). The last five
+// were added in R12.
+export type PageFilter =
+  | 'original' | 'grayscale' | 'bw' | 'enhanced'
+  | 'noshadow' | 'photo' | 'fainttext' | 'whiteboard' | 'inksaver';
 
 export type PageAdjustment = {
   brightness: number; // -100 to 100, 0 = no change
   contrast: number;   // -100 to 100, 0 = no change
   saturation: number; // -100 to 100, 0 = no change
+  // -100 (soften) to 100 (sharpen), 0 = no change. Added in R12, so absent on
+  // every adjustment saved before it: read as 0.
+  sharpness?: number;
 };
 
 export type Document = {

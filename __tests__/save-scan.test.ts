@@ -14,6 +14,7 @@ jest.mock('../lib/files', () => ({
 let mockStored: any = null;
 const mockApplied: any[] = [];
 jest.mock('../lib/storage', () => ({
+  keepSourcesEnabled: jest.fn(async () => true),
   saveDocument: jest.fn(async () => {}),
   updateDocumentWith: jest.fn(async (_id: string, fn: (cur: any) => any) => {
     if (!mockStored) return false;
@@ -23,6 +24,19 @@ jest.mock('../lib/storage', () => ({
     mockStored = JSON.parse(JSON.stringify({ ...mockStored, ...patch }));
     return true;
   }),
+}));
+// Photos with an outline (R12) go through lib/page-source; its file work is
+// tested on its own (page-source.test.ts).
+jest.mock('../lib/page-source', () => ({
+  ...jest.requireActual('../lib/page-source'),
+  prepareSourcePage: jest.fn(async (input: any, quality: number, keep: boolean) => ({
+    page: `file:///cache/page-source/page-of-${input.sourceUri.split('/').pop()}`,
+    source: keep ? 'file:///cache/page-source/src.jpg' : null,
+    geometry: { quad: [0, 0, 1, 0, 1, 1, 0, 1], rotation: 0 },
+    quality,
+  })),
+  installPreparedSource: jest.fn(),
+  discardPrepared: jest.fn(),
 }));
 jest.mock('../lib/ocr', () => ({
   ocrAvailable: jest.fn(() => true),
@@ -207,5 +221,40 @@ describe('indexDocText', () => {
     await older;
 
     expect(mockStored.ocrText).toBe('new text');
+  });
+});
+
+
+describe('pages with a source photo (R12)', () => {
+  const ps = require('../lib/page-source');
+  const storage = require('../lib/storage');
+
+  test('a photo with an outline is rendered, stored without a second compression, and keeps its source', async () => {
+    await saveScan({
+      pages: ['file:///tmp/scanner.jpg', { sourceUri: 'file:///Caches/ImagePicker/p.jpg', quad: [0.1, 0.1, 0.9, 0.1, 0.9, 0.9, 0.1, 0.9] }],
+      name: 'Doc',
+      quality: 0.75,
+    });
+    expect(ps.prepareSourcePage).toHaveBeenCalledWith(expect.objectContaining({ sourceUri: 'file:///Caches/ImagePicker/p.jpg' }), 0.75, true);
+    expect((copyPageWithQuality as jest.Mock).mock.calls).toEqual([
+      ['file:///tmp/scanner.jpg', 'fixed-id', 0, 0.75],
+      ['file:///cache/page-source/page-of-p.jpg', 'fixed-id', 1, 1],
+    ]);
+    expect(ps.installPreparedSource).toHaveBeenCalledWith(expect.anything(), 'fixed-id', 1);
+    expect(ps.discardPrepared).toHaveBeenCalledTimes(2);
+    // The picked photo is a temp: deleted once stored, like any other input.
+    expect(deleteDisposableTemps).toHaveBeenCalledWith(['file:///tmp/scanner.jpg', 'file:///Caches/ImagePicker/p.jpg']);
+  });
+
+  test('"Keep original photos" off: no source is kept', async () => {
+    (storage.keepSourcesEnabled as jest.Mock).mockResolvedValueOnce(false);
+    await saveScan({ pages: [{ sourceUri: 'file:///Caches/x.jpg', quad: null }], name: 'Doc', quality: 0.75 });
+    expect(ps.prepareSourcePage).toHaveBeenCalledWith(expect.anything(), 0.75, false);
+  });
+
+  test('plain image URIs never touch the source pipeline (existing behaviour)', async () => {
+    await saveScan({ pages: ['a.jpg', 'b.jpg'], name: 'Doc', quality: 0.9 });
+    expect(ps.prepareSourcePage).not.toHaveBeenCalled();
+    expect(storage.keepSourcesEnabled).not.toHaveBeenCalled();
   });
 });

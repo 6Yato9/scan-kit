@@ -35,6 +35,15 @@ export type PdfIndexOutcome = 'indexed' | 'no-text' | 'locked' | 'unavailable' |
 // is locked) isn't read again on every open in this session.
 const running = new Map<string, Promise<PdfIndexOutcome>>();
 const settled = new Map<string, PdfIndexOutcome>();
+// Bumped whenever a document's PDF is replaced in place (page edits,
+// lib/pdf-edit.ts: same path, new bytes). A pass that read the text before
+// that doesn't write it: it describes pages that may be gone.
+const generations = new Map<string, number>();
+
+/** Marks document `docId`'s PDF as replaced (see above). */
+export function bumpPdfTextGeneration(docId: string): void {
+  generations.set(docId, (generations.get(docId) ?? 0) + 1);
+}
 
 /**
  * Reads the embedded text of document `docId`'s PDF into its `ocrText`.
@@ -53,6 +62,7 @@ export function indexPdfText(docId: string, options: { force?: boolean } = {}): 
     if (!doc?.pdfUri) return 'skipped';
     const key = `${docId}|${doc.pdfUri}|${doc.updatedAt}`;
     if (!options.force && settled.has(key)) return 'skipped';
+    const generation = generations.get(docId) ?? 0;
     let pages: string[];
     try {
       pages = await read(doc.pdfUri.split('?')[0], null);
@@ -66,7 +76,7 @@ export function indexPdfText(docId: string, options: { force?: boolean } = {}): 
     let outcome: PdfIndexOutcome = text ? 'indexed' : 'no-text';
     await withDocLock(docId, () =>
       updateDocumentWith(docId, current => {
-        if (current.pdfUri !== pdfUri || current.pages.length > 0) {
+        if (current.pdfUri !== pdfUri || current.pages.length > 0 || (generations.get(docId) ?? 0) !== generation) {
           outcome = 'skipped';
           return null;
         }
@@ -94,4 +104,5 @@ export function needsPdfText(doc: { pdfUri?: string; pages: string[]; ocrText?: 
 export function resetPdfTextForTests(): void {
   running.clear();
   settled.clear();
+  generations.clear();
 }

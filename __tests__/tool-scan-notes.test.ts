@@ -18,6 +18,10 @@ jest.mock('../lib/document-detect', () => ({
     uri.endsWith('a.jpg') ? { uri: 'file:///tmp/doc-1.jpg', detected: true } : { uri, detected: false },
 }));
 
+jest.mock('../lib/page-source', () => ({ isSourceInput: () => false, geometryOfInput: jest.fn(), renderGeometry: jest.fn() }));
+jest.mock('../lib/capture-session', () => ({ openCaptureSession: jest.fn(), toSourceInput: jest.fn() }));
+jest.mock('../modules/vision-ocr/src/DocumentCameraView', () => ({ isDocumentCameraAvailable: () => false }));
+
 import { pickPhotos, takeUncroppedPages } from '../lib/tool-scan';
 
 test('pickPhotos reports the photos it couldn’t crop, once', async () => {

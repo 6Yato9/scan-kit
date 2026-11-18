@@ -1,6 +1,6 @@
 // components/page-actions-sheet.tsx
 // The viewer's inline edit panel: filters and brightness / contrast /
-// saturation for the current page.
+// saturation / sharpness for the current page.
 //
 // It is NOT a modal sheet. It takes the place of the viewer's toolbar and
 // thumbnail strip, so the page above shrinks to fit and stays fully visible
@@ -15,12 +15,13 @@
 // grows back just as smoothly. (A Reanimated height: it updates the layout
 // every frame, so the page above resizes with it. LayoutAnimation is not
 // enabled on iOS with the new architecture.)
-import { useEffect, useState } from 'react';
-import { ActivityIndicator, Image, LayoutChangeEvent, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Image, LayoutChangeEvent, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Animated, { Easing, ReduceMotion, runOnJS, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { PageFilter, PageAdjustment } from '@/types/document';
 import { bakePreviews, PREVIEW_FILTERS } from '@/lib/bake';
 import { PREVIEW_ASPECT } from '@/lib/bake-html';
+import { isNeutralAdjustment, NO_COLOR_FILTERS } from '@/lib/filters';
 import { ChromeSlider } from '@/components/chrome-slider';
 import { useTheme } from '@/contexts/theme-context';
 import { HIT, Radius, Spacing, Type } from '@/lib/theme';
@@ -31,6 +32,11 @@ export const FILTER_LABELS: Record<PageFilter, string> = {
   grayscale: 'Grayscale',
   bw: 'Black & white',
   enhanced: 'Enhanced',
+  noshadow: 'No shadow',
+  photo: 'Photo',
+  fainttext: 'Faint text',
+  whiteboard: 'Whiteboard',
+  inksaver: 'Ink saver',
 };
 
 /**
@@ -41,20 +47,27 @@ export const FILTER_LABELS: Record<PageFilter, string> = {
 export const FILTER_CAPTIONS: Record<PageFilter, string> = {
   original: 'As captured',
   enhanced: 'Keeps color',
+  noshadow: 'Natural look',
   grayscale: 'No color',
   bw: 'Sharpest text',
+  fainttext: 'For pencil',
+  photo: 'For pictures',
+  whiteboard: 'Bold markers',
+  inksaver: 'Prints lighter',
 };
-
-/** Filters whose output has no colour, so the Saturation slider does nothing. */
-const NO_COLOR: PageFilter[] = ['grayscale', 'bw'];
 
 export type EditTab = 'filters' | 'adjust';
 
 const DEFAULT_ADJ: PageAdjustment = { brightness: 0, contrast: 0, saturation: 0 };
-const isDefault = (a: PageAdjustment) => a.brightness === 0 && a.contrast === 0 && a.saturation === 0;
 
-/** Fixed content height so switching tabs never makes the page above jump. */
-const CONTENT_H = 150;
+/** Slider row height (components/chrome-slider.tsx) and the gap between rows. */
+const SLIDER_ROW = HIT;
+const SLIDER_GAP = Spacing.xxs;
+/**
+ * Fixed content height so switching tabs never makes the page above jump:
+ * the Adjust tab's four slider rows.
+ */
+const CONTENT_H = SLIDER_ROW * 4 + SLIDER_GAP * 3;
 
 /**
  * Height of the viewer's toolbar (components/viewer-toolbar.tsx: 8 + 56 + 4 and
@@ -86,6 +99,12 @@ const PANEL_MOTION = { duration: 260, easing: Easing.bezier(0.25, 0.1, 0.25, 1),
 const PREVIEW_MAX_H = 80;
 /** Ring border + gap around the preview in a tile. */
 const RING = 4;
+/**
+ * Filter tiles have a fixed width and the row scrolls sideways: there are
+ * nine filters, and a part-visible tile at the edge shows there are more.
+ */
+const TILE_W = 80;
+const TILE_GAP = Spacing.sm;
 
 /** The preview box inside a tile of width `tileW`. */
 function fitPreview(tileW: number): { w: number; h: number } {
@@ -133,8 +152,8 @@ export function PageEditPanel({
 }: Props) {
   const { colors } = useTheme();
   const [previews, setPreviews] = useState<string[] | null>(null);
-  const [tileW, setTileW] = useState(0);
   const [aspect, setAspect] = useState(1.3);
+  const stripRef = useRef<ScrollView>(null);
   // Mounted at the height of the bars it replaces, then grown, so the page
   // above shrinks smoothly instead of jumping.
   const closedH = replacedBarsHeight(bottomInset);
@@ -182,15 +201,19 @@ export function PageEditPanel({
     return () => { cancelled = true; };
   }, [fallback]);
 
-  const onTileLayout = (e: LayoutChangeEvent) => {
-    const { width } = e.nativeEvent.layout;
-    if (Math.abs(width - tileW) > 0.5) setTileW(width);
+  // The strip opens scrolled so the page's current filter is in view
+  // (centred where the row allows), without animating.
+  const onStripLayout = (e: LayoutChangeEvent) => {
+    const viewW = e.nativeEvent.layout.width;
+    const index = Math.max(0, PREVIEW_FILTERS.indexOf(filter));
+    const x = Spacing.gutter + index * (TILE_W + TILE_GAP) - (viewW - TILE_W) / 2;
+    if (x > 0) stripRef.current?.scrollTo({ x, animated: false });
   };
-  const box = fitPreview(tileW);
+  const box = fitPreview(TILE_W);
   // Until the previews arrive, the tile shows the unfiltered page's top at
   // full width (the same framing, minus the margin trim).
   const pageH = box.w * Math.max(0.4, Math.min(3, aspect));
-  const noColor = NO_COLOR.includes(filter);
+  const noColor = NO_COLOR_FILTERS.includes(filter);
 
   // Left of the tabs: the one secondary action that fits the current tab.
   const secondary =
@@ -198,7 +221,7 @@ export function PageEditPanel({
       ? pageCount > 1 && onApplyToAll
         ? { label: 'Apply to all', a11y: `Apply ${FILTER_LABELS[filter]} to all ${pageCount} pages`, onPress: onApplyToAll, disabled: false }
         : null
-      : { label: 'Reset', a11y: 'Reset adjustments', onPress: () => { onAdjust(DEFAULT_ADJ); onAdjustCommit(); }, disabled: isDefault(adj) };
+      : { label: 'Reset', a11y: 'Reset adjustments', onPress: () => { onAdjust(DEFAULT_ADJ); onAdjustCommit(); }, disabled: isNeutralAdjustment(adj) };
 
   return (
     <Animated.View
@@ -272,7 +295,14 @@ export function PageEditPanel({
 
       <View style={styles.content}>
         {tab === 'filters' ? (
-          <View style={styles.filterRow}>
+          <ScrollView
+            ref={stripRef}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.strip}
+            contentContainerStyle={styles.filterRow}
+            onLayout={onStripLayout}
+          >
             {PREVIEW_FILTERS.map((key, i) => {
               const active = filter === key;
               const preview = previews?.[i];
@@ -280,7 +310,6 @@ export function PageEditPanel({
                 <Pressable
                   key={key}
                   style={styles.filterTile}
-                  onLayout={i === 0 ? onTileLayout : undefined}
                   onPress={() => onFilter(key)}
                   accessibilityRole="button"
                   accessibilityLabel={`${FILTER_LABELS[key]} filter, ${FILTER_CAPTIONS[key].toLowerCase()}`}
@@ -326,7 +355,7 @@ export function PageEditPanel({
                 </Pressable>
               );
             })}
-          </View>
+          </ScrollView>
         ) : (
           <View style={styles.adjust}>
             <ChromeSlider
@@ -358,6 +387,12 @@ export function PageEditPanel({
                 onSlidingComplete={onAdjustCommit}
               />
             )}
+            <ChromeSlider
+              label="Sharpness"
+              value={adj.sharpness ?? 0}
+              onValueChange={v => onAdjust({ ...adj, sharpness: v })}
+              onSlidingComplete={onAdjustCommit}
+            />
           </View>
         )}
       </View>
@@ -387,8 +422,10 @@ const styles = StyleSheet.create({
   },
   segmentText: { fontWeight: '600' },
   content: { height: CONTENT_H, justifyContent: 'center' },
-  filterRow: { flexDirection: 'row', gap: Spacing.sm },
-  filterTile: { flex: 1, alignItems: 'center' },
+  // Full-bleed: the strip scrolls under the panel's side padding.
+  strip: { marginHorizontal: -Spacing.gutter, flexGrow: 0 },
+  filterRow: { flexDirection: 'row', gap: TILE_GAP, paddingHorizontal: Spacing.gutter },
+  filterTile: { width: TILE_W, alignItems: 'center' },
   previewSlot: { height: PREVIEW_MAX_H + RING * 2, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center' },
   previewRing: {
     borderRadius: Radius.sm + 2,
@@ -411,5 +448,5 @@ const styles = StyleSheet.create({
   noSaturation: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, minHeight: HIT },
   noSaturationLabel: { width: 84, fontWeight: '500' },
   noSaturationNote: { flex: 1 },
-  adjust: { gap: Spacing.xxs },
+  adjust: { gap: SLIDER_GAP },
 });

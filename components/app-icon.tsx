@@ -24,7 +24,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { SymbolView, type SFSymbol, type SymbolWeight } from 'expo-symbols';
 
 export type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
-type SymbolGlyph = 'signature' | 'rename' | 'long-image' | 'id-card' | 'watermark';
+type SymbolGlyph = 'signature' | 'rename' | 'long-image' | 'id-card' | 'watermark' | 'rotate-left';
 export type AppIconName = IoniconName | SymbolGlyph;
 
 const SYMBOLS: Record<
@@ -41,6 +41,8 @@ const SYMBOLS: Record<
   watermark: { symbol: 'checkmark.seal.text.page', fallback: 'ribbon-outline', scale: 1.05 },
   // Wide and short like the signature, so drawn a little larger.
   'id-card': { symbol: 'person.text.rectangle', fallback: 'id-card-outline', scale: 1.1 },
+  // Counterclockwise rotation (PDF pages): Ionicons' circular arrows only turn clockwise.
+  'rotate-left': { symbol: 'rotate.left', fallback: 'refresh-outline', scale: 1 },
 };
 
 export function isSymbolGlyph(name: AppIconName): name is SymbolGlyph {

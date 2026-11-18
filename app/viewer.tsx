@@ -9,7 +9,6 @@ import {
   Image,
   Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   useWindowDimensions,
@@ -20,11 +19,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { WebView } from 'react-native-webview';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
-import DocumentScanner from 'react-native-document-scanner-plugin';
 import {
   getDocuments,
   getFolders,
   getScanSettings,
+  keepSourcesEnabled,
   patchDocument,
   restoreDocument,
   saveFolder,
@@ -33,7 +32,10 @@ import {
   updateDocument,
 } from '@/lib/storage';
 import { deleteSinglePage, reorderPages } from '@/lib/files';
-import { cropPage, pageFileUri, rotatePage } from '@/lib/image';
+import { pageFileUri, rotatePage } from '@/lib/image';
+import { inputUri, type CropTarget, type ScanPageInput } from '@/lib/page-source';
+import { cropUndoFor, CropUndoError, rebakeAfterCrop, recropPatch, undoTargetFor, type CropUndo } from '@/lib/recrop';
+import type { PageGeometry } from '@/lib/quad';
 import {
   bakePage,
   PageEdit,
@@ -61,7 +63,7 @@ import { indexPdfText, needsPdfText } from '@/lib/pdf-text';
 import { PdfUnlockError, pdfUnlockAvailable, unlockStoredPdf } from '@/lib/pdf-unlock';
 import { subscribeViewerNotices, takeViewerNotice } from '@/lib/viewer-notice';
 import { takeNewDocumentNote, uncroppedMessage } from '@/lib/new-doc-note';
-import { alertScanError, deleteTempFiles, pickPhotos, scanWithCamera, ToolScanError } from '@/lib/tool-scan';
+import { alertScanError, deleteTempFiles, pickPhotos, scanPagesWithCamera, ToolScanError } from '@/lib/tool-scan';
 import { withSystemUI } from '@/lib/system-ui';
 import { insertAt, restoreStashedPage, stashPage } from '@/lib/page-undo';
 import { notifySuccess, notifyError } from '@/lib/haptics';
@@ -78,7 +80,7 @@ import {
 } from '@/lib/share';
 import { Document, PageAdjustment, PageFilter } from '@/types/document';
 import { DarkThemeScope, useTheme } from '@/contexts/theme-context';
-import { QUALITY_MAP, SCAN_QUALITY_MAP, useScan } from '@/contexts/scan-context';
+import { QUALITY_MAP, useScan } from '@/contexts/scan-context';
 import { HIT, Radius, Spacing, Type } from '@/lib/theme';
 import { ExportSheet } from '@/components/export-sheet';
 import { EditTab, FILTER_LABELS, PageEditPanel } from '@/components/page-actions-sheet';
@@ -90,22 +92,31 @@ import { ToastProvider, useToast } from '@/components/toast';
 import { ReorderModal } from '@/components/reorder-modal';
 import { RenameSheet } from '@/components/rename-sheet';
 import { MoveFolderSheet } from '@/components/move-folder-sheet';
-import { CropModal, CropRect } from '@/components/crop-modal';
+import { CropModal } from '@/components/crop-modal';
 import { FilterBaker } from '@/components/filter-baker';
 import { EmptyState } from '@/components/empty-state';
 import { BakeIndicator } from '@/components/bake-indicator';
 import { PdfConvertBanner, useConvertBannerDismissed } from '@/components/pdf-convert-banner';
 import { PdfDocumentView } from '@/modules/vision-ocr/src/PdfDocumentView';
+import { usePdfPageTools } from '@/components/pdf-page-tools';
+import { canEditPdfPages } from '@/lib/pdf-edit';
 import { BottomSheet, SheetHeader } from '@/components/bottom-sheet';
 import { PrimaryButton } from '@/components/primary-button';
 import { HeaderIconButton, ScreenHeader } from '@/components/screen-header';
 import { LockScreen, useAppLocked } from '@/components/lock-gate';
+import { RecognizedText } from '@/components/recognized-text';
+import { TEXT_ACTIONS_HEIGHT, TextActions } from '@/components/text-actions';
+import { saveRecognizedText } from '@/lib/recognized-text';
+
+/** Room the Recognized text sheet needs besides its text box while typing (header, actions, padding). */
+const OCR_SHEET_RESERVE = 250;
 
 const DEFAULT_ADJ: PageAdjustment = { brightness: 0, contrast: 0, saturation: 0 };
 const isDefaultAdj = (a: PageAdjustment | undefined) =>
-  !a || (a.brightness === 0 && a.contrast === 0 && a.saturation === 0);
+  !a || (a.brightness === 0 && a.contrast === 0 && a.saturation === 0 && !a.sharpness);
 
-type OcrState = { status: 'running' } | { status: 'done'; text: string };
+// `found`: the page had text. Kept apart from `text`, which the user can edit (even to empty).
+type OcrState = { status: 'running' } | { status: 'done'; text: string; found: boolean };
 
 /**
  * The viewer is a fullScreenModal, which covers the app-wide toast host, so it
@@ -198,8 +209,8 @@ function ViewerContent({
     counterRowRef.current?.measureInWindow((_x, y, _w, h) => {
       if (!Number.isFinite(y) || !Number.isFinite(h) || y <= 0) return;
       // The row's own bottom padding: Spacing.sm over the toolbar, or the
-      // home indicator's inset under a PDF (which has no toolbar).
-      const pad = docRef.current?.pdfUri ? insets.bottom + Spacing.xs : Spacing.sm;
+      // home indicator's inset under a PDF in a build without PDF page tools.
+      const pad = docRef.current?.pdfUri && !canEditPdfPages() ? insets.bottom + Spacing.xs : Spacing.sm;
       onToastAnchor(Math.max(0, windowH - (y + h)) + pad);
     });
   }, [onToastAnchor, windowH, insets.bottom]);
@@ -417,16 +428,32 @@ function ViewerContent({
     }
   }, [editDocument]);
 
-  const handleCropDone = useCallback(async (rect: CropRect) => {
+  // Crop (components/crop-modal.tsx, lib/recrop.ts): re-crops from the page's
+  // source photo when it has one, then bakes its filter back in before the
+  // editor closes. Undo re-crops the source to the previous corners.
+  const undoCrop = useCallback(async (u: CropUndo) => {
+    try {
+      const next = await editDocument({ pages: [u.index] }, async fresh =>
+        recropPatch(fresh, u.index, undoTargetFor(u), u.geometry, true));
+      await rebakeAfterCrop(next, u.index);
+      notifySuccess();
+    } catch (err) {
+      console.error('Undo crop failed', err);
+      notifyError();
+      Alert.alert('Couldn’t undo the crop', err instanceof CropUndoError ? err.message : 'Try again.');
+      reload().catch(() => {});
+    }
+  }, [editDocument, reload]);
+
+  const handleCropDone = useCallback(async (geometry: PageGeometry, target: CropTarget) => {
     const page = pageRef.current;
-    await editDocument({ pages: [page] }, async fresh => {
-      const uri = await cropPage(fresh.id, page, rect);
-      const pages = [...fresh.pages];
-      pages[page] = uri;
-      return { pages };
-    });
+    const keepSource = await keepSourcesEnabled();
+    const next = await editDocument({ pages: [page] }, async fresh => recropPatch(fresh, page, target, geometry, keepSource));
+    await rebakeAfterCrop(next, page);
     setCropVisible(false);
-  }, [editDocument]);
+    const undo = cropUndoFor(next.id, page, target, geometry, keepSource);
+    toast.show('Page cropped', undo ? { action: { label: 'Undo', onPress: () => { undoCrop(undo); } } } : undefined);
+  }, [editDocument, toast, undoCrop]);
 
   const handleFilter = useCallback((filter: PageFilter) => {
     const doc = docRef.current;
@@ -663,15 +690,12 @@ function ViewerContent({
     setAdding(true);
     try {
       const settings = await getScanSettings();
-      let uris: string[] = [];
+      let uris: ScanPageInput[] = [];
       if (source === 'camera') {
-        // withSystemUI: the app lock covers an open picker instead of closing
-        // it, and an abandoned one resolves as cancelled so `adding` resets.
-        const { scannedImages } = await withSystemUI(
-          () => DocumentScanner.scanDocument({ croppedImageQuality: SCAN_QUALITY_MAP[settings.quality] }),
-          () => ({ scannedImages: [] as string[] }),
-        );
-        uris = scannedImages ?? [];
+        // The camera chosen in Scan settings (lib/tool-scan.ts): Scan Kit's
+        // camera keeps each photo so the new pages can be re-cropped later.
+        // Either way the app lock can't close it from under this call.
+        uris = (await scanPagesWithCamera()) ?? [];
       } else {
         const result = await withSystemUI(
           () => ImagePicker.launchImageLibraryAsync({
@@ -694,6 +718,10 @@ function ViewerContent({
       setCurrentPage(first);
       setTimeout(() => flatListRef.current?.scrollToIndex({ index: first, animated: true }), 100);
     } catch (err) {
+      if (err instanceof ToolScanError) {
+        alertScanError(err);
+        return;
+      }
       const msg = err instanceof Error ? err.message : String(err);
       if (/cancel/i.test(msg)) return;
       console.error('Add pages failed', err);
@@ -758,8 +786,8 @@ function ViewerContent({
   }, [id, withPendingChoices, reload]);
 
   const retakingRef = useRef(false);
-  /** Replaces page `index` with the image at `uri` and offers Undo. */
-  const applyRetake = useCallback(async (docId: string, index: number, uri: string) => {
+  /** Replaces page `index` with the image (or photo and crop) `uri` and offers Undo. */
+  const applyRetake = useCallback(async (docId: string, index: number, uri: ScanPageInput) => {
     retakingRef.current = true;
     setRetaking(true);
     try {
@@ -788,10 +816,16 @@ function ViewerContent({
   const retakeFrom = useCallback(async (source: 'camera' | 'photos', index: number) => {
     const doc = docRef.current;
     if (!doc || retakingRef.current) return;
-    let uris: string[] | null = null;
+    let uris: ScanPageInput[] | null = null;
     try {
       // Photos are auto-cropped by retakePage, so the picker hands them over as is.
-      uris = source === 'camera' ? await scanWithCamera() : await pickPhotos(false, { autoCrop: false });
+      uris = source === 'camera'
+        ? await scanPagesWithCamera({
+          maxPages: 1,
+          title: doc.pages.length > 1 ? `Retake page ${index + 1}` : 'Retake page',
+          doneLabel: 'Replace',
+        })
+        : await pickPhotos(false, { autoCrop: false });
     } catch (err) {
       if (err instanceof ToolScanError && err.kind === 'unavailable') {
         Alert.alert(
@@ -810,7 +844,7 @@ function ViewerContent({
     if (!uris?.length) return;
     // The camera can capture several pages in one go; a retake uses the first.
     const [first, ...extra] = uris;
-    deleteTempFiles(extra);
+    deleteTempFiles(extra.map(inputUri));
     await applyRetake(doc.id, index, first);
   }, [applyRetake]);
 
@@ -1128,7 +1162,7 @@ function ViewerContent({
     setOcr({ status: 'running' });
     try {
       const { text } = await recognizeLines(pageFileUri(doc.id, pageRef.current));
-      setOcr({ status: 'done', text: text.trim() });
+      setOcr({ status: 'done', text: text.trim(), found: !!text.trim() });
       // Refresh the full-doc content index in the background so search can match
       // this document. patchDocument merges onto the current record, so a delete
       // or edit made while it runs is neither resurrected nor overwritten.
@@ -1203,6 +1237,20 @@ function ViewerContent({
       ]);
     }
   }, [handleThumbnailPress, handleRetake, movePage, confirmDeletePage]);
+
+  // Imported PDFs: page edits written into the PDF itself (components/pdf-page-tools).
+  const pdfTools = usePdfPageTools({
+    document,
+    page: pdfPage?.page ?? 0,
+    pageCount: pdfPage?.count ?? null,
+    enabled: !pdfError && !converting,
+    toast,
+    router,
+    onDocument: setDocument,
+    onMissing: () => setStatus('missing'),
+    onLocked: () => handleUnlockPdf(),
+    onCreated: bumpLastSaved,
+  });
 
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -1296,11 +1344,16 @@ function ViewerContent({
           : [],
         [
           { key: 'rename', icon: 'rename', label: 'Rename', onPress: () => setRenameVisible(true) },
+          ...pdfTools.documentRows,
           { key: 'move', icon: 'folder-outline', label: 'Move to folder', detail: document.folder, onPress: openMove },
           { key: 'duplicate', icon: 'duplicate-outline', label: 'Duplicate', onPress: handleDuplicate },
           { key: 'print', icon: 'print-outline', label: 'Print', onPress: handlePrintPdf },
         ],
-        [{ key: 'delete-doc', icon: 'trash-outline', label: 'Delete document', destructive: true, onPress: confirmDeleteDocument }],
+        pdfTools.pageRows,
+        [
+          ...(pdfTools.deleteRow ? [pdfTools.deleteRow] : []),
+          { key: 'delete-doc', icon: 'trash-outline', label: 'Delete document', destructive: true, onPress: confirmDeleteDocument },
+        ],
       ]
     : [
         [
@@ -1415,7 +1468,8 @@ function ViewerContent({
         ) : PdfDocumentView ? (
           <>
             <PdfDocumentView
-              key={pdfReload}
+              key={`${pdfReload}-${pdfTools.viewKey}`}
+              initialPage={pdfTools.initialPage}
               source={document.pdfUri.split('?')[0]}
               backgroundHex={colors.chrome}
               style={styles.pdfView}
@@ -1431,7 +1485,7 @@ function ViewerContent({
             <View
               ref={counterRowRef}
               onLayout={anchorToast}
-              style={[styles.counterRow, styles.counterRowFixed, { paddingBottom: insets.bottom + Spacing.xs }]}
+              style={[styles.counterRow, styles.counterRowFixed, pdfTools.toolbar ? null : { paddingBottom: insets.bottom + Spacing.xs }]}
               pointerEvents="none"
             >
               {pdfPage && pdfPage.count > 1 ? (
@@ -1442,6 +1496,7 @@ function ViewerContent({
                 </View>
               ) : null}
             </View>
+            {pdfTools.toolbar}
           </>
         ) : (
           // Builds without the native PDF view.
@@ -1454,6 +1509,7 @@ function ViewerContent({
         {renameSheet}
         {moreSheet}
         {moveSheet}
+        {pdfTools.sheets}
       </View>
     );
   }
@@ -1614,7 +1670,8 @@ function ViewerContent({
 
       <CropModal
         visible={cropVisible}
-        uri={document.pages[page]}
+        docId={document.id}
+        pageIndex={page}
         cacheBust={document.updatedAt}
         onCancel={() => setCropVisible(false)}
         onDone={handleCropDone}
@@ -1641,14 +1698,20 @@ function ViewerContent({
             <ActivityIndicator color={colors.muted} />
             <Text style={[Type.footnote, { color: colors.muted }]}>Reading the page…</Text>
           </View>
-        ) : ocrText ? (
+        ) : ocr?.status === 'done' && ocr.found ? (
           <>
-            <ScrollView style={[styles.ocrBody, { backgroundColor: colors.bg }]} contentContainerStyle={styles.ocrBodyContent}>
-              <Text style={[Type.callout, styles.ocrText, { color: colors.text }]} selectable>{ocrText}</Text>
-            </ScrollView>
+            {/* Selectable range by range, and editable (components/recognized-text). */}
+            <RecognizedText
+              value={ocr.text}
+              onChangeText={t => { setCopied(false); setOcr({ status: 'done', text: t, found: true }); }}
+              onSave={t => saveRecognizedText(document.id, page, t)}
+              keyboardReserve={OCR_SHEET_RESERVE + TEXT_ACTIONS_HEIGHT}
+            />
+            {/* Read aloud, detected phone numbers / emails / links / addresses / dates, codes on the page. */}
+            <TextActions text={ocr.text} imageUri={pageFileUri(document.id, page)} bleed={Spacing.xl} />
             <View style={styles.ocrActions}>
               <PrimaryButton
-                title={copied ? 'Copied' : 'Copy'}
+                title={copied ? 'Copied' : 'Copy all'}
                 icon={copied ? 'checkmark' : 'copy-outline'}
                 variant="secondary"
                 style={styles.ocrBtn}
@@ -1664,6 +1727,8 @@ function ViewerContent({
             <Text style={[Type.footnote, styles.centeredText, { color: colors.muted }]}>
               Try cropping closer to the text, or a sharper scan.
             </Text>
+            {/* A page can hold only a QR code or barcode. */}
+            {ocr?.status === 'done' ? <TextActions text="" imageUri={pageFileUri(document.id, page)} centered bleed={Spacing.xl} style={styles.ocrCodes} /> : null}
           </View>
         )}
       </BottomSheet>
@@ -1714,9 +1779,7 @@ const styles = StyleSheet.create({
   pdfEmpty: { flex: 1 },
   missingBtn: { alignSelf: 'stretch', marginTop: Spacing.lg },
   ocrBusy: { alignItems: 'center', gap: Spacing.sm, paddingVertical: Spacing.xxl },
-  ocrBody: { maxHeight: 320, borderRadius: Radius.md },
-  ocrBodyContent: { padding: Spacing.lg },
-  ocrText: { lineHeight: 22 },
-  ocrActions: { flexDirection: 'row', gap: Spacing.md, marginTop: Spacing.lg },
+  ocrActions: { flexDirection: 'row', gap: Spacing.md, marginTop: Spacing.xs },
   ocrBtn: { flex: 1 },
+  ocrCodes: { alignSelf: 'stretch', marginTop: Spacing.sm },
 });

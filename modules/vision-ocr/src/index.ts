@@ -6,6 +6,57 @@ export type DetectResult = { uri: string; detected: boolean };
 /** A written JPEG: file:// URI and pixel size. */
 export type ImageResult = { uri: string; width: number; height: number };
 
+/** Something NSDataDetector found in text. `range` is [start, length] in UTF-16 units (JS string indices). */
+export type DetectedDataType = 'phone' | 'email' | 'url' | 'address' | 'date';
+export type DetectedData = {
+  type: DetectedDataType;
+  /** The matched text as it appears. */
+  text: string;
+  range: [number, number];
+  /** phone: the number; email: the address; url: the absolute URL; address/date: the matched text. */
+  value: string;
+  /** address only: the parts NSDataDetector recognised. */
+  address?: { street?: string; city?: string; state?: string; postalCode?: string; country?: string; name?: string; organization?: string };
+  /** date only: ms since the epoch, and the duration in seconds (0 for a single moment). */
+  date?: number;
+  duration?: number;
+  /** date only: the text names a time of day (else it's a whole day). */
+  hasTime?: boolean;
+  timeZone?: string;
+};
+/** A QR code or barcode in an image; the box is normalised 0..1 in the upright image. */
+export type DetectedBarcode = {
+  symbology: string;
+  payload: string;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+};
+export type SpeechState = 'speaking' | 'paused' | 'finished' | 'stopped';
+export type SpeechStateEvent = { id: number; state: SpeechState };
+export type SpeechProgressEvent = { id: number; start: number; length: number };
+/** Fields of a contact (business card). Phone labels: work (default) | mobile | fax | main. */
+export type ContactFields = {
+  givenName?: string;
+  middleName?: string;
+  familyName?: string;
+  namePrefix?: string;
+  nameSuffix?: string;
+  organizationName?: string;
+  departmentName?: string;
+  jobTitle?: string;
+  phones?: { number: string; label?: 'work' | 'mobile' | 'fax' | 'main' }[];
+  emails?: string[];
+  urls?: string[];
+  addresses?: { street?: string; city?: string; state?: string; postalCode?: string; country?: string }[];
+  note?: string;
+  /** file:// image used as the contact photo. */
+  imageUri?: string;
+};
+/** How a system form presented by the module ended. */
+export type PresentOutcome = 'saved' | 'cancelled' | 'denied' | 'unavailable';
+
 type VisionOcrNative = {
   recognize(uri: string): Promise<VisionResult>;
   /** Present only in dev clients built after document detection was added. */
@@ -43,8 +94,60 @@ type VisionOcrNative = {
    * quad), ERR_BAD_ARGS, ERR_IMAGE_READ, ERR_IMAGE_WRITE, ERR_WARP.
    */
   warpQuad?: (srcUri: string, quad: number[], outUri: string, quality: number, maxEdge: number) => Promise<ImageResult>;
+  /**
+   * Writes a PDF whose pages are, in order, input pages `sources[i]` (each at
+   * most once) turned by `rotations[i]` degrees (a multiple of 90, added to the
+   * page's own rotation), or for a negative `sources[i]` = -(k + 1) a blank
+   * page shaped like input page k. Pages are moved, not redrawn: text stays
+   * selectable. The output is read back and checked before this resolves to
+   * its page count. Rejects ERR_PDF_LOCKED (message "locked") when the PDF needs
+   * a password that wasn't given, ERR_PDF_EDIT otherwise.
+   */
+  pdfEditPages?: (
+    inputUri: string,
+    outputUri: string,
+    sources: number[],
+    rotations: number[],
+    password?: string | null,
+  ) => Promise<number>;
+  /** Page count and protection of a PDF. Rejects ERR_PDF_INFO when it can't be opened. */
+  pdfInfo?: (uri: string, password?: string | null) => Promise<{ pageCount: number; locked: boolean; encrypted: boolean }>;
+  /** Moves `srcUri` over `destUri` in one atomic rename (dest is never missing or partial). */
+  replaceFile?: (srcUri: string, destUri: string) => Promise<string>;
   /** Upright JPEG copy (EXIF orientation baked into the pixels), long edge capped at maxEdge (never upscaled). */
   normalizeImage?: (srcUri: string, outUri: string, maxEdge: number, quality: number) => Promise<ImageResult>;
+  // ── Acting on recognised text (round 12). Call through lib/text-actions.ts, which
+  // checks presence and keeps the system forms behind App Lock.
+  /** Phone numbers, emails, links, addresses and dates in `text` (NSDataDetector). */
+  detectData?: (text: string) => Promise<DetectedData[]>;
+  /** QR codes and barcodes in an image file (Vision). Rejects ERR_BARCODES for an unreadable file. */
+  detectBarcodes?: (uri: string) => Promise<DetectedBarcode[]>;
+  /** Dominant language of `text` as a BCP-47 code ("en", "fr"), or null (NLLanguageRecognizer). */
+  detectLanguage?: (text: string) => Promise<string | null>;
+  /** People's, organisations' and places' names in `text` (NLTagger). */
+  nameEntities?: (text: string) => Promise<{ people: string[]; organizations: string[]; places: string[] }>;
+  /** Reads `text` aloud (stopping anything already being read). `rate` 0.1..1 of the maximum. */
+  speak?: (text: string, language?: string | null, rate?: number | null) => Promise<{ id: number; language: string }>;
+  pauseSpeaking?: () => Promise<void>;
+  resumeSpeaking?: () => Promise<void>;
+  stopSpeaking?: () => Promise<void>;
+  /** Only lib/text-actions.ts may call it (App Lock). */
+  presentEventEditor?: (
+    title: string,
+    startMs: number,
+    endMs: number,
+    allDay: boolean,
+    notes?: string | null,
+    location?: string | null,
+  ) => Promise<PresentOutcome>;
+  /** Only lib/text-actions.ts may call it (App Lock). */
+  presentNewContact?: (fields: ContactFields) => Promise<PresentOutcome>;
+  /** Writes a vCard (.vcf) of the contact; resolves its file:// URI. */
+  writeVCard?: (fields: ContactFields, outputUri: string) => Promise<string>;
+  addListener?: <E extends 'onSpeechProgress' | 'onSpeechState'>(
+    event: E,
+    listener: (e: E extends 'onSpeechProgress' ? SpeechProgressEvent : SpeechStateEvent) => void,
+  ) => { remove: () => void };
 };
 
 /** null on Android, on web, and in a dev client built before this module existed. */

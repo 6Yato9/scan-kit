@@ -9,6 +9,8 @@ export type PdfDocumentViewProps = ViewProps & {
   source: string;
   /** Background behind the pages, e.g. '#111111'. */
   backgroundHex?: string;
+  /** Zero-based page to open at instead of the first (applied once per load). */
+  initialPage?: number;
   /** `page` is zero-based. */
   onPageChange?: (e: { nativeEvent: { page: number; count: number } }) => void;
   /** `message` is 'locked' for a password-protected PDF; anything else means unreadable. */

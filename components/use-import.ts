@@ -4,12 +4,18 @@
 // Photos go through auto-crop (find the page on the desk and straighten it)
 // like the in-app scanner; PDFs are stored as they are. The new document opens
 // in the viewer.
+//
+// R12: with page detection available (VisionOcr.detectQuad), a photo is kept
+// whole as its page's source together with the outline found on it
+// (lib/page-source.ts), so Crop can later show the whole photo and the crop
+// can be widened. Builds without it crop the photo the old way.
 import { useCallback, useRef } from 'react';
 import { Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import { autoCropDocument } from '@/lib/document-detect';
+import { canDetectQuad, detectQuad, type ScanPageInput } from '@/lib/page-source';
 import { deleteDisposableTemps } from '@/lib/files';
 import { looksLikeFlatPage, noteNewDocument } from '@/lib/new-doc-note';
 import { getImageSize } from '@/lib/image-size';
@@ -29,9 +35,32 @@ export type { ImportKind } from '@/lib/incoming-file';
  * no page outline (kept as photographed), so the viewer can say so and offer
  * Crop instead of silently showing a photo of a desk.
  */
-async function autoCropWithMisses(uris: string[], quality: number): Promise<{ pages: string[]; uncropped: number[] }> {
-  const pages: string[] = [];
+export async function autoCropWithMisses(uris: string[], quality: number): Promise<{ pages: ScanPageInput[]; uncropped: number[] }> {
+  const pages: ScanPageInput[] = [];
   const uncropped: number[] = [];
+  if (canDetectQuad()) {
+    // Each photo is kept whole with the page outline found on it; saveScan
+    // renders the page from it (lib/page-source.ts).
+    for (let i = 0; i < uris.length; i++) {
+      const quad = await detectQuad(uris[i]);
+      if (quad) {
+        pages.push({ sourceUri: uris[i], quad });
+        continue;
+      }
+      const size = await getImageSize(uris[i]);
+      if (size && looksLikeFlatPage(size.width, size.height)) {
+        // Already a flat page (an exported page, another app's scan): no
+        // edges to find and nothing around it to widen into — stored as is.
+        pages.push(uris[i]);
+      } else {
+        // A photo whose page edges weren't found: kept whole, so the user can
+        // crop it (the viewer offers Crop) and widen that crop later.
+        pages.push({ sourceUri: uris[i], quad: null });
+        uncropped.push(i);
+      }
+    }
+    return { pages, uncropped };
+  }
   // Without page detection (not iOS, an older build) nothing was looked for,
   // so nothing was "not found".
   const canDetect = typeof VisionOcr?.detectDocument === 'function';

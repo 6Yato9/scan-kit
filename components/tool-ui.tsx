@@ -673,7 +673,8 @@ export function ColorSwatches<T extends string>({
             style={styles.swatchHit}
           >
             <View style={[styles.swatchRing, { borderColor: on ? colors.accent : 'transparent' }]}>
-              <View style={[styles.swatch, { backgroundColor: opt.color }]}>
+              {/* The outline keeps a dark ink (Sign's black) visible on a dark card. */}
+              <View style={[styles.swatch, { backgroundColor: opt.color, borderWidth: 1, borderColor: colors.ring }]}>
                 {on ? <Ionicons name="checkmark" size={18} color={colors.onScrim} /> : null}
               </View>
             </View>

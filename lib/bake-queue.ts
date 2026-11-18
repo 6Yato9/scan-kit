@@ -28,7 +28,7 @@ export type BakeJobInput = {
   /**
    * When set, this job renders one small preview per entry instead of baking the
    * page, and resolves with 'PREVIEWS:' + a JSON array of data URLs. Lets the
-   * filter picker get all four tiles from a single WebView pass.
+   * filter picker get every tile from a single WebView pass.
    */
   previews?: Record<string, number>[][];
   previewWidth?: number;

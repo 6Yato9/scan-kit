@@ -332,9 +332,12 @@ export async function bakePages(docId: string, indices: number[], filter: PageFi
 
 /**
  * Every filter in display order: the viewer's filter tiles and Scan settings'
- * default-filter list both use it, so the two always match.
+ * default-filter list both use it, so the two always match. The everyday
+ * document looks come first, then the special-purpose ones.
  */
-export const PREVIEW_FILTERS: PageFilter[] = ['original', 'enhanced', 'grayscale', 'bw'];
+export const PREVIEW_FILTERS: PageFilter[] = [
+  'original', 'enhanced', 'noshadow', 'grayscale', 'bw', 'fainttext', 'photo', 'whiteboard', 'inksaver',
+];
 
 // Previews derive from page-N.orig.jpg, which only changes when the page's
 // geometry does — not when a filter is applied — so they are cached per page and
@@ -366,8 +369,9 @@ export function invalidateDocPreviews(docId: string): void {
  * Data URLs for one small preview per entry in PREVIEW_FILTERS, in that order.
  *
  * The picker has to show what each filter WOULD do; on iOS it cannot use the RN
- * `filter` style for that, because it silently does nothing. All four are rendered
- * in a single WebView pass and cached, so opening the sheet costs one round-trip.
+ * `filter` style for that, because it silently does nothing. All of them are
+ * rendered in a single WebView pass and cached, so opening the panel costs one
+ * round-trip.
  */
 export async function bakePreviews(docId: string, pageIndex: number): Promise<string[]> {
   const key = previewCacheKey(docId, pageIndex);

@@ -2,17 +2,19 @@
 // Recognise text from a fresh scan or from photos, then copy or share it.
 // OCR goes through lib/ocr (Apple Vision on iOS, ML Kit on Android).
 import { useRef, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, StyleSheet, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useTheme } from '@/contexts/theme-context';
 import { useToast } from '@/components/toast';
 import { PrimaryButton } from '@/components/primary-button';
 import { HeaderIconButton } from '@/components/screen-header';
+import { RecognizedText } from '@/components/recognized-text';
+import { TextActions } from '@/components/text-actions';
 import { ToolIntro, ToolProgress, ToolScreen } from '@/components/tool-ui';
 import { notifyError, notifySuccess, tapLight } from '@/lib/haptics';
 import { ocrAvailable, recognizeLines } from '@/lib/ocr';
 import { alertScanError, deleteTempFiles, pickPhotos, scanWithCamera } from '@/lib/tool-scan';
-import { Radius, Spacing, Type } from '@/lib/theme';
+import { Spacing } from '@/lib/theme';
 import { shareText } from '@/lib/share';
 
 export default function ExtractTextScreen() {
@@ -21,6 +23,9 @@ export default function ExtractTextScreen() {
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
   const [text, setText] = useState<string | null>(null);
+  // `found`: recognition read something. Kept apart from `text`, which the user can edit (even to empty).
+  const [found, setFound] = useState(false);
+  const [editing, setEditing] = useState(false);
   const busyRef = useRef(false);
   const available = ocrAvailable();
 
@@ -44,7 +49,8 @@ export default function ExtractTextScreen() {
       let uris: string[] | null = null;
       if (source === 'camera') {
         try {
-          uris = await scanWithCamera();
+          // Finished pages (the photos aren't kept: nothing is saved here).
+          uris = await scanWithCamera({ title: 'Extract text', doneLabel: 'Read text' });
         } catch (err) {
           alertScanError(err);
           return;
@@ -56,6 +62,8 @@ export default function ExtractTextScreen() {
       temp = uris;
       const result = await recognize(uris);
       setText(result);
+      setFound(!!result);
+      setEditing(false);
       if (result) notifySuccess();
     } catch {
       notifyError();
@@ -70,39 +78,41 @@ export default function ExtractTextScreen() {
   };
 
   const handleCopy = async () => {
-    if (!text) return;
+    if (!text?.trim()) return;
     await Clipboard.setStringAsync(text);
     tapLight();
     show('Text copied');
   };
 
   const handleShare = async () => {
-    if (!text) return;
+    if (!text?.trim()) return;
     await shareText(text); // waits while App Lock is on; dismissing isn't an error
   };
 
   // ── Result ────────────────────────────────────────────────────────────────
   if (text !== null) {
-    const empty = text.length === 0;
+    const empty = !found;
     return (
       <ToolScreen
         title="Extract text"
         scroll={false}
         right={
-          !empty ? <HeaderIconButton icon="copy-outline" label="Copy text" onPress={handleCopy} /> : undefined
+          !empty && !editing ? <HeaderIconButton icon="refresh-outline" label="Start over" onPress={() => setText(null)} /> : undefined
         }
         footer={
           empty ? (
             <PrimaryButton title="Try another image" icon="refresh-outline" onPress={() => setText(null)} />
-          ) : (
+          ) : editing ? undefined : (
             <View style={styles.actions}>
               <PrimaryButton
-                title="Scan again"
+                title="Copy all"
+                icon="copy-outline"
                 variant="secondary"
-                onPress={() => setText(null)}
+                onPress={handleCopy}
+                disabled={!text.trim()}
                 style={styles.flex}
               />
-              <PrimaryButton title="Share" icon="share-outline" onPress={handleShare} style={styles.flex} />
+              <PrimaryButton title="Share" icon="share-outline" onPress={handleShare} disabled={!text.trim()} style={styles.flex} />
             </View>
           )
         }
@@ -116,16 +126,19 @@ export default function ExtractTextScreen() {
             />
           </View>
         ) : (
-          <ScrollView contentContainerStyle={styles.resultScroll}>
-            <View style={[styles.resultCard, { backgroundColor: colors.card }]}>
-              <Text style={[Type.body, styles.resultText, { color: colors.text }]} selectable>
-                {text}
-              </Text>
-            </View>
-            <Text style={[Type.footnote, styles.hint, { color: colors.muted }]}>
-              Touch and hold the text to select part of it.
-            </Text>
-          </ScrollView>
+          // Select any part (touch and hold, drag the handles) or fix OCR
+          // mistakes before copying. Nothing is saved: the photos were temporary.
+          <View style={styles.result}>
+            <RecognizedText
+              fill
+              value={text}
+              onChangeText={setText}
+              onEditingChange={setEditing}
+              surface={colors.card}
+            />
+            {/* Read aloud, and act on phone numbers, emails, links, addresses and dates. */}
+            {editing ? null : <TextActions text={text} bleed={Spacing.gutter} style={styles.textActions} />}
+          </View>
         )}
       </ToolScreen>
     );
@@ -186,8 +199,6 @@ const styles = StyleSheet.create({
   flex: { flex: 1 },
   pad: { paddingHorizontal: Spacing.gutter },
   actions: { flexDirection: 'row', gap: Spacing.md },
-  resultScroll: { padding: Spacing.gutter },
-  resultCard: { borderRadius: Radius.md, padding: Spacing.lg },
-  resultText: { lineHeight: 23 },
-  hint: { textAlign: 'center', marginTop: Spacing.md },
+  result: { flex: 1, paddingHorizontal: Spacing.gutter, paddingTop: Spacing.md, paddingBottom: Spacing.xs },
+  textActions: { marginTop: Spacing.sm },
 });

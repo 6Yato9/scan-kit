@@ -178,7 +178,7 @@ describe('in-place stamp geometry', () => {
       corner: 'top-left', fontFrac: 0.016, insetFrac: 0.016, ink: '#222222',
     });
     expect(resolveStamp({ kind: 'signature', signature: { dataUri: 'data:image/png;base64,AA==', width: 2, height: 1 }, placement: { x: 0.1, y: 0.2, w: 0.3 } }))
-      .toEqual({ kind: 'signature', x: 0.1, y: 0.2, w: 0.3 });
+      .toEqual({ kind: 'signature', x: 0.1, y: 0.2, w: 0.3, tint: null });
   });
 
   test('nothing to draw is caught before any page is touched', () => {

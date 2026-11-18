@@ -104,3 +104,45 @@ export function usePdfThumbnail(docId: string, pdfUri: string | undefined): stri
   }, [docId, pdfUri]);
   return uri;
 }
+
+// ── Every page, for Reorder pages ───────────────────────────────────────────
+
+/** Long edge of a page thumbnail in the Reorder list (44 × 58 pt rows on a 3x screen). */
+const PAGE_THUMB_EDGE = 200;
+
+/**
+ * Thumbnails of every page of a PDF document, in page order, rendered on
+ * demand into Caches/pdf-thumbs/pages-<key> (kept while the PDF is unchanged;
+ * an earlier version's set is removed). Rejects when the PDF can't be
+ * rendered (locked, damaged, a build without the rasterizer).
+ */
+export async function pdfPageThumbnails(docId: string, pdfUri: string): Promise<string[]> {
+  const renderPages = VisionOcr?.renderPdfPages;
+  if (typeof renderPages !== 'function') throw new Error('renderPdfPages missing');
+  const key = keyFor(docId, pdfUri);
+  if (!key) throw new Error('PDF missing');
+  const dir = new Directory(thumbDir(), `pages-${key}`);
+  const done = new File(dir, 'done');
+  if (dir.exists && done.exists) {
+    const pages = dir
+      .list()
+      .filter((f): f is File => f instanceof File && /^pdfpage-\d+\.jpg$/.test(f.name))
+      .sort((a, b) => parseInt(a.name.slice(8), 10) - parseInt(b.name.slice(8), 10))
+      .map(f => f.uri);
+    if (pages.length > 0) return pages;
+  }
+  for (const item of thumbDir().exists ? thumbDir().list() : []) {
+    if (item instanceof Directory && item.name.startsWith(`pages-${docId}-`)) {
+      try { item.delete(); } catch {}
+    }
+  }
+  dir.create({ intermediates: true, idempotent: true });
+  try {
+    const pages = await renderPages(pdfUri.split('?')[0], dir.uri, PAGE_THUMB_EDGE);
+    done.create();
+    return pages;
+  } catch (err) {
+    try { if (dir.exists) dir.delete(); } catch {}
+    throw err;
+  }
+}

@@ -12,13 +12,20 @@ import Vision
 ///   { text, lines: [{ text, left, top, width, height }] }
 /// with line frames in the pixel space of the upright image.
 public class VisionOcrModule: Module {
+  /// Read aloud (Speech.swift); created on first use.
+  private lazy var speech = SpeechController { [weak self] name, body in self?.sendEvent(name, body) }
+
   public func definition() -> ModuleDefinition {
     Name("VisionOcr")
+
+    // Read aloud progress (SpeechController).
+    Events("onSpeechProgress", "onSpeechState")
 
     View(PdfDocumentView.self) {
       Events("onPageChange", "onLoadError")
       Prop("source") { (view: PdfDocumentView, uri: String) in view.setSource(uri) }
       Prop("backgroundHex") { (view: PdfDocumentView, hex: String) in view.setBackground(hex) }
+      Prop("initialPage") { (view: PdfDocumentView, page: Int) in view.setInitialPage(page) }
     }
 
     // Must stay the SECOND view: the first one is the module's default view
@@ -166,6 +173,52 @@ public class VisionOcrModule: Module {
       }
     }
 
+    /// Page edits that keep a PDF a PDF (PdfEditor): rotate, delete, reorder,
+    /// blank pages, split. Writes `outputUri` and verifies it before resolving
+    /// to its page count. Rejects ERR_PDF_LOCKED (message "locked") when the
+    /// PDF needs a password, ERR_PDF_EDIT otherwise.
+    AsyncFunction("pdfEditPages") { (inputUri: String, outputUri: String, sources: [Int], rotations: [Int], password: String?, promise: Promise) in
+      DispatchQueue.global(qos: .userInitiated).async {
+        func path(_ u: String) -> String { URL(string: u).flatMap { $0.isFileURL ? $0.path : nil } ?? u }
+        do {
+          let n = try autoreleasepool {
+            try PdfEditor.compose(inputPath: path(inputUri), outputPath: path(outputUri),
+                                  sources: sources, rotations: rotations, password: password)
+          }
+          promise.resolve(n)
+        } catch {
+          let message = error.localizedDescription
+          promise.reject(message == PdfEditor.lockedMessage ? "ERR_PDF_LOCKED" : "ERR_PDF_EDIT", message)
+        }
+      }
+    }
+
+    /// { pageCount, locked, encrypted } of a PDF, without changing it.
+    AsyncFunction("pdfInfo") { (uri: String, password: String?, promise: Promise) in
+      DispatchQueue.global(qos: .userInitiated).async {
+        do {
+          let path = URL(string: uri).flatMap { $0.isFileURL ? $0.path : nil } ?? uri
+          promise.resolve(try PdfEditor.info(path: path, password: password))
+        } catch {
+          promise.reject("ERR_PDF_INFO", error.localizedDescription)
+        }
+      }
+    }
+
+    /// Moves a file over another in one atomic rename (the old file is never
+    /// missing or partial at any instant). Resolves to the destination URI.
+    AsyncFunction("replaceFile") { (srcUri: String, destUri: String, promise: Promise) in
+      DispatchQueue.global(qos: .userInitiated).async {
+        func path(_ u: String) -> String { URL(string: u).flatMap { $0.isFileURL ? $0.path : nil } ?? u }
+        do {
+          try PdfEditor.replace(srcPath: path(srcUri), destPath: path(destUri))
+          promise.resolve(URL(fileURLWithPath: path(destUri)).absoluteString)
+        } catch {
+          promise.reject("ERR_REPLACE_FILE", error.localizedDescription)
+        }
+      }
+    }
+
     /// One share sheet with several files (a document's pages as images).
     /// Resolves when the sheet is dismissed, whatever the user chose.
     AsyncFunction("shareFiles") { (uris: [String], title: String?, promise: Promise) in
@@ -240,6 +293,93 @@ public class VisionOcrModule: Module {
           }
         } catch {
           promise.reject("ERR_DOC_DETECT", error.localizedDescription)
+        }
+      }
+    }
+
+    // MARK: Acting on recognised text (TextActions.swift, Speech.swift,
+    // EventEditor.swift, ContactCard.swift). All on device.
+
+    /// Phone numbers, emails, links, addresses and dates in `text`
+    /// (NSDataDetector): [{ type, text, range: [start, length], value, … }].
+    AsyncFunction("detectData") { (text: String, promise: Promise) in
+      DispatchQueue.global(qos: .userInitiated).async {
+        promise.resolve(TextActions.detectData(text))
+      }
+    }
+
+    /// QR codes and barcodes in an image file (Vision).
+    AsyncFunction("detectBarcodes") { (uri: String, promise: Promise) in
+      DispatchQueue.global(qos: .userInitiated).async {
+        do {
+          promise.resolve(try autoreleasepool { try TextActions.detectBarcodes(path: TextActions.filePath(uri)) })
+        } catch {
+          promise.reject("ERR_BARCODES", error.localizedDescription)
+        }
+      }
+    }
+
+    /// Dominant language of `text` (BCP-47, e.g. "fr"), or null.
+    AsyncFunction("detectLanguage") { (text: String, promise: Promise) in
+      DispatchQueue.global(qos: .userInitiated).async {
+        promise.resolve(TextActions.dominantLanguage(text))
+      }
+    }
+
+    /// { people, organizations, places } named in `text` (NLTagger).
+    AsyncFunction("nameEntities") { (text: String, promise: Promise) in
+      DispatchQueue.global(qos: .userInitiated).async {
+        promise.resolve(TextActions.nameEntities(text))
+      }
+    }
+
+    /// Starts reading `text` aloud (stopping anything being read); resolves { id, language }.
+    AsyncFunction("speak") { (text: String, language: String?, rate: Double?, promise: Promise) in
+      promise.resolve(self.speech.speak(text, language: language, rate: rate))
+    }.runOnQueue(.main)
+
+    AsyncFunction("pauseSpeaking") { (promise: Promise) in
+      self.speech.pause()
+      promise.resolve(nil)
+    }.runOnQueue(.main)
+
+    AsyncFunction("resumeSpeaking") { (promise: Promise) in
+      self.speech.resume()
+      promise.resolve(nil)
+    }.runOnQueue(.main)
+
+    AsyncFunction("stopSpeaking") { (promise: Promise) in
+      self.speech.stop()
+      promise.resolve(nil)
+    }.runOnQueue(.main)
+
+    /// The system New Event editor, prefilled; resolves saved | cancelled | denied | unavailable.
+    AsyncFunction("presentEventEditor") { (title: String, startMs: Double, endMs: Double, allDay: Bool, notes: String?, location: String?, promise: Promise) in
+      EventEditorPresenter.present(
+        from: self.appContext?.utilities?.currentViewController(),
+        title: title,
+        start: Date(timeIntervalSince1970: startMs / 1000),
+        end: Date(timeIntervalSince1970: max(endMs, startMs) / 1000),
+        allDay: allDay, notes: notes, location: location
+      ) { promise.resolve($0) }
+    }.runOnQueue(.main)
+
+    /// The system New Contact form, prefilled; resolves saved | cancelled | unavailable.
+    AsyncFunction("presentNewContact") { (fields: [String: Any], promise: Promise) in
+      NewContactPresenter.present(from: self.appContext?.utilities?.currentViewController(), fields: fields) {
+        promise.resolve($0)
+      }
+    }.runOnQueue(.main)
+
+    /// Writes the contact as a vCard file; resolves its file URI.
+    AsyncFunction("writeVCard") { (fields: [String: Any], outputUri: String, promise: Promise) in
+      DispatchQueue.global(qos: .userInitiated).async {
+        do {
+          let out = TextActions.filePath(outputUri)
+          try ContactCard.writeVCard(fields, outPath: out)
+          promise.resolve(URL(fileURLWithPath: out).absoluteString)
+        } catch {
+          promise.reject("ERR_VCARD", error.localizedDescription)
         }
       }
     }

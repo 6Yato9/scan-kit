@@ -1,8 +1,10 @@
 // app/tools/sign.tsx
-// Draw a signature, choose the page (or every page) and where it goes, then
-// sign the document itself: the signature is drawn into the page (and its
-// unfiltered shadow), so the pages stay searchable and re-filterable, and the
-// viewer offers Undo (lib/page-stamp.ts). "Save as a copy" signs a duplicate.
+// Draw (or pick a saved) signature, choose its ink, the page (or every page),
+// then place it on the page by hand — drag it to move it, drag a corner or
+// pinch to resize it (components/placement-frame.tsx) — and sign the
+// document itself: the signature is drawn into the page (and its unfiltered
+// shadow), so the pages stay searchable and re-filterable, and the viewer
+// offers Undo (lib/page-stamp.ts). "Save as a copy" signs a duplicate.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
@@ -14,6 +16,7 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/theme-context';
@@ -21,10 +24,10 @@ import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
 import { AppSwitch } from '@/components/app-switch';
 import {
+  ColorSwatches,
   FooterActions,
   NoDocumentsScreen,
   PagePreview,
-  Segmented,
   SectionRow,
   ToolNote,
   ToolProgress,
@@ -36,14 +39,16 @@ import { ToolDocPicker, useConvertiblePdfs, useToolDoc, type PickerConvert } fro
 import { FilterBaker } from '@/components/filter-baker';
 import { PageThumb } from '@/components/page-thumb';
 import { reportStampFailure, usePageStamper, useStampFinish } from '@/components/page-stamper';
+import { SignaturePlacer } from '@/components/placement-frame';
 import { copyName, stampCopy, stampPages, targetPages } from '@/lib/page-stamp';
 import { notifySuccess, tapLight } from '@/lib/haptics';
 import {
+  SIGNATURE_INK,
   clampPlacement,
   defaultPlacement,
-  signatureHeightFraction,
   type Placement,
   type Signature,
+  type SignatureInk,
 } from '@/lib/stamp';
 import { HIT, Ink, Radius, Spacing, Type } from '@/lib/theme';
 import type { Document } from '@/types/document';
@@ -56,12 +61,12 @@ import {
 } from '@/lib/saved-signatures';
 
 const PAD_HEIGHT = 180;
-const SIZES = [
-  { value: 's', label: 'Small', w: 0.22 },
-  { value: 'm', label: 'Medium', w: 0.32 },
-  { value: 'l', label: 'Large', w: 0.44 },
-] as const;
-type SizeKey = (typeof SIZES)[number]['value'];
+/** A new signature's width on the page, as a fraction of the page width. */
+const START_WIDTH = 0.32;
+const INKS: { value: SignatureInk; label: string; color: string }[] = [
+  { value: 'black', label: 'Black', color: SIGNATURE_INK.black },
+  { value: 'blue', label: 'Blue', color: SIGNATURE_INK.blue },
+];
 
 // Ink is drawn at device resolution in the theme's text colour on a
 // transparent canvas, so the pad matches light and dark mode. Capture is
@@ -113,7 +118,8 @@ function clearPad(){ clearTimeout(timer); ctx.save(); ctx.setTransform(1,0,0,1,0
 
 export default function SignScreen() {
   const { colors } = useTheme();
-  const { width: screenW } = useWindowDimensions();
+  const { width: screenW, height: screenH } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const webRef = useRef<WebView>(null);
   const { docs, loaded, reload } = useToolDocuments();
   // Imported PDFs: listed in the picker with Convert, never a dead end.
@@ -122,8 +128,10 @@ export default function SignScreen() {
   const [drawing, setDrawing] = useState(false);
   const [pageIndex, setPageIndex] = useState(0);
   const [everyPage, setEveryPage] = useState(false);
-  const [size, setSize] = useState<SizeKey>('m');
+  const [ink, setInk] = useState<SignatureInk>('black');
   const [placement, setPlacement] = useState<Placement | null>(null);
+  // A finger is moving or resizing the signature: the screen doesn't scroll.
+  const [placing, setPlacing] = useState(false);
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
 
   const { doc, docId, setDocId, fixed, fromViewer } = useToolDoc(docs);
@@ -152,8 +160,8 @@ export default function SignScreen() {
   }, [fixed, doc]);
   const pageUri = doc ? doc.pages[Math.min(pageIndex, doc.pages.length - 1)] : null;
   const aspect = useImageAspect(pageUri);
-  const sizeW = SIZES.find(s => s.value === size)!.w;
-  const place = sig ? clampPlacement(sig, placement ?? defaultPlacement(sig, aspect, sizeW), aspect) : null;
+  // Kept whole on this page whatever page or signature it was made for.
+  const place = sig ? clampPlacement(sig, placement ?? defaultPlacement(sig, aspect, START_WIDTH), aspect) : null;
 
   // The pad draws in the theme's text colour; a theme change reloads it empty.
   const html = useMemo(() => padHtml(colors.text, Ink.signature), [colors.text]);
@@ -227,24 +235,6 @@ export default function SignScreen() {
     setPlacement(null);
   };
 
-  const changeSize = (s: SizeKey) => {
-    setSize(s);
-    const w = SIZES.find(x => x.value === s)!.w;
-    if (sig && place) {
-      // Grow/shrink around the current centre.
-      const cx = place.x + place.w / 2;
-      const cy = place.y + signatureHeightFraction(sig, place, aspect) / 2;
-      const next = { w, x: cx - w / 2, y: cy - signatureHeightFraction(sig, { x: 0, y: 0, w }, aspect) / 2 };
-      setPlacement(clampPlacement(sig, next, aspect));
-    }
-  };
-
-  const moveTo = ({ x, y }: { x: number; y: number }) => {
-    if (!sig || !place) return;
-    const h = signatureHeightFraction(sig, place, aspect);
-    setPlacement(clampPlacement(sig, { w: place.w, x: x - place.w / 2, y: y - h / 2 }, aspect));
-    tapLight();
-  };
 
   const pages = doc ? targetPages(doc.pages.length, pageIndex, everyPage) : [];
   const pagesLabel = !doc ? '' : pages.length > 1 ? `all ${pages.length} pages` : doc.pages.length > 1 ? `page ${pages[0] + 1}` : 'the page';
@@ -252,7 +242,7 @@ export default function SignScreen() {
   /** Signs the document itself (Undo in the viewer), or a copy of it. */
   const apply = async (mode: 'in-place' | 'copy') => {
     if (!doc || !sig || !place || progress) return;
-    const spec = { kind: 'signature' as const, signature: sig, placement: place };
+    const spec = { kind: 'signature' as const, signature: sig, placement: place, ink };
     const render = (pageUri: string, origUri: string | null) => stamper.stamp(pageUri, origUri, spec);
     const onProgress = (done: number, total: number) => setProgress({ current: done, total });
     setProgress({ current: 0, total: pages.length });
@@ -309,18 +299,24 @@ export default function SignScreen() {
     );
   }
 
-  // Same preview size and place as Watermark and Timestamp.
-  const previewW = Math.min(screenW * 0.5, 220);
+  // The page as large as the screen allows: placing by hand needs room for a
+  // finger. Full width, but never taller than about half the screen, so a
+  // tall page still leaves the controls around it in view.
+  const maxPreviewW = screenW - Spacing.gutter * 2 - Spacing.sm * 2;
+  const maxPreviewH = Math.max(240, (screenH - insets.top - insets.bottom) * 0.5);
+  const previewW = Math.floor(Math.min(maxPreviewW, maxPreviewH / aspect));
+  const previewH = previewW * aspect;
   // Always names the outcome ("Sign page 3"); it stays dimmed until there is
   // a signature, and the pad's "Sign here" says what to do. An instruction on a
   // disabled button ("Choose or draw a signature") read as a broken control.
   const buttonTitle = doc ? `Sign ${pagesLabel}` : 'Sign';
+  const multiPage = !!doc && doc.pages.length > 1;
 
   return (
     <ToolScreen
       title="Sign"
       busy={!!progress}
-      scrollEnabled={!drawing}
+      scrollEnabled={!drawing && !placing}
       footer={
         <>
           {progress ? (
@@ -353,69 +349,7 @@ export default function SignScreen() {
         convert={convert}
       />
 
-      {/* 2. Live preview, always shown like Watermark's and Timestamp's: the
-          chosen page (a sample page until a document is chosen) with the
-          signature where the PDF will get it. Tap it to place the signature. */}
-      {doc && doc.pages.length > 1 ? (
-        <>
-          <SectionLabel>{everyPage ? 'Pages, every page' : `Page ${pageIndex + 1}`}</SectionLabel>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pages}>
-            {doc.pages.map((p, i) => {
-              const on = i === pageIndex;
-              return (
-                <Pressable
-                  key={`${p}-${i}`}
-                  onPress={() => setPageIndex(i)}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: on }}
-                  accessibilityLabel={`Page ${i + 1}`}
-                  style={[styles.pageThumb, { borderColor: on ? colors.accent : colors.bg }]}
-                >
-                  {/* Fits a landscape page whole instead of cropping it to its middle. */}
-                  <PageThumb
-                    uri={`${p}?v=${doc.updatedAt}`}
-                    style={[styles.pageImg, { backgroundColor: colors.placeholder, borderColor: colors.thumbBorder }]}
-                  />
-                  <Text style={[Type.caption, styles.pageNum, { color: on ? colors.accent : colors.muted }]}>
-                    {i + 1}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
-          <View style={[styles.switchRow, { backgroundColor: colors.card }]}>
-            <Text style={[Type.body, styles.flex, { color: colors.text }]}>Sign every page</Text>
-            <AppSwitch value={everyPage} onValueChange={setEveryPage} accessibilityLabel="Sign every page" />
-          </View>
-        </>
-      ) : null}
-
-      <View style={[styles.previewWrap, !(doc && doc.pages.length > 1) && styles.previewGap]}>
-        <PagePreview
-          uri={doc && pageUri ? `${pageUri}?v=${doc.updatedAt}` : null}
-          aspect={aspect}
-          width={previewW}
-          onPress={sig ? moveTo : undefined}
-        >
-          {({ width, height }) =>
-            sig && place ? (
-              <Image
-                source={{ uri: sig.dataUri }}
-                style={{
-                  position: 'absolute',
-                  left: place.x * width,
-                  top: place.y * height,
-                  width: place.w * width,
-                  height: place.w * width * (sig.height / sig.width),
-                }}
-              />
-            ) : null
-          }
-        </PagePreview>
-      </View>
-      {sig ? <ToolNote>Tap the page where the signature should go.</ToolNote> : null}
-
-      {/* 3. Signature — captured as you draw; no separate confirm step. */}
+      {/* 2. Signature — captured as you draw; no separate confirm step. */}
       <SectionRow label="Signature" action={sig ? 'Clear' : undefined} onAction={clearSignature} />
       {saved.length > 0 ? (
         <>
@@ -438,7 +372,12 @@ export default function SignScreen() {
                     pressed && { opacity: 0.7 },
                   ]}
                 >
-                  <Image source={{ uri: s.uri }} style={styles.savedImg} resizeMode="contain" />
+                  <Image
+                    key={ink}
+                    source={{ uri: s.uri }}
+                    style={[styles.savedImg, ink !== 'black' ? { tintColor: SIGNATURE_INK[ink] } : null]}
+                    resizeMode="contain"
+                  />
                   {on ? (
                     <View style={[styles.savedCheck, { backgroundColor: colors.accentFill }]}>
                       <Ionicons name="checkmark" size={13} color={colors.onAccent} />
@@ -479,11 +418,74 @@ export default function SignScreen() {
         />
       </View>
 
-      {sig ? (
+      {/* 3. Ink */}
+      <SectionLabel>Ink</SectionLabel>
+      <ColorSwatches options={INKS} value={ink} onChange={setInk} />
+
+      {/* 4. Page, and where on it: the signature is placed by hand on the
+          page itself, exactly where it will be drawn into it. */}
+      {multiPage ? (
         <>
-          <SectionLabel>Size</SectionLabel>
-          <Segmented options={SIZES.map(s => ({ value: s.value, label: s.label }))} value={size} onChange={changeSize} />
+          <SectionLabel>{everyPage ? 'Every page' : `Page ${pageIndex + 1} of ${doc.pages.length}`}</SectionLabel>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pages}>
+            {doc.pages.map((p, i) => {
+              const on = i === pageIndex;
+              return (
+                <Pressable
+                  key={`${p}-${i}`}
+                  onPress={() => setPageIndex(i)}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: on }}
+                  accessibilityLabel={`Page ${i + 1}`}
+                  style={[styles.pageThumb, { borderColor: on ? colors.accent : colors.bg }]}
+                >
+                  {/* Fits a landscape page whole instead of cropping it to its middle. */}
+                  <PageThumb
+                    uri={`${p}?v=${doc.updatedAt}`}
+                    style={[styles.pageImg, { backgroundColor: colors.placeholder, borderColor: colors.thumbBorder }]}
+                  />
+                  <Text style={[Type.caption, styles.pageNum, { color: on ? colors.accent : colors.muted }]}>
+                    {i + 1}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
         </>
+      ) : (
+        <SectionLabel>Placement</SectionLabel>
+      )}
+
+      {doc && pageUri && sig && place ? (
+        <SignaturePlacer
+          // A new page starts from the placement as fractions, not from an
+          // in-flight gesture on the old one.
+          key={`${pageIndex}`}
+          uri={`${pageUri}?v=${doc.updatedAt}`}
+          width={previewW}
+          height={previewH}
+          signature={sig}
+          tint={ink === 'black' ? null : SIGNATURE_INK[ink]}
+          placement={place}
+          onChange={p => setPlacement(clampPlacement(sig, p, aspect))}
+          onInteracting={setPlacing}
+        />
+      ) : (
+        <PagePreview uri={doc && pageUri ? `${pageUri}?v=${doc.updatedAt}` : null} aspect={aspect} width={previewW} />
+      )}
+      <ToolNote>
+        {!doc
+          ? 'Choose a document to place the signature on.'
+          : sig
+            ? 'Drag the signature to move it. Drag a corner or pinch to resize it.'
+            : 'Draw or choose a signature, then place it on the page.'}
+      </ToolNote>
+
+      {multiPage ? (
+        <View style={[styles.switchRow, { backgroundColor: colors.card }]}>
+          <Text style={[Type.body, styles.flex, { color: colors.text }]}>Sign every page</Text>
+          <AppSwitch value={everyPage} onValueChange={setEveryPage} accessibilityLabel="Sign every page" />
+        </View>
       ) : null}
       <ToolNote>The signature becomes part of the page, and you can undo it right after. To keep this document as it is, save a signed copy instead.</ToolNote>
     </ToolScreen>
@@ -519,8 +521,6 @@ const styles = StyleSheet.create({
     minHeight: HIT + 8,
     marginBottom: Spacing.lg,
   },
-  previewWrap: { alignItems: 'center' },
-  previewGap: { marginTop: Spacing.lg },
   savedRow: { flexDirection: 'row', gap: Spacing.sm },
   savedTile: {
     flex: 1,

@@ -4,14 +4,34 @@
 // same pipeline a new scan goes through: auto-crop for library photos, the
 // user's scan quality, their default filter (baked, then recorded), and a
 // refreshed text index.
+//
+// Each page may be a finished image URI or a photo with its page outline
+// (SourcePageInput, see lib/save-scan.ts and lib/page-source.ts): then the page
+// is rendered from the photo and the photo is kept as its source. A library
+// photo passed as a plain URI gets the same treatment when page detection is
+// available: its outline is found (detectQuad) and the photo is kept, so its
+// crop can be widened later.
 import { File } from 'expo-file-system';
 import { docDir } from './storage-layout';
 import { Document, PageAdjustment, PageFilter } from '../types/document';
 import { copyPageWithQuality, deleteDisposableTemps, isScannerOutput, moveScannerOutputToCaches } from './files';
-import { getDocument, updateDocumentWith } from './storage';
+import { PAGE_SHADOW_SUFFIXES } from './page-family';
+import { getDocument, keepSourcesEnabled, updateDocumentWith } from './storage';
 import { bakePages, runPageEdit } from './bake';
 import { indexDocText } from './save-scan';
 import { autoCropDocument } from './document-detect';
+import {
+  canDetectQuad,
+  detectQuad,
+  discardPrepared,
+  inputUri,
+  installPreparedSource,
+  isSourceInput,
+  prepareSourcePage,
+  type PreparedSourcePage,
+  type ScanPageInput,
+  type SourcePageInput,
+} from './page-source';
 
 export type AddPagesResult = { doc: Document; added: number[] };
 
@@ -20,9 +40,38 @@ export type AddPagesOptions = {
    * Find the page in each photo and straighten it (lib/document-detect). By
    * default every input except the document scanner's own output is cropped —
    * the scanner has already done it, with the user's own corner adjustments.
+   * Ignored for SourcePageInput pages (they carry their own outline).
    */
   autoCrop?: boolean;
 };
+
+/**
+ * What a page input becomes before it is stored: a photo with its outline
+ * (kept as the page's source) when page detection is available, else a
+ * finished image (auto-cropped the old way, or as is).
+ */
+export async function resolvePageInput(
+  page: ScanPageInput,
+  quality: number,
+  autoCrop: boolean | undefined,
+): Promise<ScanPageInput> {
+  if (isSourceInput(page)) return page;
+  const crop = autoCrop ?? !isScannerOutput(page);
+  if (!crop) return page;
+  if (canDetectQuad()) {
+    const source: SourcePageInput = { sourceUri: page, quad: await detectQuad(page) };
+    return source;
+  }
+  return (await autoCropDocument(page, quality)).uri;
+}
+
+/** Removes any shadow (.orig, source photo, geometry) left at `index` by an older edit. */
+export function clearStaleShadows(dir: ReturnType<typeof docDir>, index: number): void {
+  for (const suffix of PAGE_SHADOW_SUFFIXES) {
+    const stale = new File(dir, `page-${index}${suffix}`);
+    if (stale.exists) stale.delete();
+  }
+}
 
 /**
  * Copies `uris` into `docId` as new trailing pages (recompressed at `quality`,
@@ -41,18 +90,36 @@ export type AddPagesOptions = {
  */
 export async function addPagesToDocument(
   docId: string,
-  rawUris: string[],
+  rawPages: ScanPageInput[],
   quality: number,
   options: AddPagesOptions = {},
 ): Promise<AddPagesResult> {
   // Scanner pages land in Documents (shown in the Files app): out of there
   // first, whoever called (the viewer passes the scanner's result straight in).
-  const uris = moveScannerOutputToCaches(rawUris);
-  // Auto-crop before taking the page lock: it's slow and touches no stored file.
+  const pages = rawPages.map(p => (isSourceInput(p) ? p : moveScannerOutputToCaches([p])[0]));
+  // Auto-crop / render before taking the page lock: slow, and touches no
+  // stored file.
+  let keep: boolean | null = null; // read only when a page keeps a source
   const inputs: string[] = [];
-  for (const uri of uris) {
-    const crop = options.autoCrop ?? !isScannerOutput(uri);
-    inputs.push(crop ? (await autoCropDocument(uri, quality)).uri : uri);
+  const prepared: (PreparedSourcePage | null)[] = [];
+  const temps: string[] = pages.map(inputUri);
+  try {
+    for (const page of pages) {
+      const resolved = await resolvePageInput(page, quality, options.autoCrop);
+      if (isSourceInput(resolved)) {
+        keep ??= await keepSourcesEnabled();
+        const p = await prepareSourcePage(resolved, quality, keep);
+        prepared.push(p);
+        inputs.push(p.page);
+      } else {
+        prepared.push(null);
+        inputs.push(resolved);
+        temps.push(resolved);
+      }
+    }
+  } catch (err) {
+    prepared.forEach(discardPrepared);
+    throw err;
   }
 
   const result = await runPageEdit(docId, {}, async () => {
@@ -64,10 +131,12 @@ export async function addPagesToDocument(
     try {
       for (let i = 0; i < inputs.length; i++) {
         // A shadow left at this index by an older edit would be taken for the
-        // new page's unfiltered original by its first bake.
-        const staleShadow = new File(dir, `page-${start + i}.orig.jpg`);
-        if (staleShadow.exists) staleShadow.delete();
-        stored.push(await copyPageWithQuality(inputs[i], docId, start + i, quality));
+        // new page's unfiltered original by its first bake (or its source).
+        clearStaleShadows(dir, start + i);
+        const p = prepared[i];
+        // A page rendered from its photo is already at `quality`.
+        stored.push(await copyPageWithQuality(inputs[i], docId, start + i, p ? 1 : quality));
+        if (p) installPreparedSource(p, docId, start + i);
       }
       const pad = <T,>(arr: T[] | undefined, fill: () => T): T[] | undefined =>
         arr ? [...arr, ...stored.map(fill)] : undefined;
@@ -92,13 +161,16 @@ export async function addPagesToDocument(
         try {
           const f = new File(dir, `page-${start + i}.jpg`);
           if (f.exists) f.delete();
+          clearStaleShadows(dir, start + i);
         } catch {}
       }
       throw err;
     }
+  }).finally(() => {
+    prepared.forEach(discardPrepared);
   });
 
-  deleteDisposableTemps([...uris, ...inputs]);
+  deleteDisposableTemps(temps);
   return result;
 }
 

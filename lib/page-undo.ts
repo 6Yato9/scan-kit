@@ -1,6 +1,7 @@
 // lib/page-undo.ts
 // Undo for "Delete page" in the viewer. Before a page is deleted its image (and
-// its unfiltered .orig shadow, when it has one) is copied to a stash in the
+// its shadows — the unfiltered .orig, the source photo and its crop geometry —
+// when it has them) is copied to a stash in the
 // cache; Undo puts it back at the same position, shadow included, so the page
 // is restored exactly as it was. One stash at a time: a new delete replaces it.
 // A stash is single-use: a successful restore deletes it, so a second Undo
@@ -9,6 +10,7 @@
 import { Directory, File, Paths } from 'expo-file-system';
 import { docDir } from './storage-layout';
 import { copyPageWithShadow, reorderPages } from './files';
+import { PAGE_SHADOW_SUFFIXES } from './page-family';
 
 const STASH = 'page-undo';
 
@@ -39,11 +41,14 @@ export function stashPage(docId: string, index: number): string {
   const dir = new Directory(Paths.cache, STASH, String(Date.now()));
   dir.create({ intermediates: true, idempotent: true });
   const srcDir = docDir(docId);
-  // Named page-0 so copyPageWithShadow finds the .orig next to it.
+  // Named page-0 so copyPageWithShadow finds the shadows next to it: the
+  // .orig, and the source photo + geometry (lib/page-source.ts).
   const page = new File(dir, 'page-0.jpg');
   new File(srcDir, `page-${index}.jpg`).copy(page);
-  const orig = new File(srcDir, `page-${index}.orig.jpg`);
-  if (orig.exists) orig.copy(new File(dir, 'page-0.orig.jpg'));
+  for (const suffix of PAGE_SHADOW_SUFFIXES) {
+    const shadow = new File(srcDir, `page-${index}${suffix}`);
+    if (shadow.exists) shadow.copy(new File(dir, `page-0${suffix}`));
+  }
   return page.uri;
 }
 

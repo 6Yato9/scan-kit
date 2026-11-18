@@ -124,6 +124,10 @@ jest.mock('../lib/bake', () => ({
 }));
 const mockIndex = jest.fn(async (..._args: unknown[]) => {});
 jest.mock('../lib/save-scan', () => ({ indexDocText: (...a: unknown[]) => mockIndex(...a) }));
+let mockOcrAvailable = true;
+const mockPrune = jest.fn();
+jest.mock('../lib/ocr', () => ({ ocrAvailable: () => mockOcrAvailable }));
+jest.mock('../lib/ocr-cache', () => ({ pruneDocumentOcr: (...a: unknown[]) => mockPrune(...a) }));
 import {
   lookOf,
   recoverInterruptedStamps,
@@ -442,5 +446,91 @@ describe('a run the app died in the middle of (crash journal)', () => {
     expect(stashKeys().length).toBeGreaterThan(0);
     await undoStamp(undo!);
     expect(mockFs.get(pageUri('d1', 0))).toBe('page0-enhanced');
+  });
+});
+
+describe('Redact (option redact)', () => {
+  const srcUri = (doc: string, i: number, ext: 'jpg' | 'json') => `${root}/${doc}/page-${i}.src.${ext}`;
+  beforeEach(() => {
+    mockOcrAvailable = true;
+    mockFs.set(srcUri('d1', 1, 'jpg'), 'photo1-uncropped');
+    mockFs.set(srcUri('d1', 1, 'json'), '{"v":1}');
+    mockDoc = { ...mockDoc, ocrText: 'Account holder John Smith' };
+  });
+
+  test('burns into page and shadow, drops the source photo, keeps it only in the Undo stash', async () => {
+    const { undo } = await stampPages('d1', [1], render, { redact: true });
+    expect(mockFs.get(pageUri('d1', 1))).toBe('b64:SIGNED(page1-enhanced)');
+    expect(mockFs.get(origUri('d1', 1))).toBe('b64:SIGNED(page1-raw)');
+    // Crop › Full page can't show the page uncovered: the photo is gone.
+    expect(mockFs.has(srcUri('d1', 1, 'jpg'))).toBe(false);
+    expect(mockFs.has(srcUri('d1', 1, 'json'))).toBe(false);
+    // …but Undo can bring it back while it is offered.
+    const stashed = [...mockFs.keys()].filter(k => k.startsWith(`${undo!.dir}/`));
+    expect(stashed.some(k => k.endsWith('/page-0.src.jpg'))).toBe(true);
+    expect(stashed.some(k => k.endsWith('/page-0.src.json'))).toBe(true);
+  });
+
+  test('the search text is cleared, the old text pruned, and the index rebuilt before it resolves', async () => {
+    const order: string[] = [];
+    mockPrune.mockImplementation(() => order.push('prune'));
+    mockPatch.mockImplementationOnce(async (id: string, p: any) => {
+      order.push(`patch:${JSON.stringify(p)}`);
+      mockDoc = { ...mockDoc, ...p };
+      return true;
+    });
+    // The page write's own patch (updatedAt) comes first; record from the redact patch on.
+    mockPatch.mockImplementation(async (id: string, p: any) => {
+      if ('ocrText' in p) order.push(`clear:${p.ocrText === undefined}`);
+      mockDoc = { ...mockDoc, ...p };
+      return true;
+    });
+    let indexed = false;
+    mockIndex.mockImplementationOnce(async () => {
+      order.push('index');
+      await new Promise(r => setTimeout(r, 5));
+      indexed = true;
+    });
+    await stampPages('d1', [1], render, { redact: true });
+    expect(indexed).toBe(true); // awaited, not fired and forgotten
+    expect(order.filter(o => !o.startsWith('patch:'))).toEqual(['prune', 'clear:true', 'index']);
+    expect(mockPrune).toHaveBeenCalledWith('d1');
+    expect(mockDoc.ocrText).toBeUndefined();
+    mockPatch.mockImplementation(async (id: string, p: any) => {
+      if (id === 'd1') mockDoc = { ...mockDoc, ...p };
+      else if (mockOthers.has(id)) mockOthers.set(id, { ...mockOthers.get(id), ...p });
+      else return false;
+      return true;
+    });
+  });
+
+  test('without text recognition the old text is still removed (never left behind)', async () => {
+    mockOcrAvailable = false;
+    await stampPages('d1', [1], render, { redact: true });
+    expect(mockDoc.ocrText).toBeUndefined();
+    expect(mockIndex).not.toHaveBeenCalled();
+  });
+
+  test('a normal stamp leaves the source photo and the text alone', async () => {
+    await stampPages('d1', [1], render);
+    expect(mockFs.get(srcUri('d1', 1, 'jpg'))).toBe('photo1-uncropped');
+    expect(mockDoc.ocrText).toBe('Account holder John Smith');
+    expect(mockPrune).not.toHaveBeenCalled();
+  });
+
+  test('each page gets its own boxes: the renderer is told the page index', async () => {
+    await stampPages('d1', [0, 2], render, { redact: true });
+    expect(render.mock.calls.map(c => (c as unknown[])[2])).toEqual([0, 2]);
+  });
+
+  test('a redacted copy starts without the original text and drops its own source photos', async () => {
+    mockFs.set(srcUri('copy1', 1, 'jpg'), 'photo1-uncropped'); // copyDocumentFiles carries them
+    const copy = await stampCopy(mockDoc, 'Lease (redacted)', [1], render, undefined, undefined, { redact: true });
+    expect(copy.ocrText).toBeUndefined();
+    expect(mockFs.has(srcUri('copy1', 1, 'jpg'))).toBe(false);
+    expect(mockIndex).toHaveBeenCalledWith('copy1', expect.any(Array));
+    // The original keeps everything.
+    expect(mockDoc.ocrText).toBe('Account holder John Smith');
+    expect(mockFs.get(srcUri('d1', 1, 'jpg'))).toBe('photo1-uncropped');
   });
 });

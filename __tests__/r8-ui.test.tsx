@@ -58,8 +58,9 @@ describe('replacedBarsHeight', () => {
   });
 
   it('is shorter than the open panel, which the page shrinks to make room for', () => {
-    // 8 + 44 top row + 8 + 150 content + inset + 8.
-    expect(panelHeight(34)).toBe(252);
+    // 8 + 44 top row + 8 + 182 content (four 44pt slider rows since R12's
+    // Sharpness, 2pt apart) + inset + 8.
+    expect(panelHeight(34)).toBe(284);
     expect(panelHeight(34)).toBeGreaterThan(replacedBarsHeight(34));
   });
 });

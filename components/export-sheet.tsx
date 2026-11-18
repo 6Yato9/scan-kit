@@ -26,7 +26,10 @@ import {
   PdfProtectError,
   protectPdf,
   roundUpEstimate,
+  type PageNumberStyle,
 } from '@/lib/pdf';
+import { getExportPageNumbers, setExportPageNumbers } from '@/lib/export-prefs';
+import { SegmentedControl } from '@/components/segmented-control';
 import {
   cleanFileUri,
   clearExportCache,
@@ -54,7 +57,8 @@ import { getDocSettings } from '@/lib/storage';
 import { documentBytes } from '@/lib/doc-size';
 import { formatBytes } from '@/components/tool-ui';
 import { notifySuccess } from '@/lib/haptics';
-import { Radius, Spacing, Type } from '@/lib/theme';
+import { HIT, Radius, Spacing, Type } from '@/lib/theme';
+import { Ionicons } from '@expo/vector-icons';
 
 type Props = {
   visible: boolean;
@@ -146,6 +150,8 @@ export function ExportSheet({ visible, document, onClose }: Props) {
   // 'high' would otherwise stick with no way to change it). "Smaller PDF"
   // covers size.
   const quality: PdfQuality = 'standard';
+  // Page numbers on exported PDFs (and print): remembered between exports.
+  const [pageNumbers, setPageNumbers] = useState<PageNumberStyle>('off');
   const [bytes, setBytes] = useState<number | null>(null);
   const [stats, setStats] = useState<PageStat[] | null>(null);
   // "Password-protected PDF" asks for the password inside the sheet (an Alert
@@ -188,6 +194,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
         setPageSize(s.pdfPageSize);
       })
       .catch(() => {});
+    getExportPageNumbers().then(p => { if (!cancelled) setPageNumbers(p); });
     return () => {
       cancelled = true;
       clearTimeout(sizeTimer);
@@ -230,6 +237,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
       pageSize: size,
       quality: q,
       searchable,
+      pageNumbers,
       signal,
       onProgress: (done, total, phase) => {
         if (signal.aborted) return;
@@ -490,6 +498,15 @@ export function ExportSheet({ visible, document, onClose }: Props) {
     if (pwReady) run('protected', pw);
   };
   const printDetail = detailLine(['Any AirPrint printer', pageSize === 'Auto' || isPdfDoc ? null : paperName(pageSize)]);
+  const choosePageNumbers = (p: PageNumberStyle) => {
+    setPageNumbers(p);
+    setExportPageNumbers(p).catch(() => {});
+  };
+  const pageNumberOptions: { value: PageNumberStyle; label: string }[] = [
+    { value: 'off', label: 'Off' },
+    { value: 'number', label: '1' },
+    { value: 'of-total', label: `1 of ${Math.max(1, pageCount)}` },
+  ];
 
   return (
     <BottomSheet visible={visible} onClose={handleClose} variant="grouped">
@@ -575,6 +592,24 @@ export function ExportSheet({ visible, document, onClose }: Props) {
         </>
       ) : (
         <>
+          {/* PDF and print only (JPEG images stay as stored). Imported PDFs
+              are shared as the file itself, so they get no numbers. */}
+          {!isPdfDoc && pageCount > 0 ? (
+            <SheetGroup>
+              <View style={styles.optionRow}>
+                <View style={[styles.optionIcon, { backgroundColor: colors.accentLight }]}>
+                  <Ionicons name="list-outline" size={18} color={colors.accent} />
+                </View>
+                <View style={styles.optionText}>
+                  <Text style={[Type.body, { color: colors.text }]} numberOfLines={1}>Page numbers</Text>
+                  <Text style={[Type.footnote, { color: colors.muted }]} numberOfLines={1}>In PDFs and prints</Text>
+                </View>
+                <View style={styles.optionControl} accessibilityLabel="Page numbers">
+                  <SegmentedControl options={pageNumberOptions} value={pageNumbers} onChange={choosePageNumbers} />
+                </View>
+              </View>
+            </SheetGroup>
+          ) : null}
           <SectionLabel style={styles.label}>Share as</SectionLabel>
           <SheetGroup>
             {isPdfDoc ? (
@@ -664,6 +699,11 @@ export function ExportSheet({ visible, document, onClose }: Props) {
               last
             />
           </SheetGroup>
+          {isPdfDoc ? (
+            <Text style={[Type.footnote, styles.pdfNote, { color: colors.muted }]}>
+              An imported PDF is shared as it is. Page numbers can be added to scanned documents.
+            </Text>
+          ) : null}
         </>
       )}
     </BottomSheet>
@@ -682,4 +722,9 @@ const styles = StyleSheet.create({
   pwDivider: { borderBottomWidth: StyleSheet.hairlineWidth },
   pwHint: { marginHorizontal: Spacing.xs, lineHeight: 18, minHeight: 36 },
   pwActions: { gap: Spacing.sm, marginTop: Spacing.lg },
+  optionRow: { flexDirection: 'row', alignItems: 'center', paddingLeft: Spacing.lg, paddingRight: Spacing.sm, minHeight: HIT + 12, gap: Spacing.md },
+  optionIcon: { width: 30, height: 30, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  optionText: { flex: 1 },
+  optionControl: { width: 168 },
+  pdfNote: { marginTop: Spacing.sm, marginHorizontal: Spacing.xs, lineHeight: 18 },
 });

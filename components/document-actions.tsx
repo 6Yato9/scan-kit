@@ -11,6 +11,7 @@ import { Alert } from 'react-native';
 import { Document } from '@/types/document';
 import { patchDocument, restoreDocument, saveFolder, getFolders, trashDocument } from '@/lib/storage';
 import { duplicateDocument, mergeInto } from '@/lib/doc-ops';
+import { mergeDocumentsToPdf, needsPdfMerge, PdfEditError } from '@/lib/pdf-edit';
 import { notifySuccess } from '@/lib/haptics';
 import { useToast } from '@/components/toast';
 import { useScan } from '@/contexts/scan-context';
@@ -117,6 +118,25 @@ export function useDocumentActions({
   }, [setDocuments, dropMissing]);
 
   const handleMerge = useCallback(async (target: Document, source: Document) => {
+    // An imported PDF in the pair: one new PDF, both originals kept (lib/pdf-edit).
+    if (needsPdfMerge([target, source])) {
+      try {
+        const merged = await mergeDocumentsToPdf([target, source], `${target.name} (merged)`);
+        setDocuments(prev => [merged, ...prev]);
+        bumpLastSaved();
+        notifySuccess();
+        toast.show(`Saved “${merged.name}”`);
+      } catch (err) {
+        const locked = err instanceof PdfEditError && err.kind === 'locked';
+        if (!locked) console.error('PDF merge failed', err);
+        const who = locked ? [target, source].find(d => d.id === (err as PdfEditError).docId) : null;
+        Alert.alert(
+          locked ? `“${who?.name ?? 'This PDF'}” is password protected` : "Couldn't merge documents",
+          locked ? 'Open it and enter its password, then merge again.' : 'There may not be enough free space. Please try again.',
+        );
+      }
+      return;
+    }
     try {
       const updated = await mergeInto(target, source);
       if (!updated) { dropMissing(target.id); return; }
@@ -127,7 +147,7 @@ export function useDocumentActions({
       console.error('Merge failed', err);
       Alert.alert("Couldn't merge documents", 'There may not be enough free space. Please try again.');
     }
-  }, [setDocuments, dropMissing, toast]);
+  }, [setDocuments, dropMissing, toast, bumpLastSaved]);
 
   const handleMove = useCallback(async (doc: Document, folder: string | null) => {
     setMoveTarget(null);

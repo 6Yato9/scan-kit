@@ -138,7 +138,7 @@ function previewCrop(d, w, h, aspect) {
  * load, posting back `PREVIEWS:` followed by a JSON array of JPEG data URLs.
  *
  * The filter picker needs to show what each filter WOULD look like. Doing that as
- * four separate bakes would mean four WebView round-trips through a queue that
+ * separate bakes would mean one WebView round-trip per filter through a queue that
  * processes one job at a time; this does it in one, at thumbnail resolution.
  *
  * Every filter runs on the WHOLE page (the document filters estimate lighting
@@ -173,37 +173,41 @@ img.onload = function () {
     // Working size: the crop is at least half the page wide, so twice the
     // tile width keeps it at full tile resolution.
     var pw = Math.min(nw, W * 2), ph = Math.max(1, Math.round(pw * nh / nw));
-    var pages = [], crop = null;
-    for (var k = 0; k < LIST.length; k++) {
-      var c = document.createElement('canvas');
-      c.width = pw; c.height = ph;
-      var ctx = c.getContext('2d');
-      ctx.imageSmoothingQuality = 'high';
-      ctx.drawImage(img, 0, 0, pw, ph);
-      if (LIST[k].length) {
-        var id = ctx.getImageData(0, 0, pw, ph);
-        applyOps(id.data, pw, ph, LIST[k]);
-        ctx.putImageData(id, 0, 0);
-        if (!crop) crop = previewCrop(id.data, pw, ph, ASPECT);
+    // One working canvas, reused for every filter, and the source pixels read
+    // once: memory stays flat however many filters there are (nine since R12).
+    var c = document.createElement('canvas');
+    c.width = pw; c.height = ph;
+    var ctx = c.getContext('2d');
+    if (!ctx) { post('BAKE_ERROR:canvas'); return; }
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, 0, 0, pw, ph);
+    var base = ctx.getImageData(0, 0, pw, ph);
+    var work = ctx.createImageData(pw, ph);
+    // The crop is measured on the first filtered result, so that one runs
+    // first; tiles are still returned in LIST order.
+    var order = [], first = -1, k;
+    for (k = 0; k < LIST.length; k++) if (LIST[k].length) { first = k; break; }
+    if (first >= 0) order.push(first);
+    for (k = 0; k < LIST.length; k++) if (k !== first) order.push(k);
+    var crop = null, out = [], o = null, octx = null, ow = 0, oh = 0, dh = 0;
+    for (var n = 0; n < order.length; n++) {
+      var j = order[n];
+      work.data.set(base.data);
+      if (LIST[j].length) applyOps(work.data, pw, ph, LIST[j]);
+      if (!crop) {
+        crop = previewCrop(work.data, pw, ph, ASPECT);
+        ow = Math.max(1, Math.min(W, crop.w)); oh = Math.max(1, Math.round(ow * ASPECT));
+        dh = Math.min(oh, Math.round(ow * crop.h / crop.w));
+        o = document.createElement('canvas');
+        o.width = ow; o.height = oh;
+        octx = o.getContext('2d');
+        octx.imageSmoothingQuality = 'high';
       }
-      pages.push(c);
-    }
-    if (!crop) {
-      var probe = pages[0].getContext('2d').getImageData(0, 0, pw, ph);
-      crop = previewCrop(probe.data, pw, ph, ASPECT);
-    }
-    var ow = Math.max(1, Math.min(W, crop.w)), oh = Math.max(1, Math.round(ow * ASPECT));
-    var dh = Math.min(oh, Math.round(ow * crop.h / crop.w));
-    var out = [];
-    for (var j = 0; j < pages.length; j++) {
-      var o = document.createElement('canvas');
-      o.width = ow; o.height = oh;
-      var octx = o.getContext('2d');
-      octx.imageSmoothingQuality = 'high';
+      ctx.putImageData(work, 0, 0);
       octx.fillStyle = '#fff';
       octx.fillRect(0, 0, ow, oh);
-      octx.drawImage(pages[j], crop.x, crop.y, crop.w, crop.h, 0, 0, ow, dh);
-      out.push(o.toDataURL('image/jpeg', 0.8));
+      octx.drawImage(c, crop.x, crop.y, crop.w, crop.h, 0, 0, ow, dh);
+      out[j] = o.toDataURL('image/jpeg', 0.8);
     }
     post('PREVIEWS:' + JSON.stringify(out));
   } catch (e) {

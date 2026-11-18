@@ -30,6 +30,23 @@ export type ScanSettings = {
   quality: 'low' | 'medium' | 'high';
   autoCrop: boolean;
   defaultFilter: PageFilter;
+  /**
+   * Keep each new page's uncropped photo so Crop can widen it later
+   * (lib/page-source.ts). Added in R12; absent = on.
+   */
+  keepSources?: boolean;
+  /**
+   * Which camera Scan opens (R12): Scan Kit's own camera (keeps the photo, so
+   * a crop can be widened later) or Apple's document scanner. Absent = Scan Kit
+   * camera where this build has it (lib/tool-scan.ts cameraChoice).
+   */
+  camera?: 'scankit' | 'apple';
+  /** Scan Kit camera: take the photo once the page holds steady. Absent = on. */
+  autoCapture?: boolean;
+  /** Scan Kit camera: show each page for checking right after it is captured. Absent = off. */
+  reviewEachPage?: boolean;
+  /** Scan Kit camera: last flash mode chosen. Absent = 'auto'. */
+  cameraFlash?: 'off' | 'auto' | 'on';
 };
 
 export type DocSettings = {
@@ -738,7 +755,7 @@ export function setPageBaked(
 }
 
 function isDefaultAdjustment(adj: PageAdjustment | undefined): boolean {
-  return !adj || (adj.brightness === 0 && adj.contrast === 0 && adj.saturation === 0);
+  return !adj || (adj.brightness === 0 && adj.contrast === 0 && adj.saturation === 0 && !adj.sharpness);
 }
 
 /**
@@ -898,6 +915,15 @@ export async function getScanSettings(): Promise<ScanSettings> {
     console.warn('storage: corrupt scan settings, resetting to defaults');
     await AsyncStorage.setItem(SCAN_SETTINGS_KEY, JSON.stringify(DEFAULT_SCAN_SETTINGS));
     return DEFAULT_SCAN_SETTINGS;
+  }
+}
+
+/** Whether new pages keep their source photo (Scan settings › Keep original photos; on by default). */
+export async function keepSourcesEnabled(): Promise<boolean> {
+  try {
+    return (await getScanSettings()).keepSources !== false;
+  } catch {
+    return true;
   }
 }
 

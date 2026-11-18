@@ -38,6 +38,15 @@
 // Writes go through runPageEdit (lib/bake.ts): under the per-document lock,
 // beside the page and renamed over it (a crash can't leave a truncated page),
 // and any in-flight filter bake for the page is redone from the new shadow.
+//
+// Redact (option `redact`, app/tools/redact.tsx) is a stamp that must leave
+// nothing of what it covers anywhere in the document: besides the page and
+// its shadow, the page's kept source photo (page-N.src.jpg, lib/page-source.ts:
+// Crop › Full page would show it uncovered) is removed — moved into the Undo
+// stash, so Undo still brings it back while it is offered — the recognised
+// text of the old pixels is pruned from the OCR cache, and the document's
+// search text is rebuilt from the redacted pages before the run resolves
+// (cleared first, so it can never outlive a failed re-read).
 import { Directory, File } from 'expo-file-system';
 import { deleteJsonSync, docDir, privateStateDir, readJsonSync, writeJsonSync } from './storage-layout';
 import { writeAsStringAsync } from 'expo-file-system/legacy';
@@ -65,12 +74,20 @@ import {
   updateDocument,
 } from './storage';
 import { indexDocText } from './save-scan';
+import { pruneDocumentOcr } from './ocr-cache';
+import { ocrAvailable } from './ocr';
+
+/** A page's kept source photo and its crop geometry (lib/page-source.ts), photo last. */
+const SOURCE_SUFFIXES = ['.src.json', '.src.jpg'] as const;
 
 /** A page and its shadow with the mark drawn in, as JPEG data URLs (orig null when the page has none). */
 export type StampedPixels = { page: string; orig: string | null };
 
-/** Draws the mark into one page: `(pageUri, origUri | null) => pixels`. */
-export type StampRender = (pageUri: string, origUri: string | null) => Promise<StampedPixels>;
+/**
+ * Draws the mark into one page: `(pageUri, origUri | null, index) => pixels`.
+ * `index` is the page's position, for a mark that differs per page (Redact).
+ */
+export type StampRender = (pageUri: string, origUri: string | null, index: number) => Promise<StampedPixels>;
 
 const DEFAULT_ADJ: PageAdjustment = { brightness: 0, contrast: 0, saturation: 0 };
 const STASH_ROOT = 'stamp-undo';
@@ -198,7 +215,7 @@ function withEntry<T>(list: T[] | undefined, length: number, index: number, valu
   return out;
 }
 const allOriginal = (f: PageFilter[]) => f.every(x => x === 'original');
-const allDefaultAdj = (a: PageAdjustment[]) => a.every(x => !x.brightness && !x.contrast && !x.saturation);
+const allDefaultAdj = (a: PageAdjustment[]) => a.every(x => !x.brightness && !x.contrast && !x.saturation && !x.sharpness);
 
 /** Throws away an Undo nobody will use (best effort). */
 export function discardStampUndo(undo: StampUndo | null | undefined): void {
@@ -215,7 +232,7 @@ export function discardStampUndo(undo: StampUndo | null | undefined): void {
  * finds the `.orig` next to it.
  */
 let stashSeq = 0;
-function stashPages(doc: Document, indices: number[]): StampUndo {
+function stashPages(doc: Document, indices: number[], withSources = false): StampUndo {
   // Its own folder: another run's stash (still needed for its rollback or its
   // Undo) is never touched.
   const dir = new Directory(stashRoot(), `${SESSION}-${Date.now()}-${++stashSeq}`);
@@ -228,6 +245,13 @@ function stashPages(doc: Document, indices: number[]): StampUndo {
     new File(srcDir, `page-${index}.jpg`).copy(page);
     const orig = new File(srcDir, `page-${index}.orig.jpg`);
     if (orig.exists) orig.copy(new File(sub, 'page-0.orig.jpg'));
+    // Redact removes the source photo: Undo (restorePageWithShadow) puts it back.
+    if (withSources) {
+      for (const suffix of SOURCE_SUFFIXES) {
+        const f = new File(srcDir, `page-${index}${suffix}`);
+        if (f.exists) f.copy(new File(sub, `page-0${suffix}`));
+      }
+    }
     return {
       index,
       stash: page.uri,
@@ -244,7 +268,40 @@ export type StampPagesOptions = {
   onProgress?: (done: number, total: number) => void;
   /** Aborted (the screen closed): stop, put back what was done, fail with kind 'cancelled'. */
   signal?: StampSignal;
+  /**
+   * Redaction (see the header): also drop each page's source photo, prune the
+   * old pixels' recognised text and rebuild the search text before resolving.
+   */
+  redact?: boolean;
 };
+
+/** Removes page `index`'s source photo and geometry (geometry first, as lib/page-source does). */
+function dropPageSource(docId: string, index: number): void {
+  const dir = docDir(docId);
+  for (const suffix of SOURCE_SUFFIXES) {
+    const f = new File(dir, `page-${index}${suffix}`);
+    if (f.exists) f.delete();
+  }
+}
+
+/**
+ * After a redaction: the search text can only come from the redacted pixels.
+ * It is cleared first, so a re-read that fails (or a build without text
+ * recognition) leaves no text rather than the redacted words, then rebuilt
+ * from the pages (only the redacted ones are read again: lib/ocr-cache).
+ */
+async function rebuildTextAfterRedact(docId: string): Promise<void> {
+  pruneDocumentOcr(docId);
+  await patchDocument(docId, { ocrText: undefined });
+  if (!ocrAvailable()) return;
+  const doc = await getDocument(docId);
+  if (!doc) return;
+  try {
+    await indexDocText(docId, doc.pages);
+  } catch (err) {
+    console.warn('Redact: re-reading the text failed', err);
+  }
+}
 
 // One run per document at a time (see the header). Keyed by document id.
 const runTails = new Map<string, Promise<unknown>>();
@@ -282,7 +339,7 @@ async function stampPagesNow(
   render: StampRender,
   options: StampPagesOptions,
 ): Promise<StampPagesResult> {
-  const { undo: keepUndo = true, onProgress, signal } = options;
+  const { undo: keepUndo = true, onProgress, signal, redact = false } = options;
   if (signal?.aborted) throw cancelled();
   // A filter still being baked would land on top of the mark (it re-derives
   // from the .orig it read before) — let those finish first.
@@ -293,7 +350,7 @@ async function stampPagesNow(
   const targets = [...new Set(indices)].filter(i => Number.isInteger(i) && i >= 0 && i < start.pages.length).sort((a, b) => a - b);
   if (targets.length === 0) throw new StampError('missing-page', 'That page no longer exists.');
 
-  const undo = keepUndo ? await withDocLock(docId, () => stashPages(start, targets)) : null;
+  const undo = keepUndo ? await withDocLock(docId, () => stashPages(start, targets, redact)) : null;
   const layout = undo?.layout ?? pageLayoutGeneration(docId);
   const done: number[] = [];
   const written: Record<string, PixelPrint> = {};
@@ -308,7 +365,7 @@ async function stampPagesNow(
       if (!before) throw new StampError('missing-doc', 'This document is no longer available.');
       const look = lookOf(before, index);
       const origFile = new File(originalUri(docId, index));
-      const pixels = await render(pageFileUri(docId, index), origFile.exists ? origFile.uri : null);
+      const pixels = await render(pageFileUri(docId, index), origFile.exists ? origFile.uri : null, index);
       if (signal?.aborted) throw cancelled();
 
       await runPageEdit(docId, { pages: [index] }, async () => {
@@ -334,6 +391,8 @@ async function stampPagesNow(
         }
         promotePageSide(docId, index);
         if (hasOrig) promoteOriginalSide(docId, index);
+        // Its source photo would show the page uncovered (Crop › Full page).
+        if (redact) dropPageSource(docId, index);
         done.push(index);
         // updatedAt busts the image caches that show the page.
         await patchDocument(docId, { updatedAt: Date.now() });
@@ -384,6 +443,10 @@ async function stampPagesNow(
   endJournal(undo); // complete: the stash stays only for Undo
   for (const r of rebake) {
     bakePage(docId, r.index, r.filter, r.adjustment).catch(e => console.warn('Re-bake after stamp failed', e));
+  }
+  if (redact) {
+    await rebuildTextAfterRedact(docId);
+    return { doc: (await getDocument(docId)) ?? start, undo };
   }
   const doc = (await getDocument(docId)) ?? start;
   indexDocText(docId, doc.pages).catch(() => {});
@@ -457,7 +520,9 @@ export async function stampCopy(
   render: StampRender,
   onProgress?: (done: number, total: number) => void,
   signal?: StampSignal,
+  extra: { redact?: boolean } = {},
 ): Promise<Document> {
+  const redact = !!extra.redact;
   if (signal?.aborted) throw cancelled();
   await waitForPendingBakes(source.id, { timeoutMs: 60_000 });
   // After any run still going on the source (it may be rolling back).
@@ -473,7 +538,8 @@ export async function stampCopy(
         id,
         name,
         folder: fresh.folder,
-        ocrText: fresh.ocrText,
+        // A redacted copy's text is read from its own (redacted) pages.
+        ocrText: redact ? undefined : fresh.ocrText,
         createdAt: now,
         updatedAt: now,
         pages: copyDocumentFiles(fresh.id, id, fresh.pages),
@@ -490,7 +556,7 @@ export async function stampCopy(
     }),
   );
   try {
-    await stampPages(copy.id, indices, render, { undo: false, onProgress, signal });
+    await stampPages(copy.id, indices, render, { undo: false, onProgress, signal, redact });
     if (!(await commitPendingDocument(copy.id, { updatedAt: Date.now() }))) {
       throw new StampError('missing-doc', 'This document is no longer available.');
     }
@@ -565,6 +631,6 @@ export async function recoverInterruptedStamps(): Promise<number> {
 export const PDF_NOT_LISTED_NOTE = 'Imported PDFs aren’t listed. Open one and choose Convert to pages to edit it.';
 
 /** The copy's name: "Lease (signed)". */
-export function copyName(name: string, suffix: 'signed' | 'watermarked' | 'timestamped'): string {
+export function copyName(name: string, suffix: 'signed' | 'watermarked' | 'timestamped' | 'redacted'): string {
   return `${name} (${suffix})`;
 }

@@ -30,6 +30,7 @@ import {
   SortKey,
 } from '@/lib/storage';
 import { mergeIntoNew } from '@/lib/doc-ops';
+import { canMergePdfDocuments, mergeDocumentsToPdf, needsPdfMerge, PdfEditError } from '@/lib/pdf-edit';
 import { matchesQuery, searchSnippet, sortDocuments } from '@/lib/doc-list';
 import { requestFilesCopySync } from '@/lib/files-copy';
 import { useScan } from '@/contexts/scan-context';
@@ -361,23 +362,36 @@ export default function FilesScreen() {
     }
   }, [exitSelect, toast]);
 
-  const mergeable = selectedDocs.filter(d => !d.pdfUri && d.pages.length > 0);
+  // Imported PDFs join in builds that can merge PDFs: the result is then one new PDF (lib/pdf-edit).
+  const mergeable = selectedDocs.filter(d => (d.pdfUri ? canMergePdfDocuments() : d.pages.length > 0));
   const canMerge = selectedDocs.length >= 2 && mergeable.length === selectedDocs.length;
 
   const handleBatchMerge = useCallback(async () => {
     if (!canMerge) {
-      Alert.alert('Choose two or more scans', 'Imported PDFs can’t be merged. Select at least two scanned documents.');
+      Alert.alert(
+        'Choose two or more documents',
+        canMergePdfDocuments()
+          ? 'Select at least two documents to merge.'
+          : 'Imported PDFs can’t be merged. Select at least two scanned documents.',
+      );
       return;
     }
     // Oldest first reads naturally as one document.
     const ordered = [...mergeable].sort((a, b) => a.createdAt - b.createdAt);
     try {
-      const merged = await mergeIntoNew(ordered, `Merged ${ordered[0].name}`);
+      const merged = needsPdfMerge(ordered)
+        ? await mergeDocumentsToPdf(ordered, `Merged ${ordered[0].name}`)
+        : await mergeIntoNew(ordered, `Merged ${ordered[0].name}`);
       setDocuments(prev => [merged, ...prev]);
       exitSelect();
       notifySuccess();
       toast.show(`Merged ${ordered.length} documents`);
     } catch (err) {
+      if (err instanceof PdfEditError && err.kind === 'locked') {
+        const who = ordered.find(d => d.id === err.docId);
+        Alert.alert(`“${who?.name ?? 'A PDF'}” is password protected`, 'Open it and enter its password, then merge again.');
+        return;
+      }
       console.error('Batch merge failed', err);
       Alert.alert("Couldn't merge documents", 'There may not be enough free space. Please try again.');
     }

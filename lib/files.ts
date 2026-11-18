@@ -23,6 +23,7 @@ import {
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { cappedSize, getImageSize } from './image-size';
 import { forgetDocumentOcr, pruneDocumentOcr } from './ocr-cache';
+import { PAGE_FAMILY_SUFFIXES, PAGE_SHADOW_SUFFIXES } from './page-family';
 
 /**
  * Moves `side` into `dest`'s place. The old `dest` is deleted first because
@@ -104,14 +105,25 @@ function stripQuery(uri: string): string {
   return uri.split('?')[0];
 }
 
+// Page file families (page, .orig, source photo, geometry): lib/page-family.ts.
+export { PAGE_FAMILY_SUFFIXES, PAGE_SHADOW_SUFFIXES } from './page-family';
+
+/**
+ * The `suffix` sibling of a stored page URI (`…/page-3.jpg` → `…/page-3.src.jpg`),
+ * or null when the URI is not a stored page (a scanner or picker temp file).
+ */
+export function siblingOf(pageUri: string, suffix: string): string | null {
+  const clean = stripQuery(pageUri);
+  if (!/\/page-\d+\.jpg$/.test(clean)) return null;
+  return clean.replace(/\.jpg$/, suffix);
+}
+
 /**
  * The `.orig` shadow that belongs to a stored page URI, or null when the URI
  * is not a stored page (e.g. a scanner or picker temp file).
  */
 export function shadowOf(pageUri: string): string | null {
-  const clean = stripQuery(pageUri);
-  if (!/\/page-\d+\.jpg$/.test(clean)) return null;
-  return clean.replace(/\.jpg$/, '.orig.jpg');
+  return siblingOf(pageUri, '.orig.jpg');
 }
 
 /**
@@ -137,29 +149,61 @@ export function restorePageWithShadow(srcUri: string, docId: string, pageIndex: 
   const pageSide = new File(dir, `page-${pageIndex}.new.jpg`);
   // Staged in Caches/page-undo, which the startup sweep clears (TEMP_DIRS), so
   // an Undo interrupted between the two steps leaves nothing behind for good.
+  const staging = new Directory(Paths.cache, 'page-undo');
+  const stamp = `${Date.now()}-${++restoreSeq}`;
   let origSide: File | null = null;
   if (srcOrig && srcOrig.exists) {
-    const staging = new Directory(Paths.cache, 'page-undo');
     staging.create({ intermediates: true, idempotent: true });
-    origSide = new File(staging, `restore-${Date.now()}.orig.jpg`);
+    origSide = new File(staging, `restore-${stamp}.orig.jpg`);
+  }
+  // The copy's source photo and geometry (lib/page-source.ts), when it has
+  // them. A copy without them (an older stash, Sign's) leaves the page's own
+  // alone: their stamp decides whether they still describe the page.
+  const sources: { from: File; side: File; suffix: string }[] = [];
+  for (const suffix of ['.src.jpg', '.src.json']) {
+    const u = siblingOf(srcUri, suffix);
+    const f = u ? new File(u) : null;
+    if (f && f.exists) {
+      staging.create({ intermediates: true, idempotent: true });
+      sources.push({ from: f, side: new File(staging, `restore-${stamp}${suffix}`), suffix });
+    }
   }
 
-  if (origSide) stage(srcOrig!, origSide);
+  const staged: File[] = [];
   try {
+    if (origSide) {
+      stage(srcOrig!, origSide);
+      staged.push(origSide);
+    }
+    for (const s of sources) {
+      stage(s.from, s.side);
+      staged.push(s.side);
+    }
     stage(src, pageSide);
   } catch (err) {
-    if (origSide) {
-      try { origSide.delete(); } catch {}
+    for (const f of staged) {
+      try { f.delete(); } catch {}
     }
     throw err;
   }
 
   if (destOrig.exists) destOrig.delete();
+  if (sources.length) {
+    // Geometry first: never a new photo paired with the old geometry.
+    for (const suffix of ['.src.json', '.src.jpg']) {
+      const f = new File(dir, `page-${pageIndex}${suffix}`);
+      if (f.exists) f.delete();
+    }
+  }
   swapIn(pageSide, dest);
   // A rename within the app's container: needs no free space.
   if (origSide) origSide.move(destOrig);
+  // Photo before geometry (pushed in that order above).
+  for (const s of sources) s.side.move(new File(dir, `page-${pageIndex}${s.suffix}`));
   return dest.uri;
 }
+
+let restoreSeq = 0;
 
 /**
  * Copies one page into `destDocId` at `destIndex`, carrying its unfiltered
@@ -178,18 +222,28 @@ export function copyPageWithShadow(srcUri: string, destDocId: string, destIndex:
   const dir = resolveDocDir(destDocId);
   dir.create({ intermediates: true, idempotent: true });
   const dest = new File(dir, `page-${destIndex}.jpg`);
-  const destOrig = new File(dir, `page-${destIndex}.orig.jpg`);
   const src = new File(stripQuery(srcUri));
   if (dest.exists) dest.delete();
   src.copy(dest);
-
-  const shadowUri = shadowOf(srcUri);
-  const srcOrig = shadowUri ? new File(shadowUri) : null;
-  if (destOrig.exists) {
-    try { destOrig.delete(); } catch {}
-  }
-  if (srcOrig && srcOrig.exists) srcOrig.copy(destOrig);
+  copyShadows(srcUri, dir, destIndex);
   return dest.uri;
+}
+
+/**
+ * Gives page `destIndex` in `destDir` exactly the shadows the stored page at
+ * `srcUri` has (PAGE_SHADOW_SUFFIXES): each one it has is copied, each one it
+ * lacks is removed at the destination.
+ */
+function copyShadows(srcUri: string, destDir: Directory, destIndex: number): void {
+  for (const suffix of PAGE_SHADOW_SUFFIXES) {
+    const destShadow = new File(destDir, `page-${destIndex}${suffix}`);
+    if (destShadow.exists) {
+      try { destShadow.delete(); } catch {}
+    }
+    const u = siblingOf(srcUri, suffix);
+    const from = u ? new File(u) : null;
+    if (from && from.exists) from.copy(destShadow);
+  }
 }
 
 /**
@@ -227,7 +281,7 @@ export function deleteSinglePage(
   // stays behind after a delete, page N's next bake silently swaps in the image
   // that used to be at N+1.
   const shift = (suffix: string) => {
-    const name = (i: number) => `page-${i}${suffix}.jpg`;
+    const name = (i: number) => `page-${i}${suffix}`;
     const target = new File(dir, name(pageIndex));
     if (target.exists) target.delete();
     for (let i = pageIndex + 1; i < totalPages; i++) {
@@ -241,8 +295,8 @@ export function deleteSinglePage(
     }
   };
 
-  shift('');
-  shift('.orig');
+  // Every family moves: the page, its .orig, its source photo and geometry.
+  for (const suffix of PAGE_FAMILY_SUFFIXES) shift(suffix);
   // The deleted page's recognised text must not stay behind in the folder.
   pruneDocumentOcr(docId);
 }
@@ -267,13 +321,14 @@ export function reorderPages(docId: string, newOrderIndices: number[]): string[]
   if (newOrderIndices.some((from, to) => from !== to)) bumpLayout(docId);
   const dir = resolveDocDir(docId);
   const n = newOrderIndices.length;
-  // `required` is false for .orig: a page that has never been filtered has none.
-  const families: { suffix: string; required: boolean }[] = [
-    { suffix: '', required: true },
-    { suffix: '.orig', required: false },
-  ];
-  const name = (suffix: string, i: number) => `page-${i}${suffix}.jpg`;
-  const tmpName = (suffix: string, i: number) => `page-tmp-${i}${suffix}.jpg`;
+  // Only the page itself is required: shadows are optional (a page that has
+  // never been filtered has no .orig; most pages have no source photo).
+  const families: { suffix: string; required: boolean }[] = PAGE_FAMILY_SUFFIXES.map(suffix => ({
+    suffix,
+    required: suffix === '.jpg',
+  }));
+  const name = (suffix: string, i: number) => `page-${i}${suffix}`;
+  const tmpName = (suffix: string, i: number) => `page-tmp-${i}${suffix}`;
   const removeTemps = () => {
     for (const { suffix } of families) {
       for (let i = 0; i < n; i++) {
@@ -310,7 +365,7 @@ export function reorderPages(docId: string, newOrderIndices: number[]): string[]
       const tmp = new File(dir, tmpName(suffix, i));
       const dest = new File(dir, name(suffix, i));
       if (tmp.exists) swapIn(tmp, dest);
-      else if (dest.exists && suffix) dest.delete(); // its page has no shadow now
+      else if (dest.exists && suffix !== '.jpg') dest.delete(); // its page has no such shadow now
     }
   }
   marker.delete();
@@ -331,11 +386,14 @@ export function copyDocumentFiles(
     const src = new File(srcDir, `page-${i}.jpg`);
     const dest = new File(destDir, `page-${i}.jpg`);
     src.copy(dest);
-    // Carry the .orig shadow across too. Without it the duplicate has no
+    // Carry the shadows across too. Without the .orig the duplicate has no
     // pristine source, so its first filter change would bake on top of pixels
-    // that already have a filter in them.
-    const srcOrig = new File(srcDir, `page-${i}.orig.jpg`);
-    if (srcOrig.exists) srcOrig.copy(new File(destDir, `page-${i}.orig.jpg`));
+    // that already have a filter in them; without the source photo the copy
+    // couldn't be re-cropped wider.
+    for (const suffix of PAGE_SHADOW_SUFFIXES) {
+      const shadow = new File(srcDir, `page-${i}${suffix}`);
+      if (shadow.exists) shadow.copy(new File(destDir, `page-${i}${suffix}`));
+    }
     return dest.uri;
   });
 }
@@ -461,13 +519,14 @@ function isSettled(item: File | Directory, now: number): boolean {
 // file each one stands in for.
 const SIDE_FILES: { re: RegExp; target: (m: RegExpMatchArray) => string }[] = [
   // replacePage / replaceOriginal: page-3.new.jpg → page-3.jpg, page-3.orig.new.jpg → page-3.orig.jpg
-  { re: /^page-(\d+)((?:\.orig)?)\.new\.jpg$/, target: m => `page-${m[1]}${m[2]}.jpg` },
+  // (and the same for a source photo, page-3.src.new.jpg → page-3.src.jpg)
+  { re: /^page-(\d+)((?:\.orig|\.src)?)\.new\.jpg$/, target: m => `page-${m[1]}${m[2]}.jpg` },
   // older builds' deleteSinglePage: page-4.shifting.jpg was headed for page-3.jpg
   { re: /^page-(\d+)((?:\.orig)?)\.shifting\.jpg$/, target: m => `page-${Number(m[1]) - 1}${m[2]}.jpg` },
   // older builds' generic temp: page-3.tmp.jpg → page-3.jpg
   { re: /^page-(\d+)((?:\.orig)?)\.tmp\.jpg$/, target: m => `page-${m[1]}${m[2]}.jpg` },
 ];
-const REORDER_TEMP = /^page-tmp-(\d+)((?:\.orig)?)\.jpg$/;
+const REORDER_TEMP = /^page-tmp-(\d+)((?:\.orig|\.src)?\.jpg|\.src\.json)$/;
 // A copy that is renamed into place only once complete (ensureOriginal).
 const PARTIAL = /\.part\.jpg$/;
 
@@ -503,7 +562,7 @@ function recoverInterrupted(dir: Directory, now: number): number {
       if (partial) {
         file.delete(); // an interrupted copy; the source it came from is intact
       } else if (reorder) {
-        const dest = new File(dir, `page-${reorder[1]}${reorder[2]}.jpg`);
+        const dest = new File(dir, `page-${reorder[1]}${reorder[2]}`);
         if (committed) swapIn(file, dest);
         else file.delete();
       } else if (side) {
@@ -603,7 +662,7 @@ const PROTECTED_DIR_NAMES = new Set([SCAN_DIR_NAME, SIGNATURES_DIR_NAME]);
 /** What a document's record points at (lib/storage.ts documentFileRefsForCleanup). */
 export type DocFileRefs = { id: string; pages: string[]; pdfUri?: string; updatedAt: number };
 
-const PAGE_FILE = /^page-\d+(?:\.orig)?\.jpg$/;
+const PAGE_FILE = /^page-\d+(?:(?:\.orig|\.src)?\.jpg|\.src\.json)$/;
 
 /**
  * Reads document `id`'s current record and runs `act` on it INSIDE the docs
@@ -828,6 +887,11 @@ const TEMP_DIRS = [
   'files-copy',
   // HTML pages the off-screen WebViews load (components/local-webview.tsx).
   'webview',
+  // Photos being normalised and pages being rendered from them (lib/page-source.ts).
+  'page-source',
+  // Scan Kit camera photos and their review previews (app/camera.tsx,
+  // lib/capture-session.ts): a session that never finished leaves them here.
+  'scanner-src',
 ];
 /** Open-in staging files older builds wrote straight into the Caches root. */
 const LEGACY_STAGED = /^(?:incoming|attempt)-\d+-/;

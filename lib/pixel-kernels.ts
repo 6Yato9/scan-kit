@@ -491,6 +491,9 @@ function strokeGuard(d, w, h, s) {
       return lp * e * (1 - keep) * neutral;
     },
     floor: floor,
+    // Darkest flattened luminance near column xx of the current row (R12,
+    // read by Faint text; the filters above never call it).
+    ink: function (xx) { return MN[cur + cx[xx]]; },
   };
 }
 
@@ -655,6 +658,249 @@ function docBW(d, w, h, op) {
   despeckle(d, w, h, gray, BW_ISOLATED, BW_FAINT, BW_INK, 0);
 }
 
+// ── R12 filters ─────────────────────────────────────────────────────────────
+// Added alongside the four originals, which must keep producing exactly the
+// pixels they always have (stored filter ids are re-applied on every re-bake;
+// see __tests__/filters-legacy-snapshot.test.ts). New maths goes in new
+// functions; the shared helpers above are only read.
+
+// No shadow: the lighting is flattened per channel exactly as Enhanced does
+// (shadows, uneven light and the paper's yellow go), but the tone stays the
+// photo's own: a gentle curve that only sets white just under the paper and
+// eases the black point, with no ink darkening, no colour boost and no grain
+// clipping. Text keeps its printed weight, photos on the page their mid-tones.
+function docNoShadow(d, w, h) {
+  var s = makeSampler(estimateBackground(d, w, h), w, h);
+  var bp = blackPoint(d, w, h, s) * 0.5, sp = paperSpread(d, w, h, s);
+  // White just under the paper's median: bare paper is white.
+  // On grainy paper it follows the grain down (as Enhanced's does), else
+  // the darker half of the grain is left as a grey mottle.
+  var wp = sp.median - 2 * sp.sigma, wmax = sp.median * 0.965;
+  if (wp > wmax) wp = wmax; if (wp > 1) wp = 1; if (wp < 0.8) wp = 0.8;
+  var lut = toneLut(bp, 1.1, wp);
+  for (var y = 0; y < h; y++) {
+    s.row(y);
+    for (var x = 0, i = y * w * 4; x < w; x++, i += 4) {
+      d[i] = 255 * lut[lutIndex(d[i] * s.R[x])];
+      d[i + 1] = 255 * lut[lutIndex(d[i + 1] * s.G[x])];
+      d[i + 2] = 255 * lut[lutIndex(d[i + 2] * s.B[x])];
+    }
+  }
+  // Only lone flecks of grain go; nothing next to real ink is touched.
+  despeckle(d, w, h, null, SPECK_ISOLATED, SPECK_FAINT, SPECK_INK, 0);
+}
+
+// Luminance histogram (256 bins), sampled to about 250k pixels.
+function lumHist(d, w, h) {
+  var hist = new Uint32Array(256), total = 0, step = Math.max(1, Math.round(Math.sqrt(w * h / 250000)));
+  for (var y = 0; y < h; y += step) {
+    for (var x = 0, i = y * w * 4; x < w; x += step, i += 4 * step) {
+      hist[(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) | 0]++; total++;
+    }
+  }
+  return { hist: hist, total: total };
+}
+function histPct(hh, p) {
+  var target = hh.total * p, acc = 0;
+  for (var b = 0; b < 256; b++) { acc += hh.hist[b]; if (acc >= target) return b; }
+  return 255;
+}
+
+// Photo: no flattening (a photo's light and shade are part of it). Levels are
+// stretched on luminance, the same map on every channel so hue is kept: the
+// darkest 0.3% to black and the brightest 0.5% to white, never by more than
+// a sensible amount on an already full-range picture. Then a soft S-curve,
+// a little more saturation, and light sharpening.
+function docPhoto(d, w, h) {
+  var hh = lumHist(d, w, h);
+  var lo = histPct(hh, 0.002), hi = histPct(hh, 0.998);
+  if (lo > 50) lo = 50; if (hi < 215) hi = 215; if (hi - lo < 64) { lo = 0; hi = 255; }
+  var lut = new Float32Array(256), k;
+  for (k = 0; k < 256; k++) {
+    var t = (k - lo) / (hi - lo); t = t < 0 ? 0 : (t > 1 ? 1 : t);
+    var sm = t * t * (3 - 2 * t);
+    lut[k] = 255 * (t + (sm - t) * 0.3);
+  }
+  var SAT = 1.18;
+  for (var i = 0; i < d.length; i += 4) {
+    var r = lut[d[i]], g = lut[d[i + 1]], b = lut[d[i + 2]];
+    var l = 0.299 * r + 0.587 * g + 0.114 * b;
+    d[i] = l + (r - l) * SAT; d[i + 1] = l + (g - l) * SAT; d[i + 2] = l + (b - l) * SAT;
+  }
+  sharpen(d, w, h, 0.35);
+}
+
+// Whiteboard: the board's glare, reflections and ghosting of old writing are
+// flattened and clipped to white harder than on paper, and marker strokes are
+// made bold and saturated (a photo of a whiteboard shows them dull and thin).
+function docBoard(d, w, h) {
+  var s = makeSampler(estimateBackground(d, w, h), w, h);
+  var bp = blackPoint(d, w, h, s), sp = paperSpread(d, w, h, s);
+  var wp = sp.white < 0.88 ? sp.white : 0.88;
+  var lutN = toneLut(bp, 1.8, wp), lutC = toneLut(bp * COLOUR_BP, 1.35, wp);
+  // No stroke guard here: the faint strokes it would save are exactly the
+  // ghosts of erased writing a whiteboard photo is full of.
+  var SAT = 1.9;
+  for (var y = 0; y < h; y++) {
+    s.row(y);
+    for (var x = 0, i = y * w * 4; x < w; x++, i += 4) {
+      var r = d[i] * s.R[x], g = d[i + 1] * s.G[x], b = d[i + 2] * s.B[x];
+      var l = 0.299 * r + 0.587 * g + 0.114 * b;
+      var mx = r > g ? (r > b ? r : b) : (g > b ? g : b), mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
+      // Marker colour is weak in a photo: a lower bar than Enhanced's.
+      var k = (mx - mn - 0.03) / 0.07; k = k < 0 ? 0 : (k > 1 ? 1 : k);
+      var yn = lutN[lutIndex(l)];
+      if (k > 0) {
+        var cl = lutC[lutIndex(l)], q = cl / (l > 0.01 ? l : 0.01);
+        var cr = r * q, cg = g * q, cb = b * q, cm = cr < cg ? (cr < cb ? cr : cb) : (cg < cb ? cg : cb);
+        var sg = SAT;
+        // Never past zero on the weakest channel (that would shift the hue).
+        if (cl - cm > 1e-4 && cl / (cl - cm) < sg) sg = cl / (cl - cm);
+        cr = cl + (cr - cl) * sg; cg = cl + (cg - cl) * sg; cb = cl + (cb - cl) * sg;
+        d[i] = 255 * (yn + (cr - yn) * k); d[i + 1] = 255 * (yn + (cg - yn) * k); d[i + 2] = 255 * (yn + (cb - yn) * k);
+      } else {
+        d[i] = d[i + 1] = d[i + 2] = 255 * yn;
+      }
+    }
+  }
+  despeckle(d, w, h, null, SPECK_ISOLATED, SPECK_FAINT, SPECK_INK, SPECK_REL);
+}
+
+// Faint text: for pencil, faded print and thermal receipts. Lighting is
+// flattened as for Grayscale; then every stroke is darkened relative to the
+// darkest ink near it (strokeGuard's local paper and local ink), so a stroke
+// only a little darker than the paper is stretched towards black while print
+// that is already black stays as it is. The stretch is capped (a faint
+// stroke can gain at most FAINT_GAIN times its contrast) and starts above the
+// paper's own noise, so grain, JPEG noise and the shading of a shadow edge are
+// not "found" as writing. Output is gray.
+var FAINT_GAIN = 6, FAINT_NORM = 0.8, FAINT_SPECK = 228;
+function docFaint(d, w, h) {
+  var s = makeSampler(estimateBackground(d, w, h), w, h);
+  var guard = strokeGuard(d, w, h, s), fl = guard.floor;
+  // Large shapes (a logo, a photo, a filled box) are part of the guard's
+  // "local paper", so on their own they would come out as hollow outlines:
+  // every pixel is also toned exactly as Grayscale tones it, and the darker
+  // wins. That Grayscale tone is kept as the despeckle depth, too.
+  var lut = toneLut(blackPoint(d, w, h, s), 1.8, paperSpread(d, w, h, s).white);
+  var depth = new Uint8ClampedArray(w * h);
+  for (var y = 0, j = 0; y < h; y++) {
+    s.row(y); guard.row(y);
+    for (var x = 0, i = y * w * 4; x < w; x++, i += 4, j++) {
+      var r = d[i] * s.R[x], gg = d[i + 1] * s.G[x], b = d[i + 2] * s.B[x];
+      var v = 0.299 * r + 0.587 * gg + 0.114 * b, lp = guard.P[x];
+      var o = 255 * lut[lutIndex(v - guard.boost(v, x, 1 - colourWeight(r, gg, b)))];
+      depth[j] = o;
+      if (lp > 0.05) {
+        var t = 1 - v / lp - fl;
+        if (t > 0) {
+          // The darkest ink nearby maps to (just past) black: print stays
+          // black, a pencil stroke is stretched towards it, by at most GAIN.
+          var ink = (1 - guard.ink(x) / lp - fl) * FAINT_NORM;
+          var g = 1 / (ink > 0.02 ? ink : 0.02);
+          if (g > FAINT_GAIN) g = FAINT_GAIN; if (g < 1) g = 1;
+          var dk = t * g;
+          dk = dk >= 1 ? 1 : Math.pow(dk, 0.85);
+          if (255 * (1 - dk) < o) o = 255 * (1 - dk);
+        }
+      }
+      d[i] = o; d[i + 1] = o; d[i + 2] = o;
+    }
+  }
+  // The stretch also turns the odd fleck of grain or a paper fibre black. A
+  // small mark goes when Grayscale would have shown it barely or not at all
+  // (FAINT_SPECK), or when it is isolated and was not dark there; a pencil
+  // i-dot or a full stop shows in Grayscale and sits next to its word.
+  despeckle(d, w, h, depth, SPECK_INK, FAINT_SPECK, SPECK_INK, 0);
+}
+
+// Ink saver: Grayscale's clean page, then ink is printed lighter. Text becomes
+// a dark gray that still reads crisply, and large solid areas (a photo, a
+// filled box, a dark header bar) are lightened much more, since that is where
+// the toner goes. "Solid" is the share of dark pixels around each point on a
+// coarse grid (about 1.5% of the long side), bilinear so there are no blocks.
+function docEco(d, w, h) {
+  docGray(d, w, h);
+  var long = w > h ? w : h, cs = Math.max(2, Math.round(long / 300));
+  var gw = Math.ceil(w / cs), gh = Math.ceil(h / cs), n = gw * gh;
+  var C = new Float32Array(n), N = new Float32Array(n), x, y, i, k;
+  var cx = new Int32Array(w);
+  for (x = 0; x < w; x++) cx[x] = (x / cs) | 0;
+  for (y = 0; y < h; y++) {
+    var gb = ((y / cs) | 0) * gw;
+    for (x = 0, i = y * w * 4; x < w; x++, i += 4) { k = gb + cx[x]; C[k] += 255 - d[i]; N[k] += 255; }
+  }
+  for (k = 0; k < n; k++) C[k] /= N[k];
+  boxBlur(C, gw, gh, Math.max(1, Math.round(long / 70 / cs)));
+  var x0 = new Int32Array(w), x1 = new Int32Array(w), wx = new Float32Array(w), row = new Float32Array(w), g;
+  for (x = 0; x < w; x++) {
+    g = (x + 0.5) / cs - 0.5; if (g < 0) g = 0; if (g > gw - 1) g = gw - 1;
+    x0[x] = g | 0; x1[x] = Math.min(gw - 1, x0[x] + 1); wx[x] = g - x0[x];
+  }
+  var TEXT = 0.7, SOLID = 0.28;
+  for (y = 0; y < h; y++) {
+    var gy = (y + 0.5) / cs - 0.5; if (gy < 0) gy = 0; if (gy > gh - 1) gy = gh - 1;
+    var a = (gy | 0) * gw, c = Math.min(gh - 1, (gy | 0) + 1) * gw, t = gy - (gy | 0);
+    for (x = 0; x < w; x++) {
+      var p0 = C[a + x0[x]] + (C[a + x1[x]] - C[a + x0[x]]) * wx[x];
+      var p1 = C[c + x0[x]] + (C[c + x1[x]] - C[c + x0[x]]) * wx[x];
+      row[x] = p0 + (p1 - p0) * t;
+    }
+    for (x = 0, i = y * w * 4; x < w; x++, i += 4) {
+      var dk = 255 - d[i];
+      if (!dk) continue;
+      var sol = (row[x] - 0.35) / 0.3; sol = sol < 0 ? 0 : (sol > 1 ? 1 : sol);
+      var o = 255 - dk * (TEXT + (SOLID - TEXT) * sol);
+      d[i] = o; d[i + 1] = o; d[i + 2] = o;
+    }
+  }
+}
+
+// Sharpness (Adjust slider, -1..1) and Photo's built-in crispness: an unsharp
+// mask on luminance (the same offset added to every channel, so no colour
+// fringes), radius about 1/1500 of the long side. Positive sharpens, negative
+// softens (a box blur blended in, for noisy pages). Differences under 2 levels
+// are left alone so paper grain and JPEG noise are not sharpened, and the
+// offset is capped so edges get crisper without bright or dark halos.
+// Streams the image: the box sums keep (2r + 2) rows of original luminance in
+// a ring, so memory is O(w * r) whatever the page size.
+function sharpen(d, w, h, amt) {
+  if (!amt || w < 3 || h < 3) return;
+  var long = w > h ? w : h, r = Math.max(1, Math.round(long / 1500));
+  var R = 2 * r + 2, ring = new Uint8Array(R * w), col = new Int32Array(w), x, y, i;
+  function load(yy) {
+    var base = (yy % R) * w;
+    for (var xx = 0, ii = yy * w * 4; xx < w; xx++, ii += 4) {
+      var v = (0.299 * d[ii] + 0.587 * d[ii + 1] + 0.114 * d[ii + 2] + 0.5) | 0;
+      ring[base + xx] = v; col[xx] += v;
+    }
+  }
+  function drop(yy) {
+    var base = (yy % R) * w;
+    for (var xx = 0; xx < w; xx++) col[xx] -= ring[base + xx];
+  }
+  for (y = 0; y <= r && y < h; y++) load(y);
+  var gain = amt > 0 ? amt * 1.6 : amt, CAP = 48;
+  for (y = 0; y < h; y++) {
+    if (y > 0) {
+      if (y + r < h) load(y + r);
+      if (y - r - 1 >= 0) drop(y - r - 1);
+    }
+    var rows = Math.min(h - 1, y + r) - Math.max(0, y - r) + 1, base = (y % R) * w;
+    var S = 0, cols = 0;
+    for (x = 0; x < r && x < w; x++) { S += col[x]; cols++; }
+    for (x = 0, i = y * w * 4; x < w; x++, i += 4) {
+      if (x + r < w) { S += col[x + r]; cols++; }
+      if (x - r - 1 >= 0) { S -= col[x - r - 1]; cols--; }
+      var v = ring[base + x], diff = v - S / (rows * cols);
+      if (amt > 0 && diff < 2 && diff > -2) continue;
+      var off = diff * gain;
+      if (off > CAP) off = CAP; else if (off < -CAP) off = -CAP;
+      d[i] += off; d[i + 1] += off; d[i + 2] += off;
+    }
+  }
+}
+
 function applyPrimitive(d, key, a) {
   for (var i = 0; i < d.length; i += 4) {
     var r = d[i], g = d[i + 1], b = d[i + 2], lum;
@@ -678,6 +924,12 @@ function applyOps(d, w, h, ops) {
     if (op.magic) docMagic(d, w, h);
     else if (op.docgray) docGray(d, w, h);
     else if (op.docbw) docBW(d, w, h, op);
+    else if (op.noshadow) docNoShadow(d, w, h);
+    else if (op.photo) docPhoto(d, w, h);
+    else if (op.board) docBoard(d, w, h);
+    else if (op.faint) docFaint(d, w, h);
+    else if (op.eco) docEco(d, w, h);
+    else if ('sharpen' in op) sharpen(d, w, h, op.sharpen);
     else for (var key in op) applyPrimitive(d, key, op[key]);
   }
 }

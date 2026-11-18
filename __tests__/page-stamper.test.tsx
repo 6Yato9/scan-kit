@@ -5,14 +5,18 @@
 // Failures are reported truthfully: nothing for a cancelled run, the changed
 // pages for a partial one.
 import { Alert } from 'react-native';
-import { act, renderHook } from '@testing-library/react-native';
+import { act, render, renderHook } from '@testing-library/react-native';
 
 jest.mock('react-native-webview', () => ({ WebView: () => null }));
+jest.mock('../components/local-webview', () => ({ LocalWebView: () => null }));
 const mockRouter = { back: jest.fn(), replace: jest.fn() };
 jest.mock('expo-router', () => ({ useRouter: () => mockRouter }));
 jest.mock('../lib/nav-guard', () => ({ navigateWhenUnlocked: (fn: () => void) => fn() }));
 jest.mock('../lib/haptics', () => ({ notifyError: jest.fn(), notifySuccess: jest.fn() }));
-jest.mock('../lib/stamp', () => ({ buildStampHtml: () => '<html></html>' }));
+jest.mock('../lib/stamp', () => ({
+  buildStampHtml: () => '<html></html>',
+  parseStampMessage: jest.requireActual('../lib/stamp').parseStampMessage,
+}));
 const mockUndo = jest.fn(async (..._a: unknown[]) => ({}));
 const mockDiscard = jest.fn();
 jest.mock('../lib/page-stamp', () => {
@@ -28,7 +32,7 @@ jest.mock('../lib/page-stamp', () => {
   };
 });
 
-import { reportStampFailure, usePageStamper, useStampFinish } from '../components/page-stamper';
+import { reportStampFailure, StampRenderError, stampRenderMessage, usePageStamper, useStampFinish } from '../components/page-stamper';
 import { resetViewerNoticesForTests, takeViewerNotice } from '../lib/viewer-notice';
 
 const { StampError } = jest.requireMock('../lib/page-stamp');
@@ -105,5 +109,83 @@ describe('reportStampFailure', () => {
     jest.spyOn(console, 'error').mockImplementation(() => {});
     reportStampFailure(new Error('webview died'), 'Couldn’t add the watermark');
     expect(alert).toHaveBeenCalledWith('Couldn’t add the watermark', 'Your document is unchanged. Try again.');
+  });
+});
+
+describe('drawing a page (one WebView at a time)', () => {
+  let stamper!: ReturnType<typeof usePageStamper>;
+  function Host() {
+    stamper = usePageStamper();
+    return <>{stamper.host}</>;
+  }
+  const webView = (root: { findAll: (p: (n: { props: Record<string, unknown> }) => boolean) => { props: Record<string, unknown> }[] }) =>
+    root.findAll(n => typeof n.props.onMessage === 'function' && typeof n.props.html === 'string')[0];
+  const send = (root: Parameters<typeof webView>[0], data: string) =>
+    act(() => { (webView(root).props.onMessage as (e: unknown) => void)({ nativeEvent: { data } }); });
+
+  test('the page and its shadow arrive one at a time, then done', async () => {
+    const { UNSAFE_root } = render(<Host />);
+    let run!: Promise<unknown>;
+    act(() => { run = stamper.stamp('file:///p.jpg', 'file:///p.orig.jpg', spec); });
+    await act(async () => {});
+    send(UNSAFE_root, 'STAMP_STEP:page-loaded');
+    send(UNSAFE_root, 'STAMP_PAGE:data:image/jpeg;base64,PAGE');
+    send(UNSAFE_root, 'STAMP_ORIG:data:image/jpeg;base64,ORIG');
+    send(UNSAFE_root, 'STAMP_DONE:{"scaled":false}');
+    await expect(run).resolves.toEqual({ page: 'data:image/jpeg;base64,PAGE', orig: 'data:image/jpeg;base64,ORIG' });
+  });
+
+  test('an error code fails the page with that code', async () => {
+    const { UNSAFE_root } = render(<Host />);
+    let run!: Promise<unknown>;
+    act(() => { run = stamper.stamp('file:///p.jpg', null, spec); });
+    await act(async () => {});
+    send(UNSAFE_root, 'STAMP_ERROR:load-page');
+    await expect(run).rejects.toThrow('load-page');
+  });
+
+  test('out of memory: tried once more in a fresh WebView before failing', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const { UNSAFE_root } = render(<Host />);
+    let run!: Promise<unknown>;
+    act(() => { run = stamper.stamp('file:///p.jpg', null, spec); });
+    await act(async () => {});
+    send(UNSAFE_root, 'STAMP_ERROR:encode');
+    await act(async () => {});
+    // The retry: a new page, which this time works.
+    send(UNSAFE_root, 'STAMP_PAGE:data:image/jpeg;base64,OK');
+    send(UNSAFE_root, 'STAMP_DONE:{"scaled":true}');
+    await expect(run).resolves.toEqual({ page: 'data:image/jpeg;base64,OK', orig: null });
+    warn.mockRestore();
+  });
+
+  test('done without a usable page is a failure, never a blank page', async () => {
+    const { UNSAFE_root } = render(<Host />);
+    let run!: Promise<unknown>;
+    act(() => { run = stamper.stamp('file:///p.jpg', null, spec); });
+    await act(async () => {});
+    send(UNSAFE_root, 'STAMP_PAGE:data:,');
+    send(UNSAFE_root, 'STAMP_DONE:{}');
+    await expect(run).rejects.toThrow('unreadable');
+  });
+});
+
+describe('what a failed drawing tells the user', () => {
+  test('each cause says what to do, and that the document is unchanged', () => {
+    for (const code of ['load-signature', 'load-page', 'canvas', 'crashed', 'timeout', 'script:x', 'webview-load']) {
+      expect(stampRenderMessage(code)).toMatch(/unchanged/);
+    }
+    expect(stampRenderMessage('canvas')).toMatch(/memory/);
+    expect(stampRenderMessage('load-signature')).toMatch(/draw it again/);
+  });
+
+  test('the alert carries it, and the code goes to the device log', () => {
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    reportStampFailure(new StampRenderError('encode'), 'Couldn’t sign the document');
+    expect(alert).toHaveBeenCalledWith('Couldn’t sign the document', stampRenderMessage('encode'));
+    expect(warn.mock.calls[0][0]).toContain('encode');
+    alert.mockRestore();
+    warn.mockRestore();
   });
 });

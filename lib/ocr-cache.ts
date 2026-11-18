@@ -32,6 +32,12 @@ import { docDir } from './storage-layout';
 export type CachedOcr = {
   text: string;
   lines: { text: string; left: number; top: number; width: number; height: number }[];
+  /**
+   * The user corrected `text` in the Recognized text sheet. `lines` (the
+   * positioned words of the searchable PDF's text layer) are still Vision's:
+   * a free-text correction can't be placed on the page.
+   */
+  edited?: true;
 };
 
 const LEGACY_DIR_NAME = 'ocr-lines';
@@ -131,11 +137,32 @@ export function writeCachedOcr(uri: string, identity: string, value: CachedOcr):
     if (!dir.exists) dir.create({ intermediates: true, idempotent: true });
     const f = entryFile(doc.dir, identity);
     f.create({ overwrite: true });
-    f.write(JSON.stringify({ text: value.text, lines: value.lines }));
+    f.write(JSON.stringify(value.edited ? { text: value.text, lines: value.lines, edited: true } : { text: value.text, lines: value.lines }));
     pruneIfStale(doc.dir, doc.id);
   } catch {
     // Disk full: the in-memory entry still helps this session.
   }
+}
+
+/**
+ * Replaces the recognized text of the page image at `uri` with the user's
+ * correction, keeping Vision's positioned lines. Only an image that already
+ * has an entry for its current pixels can be corrected (read it with
+ * recognizeLines first): the correction then lives exactly as long as those
+ * pixels, like any entry. Returns false when there is nothing to correct or
+ * the folder is gone. Never throws.
+ */
+export function writeOcrCorrection(uri: string, text: string): boolean {
+  const identity = fileIdentity(uri);
+  if (!identity) return false;
+  const current = readCachedOcr(uri, identity);
+  if (!current) return false;
+  if (current.text === text) return true;
+  const doc = docOf(uri);
+  if (doc && !new Directory(doc.dir).exists) return false;
+  writeCachedOcr(uri, identity, { text, lines: current.lines, edited: true });
+  // writeCachedOcr is best effort; report whether the correction is what the cache now answers.
+  return readCachedOcr(uri, identity)?.text === text;
 }
 
 function listNames(dir: Directory): string[] {

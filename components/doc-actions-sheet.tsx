@@ -16,6 +16,7 @@ import { useTheme } from '@/contexts/theme-context';
 import { Spacing, Type } from '@/lib/theme';
 import { documentBytes } from '@/lib/doc-size';
 import { formatBytes } from '@/components/tool-ui';
+import { canMergePdfDocuments } from '@/lib/pdf-edit';
 
 type Props = {
   visible: boolean;
@@ -67,7 +68,8 @@ export function DocActionsSheet({
     };
   }
 
-  const canMerge = !doc.pdfUri;
+  // An imported PDF merges into a new PDF (lib/pdf-edit) in builds that can.
+  const canMerge = !doc.pdfUri || canMergePdfDocuments();
 
   return (
     <BottomSheet

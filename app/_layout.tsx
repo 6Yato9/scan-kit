@@ -18,6 +18,7 @@ import { garbageCollectOrphans, sweepConvertLeftovers } from '@/lib/files';
 import { ensureStorageLayout } from '@/lib/storage-layout';
 import { clearLegacyOcrCache } from '@/lib/ocr-cache';
 import { recoverInterruptedStamps } from '@/lib/page-stamp';
+import { recoverInterruptedPdfEdits } from '@/lib/pdf-edit';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
 import { documentFileRefsForCleanup, documentIdsForCleanup, getOnboarded, getOnboardedSync, pendingBakeMigrations, withDocumentFileRefs } from '@/lib/storage';
 
@@ -213,6 +214,11 @@ function ThemedStack() {
         name="annotate"
         options={{ presentation: 'fullScreenModal', headerShown: false }}
       />
+      {/* Scan Kit's document camera and its review (app/camera.tsx, lib/capture-session.ts). */}
+      <Stack.Screen
+        name="camera"
+        options={{ presentation: 'fullScreenModal', headerShown: false, gestureEnabled: false, contentStyle: { backgroundColor: colors.chrome } }}
+      />
       <Stack.Screen name="settings/scan-settings" options={{ title: 'Scan settings', presentation: 'card' }} />
       <Stack.Screen name="settings/document-settings" options={{ title: 'Document settings', presentation: 'card' }} />
       <Stack.Screen name="settings/printer" options={{ title: 'Printing', presentation: 'card' }} />
@@ -230,7 +236,9 @@ function ThemedStack() {
       <Stack.Screen name="tools/book" options={{ headerShown: false, presentation: 'card' }} />
       <Stack.Screen name="tools/whiteboard" options={{ headerShown: false, presentation: 'card' }} />
       <Stack.Screen name="tools/erase-marks" options={toolOptions} />
+      <Stack.Screen name="tools/redact" options={toolOptions} />
       <Stack.Screen name="tools/extract-text" options={{ headerShown: false, presentation: 'card' }} />
+      <Stack.Screen name="tools/business-card" options={{ headerShown: false, presentation: 'card' }} />
     </Stack>
     </LockGate>
     {/* After the navigator so it draws above the tab screens; clears the
@@ -246,6 +254,8 @@ export default function RootLayout() {
     // back first, from its journal (lib/page-stamp.ts), before anything opens
     // the document or the sweep below looks at its folder.
     const stampsRecovered = recoverInterruptedStamps().catch(() => 0);
+    // Likewise a PDF page edit (lib/pdf-edit.ts): its search text is re-read.
+    recoverInterruptedPdfEdits().catch(() => 0);
     // Fire-and-forget startup sweep of orphaned doc dirs and interrupted-
     // operation temp files. Delayed slightly so it never competes with render.
     // documentIdsForCleanup returns null when the list can't be trusted (doc

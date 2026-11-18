@@ -19,7 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { Alert, StyleSheet, View } from 'react-native';
 import { LocalWebView } from './local-webview';
 import { useRouter } from 'expo-router';
-import { buildStampHtml, type StampSpec } from '@/lib/stamp';
+import { buildStampHtml, parseStampMessage, type StampSpec } from '@/lib/stamp';
 import {
   discardStampUndo,
   StampError,
@@ -32,7 +32,12 @@ import { postViewerNotice } from '@/lib/viewer-notice';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
 import { notifyError, notifySuccess } from '@/lib/haptics';
 
-/** A page that hasn't come back by then is treated as failed (a hung content process). */
+/**
+ * A page whose WebView has said nothing for this long is treated as failed (a
+ * hung content process). Measured from the last sign of life, not from the
+ * start: the page posts a step as it loads and draws each image, so a slow
+ * phone working through a big page is never cut off part-way.
+ */
 const STAMP_TIMEOUT_MS = 45_000;
 
 type Job = {
@@ -41,12 +46,45 @@ type Job = {
   resolve: (r: StampedPixels) => void;
   reject: (e: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+  page: string | null;
+  orig: string | null;
 };
 
+/**
+ * Drawing one page failed. `message` is the page's error code (lib/stamp.ts
+ * StampMessage: load-page, load-orig, load-signature, empty, canvas, encode,
+ * script:…) or one of the host's: timeout, crashed, webview-load, unreadable,
+ * closed.
+ */
 export class StampRenderError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'StampRenderError';
+  }
+}
+
+/** Failures worth one more try in a fresh WebView: WebKit ran out of memory or hung. */
+const RETRYABLE = new Set(['crashed', 'timeout', 'canvas', 'encode']);
+
+/**
+ * What to tell the user for a page that couldn't be drawn. The run has already
+ * put back every page it changed, so each says the document is unchanged.
+ */
+export function stampRenderMessage(code: string): string {
+  switch (code) {
+    case 'load-signature':
+      return 'The signature couldn’t be read. Your document is unchanged. Clear it, draw it again and try again.';
+    case 'load-page':
+    case 'load-orig':
+    case 'empty':
+      return 'The page image couldn’t be opened. Your document is unchanged. Try again — if it keeps happening, retake the page.';
+    case 'canvas':
+    case 'encode':
+    case 'crashed':
+    case 'timeout':
+      return 'There wasn’t enough free memory to draw on the page. Your document is unchanged. Close other apps and try again.';
+    default:
+      return 'Your document is unchanged. Try again.';
   }
 }
 
@@ -111,37 +149,61 @@ export function usePageStamper(): {
         spec,
       );
       const timer = setTimeout(() => settle(id, { err: new StampRenderError('timeout') }), STAMP_TIMEOUT_MS);
-      const next: Job = { id, html, resolve, reject, timer };
+      const next: Job = { id, html, resolve, reject, timer, page: null, orig: null };
       jobRef.current = next;
       setJob(next);
     }), [settle, mounted]);
 
   const stamp = useCallback((pageUri: string, origUri: string | null, spec: StampSpec) => {
-    const run = chain.current.then(() => runOne(pageUri, origUri, spec));
+    const run = chain.current.then(() =>
+      runOne(pageUri, origUri, spec).catch(err => {
+        // Out of memory or hung: once more in a fresh WebView (a new content
+        // process with nothing else in it) before giving up.
+        if (!(err instanceof StampRenderError) || !RETRYABLE.has(err.message) || !mounted.current) throw err;
+        console.warn(`Stamp: drawing the page failed (${err.message}), trying once more`);
+        return runOne(pageUri, origUri, spec);
+      }),
+    );
     chain.current = run.catch(() => undefined);
     return run;
-  }, [runOne]);
+  }, [runOne, mounted]);
 
   const onMessage = useCallback((e: { nativeEvent: { data: string } }) => {
     const current = jobRef.current;
     if (!current) return;
-    const data = e.nativeEvent.data;
-    if (data.startsWith('STAMP:')) {
-      try {
-        const parsed = JSON.parse(data.slice('STAMP:'.length)) as StampedPixels;
-        if (!parsed.page?.startsWith('data:image/jpeg')) throw new Error('bad page');
-        settle(current.id, { ok: { page: parsed.page, orig: parsed.orig ?? null } });
-      } catch {
-        settle(current.id, { err: new StampRenderError('unreadable result') });
+    const msg = parseStampMessage(e.nativeEvent.data);
+    if (!msg) return;
+    // Alive: the page has the full timeout again for its next step.
+    clearTimeout(current.timer);
+    const id = current.id;
+    current.timer = setTimeout(() => settle(id, { err: new StampRenderError('timeout') }), STAMP_TIMEOUT_MS);
+    if (msg.type === 'page') {
+      current.page = msg.data;
+    } else if (msg.type === 'orig') {
+      current.orig = msg.data;
+    } else if (msg.type === 'done') {
+      if (!current.page?.startsWith('data:image/jpeg') || (current.orig !== null && !current.orig.startsWith('data:image/jpeg'))) {
+        settle(id, { err: new StampRenderError('unreadable') });
+        return;
       }
-    } else if (data.startsWith('STAMP_ERROR:')) {
-      settle(current.id, { err: new StampRenderError(data.slice('STAMP_ERROR:'.length)) });
+      if (msg.scaled) console.warn('Stamp: the page was drawn below full size to fit in memory');
+      settle(id, { ok: { page: current.page, orig: current.orig } });
+    } else if (msg.type === 'error') {
+      settle(id, { err: new StampRenderError(msg.code) });
     }
   }, [settle]);
 
   const onCrash = useCallback(() => {
     const current = jobRef.current;
-    if (current) settle(current.id, { err: new StampRenderError('content process ended') });
+    if (current) settle(current.id, { err: new StampRenderError('crashed') });
+  }, [settle]);
+
+  // The HTML file itself couldn't be loaded (file access, see LocalWebView).
+  const onLoadFail = useCallback((e: { nativeEvent: { code?: number; description?: string } }) => {
+    const current = jobRef.current;
+    if (!current) return;
+    console.warn(`Stamp: the drawing page didn't load (${e.nativeEvent.code ?? '?'}: ${e.nativeEvent.description ?? ''})`);
+    settle(current.id, { err: new StampRenderError('webview-load') });
   }, [settle]);
 
   const host = useMemo(() => (job ? (
@@ -153,11 +215,11 @@ export function usePageStamper(): {
         onMessage={onMessage}
         onContentProcessDidTerminate={onCrash}
         onRenderProcessGone={onCrash}
-        onError={onCrash}
+        onError={onLoadFail}
         javaScriptEnabled
       />
     </View>
-  ) : null), [job, onMessage, onCrash]);
+  ) : null), [job, onMessage, onCrash, onLoadFail]);
 
   return { host, stamp, signal };
 }
@@ -199,6 +261,12 @@ export function reportStampFailure(err: unknown, title: string, undoneMessage = 
           ]
         : undefined,
     );
+    return;
+  }
+  if (err instanceof StampRenderError) {
+    // The code is what a device log needs to tell memory from file access.
+    console.warn(`${title}: page drawing failed with "${err.message}"`);
+    Alert.alert(title, stampRenderMessage(err.message));
     return;
   }
   if (!(err instanceof StampError)) console.error(`${title}:`, err);

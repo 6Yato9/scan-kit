@@ -21,9 +21,9 @@ type Tool = {
 // import (Files "+"), reorder / rotate / text (viewer), print / save as images /
 // smaller PDF (Export), merge (Files: select or long-press), and Free up space
 // (Settings › Storage, beside the space used: it converts nothing). Tiles keep
-// the same four columns in every section, so icons line up down the screen;
-// the one short section (Convert) comes last, where a shorter row reads as the
-// end of the grid rather than a gap.
+// the same four columns in every section, so icons line up down the screen.
+// QR code sits in Convert beside Extract text: both read what is printed on a
+// page or photo (a camera or a photo), while Scan holds the capture modes.
 const TOOL_SECTIONS: { title: string; tools: Tool[] }[] = [
   {
     title: 'Scan',
@@ -31,7 +31,7 @@ const TOOL_SECTIONS: { title: string; tools: Tool[] }[] = [
       { id: 'whiteboard', icon: 'easel-outline', label: 'Whiteboard', href: '/tools/whiteboard' },
       { id: 'book', icon: 'book-outline', label: 'Book mode', href: '/tools/book' },
       { id: 'id-card', icon: 'id-card', label: 'ID card', href: '/tools/id-card' },
-      { id: 'qr', icon: 'qr-code-outline', label: 'QR code', href: '/tools/qr' },
+      { id: 'business-card', icon: 'person-add-outline', label: 'Business card', href: '/tools/business-card' },
     ],
   },
   {
@@ -41,12 +41,14 @@ const TOOL_SECTIONS: { title: string; tools: Tool[] }[] = [
       { id: 'watermark', icon: 'watermark', label: 'Watermark', href: '/tools/watermark' },
       { id: 'timestamp', icon: 'time-outline', label: 'Timestamp', href: '/tools/timestamp' },
       { id: 'erase-marks', icon: 'color-wand-outline', label: 'Erase marks', href: '/tools/erase-marks' },
+      { id: 'redact', icon: 'eye-off-outline', label: 'Redact', href: '/tools/redact' },
     ],
   },
   {
     title: 'Convert',
     tools: [
       { id: 'extract-text', icon: 'reader-outline', label: 'Extract text', href: '/tools/extract-text' },
+      { id: 'qr', icon: 'qr-code-outline', label: 'QR code', href: '/tools/qr' },
       { id: 'extract', icon: 'cut-outline', label: 'Extract pages', href: '/tools/extract' },
       { id: 'long-image', icon: 'long-image', label: 'Long image', href: '/tools/long-image' },
     ],

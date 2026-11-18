@@ -613,3 +613,40 @@ describe('long documents print in bounded runs (r7 #7)', () => {
     expect(mockPrint).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('page numbers on export', () => {
+  const { pageNumberLabel, pageNumberHtml } = jest.requireActual('../lib/pdf') as typeof import('../lib/pdf');
+
+  test('labels: off, "3", "3 of 12"', () => {
+    expect(pageNumberLabel('off', 2, 12)).toBe('');
+    expect(pageNumberLabel(undefined, 2, 12)).toBe('');
+    expect(pageNumberLabel('number', 2, 12)).toBe('3');
+    expect(pageNumberLabel('of-total', 2, 12)).toBe('3 of 12');
+    expect(pageNumberHtml('off', 0, 1)).toBe('');
+  });
+
+  test('every sheet gets its number, bottom-centre on the paper, with the total across runs', async () => {
+    native.mergePdfs = jest.fn().mockResolvedValue('file:///merged.pdf');
+    // Portrait, landscape, portrait: three runs, three print jobs.
+    sizesByUri = { 'file:///b.jpg': { width: 1600, height: 1200 } };
+    await generatePdf(['file:///a.jpg', 'file:///b.jpg', 'file:///c.jpg'], { pageSize: 'A4', pageNumbers: 'of-total' });
+    const htmls = mockPrint.mock.calls.map(c => c[0].html as string);
+    expect(htmls).toHaveLength(3);
+    expect(htmls[0]).toContain('<div class="pn"><span>1 of 3</span></div>');
+    expect(htmls[1]).toContain('<div class="pn"><span>2 of 3</span></div>');
+    expect(htmls[2]).toContain('<div class="pn"><span>3 of 3</span></div>');
+    // On the sheet (outside the image box), sized in PDF points.
+    expect(htmls[0]).toMatch(/<\/div><div class="pn">.*<\/div><\/div>/);
+    expect(htmls[0]).toMatch(/\.pn\{position:absolute;left:0;right:0;bottom:calc\(14 \* var\(--pt\)\)/);
+  });
+
+  test('off by default: no number, and the searchable text layer is unchanged', async () => {
+    await generatePdf(['file:///a.jpg'], { searchable: true });
+    expect(htmlOf()).not.toContain('class="pn"');
+    await generatePdf(['file:///a.jpg'], { searchable: true, pageNumbers: 'number' });
+    const numbered = mockPrint.mock.calls[1][0].html as string;
+    expect(numbered).toContain('<div class="pn"><span>1</span></div>');
+    expect(numbered).toContain('Total &lt;due&gt; &amp; paid');
+    expect(numbered).toContain('class="t"');
+  });
+});

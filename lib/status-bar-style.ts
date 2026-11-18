@@ -3,8 +3,8 @@
 // React so it can be tested.
 
 // Routes whose chrome is always dark (the viewer and its crop modal, annotate,
-// the QR camera): the status bar is light there whatever the theme.
-const CHROME_ROUTES = ['/viewer', '/annotate', '/tools/qr'];
+// the QR camera, the document camera): the status bar is light there whatever the theme.
+const CHROME_ROUTES = ['/viewer', '/annotate', '/tools/qr', '/camera'];
 
 /** 'light' = white clock and battery, 'dark' = black. */
 export function statusBarStyleFor(pathname: string, isDark: boolean): 'light' | 'dark' {

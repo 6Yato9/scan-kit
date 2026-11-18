@@ -183,6 +183,17 @@ export const Ink = {
   stampBg: 'rgba(255,255,255,0.85)',
 } as const;
 
+/**
+ * Highlighter colours (Markup). Content like Ink: drawn opaque on their own
+ * layer and multiplied onto the page, so dark print shows through.
+ */
+export const Highlight = {
+  yellow: '#ffe45e',
+  green: '#a6ee8f',
+  pink: '#ffa8d2',
+  blue: '#a3dcff',
+} as const;
+
 // ---------------------------------------------------------------------------
 // Layout and type scales. Use these instead of ad-hoc numbers so every screen
 // shares one rhythm.

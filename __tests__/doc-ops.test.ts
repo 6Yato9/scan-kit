@@ -86,6 +86,19 @@ test('copyPagesWithOriginals copies pages and their .orig shadows to the right i
   expect(`${dir('dst')}/page-3.orig.jpg` in mockFiles).toBe(false);
 });
 
+test('copyPagesWithOriginals carries source photos and geometry (R12), and clears stale ones at the destination', () => {
+  const src = doc('src', 2);
+  mockFiles[`${dir('src')}/page-0.src.jpg`] = 'src-0-photo';
+  mockFiles[`${dir('src')}/page-0.src.json`] = 'src-0-geo';
+  mockFiles[`${dir('dst')}/page-4.src.jpg`] = 'stale-photo';
+  mockFiles[`${dir('dst')}/page-4.src.json`] = 'stale-geo';
+  copyPagesWithOriginals(src, 'dst', 3);
+  expect(mockFiles[`${dir('dst')}/page-3.src.jpg`]).toBe('src-0-photo');
+  expect(mockFiles[`${dir('dst')}/page-3.src.json`]).toBe('src-0-geo');
+  expect(`${dir('dst')}/page-4.src.jpg` in mockFiles).toBe(false);
+  expect(`${dir('dst')}/page-4.src.json` in mockFiles).toBe(false);
+});
+
 test('combinePageMeta keeps filters aligned and collapses all-default metadata', () => {
   const a = doc('a', 2, { filters: ['bw', 'original'] });
   const b = doc('b', 1);

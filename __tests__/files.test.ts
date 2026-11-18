@@ -182,7 +182,9 @@ describe('copyDocumentFiles', () => {
     const pages = ['file:///docs/scan-kit/src/page-0.jpg', 'file:///docs/scan-kit/src/page-1.jpg'];
     // A document that was never filtered has no .orig shadows to carry across.
     for (const i of [0, 1]) {
-      (new RawFile(new RawDirectory('file:///documents', 'scan-kit', 'src'), `page-${i}.orig.jpg`) as any).exists = false;
+      for (const suffix of ['.orig.jpg', '.src.jpg', '.src.json']) {
+        (new RawFile(new RawDirectory('file:///documents', 'scan-kit', 'src'), `page-${i}${suffix}`) as any).exists = false;
+      }
     }
     const uris = copyDocumentFiles('src', 'dest', pages);
     expect(mockCopy).toHaveBeenCalledTimes(2);
@@ -695,8 +697,8 @@ describe('restorePageWithShadow (retake Undo) never deletes before it has a copy
     const uri = stash('OLD', 'OLD-orig');
     mockCopy.mockClear();
     restorePageWithShadow(uri, 'u5', 0);
-    const staged = mockCopy.mock.calls.map(c => (c[0] as any).uri).find((u: string) => /restore-\d+\.orig\.jpg$/.test(u));
-    expect(staged).toMatch(/^file:\/\/\/Library\/Caches\/+page-undo\/restore-\d+\.orig\.jpg$/);
+    const staged = mockCopy.mock.calls.map(c => (c[0] as any).uri).find((u: string) => /restore-[\d-]+\.orig\.jpg$/.test(u));
+    expect(staged).toMatch(/^file:\/\/\/Library\/Caches\/+page-undo\/restore-[\d-]+\.orig\.jpg$/);
     // Moved into place afterwards: nothing is left in the staging folder.
     expect(fileContents[staged!]).toBeUndefined();
     expect(read('u5', 'page-0.orig.jpg')).toBe('OLD-orig');
@@ -1003,5 +1005,131 @@ describe('Open-in staging is swept (r7 #3)', () => {
     new MockDirectory({ uri: 'file:///documents' }, 'Inbox').list = jest.fn(() => [inbox]);
     expect(sweepTempLeftovers(now)).toBe(0);
     expect(inbox.exists).toBe(true);
+  });
+});
+
+// ── R12: source photos (page-N.src.jpg) and their geometry (page-N.src.json) ──
+// They are page shadows like .orig: every operation must carry them with their
+// page, and never leave one paired with another page.
+
+describe('source photos travel with their pages (R12)', () => {
+  beforeEach(() => jest.clearAllMocks());
+  /** Marks files that hold no seeded bytes as absent (the mock defaults to "exists"). */
+  const absent = (docId: string, ...names: string[]) => {
+    for (const n of names) (new MockFile(docDirOf(docId), n) as any).exists = false;
+  };
+  const family = (docId: string, i: number) =>
+    [read(docId, `page-${i}.jpg`), read(docId, `page-${i}.orig.jpg`), read(docId, `page-${i}.src.jpg`), read(docId, `page-${i}.src.json`)];
+
+  test('deleteSinglePage shifts source photos and geometry with their pages', () => {
+    seedFile('s1', 'page-0.jpg', 'A'); seedFile('s1', 'page-0.src.jpg', 'A-src'); seedFile('s1', 'page-0.src.json', 'A-geo');
+    seedFile('s1', 'page-1.jpg', 'B'); absent('s1', 'page-1.orig.jpg', 'page-1.src.jpg', 'page-1.src.json');
+    seedFile('s1', 'page-2.jpg', 'C'); seedFile('s1', 'page-2.orig.jpg', 'C-orig'); seedFile('s1', 'page-2.src.jpg', 'C-src'); seedFile('s1', 'page-2.src.json', 'C-geo');
+    absent('s1', 'page-0.orig.jpg');
+    deleteSinglePage('s1', 0, 3);
+    expect(family('s1', 0)).toEqual(['B', undefined, undefined, undefined]);
+    expect(family('s1', 1)).toEqual(['C', 'C-orig', 'C-src', 'C-geo']);
+    expect(family('s1', 2)).toEqual([undefined, undefined, undefined, undefined]);
+  });
+
+  test('reorderPages moves source photos and geometry with their pages, and clears a slot whose page has none', () => {
+    seedFile('s2', 'page-0.jpg', 'A'); seedFile('s2', 'page-0.src.jpg', 'A-src'); seedFile('s2', 'page-0.src.json', 'A-geo');
+    seedFile('s2', 'page-1.jpg', 'B'); absent('s2', 'page-1.src.jpg', 'page-1.src.json');
+    absent('s2', 'page-0.orig.jpg', 'page-1.orig.jpg');
+    reorderPages('s2', [1, 0]);
+    expect(family('s2', 0)).toEqual(['B', undefined, undefined, undefined]);
+    expect(family('s2', 1)).toEqual(['A', undefined, 'A-src', 'A-geo']);
+    expect(Object.keys(fileContents).filter(u => /tmp|commit/.test(u))).toEqual([]);
+  });
+
+  test('an interrupted reorder is finished for source files too (page-tmp-N.src.*)', async () => {
+    seedFile('s3', 'reorder.commit', '');
+    seedFile('s3', 'page-tmp-0.src.jpg', 'B-src');
+    seedFile('s3', 'page-tmp-0.src.json', 'B-geo');
+    seedFile('s3', 'page-0.jpg', 'B');
+    rootWith(listFromContents('s3'));
+    await garbageCollectOrphans(['s3']);
+    expect(read('s3', 'page-0.src.jpg')).toBe('B-src');
+    expect(read('s3', 'page-0.src.json')).toBe('B-geo');
+    expect(read('s3', 'page-tmp-0.src.jpg')).toBeUndefined();
+  });
+
+  test('the sweep never deletes a referenced source; it deletes a half-copied one (.src.part.jpg)', async () => {
+    seedFile('s4', 'page-0.jpg', 'A');
+    seedFile('s4', 'page-0.src.jpg', 'A-src');
+    seedFile('s4', 'page-0.src.json', 'A-geo');
+    seedFile('s4', 'page-1.src.part.jpg', 'half');
+    rootWith(listFromContents('s4'));
+    await garbageCollectOrphans(['s4']);
+    expect(read('s4', 'page-0.src.jpg')).toBe('A-src');
+    expect(read('s4', 'page-0.src.json')).toBe('A-geo');
+    expect(read('s4', 'page-1.src.part.jpg')).toBeUndefined();
+    expect(read('s4', 'page-1.src.jpg')).toBeUndefined();
+  });
+
+  test('copyPageWithShadow carries the source, and clears a stale one when the copied page has none', () => {
+    seedFile('from', 'page-3.jpg', 'P'); seedFile('from', 'page-3.src.jpg', 'P-src'); seedFile('from', 'page-3.src.json', 'P-geo');
+    absent('from', 'page-3.orig.jpg');
+    copyPageWithShadow(`${DOCS}/from/page-3.jpg?v=9`, 'to', 0);
+    expect(family('to', 0)).toEqual(['P', undefined, 'P-src', 'P-geo']);
+
+    seedFile('from', 'page-4.jpg', 'Q'); absent('from', 'page-4.orig.jpg', 'page-4.src.jpg', 'page-4.src.json');
+    copyPageWithShadow(`${DOCS}/from/page-4.jpg`, 'to', 0); // over the slot that has a source
+    expect(family('to', 0)).toEqual(['Q', undefined, undefined, undefined]);
+  });
+
+  test('copyDocumentFiles (duplicate) carries source photos and geometry', () => {
+    seedFile('dupsrc', 'page-0.jpg', 'A'); seedFile('dupsrc', 'page-0.orig.jpg', 'A-orig');
+    seedFile('dupsrc', 'page-0.src.jpg', 'A-src'); seedFile('dupsrc', 'page-0.src.json', 'A-geo');
+    copyDocumentFiles('dupsrc', 'dupdest', [`${DOCS}/dupsrc/page-0.jpg`]);
+    expect(family('dupdest', 0)).toEqual(['A', 'A-orig', 'A-src', 'A-geo']);
+  });
+
+  test('restorePageWithShadow puts a stashed source back with its page', () => {
+    const stash = 'file:///Library/Caches/page-undo/1';
+    for (const [n, c] of [['page-0.jpg', 'OLD'], ['page-0.orig.jpg', 'OLD-orig'], ['page-0.src.jpg', 'OLD-src'], ['page-0.src.json', 'OLD-geo']]) {
+      const f: any = new MockFile(`${stash}/${n}`); f.exists = true; fileContents[f.uri] = c;
+    }
+    seedFile('rs', 'page-0.jpg', 'NEW'); seedFile('rs', 'page-0.src.jpg', 'NEW-src'); seedFile('rs', 'page-0.src.json', 'NEW-geo');
+    restorePageWithShadow(`${stash}/page-0.jpg`, 'rs', 0);
+    expect(family('rs', 0)).toEqual(['OLD', 'OLD-orig', 'OLD-src', 'OLD-geo']);
+  });
+
+  test('restorePageWithShadow from a stash without a source leaves the page\'s own source alone', () => {
+    const stash = 'file:///Library/Caches/stamp/1';
+    for (const [n, c] of [['page-0.jpg', 'PRE'], ['page-0.orig.jpg', 'PRE-orig']]) {
+      const f: any = new MockFile(`${stash}/${n}`); f.exists = true; fileContents[f.uri] = c;
+    }
+    for (const n of ['page-0.src.jpg', 'page-0.src.json']) (new MockFile(`${stash}/${n}`) as any).exists = false;
+    seedFile('rs2', 'page-0.jpg', 'STAMPED'); seedFile('rs2', 'page-0.orig.jpg', 'STAMPED-orig');
+    seedFile('rs2', 'page-0.src.jpg', 'SRC'); seedFile('rs2', 'page-0.src.json', 'GEO');
+    restorePageWithShadow(`${stash}/page-0.jpg`, 'rs2', 0);
+    expect(family('rs2', 0)).toEqual(['PRE', 'PRE-orig', 'SRC', 'GEO']);
+  });
+
+  test('a document without sources gets no source files from any of these operations', () => {
+    seedFile('plain', 'page-0.jpg', 'A'); seedFile('plain', 'page-0.orig.jpg', 'A-orig');
+    seedFile('plain', 'page-1.jpg', 'B');
+    absent('plain', 'page-1.orig.jpg', 'page-0.src.jpg', 'page-0.src.json', 'page-1.src.jpg', 'page-1.src.json');
+    reorderPages('plain', [1, 0]);
+    copyDocumentFiles('plain', 'plain-copy', [`${DOCS}/plain/page-0.jpg`, `${DOCS}/plain/page-1.jpg`]);
+    deleteSinglePage('plain', 0, 2);
+    // (The mock leaves keys without bytes for files it was told about; only bytes count.)
+    expect(Object.keys(fileContents).filter(u => /\.src\./.test(u) && fileContents[u] !== undefined)).toEqual([]);
+    expect(family('plain', 0)).toEqual(['A', 'A-orig', undefined, undefined]);
+    expect(family('plain-copy', 1)).toEqual(['A', 'A-orig', undefined, undefined]);
+  });
+
+  test('sweepConvertLeftovers removes stray source files of a document that is a PDF again', async () => {
+    const now = 10_000_000_000;
+    seedFile('cv', 'document.pdf', 'PDF');
+    seedFile('cv', 'page-0.src.jpg', 'S');
+    seedFile('cv', 'page-0.src.json', 'G');
+    listFromContents('cv');
+    const rec = { id: 'cv', pages: [], pdfUri: `${DOCS}/cv/document.pdf`, updatedAt: 1 };
+    await sweepConvertLeftovers([rec], async (_id, act) => act(rec), now);
+    expect(read('cv', 'page-0.src.jpg')).toBeUndefined();
+    expect(read('cv', 'page-0.src.json')).toBeUndefined();
+    expect(read('cv', 'document.pdf')).toBe('PDF');
   });
 });

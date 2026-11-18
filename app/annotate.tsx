@@ -1,4 +1,8 @@
 // app/annotate.tsx
+// Markup: pen, highlighter, text, shapes and eraser on a page, with undo/redo
+// for everything and two-finger zoom. The drawing runs in a LocalWebView
+// (lib/markup-html.ts + lib/markup-core.ts); Done draws the marks into the page
+// (and its unfiltered .orig shadow) at full size, exactly as previewed.
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -6,6 +10,7 @@ import {
   Pressable,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { WebView } from 'react-native-webview';
@@ -20,194 +25,72 @@ import { getDocuments, patchDocument } from '@/lib/storage';
 import { originalSideUri, originalUri, pageSideUri, promoteOriginalSide, promotePageSide } from '@/lib/files';
 import { pageFileUri } from '@/lib/image';
 import { bakePage, runPageEdit } from '@/lib/bake';
-import { HIT, Ink, Spacing } from '@/lib/theme';
-import { useTheme } from '@/contexts/theme-context';
+import { buildMarkupHtml, type MarkupConfig } from '@/lib/markup-html';
+import { Highlight, HIT, Ink, Radius, Spacing, Type } from '@/lib/theme';
+import { DarkThemeScope, useTheme } from '@/contexts/theme-context';
 import { HeaderTextButton, ScreenHeader } from '@/components/screen-header';
+import { BottomSheet, SheetHeader } from '@/components/bottom-sheet';
+import { PrimaryButton } from '@/components/primary-button';
 import { FilterBaker } from '@/components/filter-baker';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
+import { selection, tapLight } from '@/lib/haptics';
 import type { Document, PageAdjustment, PageFilter } from '@/types/document';
 
-// This screen's chrome is always dark (like the viewer): it uses the theme's
-// `chrome*` colours, never the light/dark foregrounds. Ink colours are content,
-// not UI, so they are fixed.
-const PEN_COLORS = [
-  { id: 'black', hex: Ink.black, label: 'Black' },
-  { id: 'red',   hex: Ink.red,   label: 'Red' },
-  { id: 'blue',  hex: Ink.blue,  label: 'Blue' },
-  { id: 'green', hex: Ink.green, label: 'Green' },
-];
+type IconName = React.ComponentProps<typeof Ionicons>['name'];
+type Tool = MarkupConfig['tool'];
+type Shape = MarkupConfig['shape'];
 
+// This screen's chrome is always dark (like the viewer): it uses the theme's
+// `chrome*` colours. Ink and highlight colours are content, not UI, so they
+// are fixed (lib/theme Ink / Highlight).
+const INK_COLORS = [
+  { hex: Ink.black, label: 'Black' },
+  { hex: Ink.red, label: 'Red' },
+  { hex: Ink.blue, label: 'Blue' },
+  { hex: Ink.green, label: 'Green' },
+];
+const HIGHLIGHT_COLORS = [
+  { hex: Highlight.yellow, label: 'Yellow' },
+  { hex: Highlight.green, label: 'Green' },
+  { hex: Highlight.pink, label: 'Pink' },
+  { hex: Highlight.blue, label: 'Blue' },
+];
+/** Widths in screen points: constant on screen, so zooming in draws finer. */
 const PEN_SIZES = [
   { size: 2, label: 'Fine' },
   { size: 4, label: 'Medium' },
   { size: 8, label: 'Bold' },
 ];
+const HIGHLIGHT_SIZES = [
+  { size: 14, label: 'Narrow' },
+  { size: 24, label: 'Wide' },
+];
+const ERASER_SIZES = [
+  { size: 14, label: 'Small eraser' },
+  { size: 32, label: 'Large eraser' },
+];
+/** Text sizes in points at the page's fitted size (they scale with the page). */
+const TEXT_SIZES = [
+  { size: 14, icon: 13, label: 'Small text' },
+  { size: 20, icon: 17, label: 'Medium text' },
+  { size: 30, icon: 22, label: 'Large text' },
+];
+const SHAPES: { id: Shape; icon: IconName; label: string }[] = [
+  { id: 'rect', icon: 'square-outline', label: 'Rectangle' },
+  { id: 'ellipse', icon: 'ellipse-outline', label: 'Oval' },
+  { id: 'line', icon: 'remove-outline', label: 'Line' },
+  { id: 'arrow', icon: 'arrow-forward-outline', label: 'Arrow' },
+];
+const TOOLS: { id: Tool; icon: IconName; label: string }[] = [
+  { id: 'pen', icon: 'pencil-outline', label: 'Pen' },
+  { id: 'highlighter', icon: 'brush-outline', label: 'Highlight' },
+  { id: 'text', icon: 'text-outline', label: 'Text' },
+  { id: 'shape', icon: 'shapes-outline', label: 'Shape' },
+  { id: 'eraser', icon: 'backspace-outline', label: 'Eraser' },
+];
+const SHAPE_WIDTH = 3;
 
-function buildHtml(imageSrc: string, origSrc: string | null, chrome: string): string {
-  return `<!DOCTYPE html>
-<html>
-<head>
-<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<style>
-* { margin:0; padding:0; box-sizing:border-box; }
-body { background:${chrome}; overflow:hidden; width:100vw; height:100vh; }
-#wrap { position:relative; width:100vw; height:100vh; display:flex; align-items:center; justify-content:center; }
-#bg { max-width:100%; max-height:100%; display:block; object-fit:contain; pointer-events:none; user-select:none; }
-#c { position:absolute; top:0; left:0; width:100%; height:100%; touch-action:none; cursor:crosshair; }
-</style>
-</head>
-<body>
-<div id="wrap">
-  <img id="bg" src="${imageSrc}" crossorigin="anonymous" />
-  <canvas id="c"></canvas>
-</div>
-${origSrc ? `<img id="orig" src="${origSrc}" crossorigin="anonymous" style="display:none" />` : ''}
-<script>
-const canvas = document.getElementById('c');
-const ctx = canvas.getContext('2d');
-const wrap = document.getElementById('wrap');
-const img = document.getElementById('bg');
-
-function resize() {
-  canvas.width = wrap.clientWidth;
-  canvas.height = wrap.clientHeight;
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  applyTool();
-}
-
-let currentColor = '${Ink.black}';
-let currentWidth = 4;
-let isEraser = false;
-let drawing = false;
-let history = [];
-let dirty = false;
-function post(msg) { if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(msg); }
-
-function applyTool() {
-  if (isEraser) {
-    ctx.globalCompositeOperation = 'destination-out';
-    ctx.strokeStyle = '${Ink.black}'; // erases via destination-out; only alpha matters
-    ctx.lineWidth = 24;
-  } else {
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.strokeStyle = currentColor;
-    ctx.lineWidth = currentWidth;
-  }
-}
-
-function saveHistory() {
-  history.push(ctx.getImageData(0, 0, canvas.width, canvas.height));
-  if (history.length > 20) history.shift();
-}
-
-canvas.addEventListener('touchstart', e => {
-  e.preventDefault();
-  drawing = true;
-  saveHistory();
-  if (!dirty) { dirty = true; post('DIRTY'); }
-  applyTool();
-  const t = e.touches[0];
-  const r = canvas.getBoundingClientRect();
-  ctx.beginPath();
-  ctx.moveTo(t.clientX - r.left, t.clientY - r.top);
-}, { passive: false });
-
-canvas.addEventListener('touchmove', e => {
-  e.preventDefault();
-  if (!drawing) return;
-  const t = e.touches[0];
-  const r = canvas.getBoundingClientRect();
-  ctx.lineTo(t.clientX - r.left, t.clientY - r.top);
-  ctx.stroke();
-}, { passive: false });
-
-canvas.addEventListener('touchend', () => { drawing = false; });
-
-function setColor(hex) {
-  currentColor = hex;
-  isEraser = false;
-  applyTool();
-}
-
-function setWidth(w) {
-  currentWidth = w;
-  if (!isEraser) applyTool();
-}
-
-function setEraser() {
-  isEraser = true;
-  applyTool();
-}
-
-function undo() {
-  if (history.length === 0) return;
-  ctx.putImageData(history.pop(), 0, 0);
-}
-
-function clearAll() {
-  saveHistory();
-  ctx.save();
-  ctx.globalCompositeOperation = 'source-over';
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.restore();
-  applyTool();
-}
-
-function getResult() {
-  try {
-    const bg = document.getElementById('bg');
-    const natW = bg.naturalWidth || canvas.width;
-    const natH = bg.naturalHeight || canvas.height;
-
-    // How the image was displayed (object-fit contain inside wrap).
-    const wrapW = wrap.clientWidth;
-    const wrapH = wrap.clientHeight;
-    const scale = Math.min(wrapW / natW, wrapH / natH);
-    const dispW = natW * scale;
-    const dispH = natH * scale;
-    const offX = (wrapW - dispW) / 2;
-    const offY = (wrapH - dispH) / 2;
-
-    // The ink alone, mapped to the page's natural pixels.
-    const ink = document.createElement('canvas');
-    ink.width = natW;
-    ink.height = natH;
-    const ictx = ink.getContext('2d');
-    ictx.translate(-offX / scale, -offY / scale);
-    ictx.scale(1 / scale, 1 / scale);
-    ictx.drawImage(canvas, 0, 0);
-
-    function compose(base, w, h) {
-      const out = document.createElement('canvas');
-      out.width = w;
-      out.height = h;
-      const octx = out.getContext('2d');
-      octx.drawImage(base, 0, 0, w, h);
-      octx.drawImage(ink, 0, 0, w, h);
-      return out.toDataURL('image/jpeg', 0.92);
-    }
-
-    // The same ink goes onto the unfiltered .orig shadow, which every later
-    // filter change re-derives from — otherwise the next filter erases it.
-    const orig = document.getElementById('orig');
-    const result = { page: compose(bg, natW, natH), orig: null };
-    if (orig && orig.naturalWidth) result.orig = compose(orig, orig.naturalWidth, orig.naturalHeight);
-    post('RESULT:' + JSON.stringify(result));
-  } catch (e) {
-    post('ERROR:' + (e && e.message ? e.message : 'unknown'));
-  }
-}
-
-window.addEventListener('resize', resize);
-img.onload = resize;
-if (img.complete) resize();
-</script>
-</body>
-</html>`;
-}
-
-type Tool = 'pen' | 'eraser';
+type TextDraft = { mode: 'new'; x: number; y: number } | { mode: 'edit'; id: string };
 
 export default function AnnotateScreen() {
   const { docId, pageIndex: pageIndexStr } = useLocalSearchParams<{ docId: string; pageIndex: string }>();
@@ -215,18 +98,42 @@ export default function AnnotateScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
-  const chrome = colors.chrome;
   const webRef = useRef<WebView>(null);
   const [html, setHtml] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [dirty, setDirty] = useState(false);
-  const [penColor, setPenColor] = useState<string>(PEN_COLORS[0].hex);
-  const [penSize, setPenSize] = useState(4);
+  const [history, setHistory] = useState({ canUndo: false, canRedo: false, count: 0 });
   const [tool, setTool] = useState<Tool>('pen');
+  const [inkColor, setInkColor] = useState<string>(Ink.black);
+  const [penSize, setPenSize] = useState(4);
+  const [hlColor, setHlColor] = useState<string>(Highlight.yellow);
+  const [hlSize, setHlSize] = useState(24);
+  const [eraserSize, setEraserSize] = useState(32);
+  const [shape, setShape] = useState<Shape>('rect');
+  const [textSize, setTextSize] = useState(20);
+  // Text sheet
+  const [draft, setDraft] = useState<TextDraft | null>(null);
+  const [draftText, setDraftText] = useState('');
+  const [draftColor, setDraftColor] = useState<string>(Ink.black);
+  const [draftSize, setDraftSize] = useState(20);
   // The page's filter/adjustment when the screen opened. If a bake changes them
   // while the user draws, the page pixels we composite onto are stale and the
   // page is re-baked from the (now inked) .orig after saving.
   const loadedLook = useRef<string>('');
+  const dirty = history.count > 0;
+
+  const config = (): MarkupConfig => ({
+    tool,
+    color: inkColor,
+    width: penSize,
+    hlColor,
+    hlWidth: hlSize,
+    eraserWidth: eraserSize,
+    shape,
+    shapeWidth: SHAPE_WIDTH,
+  });
+  const configRef = useRef(config);
+  configRef.current = config;
 
   useEffect(() => {
     let cancelled = false;
@@ -244,14 +151,32 @@ export default function AnnotateScreen() {
       loadedLook.current = lookOf(found, pageIndex);
       const uri = pageFileUri(found.id, pageIndex);
       const orig = new File(originalUri(found.id, pageIndex));
-      // Load the page directly via file:// rather than a base64 data URL — saves
-      // megabytes of JS string + WebView heap on large scans. The query defeats
-      // WebKit's image cache after an in-place edit such as a rotate.
+      // Loaded by file:// URL (LocalWebView grants read access to the app's
+      // container — a device requires it). The query defeats WebKit's image
+      // cache after an in-place edit such as a rotate.
       const bust = `?t=${found.updatedAt}`;
-      setHtml(buildHtml(uri + bust, orig.exists ? orig.uri + bust : null, chrome));
+      setHtml(buildMarkupHtml(uri + bust, orig.exists ? orig.uri + bust : null, {
+        background: colors.chrome,
+        guide: colors.chromeAccent,
+        config: configRef.current(),
+      }));
     })();
     return () => { cancelled = true; };
-  }, [docId, pageIndex, router, chrome]);
+    // The page is built once; later tool changes go through setConfig.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [docId, pageIndex, router]);
+
+  const inject = (js: string) => {
+    if (!webRef.current || !loaded) return;
+    webRef.current.injectJavaScript(`${js}; true;`);
+  };
+
+  // Every option change reaches the page.
+  useEffect(() => {
+    if (!loaded || !webRef.current) return;
+    webRef.current.injectJavaScript(`setConfig(${JSON.stringify(config())}); true;`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded, tool, inkColor, penSize, hlColor, hlSize, eraserSize, shape]);
 
   const save = async (payload: { page: string; orig: string | null }) => {
     const strip = (d: string) => d.replace(/^data:image\/jpeg;base64,/, '');
@@ -287,20 +212,49 @@ export default function AnnotateScreen() {
     }
   };
 
+  const openText = (next: TextDraft, text: string, color: string, size: number) => {
+    setDraftText(text);
+    setDraftColor(color);
+    setDraftSize(nearestTextSize(size));
+    setDraft(next);
+  };
+
   const handleMessage = async (event: { nativeEvent: { data: string } }) => {
     const data = event.nativeEvent.data;
-    if (data === 'DIRTY') {
-      setDirty(true);
+    const body = (prefix: string) => JSON.parse(data.slice(prefix.length));
+    if (data.startsWith('READY:')) {
+      setLoaded(true);
+      return;
+    }
+    if (data === 'LOAD_ERROR') {
+      Alert.alert('Couldn’t open this page for markup', 'Close Markup and try again.', [
+        { text: 'Close', onPress: () => router.back() },
+      ]);
+      return;
+    }
+    if (data.startsWith('STATE:')) {
+      setHistory(body('STATE:'));
+      return;
+    }
+    if (data.startsWith('TEXT_NEW:')) {
+      const { x, y } = body('TEXT_NEW:') as { x: number; y: number };
+      openText({ mode: 'new', x, y }, '', inkColor, textSize);
+      return;
+    }
+    if (data.startsWith('TEXT_EDIT:')) {
+      const t = body('TEXT_EDIT:') as { id: string; text: string; color: string; size: number };
+      openText({ mode: 'edit', id: t.id }, t.text, t.color, t.size);
       return;
     }
     if (data.startsWith('ERROR:')) {
       setSaving(false);
-      Alert.alert("Couldn't save your markup", 'Try again.');
+      console.error('Markup render failed', data);
+      Alert.alert('Couldn’t save your markup', 'Try again.');
       return;
     }
     if (!data.startsWith('RESULT:')) return;
     try {
-      const payload = JSON.parse(data.slice('RESULT:'.length)) as { page: string; orig: string | null };
+      const payload = body('RESULT:') as { page: string; orig: string | null };
       await save(payload);
       // The drawing comes back from the WebView on its own time: if the app
       // was locked meanwhile, /lock is the top screen and back() would close
@@ -310,23 +264,15 @@ export default function AnnotateScreen() {
       navigateWhenUnlocked(() => router.back());
     } catch (err) {
       console.error('Annotate save failed', err);
-      Alert.alert("Couldn't save your markup", 'There may not be enough free space. Try again.');
+      Alert.alert('Couldn’t save your markup', 'There may not be enough free space. Try again.');
     } finally {
       setSaving(false);
     }
   };
 
-  const inject = (js: string) => {
-    if (!webRef.current || !html) return;
-    webRef.current.injectJavaScript(`${js}; true;`);
-  };
-
-  const ready = html !== null;
-
-
   const handleDone = () => {
-    if (!ready || saving) return;
-    if (!dirty) {
+    if (saving) return;
+    if (!dirty || !loaded) {
       router.back();
       return;
     }
@@ -339,56 +285,158 @@ export default function AnnotateScreen() {
       router.back();
       return;
     }
-    Alert.alert('Discard your markup?', 'The changes you drew on this page will be lost.', [
+    Alert.alert('Discard your markup?', 'The changes you made on this page will be lost.', [
       { text: 'Keep editing', style: 'cancel' },
       { text: 'Discard', style: 'destructive', onPress: () => router.back() },
     ]);
   };
 
-  const selectColor = (hex: string) => {
-    if (!ready) return;
-    setPenColor(hex);
-    setTool('pen');
-    inject(`setColor('${hex}')`);
-  };
-
-  const selectSize = (size: number) => {
-    if (!ready) return;
-    setPenSize(size);
-    if (tool === 'eraser') {
-      setTool('pen');
-      inject(`setColor('${penColor}')`);
+  const commitText = () => {
+    if (!draft) return;
+    const text = draftText.replace(/\s+$/, '');
+    if (draft.mode === 'new') {
+      if (text) inject(`addText(${draft.x}, ${draft.y}, ${JSON.stringify(text)}, ${JSON.stringify(draftColor)}, ${draftSize})`);
+    } else if (text) {
+      inject(`updateText(${JSON.stringify(draft.id)}, ${JSON.stringify(text)}, ${JSON.stringify(draftColor)}, ${draftSize})`);
+    } else {
+      inject(`deleteText(${JSON.stringify(draft.id)})`);
     }
-    inject(`setWidth(${size})`);
+    // The next new text starts with the look just used.
+    setInkColor(draftColor);
+    setTextSize(draftSize);
+    setDraft(null);
   };
 
-  const selectTool = (next: Tool) => {
-    if (!ready) return;
+  const deleteDraftText = () => {
+    if (draft?.mode === 'edit') inject(`deleteText(${JSON.stringify(draft.id)})`);
+    setDraft(null);
+  };
+
+  const pickTool = (next: Tool) => {
+    selection();
     setTool(next);
-    inject(next === 'eraser' ? 'setEraser()' : `setColor('${penColor}')`);
   };
 
-  const toolButton = (
-    icon: React.ComponentProps<typeof Ionicons>['name'],
+  // ── Toolbar pieces ────────────────────────────────────────────────────────
+  const swatches = (list: { hex: string; label: string }[], value: string, onPick: (hex: string) => void, label: string) => (
+    <View style={styles.group} accessibilityRole="radiogroup" accessibilityLabel={label}>
+      {list.map(c => {
+        const active = value === c.hex;
+        return (
+          <Pressable
+            key={c.hex}
+            onPress={() => { selection(); onPick(c.hex); }}
+            style={styles.optionHit}
+            accessibilityRole="radio"
+            accessibilityLabel={c.label}
+            accessibilityState={{ selected: active }}
+          >
+            <View style={[styles.swatchRing, { borderColor: active ? colors.chromeText : 'transparent' }]}>
+              <View style={[styles.swatch, { backgroundColor: c.hex, borderColor: colors.chromeMuted }]} />
+            </View>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+
+  const dots = (list: { size: number; label: string }[], value: number, onPick: (n: number) => void, color: string, scale: (n: number) => number) => (
+    <View style={styles.group} accessibilityRole="radiogroup" accessibilityLabel="Size">
+      {list.map(({ size, label }) => {
+        const active = value === size;
+        const d = scale(size);
+        return (
+          <Pressable
+            key={size}
+            onPress={() => { selection(); onPick(size); }}
+            style={[styles.optionHit, active && { backgroundColor: colors.chromeBorder }]}
+            accessibilityRole="radio"
+            accessibilityLabel={label}
+            accessibilityState={{ selected: active }}
+          >
+            <View style={{ width: d, height: d, borderRadius: d / 2, backgroundColor: color, borderWidth: 1, borderColor: colors.chromeMuted }} />
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+
+  const iconOptions = <T extends string | number>(
+    list: { id: T; icon: IconName; label: string; iconSize?: number }[],
+    value: T,
+    onPick: (v: T) => void,
     label: string,
-    onPress: () => void,
-    active = false,
   ) => (
+    <View style={styles.group} accessibilityRole="radiogroup" accessibilityLabel={label}>
+      {list.map(o => {
+        const active = value === o.id;
+        return (
+          <Pressable
+            key={String(o.id)}
+            onPress={() => { selection(); onPick(o.id); }}
+            style={[styles.optionHit, active && { backgroundColor: colors.chromeBorder }]}
+            accessibilityRole="radio"
+            accessibilityLabel={o.label}
+            accessibilityState={{ selected: active }}
+          >
+            <Ionicons name={o.icon} size={o.iconSize ?? 22} color={active ? colors.chromeAccent : colors.chromeText} />
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+
+  const divider = <View style={[styles.divider, { backgroundColor: colors.chromeBorder }]} />;
+  const textSizeOptions = TEXT_SIZES.map(t => ({ id: t.size, icon: 'text-outline' as IconName, label: t.label, iconSize: t.icon }));
+
+  const options = (() => {
+    switch (tool) {
+      case 'pen':
+        return <>{swatches(INK_COLORS, inkColor, setInkColor, 'Pen color')}{divider}{dots(PEN_SIZES, penSize, setPenSize, inkColor, s => s * 2 + 4)}</>;
+      case 'highlighter':
+        return <>{swatches(HIGHLIGHT_COLORS, hlColor, setHlColor, 'Highlight color')}{divider}{dots(HIGHLIGHT_SIZES, hlSize, setHlSize, hlColor, s => s * 0.75)}</>;
+      case 'text':
+        return <>{swatches(INK_COLORS, inkColor, setInkColor, 'Text color')}{divider}{iconOptions(textSizeOptions, textSize, setTextSize, 'Text size')}</>;
+      case 'shape':
+        return <>{iconOptions(SHAPES, shape, setShape, 'Shape')}{divider}{swatches(INK_COLORS, inkColor, setInkColor, 'Shape color')}</>;
+      case 'eraser':
+        return (
+          <>
+            {dots(ERASER_SIZES, eraserSize, setEraserSize, colors.chromeMuted, s => s * 0.7)}
+            {divider}
+            <Pressable
+              onPress={() => { tapLight(); inject('clearAll()'); }}
+              disabled={!dirty}
+              style={({ pressed }) => [styles.eraseAll, (pressed || !dirty) && { opacity: dirty ? 0.6 : 0.35 }]}
+              accessibilityRole="button"
+              accessibilityLabel="Erase all marks"
+              accessibilityState={{ disabled: !dirty }}
+            >
+              <Ionicons name="trash-outline" size={20} color={colors.chromeText} />
+              <Text allowFontScaling={false} style={[Type.subhead, { color: colors.chromeText }]}>Erase all</Text>
+            </Pressable>
+          </>
+        );
+    }
+  })();
+
+  const hint =
+    tool === 'text' ? 'Tap to add text. Drag text to move it.'
+    : tool === 'shape' ? 'Drag on the page to draw.'
+    : tool === 'eraser' ? 'Erases your marks, never the page.'
+    : null;
+
+  const historyButton = (icon: IconName, label: string, enabled: boolean, onPress: () => void) => (
     <Pressable
-      key={label}
       onPress={onPress}
-      disabled={!ready}
-      style={({ pressed }) => [styles.toolBtn, pressed && { opacity: 0.6 }]}
+      disabled={!enabled}
+      hitSlop={4}
+      style={({ pressed }) => [styles.toolBtn, styles.historyBtn, pressed && { opacity: 0.6 }]}
       accessibilityRole="button"
       accessibilityLabel={label}
-      accessibilityState={{ selected: active, disabled: !ready }}
+      accessibilityState={{ disabled: !enabled }}
     >
-      <View style={[styles.toolIcon, { backgroundColor: active ? colors.chromeBorder : 'transparent' }]}>
-        <Ionicons name={icon} size={22} color={active ? colors.chromeAccent : colors.chromeText} />
-      </View>
-      <Text allowFontScaling={false} style={[styles.toolLabel, { color: active ? colors.chromeAccent : colors.chromeMuted }]}>
-        {label}
-      </Text>
+      <Ionicons name={icon} size={22} color={enabled ? colors.chromeText : colors.chromeBorder} />
     </Pressable>
   );
 
@@ -405,18 +453,11 @@ export default function AnnotateScreen() {
           saving ? (
             <ActivityIndicator color={colors.chromeAccent} style={styles.busy} />
           ) : (
-            <HeaderTextButton
-              title="Done"
-              emphasis
-              color={colors.chromeAccent}
-              disabled={!ready}
-              onPress={handleDone}
-            />
+            <HeaderTextButton title="Done" emphasis color={colors.chromeAccent} disabled={!loaded} onPress={handleDone} />
           )
         }
       />
 
-      {/* Canvas */}
       <View style={styles.canvasArea}>
         {html ? (
           <LocalWebView
@@ -424,72 +465,158 @@ export default function AnnotateScreen() {
             html={html}
             style={[styles.webview, { backgroundColor: colors.chrome }]}
             scrollEnabled={false}
+            bounces={false}
             onMessage={handleMessage}
           />
-        ) : (
-          <ActivityIndicator color={colors.chromeText} style={{ flex: 1 }} />
-        )}
+        ) : null}
+        {!loaded ? (
+          <View style={[StyleSheet.absoluteFill, styles.center, { backgroundColor: colors.chrome }]} pointerEvents="none">
+            <ActivityIndicator color={colors.chromeText} />
+          </View>
+        ) : hint ? (
+          <View style={styles.hintWrap} pointerEvents="none">
+            <View style={[styles.hint, { backgroundColor: colors.chromeRaised, borderColor: colors.chromeBorder }]}>
+              <Text allowFontScaling={false} numberOfLines={1} style={[Type.footnote, { color: colors.chromeText }]}>{hint}</Text>
+            </View>
+          </View>
+        ) : null}
       </View>
 
-      {/* Toolbar */}
-      <View style={[styles.toolbar, { paddingBottom: insets.bottom + Spacing.sm, backgroundColor: colors.chromeRaised, borderTopColor: colors.chromeBorder }]}>
-        <View style={styles.optionsRow}>
-          <View style={styles.group} accessibilityRole="radiogroup" accessibilityLabel="Pen color">
-            {PEN_COLORS.map(c => {
-              const active = tool === 'pen' && penColor === c.hex;
-              return (
-                <Pressable
-                  key={c.id}
-                  onPress={() => selectColor(c.hex)}
-                  style={styles.swatchHit}
-                  accessibilityRole="radio"
-                  accessibilityLabel={c.label}
-                  accessibilityState={{ selected: active }}
-                >
-                  <View style={[styles.swatchRing, { borderColor: active ? colors.chromeText : 'transparent' }]}>
-                    <View style={[styles.swatch, { backgroundColor: c.hex, borderColor: colors.chromeMuted }]} />
-                  </View>
-                </Pressable>
-              );
-            })}
-          </View>
-          <View style={[styles.divider, { backgroundColor: colors.chromeBorder }]} />
-          <View style={styles.group} accessibilityRole="radiogroup" accessibilityLabel="Pen size">
-            {PEN_SIZES.map(({ size, label }) => {
-              const active = penSize === size;
-              return (
-                <Pressable
-                  key={size}
-                  onPress={() => selectSize(size)}
-                  style={[styles.sizeHit, active && { backgroundColor: colors.chromeBorder }]}
-                  accessibilityRole="radio"
-                  accessibilityLabel={label}
-                  accessibilityState={{ selected: active }}
-                >
-                  <View
-                    style={{
-                      width: size * 2 + 2,
-                      height: size * 2 + 2,
-                      borderRadius: size + 1,
-                      backgroundColor: tool === 'eraser' ? colors.chromeMuted : penColor,
-                      borderWidth: 1,
-                      borderColor: colors.chromeMuted,
-                    }}
-                  />
-                </Pressable>
-              );
-            })}
-          </View>
-        </View>
+      <View style={[styles.toolbar, { paddingBottom: insets.bottom + Spacing.xs, backgroundColor: colors.chromeRaised, borderTopColor: colors.chromeBorder }]}>
+        <View style={styles.optionsRow}>{options}</View>
         <View style={styles.toolsRow}>
-          {toolButton('pencil-outline', 'Pen', () => selectTool('pen'), tool === 'pen')}
-          {toolButton('backspace-outline', 'Eraser', () => selectTool('eraser'), tool === 'eraser')}
-          {toolButton('arrow-undo-outline', 'Undo', () => inject('undo()'))}
-          {toolButton('trash-outline', 'Clear', () => inject('clearAll()'))}
+          {historyButton('arrow-undo-outline', 'Undo', loaded && history.canUndo, () => inject('undo()'))}
+          {historyButton('arrow-redo-outline', 'Redo', loaded && history.canRedo, () => inject('redo()'))}
+          <View style={[styles.toolsDivider, { backgroundColor: colors.chromeBorder }]} />
+          {TOOLS.map(t => {
+            const active = tool === t.id;
+            return (
+              <Pressable
+                key={t.id}
+                onPress={() => pickTool(t.id)}
+                style={({ pressed }) => [styles.toolBtn, pressed && { opacity: 0.6 }]}
+                accessibilityRole="button"
+                accessibilityLabel={t.label}
+                accessibilityState={{ selected: active }}
+              >
+                <View style={[styles.toolIcon, { backgroundColor: active ? colors.chromeBorder : 'transparent' }]}>
+                  <Ionicons name={t.icon} size={22} color={active ? colors.chromeAccent : colors.chromeText} />
+                </View>
+                <Text allowFontScaling={false} style={[styles.toolLabel, { color: active ? colors.chromeAccent : colors.chromeMuted }]}>
+                  {t.label}
+                </Text>
+              </Pressable>
+            );
+          })}
         </View>
       </View>
+
+      <DarkThemeScope>
+        <TextSheet
+          draft={draft}
+          text={draftText}
+          onChangeText={setDraftText}
+          color={draftColor}
+          onColor={setDraftColor}
+          size={draftSize}
+          onSize={setDraftSize}
+          onCommit={commitText}
+          onDelete={deleteDraftText}
+          onClose={() => setDraft(null)}
+        />
+      </DarkThemeScope>
     </View>
   );
+}
+
+/** Add or edit a text box: the words, their colour and size. */
+function TextSheet({
+  draft, text, onChangeText, color, onColor, size, onSize, onCommit, onDelete, onClose,
+}: {
+  draft: TextDraft | null;
+  text: string;
+  onChangeText: (t: string) => void;
+  color: string;
+  onColor: (c: string) => void;
+  size: number;
+  onSize: (s: number) => void;
+  onCommit: () => void;
+  onDelete: () => void;
+  onClose: () => void;
+}) {
+  const { colors } = useTheme();
+  const editing = draft?.mode === 'edit';
+  const empty = !text.trim();
+  return (
+    <BottomSheet visible={draft !== null} onClose={onClose}>
+      <SheetHeader title={editing ? 'Edit text' : 'Add text'} />
+      <TextInput
+        value={text}
+        onChangeText={onChangeText}
+        placeholder="Type your text"
+        placeholderTextColor={colors.muted}
+        autoFocus
+        multiline
+        keyboardAppearance="dark"
+        selectionColor={colors.accent}
+        accessibilityLabel="Text"
+        style={[Type.body, styles.textInput, { color: colors.text, backgroundColor: colors.bg }]}
+      />
+      <View style={styles.sheetOptions}>
+        <View style={styles.group} accessibilityRole="radiogroup" accessibilityLabel="Text color">
+          {INK_COLORS.map(c => {
+            const active = color === c.hex;
+            return (
+              <Pressable
+                key={c.hex}
+                onPress={() => { selection(); onColor(c.hex); }}
+                style={styles.optionHit}
+                accessibilityRole="radio"
+                accessibilityLabel={c.label}
+                accessibilityState={{ selected: active }}
+              >
+                <View style={[styles.swatchRing, { borderColor: active ? colors.text : 'transparent' }]}>
+                  <View style={[styles.swatch, { backgroundColor: c.hex, borderColor: colors.muted }]} />
+                </View>
+              </Pressable>
+            );
+          })}
+        </View>
+        <View style={[styles.divider, { backgroundColor: colors.border }]} />
+        <View style={styles.group} accessibilityRole="radiogroup" accessibilityLabel="Text size">
+          {TEXT_SIZES.map(t => {
+            const active = size === t.size;
+            return (
+              <Pressable
+                key={t.size}
+                onPress={() => { selection(); onSize(t.size); }}
+                style={[styles.optionHit, active && { backgroundColor: colors.separator }]}
+                accessibilityRole="radio"
+                accessibilityLabel={t.label}
+                accessibilityState={{ selected: active }}
+              >
+                <Ionicons name="text-outline" size={t.icon} color={active ? colors.accent : colors.text} />
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
+      <View style={styles.sheetActions}>
+        {editing ? (
+          <PrimaryButton title="Delete" icon="trash-outline" variant="destructive" onPress={onDelete} style={styles.flex} />
+        ) : (
+          <PrimaryButton title="Cancel" variant="secondary" onPress={onClose} style={styles.flex} />
+        )}
+        <PrimaryButton title={editing ? 'Done' : 'Add text'} onPress={onCommit} disabled={!editing && empty} style={styles.flex} />
+      </View>
+    </BottomSheet>
+  );
+}
+
+function nearestTextSize(size: number): number {
+  let best = TEXT_SIZES[0].size;
+  for (const t of TEXT_SIZES) if (Math.abs(t.size - size) < Math.abs(best - size)) best = t.size;
+  return best;
 }
 
 /** A comparable snapshot of a page's recorded filter + adjustment. */
@@ -499,11 +626,20 @@ function lookOf(doc: Document, pageIndex: number): string {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  flex: { flex: 1 },
   busy: { minWidth: 60 },
+  center: { alignItems: 'center', justifyContent: 'center' },
   canvasArea: { flex: 1 },
   webview: { flex: 1 },
+  hintWrap: { position: 'absolute', top: Spacing.sm, left: Spacing.gutter, right: Spacing.gutter, alignItems: 'center' },
+  hint: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs + 2,
+    borderRadius: Radius.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
   toolbar: {
-    paddingTop: Spacing.sm,
+    paddingTop: Spacing.xs,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
   optionsRow: {
@@ -511,27 +647,47 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: Spacing.sm,
+    minHeight: HIT + Spacing.xs,
   },
   group: { flexDirection: 'row', alignItems: 'center' },
   divider: { width: StyleSheet.hairlineWidth, height: 28, marginHorizontal: Spacing.sm },
-  swatchHit: { width: HIT, height: HIT, alignItems: 'center', justifyContent: 'center' },
+  optionHit: { width: HIT, height: HIT, borderRadius: HIT / 2, alignItems: 'center', justifyContent: 'center' },
   swatchRing: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     borderWidth: 2,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  swatch: { width: 26, height: 26, borderRadius: 13, borderWidth: 1 },
-  sizeHit: { width: HIT, height: HIT, borderRadius: HIT / 2, alignItems: 'center', justifyContent: 'center' },
+  swatch: { width: 24, height: 24, borderRadius: 12, borderWidth: 1 },
+  eraseAll: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs + 2,
+    minHeight: HIT,
+    paddingHorizontal: Spacing.md,
+  },
   toolsRow: {
     flexDirection: 'row',
-    justifyContent: 'space-around',
-    paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.xs,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.sm,
   },
-  toolBtn: { minWidth: 64, minHeight: HIT, alignItems: 'center', justifyContent: 'center', gap: 2 },
-  toolIcon: { width: 40, height: 32, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  toolsDivider: { width: StyleSheet.hairlineWidth, height: 32 },
+  toolBtn: { flex: 1, minHeight: HIT + 8, alignItems: 'center', justifyContent: 'center', gap: 2 },
+  historyBtn: { flex: 0, width: 44 },
+  toolIcon: { width: 40, height: 30, borderRadius: Radius.sm + 2, alignItems: 'center', justifyContent: 'center' },
   toolLabel: { fontSize: 11, fontWeight: '500' },
+  textInput: {
+    minHeight: 88,
+    maxHeight: 160,
+    borderRadius: Radius.md,
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.md,
+    paddingBottom: Spacing.md,
+    lineHeight: 22,
+  },
+  sheetOptions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: Spacing.sm },
+  sheetActions: { flexDirection: 'row', gap: Spacing.md, marginTop: Spacing.md },
 });

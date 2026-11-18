@@ -1,22 +1,20 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState, ReactNode } from 'react';
-import { ActivityIndicator, Alert, Linking, StyleSheet, Text, View } from 'react-native';
-import DocumentScanner from 'react-native-document-scanner-plugin';
+import { ActivityIndicator, Alert, StyleSheet, Text, View } from 'react-native';
 import { PageFilter } from '@/types/document';
 import { notifySuccess, notifyError } from '@/lib/haptics';
 import { getScanSettings, getDocSettings } from '@/lib/storage';
-import { saveScan, indexDocText } from '@/lib/save-scan';
+import { saveScan, indexDocText, type ScanPageInput } from '@/lib/save-scan';
 import { autoName } from '@/lib/auto-name';
 import { bakePages } from '@/lib/bake';
-import { withSystemUI } from '@/lib/system-ui';
-import { moveScannerOutputToCaches } from '@/lib/files';
-import { takeUncroppedPages } from '@/lib/tool-scan';
+import { alertScanError, scanPagesWithCamera, takeUncroppedPages, ToolScanError } from '@/lib/tool-scan';
 import { noteNewDocument } from '@/lib/new-doc-note';
 import { serialized } from '@/lib/serial';
 import { useTheme } from '@/contexts/theme-context';
 import { Radius, Spacing, Type } from '@/lib/theme';
 
 type SaveInput = {
-  pages?: string[];
+  /** Image URIs, or photos with their page outline (lib/save-scan.ts). */
+  pages?: ScanPageInput[];
   pdfUri?: string;
   defaultFilter?: PageFilter | 'original';
 };
@@ -105,37 +103,18 @@ export function ScanProvider({ children }: { children: ReactNode }) {
     scanningRef.current = true;
     setScanning(true);
     try {
-      const settings = await getScanSettings();
-      // VisionKit always shows its own review/crop step; the plugin has no
-      // option to turn that on or off.
-      // Tracked so the app lock covers the camera instead of presenting over
-      // it, which would close it and leave this promise (and scanningRef)
-      // hanging; see lib/system-ui.
-      const { scannedImages } = await withSystemUI(
-        () => DocumentScanner.scanDocument({ croppedImageQuality: SCAN_QUALITY_MAP[settings.quality] }),
-        () => ({ scannedImages: [] as string[] }),
-      );
-      if (!scannedImages?.length) return null;
-      // The scanner writes into Documents, which the Files app shows: move its
-      // pages to Caches before anything else happens to them.
-      return await saveAndOpen({ pages: moveScannerOutputToCaches(scannedImages) });
+      // Scan Kit's camera (with its own review step) or Apple's document
+      // scanner, as chosen in Settings › Scan (lib/tool-scan.ts). Either way
+      // the app lock can't close the camera from under this promise.
+      const pages = await scanPagesWithCamera();
+      if (!pages?.length) return null;
+      return await saveAndOpen({ pages });
     } catch (err) {
-      console.error('Scan failed', err);
-      const msg = err instanceof Error ? err.message : String(err);
-      // Only alert on real failures, not user-cancelled scans.
-      if (/cancel|user.+(stop|dismiss)/i.test(msg)) {
-        // user-cancelled, ignore
-      } else if (/permission|denied|not.+granted/i.test(msg)) {
+      if (err instanceof ToolScanError) {
         notifyError();
-        Alert.alert(
-          'Camera access needed',
-          'Scan Kit needs Camera permission to scan documents. Open Settings to enable it.',
-          [
-            { text: 'Cancel', style: 'cancel' },
-            { text: 'Open Settings', onPress: () => Linking.openSettings() },
-          ],
-        );
+        alertScanError(err);
       } else {
+        console.error('Scan failed', err);
         notifyError();
         Alert.alert("Couldn't start the scanner", 'Try again in a moment.');
       }

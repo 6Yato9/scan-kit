@@ -1,8 +1,11 @@
 // app/tools/qr.tsx
+// Read a QR code or barcode with the camera, or from a photo (Vision, on
+// device). The content is selectable text with Copy and, for web links, Open.
 import { useCallback, useRef, useState } from 'react';
 import {
   Alert,
   Linking,
+  Pressable,
   StyleSheet,
   Text,
   View,
@@ -16,8 +19,11 @@ import { useTheme } from '@/contexts/theme-context';
 import { useToast } from '@/components/toast';
 import { ScreenHeader } from '@/components/screen-header';
 import { PrimaryButton } from '@/components/primary-button';
-import { notifySuccess, tapLight } from '@/lib/haptics';
-import { Radius, Spacing, Type } from '@/lib/theme';
+import { RecognizedText } from '@/components/recognized-text';
+import { notifyError, notifySuccess, tapLight } from '@/lib/haptics';
+import { HIT, Radius, Spacing, Type } from '@/lib/theme';
+import { barcodeTypeLabel, canDetectBarcodes, detectBarcodes, openWebLink } from '@/lib/text-actions';
+import { deleteTempFiles, pickPhotos } from '@/lib/tool-scan';
 
 type BarcodeResult = {
   type: string;
@@ -25,20 +31,7 @@ type BarcodeResult = {
 };
 
 function formatType(type: string): string {
-  const map: Record<string, string> = {
-    qr: 'QR Code',
-    ean13: 'EAN-13',
-    ean8: 'EAN-8',
-    code128: 'Code 128',
-    code39: 'Code 39',
-    datamatrix: 'Data Matrix',
-    pdf417: 'PDF417',
-    aztec: 'Aztec',
-    upc_a: 'UPC-A',
-    upc_e: 'UPC-E',
-    itf14: 'ITF-14',
-  };
-  return map[type] ?? type.toUpperCase();
+  return barcodeTypeLabel(type);
 }
 
 function isUrl(text: string): boolean {
@@ -52,7 +45,11 @@ export default function QrScreen() {
   const { show } = useToast();
   const [permission, requestPermission] = useCameraPermissions();
   const [result, setResult] = useState<BarcodeResult | null>(null);
+  // Codes found in a chosen photo (several are possible) and which one is shown.
+  const [photoCodes, setPhotoCodes] = useState<BarcodeResult[]>([]);
+  const [picking, setPicking] = useState(false);
   const scanned = useRef(false);
+  const pickingRef = useRef(false);
 
   const handleBarcode = useCallback(({ type, data }: BarcodeResult) => {
     if (scanned.current) return;
@@ -63,7 +60,51 @@ export default function QrScreen() {
 
   const handleRescan = () => {
     scanned.current = false;
+    setPhotoCodes([]);
     setResult(null);
+  };
+
+  const handleChoosePhoto = async () => {
+    if (pickingRef.current) return;
+    pickingRef.current = true;
+    scanned.current = true; // the camera stops reporting while a photo is read
+    setPicking(true);
+    let picked: string[] | null = null;
+    try {
+      picked = await pickPhotos(false, { autoCrop: false });
+      if (!picked?.length) {
+        scanned.current = result !== null;
+        return;
+      }
+      const codes = await detectBarcodes(picked[0]);
+      if (!codes.length) {
+        scanned.current = result !== null;
+        notifyError();
+        Alert.alert('No code found', 'Choose a photo where the code is sharp and not too small.');
+        return;
+      }
+      notifySuccess();
+      const list = codes.map(c => ({ type: c.symbology, data: c.payload }));
+      setPhotoCodes(list);
+      setResult(list[0]);
+    } catch {
+      scanned.current = result !== null;
+      notifyError();
+      Alert.alert('Couldn’t read the photo', 'Try another photo.');
+    } finally {
+      deleteTempFiles(picked ?? []);
+      pickingRef.current = false;
+      setPicking(false);
+    }
+  };
+
+  const photoIndex = result ? photoCodes.indexOf(result) : -1;
+  // The result came from a chosen photo (not the camera): "Another photo" instead of "Scan again".
+  const fromPhoto = photoIndex >= 0;
+  const handleNextCode = () => {
+    if (photoCodes.length < 2) return;
+    tapLight();
+    setResult(photoCodes[(photoIndex + 1) % photoCodes.length]);
   };
 
   const handleCopy = async () => {
@@ -93,7 +134,10 @@ export default function QrScreen() {
     };
 
     if (safeAutoOpen) {
-      openIt();
+      // In the in-app browser (a Safari view), like links found in a page's text.
+      openWebLink(url).then(ok => {
+        if (!ok) Alert.alert('Couldn’t open the link', 'No app on this device can open it.');
+      });
       return;
     }
     if (requiresConfirm) {
@@ -112,6 +156,55 @@ export default function QrScreen() {
       `For your safety, this kind of link isn’t opened directly. You can copy it instead.\n\n${url}`,
     );
   };
+
+  function renderResult() {
+    if (!result) return null;
+    const many = photoCodes.length > 1 && photoIndex >= 0;
+    return (
+      <View style={[styles.resultSheet, { backgroundColor: colors.card, paddingBottom: insets.bottom + Spacing.lg }]}>
+        <View style={styles.resultHead}>
+          <Text style={[Type.sectionLabel, styles.flex, { color: colors.muted }]}>
+            {many ? `${formatType(result.type)} · ${photoIndex + 1} of ${photoCodes.length}` : formatType(result.type)}
+          </Text>
+          {many ? (
+            <Pressable
+              onPress={handleNextCode}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel="Next code in this photo"
+              style={({ pressed }) => [styles.nextBtn, pressed && { opacity: 0.5 }]}
+            >
+              <Text style={[Type.subhead, { color: colors.accent }]}>Next</Text>
+              <Ionicons name="chevron-forward" size={16} color={colors.accent} />
+            </Pressable>
+          ) : null}
+        </View>
+        {/* Selectable range by range (touch and hold), not only as a whole. */}
+        <RecognizedText value={result.data} onChangeText={() => {}} readOnly maxHeight={132} />
+
+        {isUrl(result.data) ? (
+          <PrimaryButton title="Open link" icon="open-outline" onPress={handleOpen} />
+        ) : null}
+        <View style={styles.resultActions}>
+          <PrimaryButton
+            title="Copy"
+            icon="copy-outline"
+            variant={isUrl(result.data) ? 'secondary' : 'primary'}
+            onPress={handleCopy}
+            style={styles.flex}
+          />
+          <PrimaryButton
+            title={fromPhoto ? 'Another photo' : 'Scan again'}
+            icon={fromPhoto ? 'images-outline' : 'scan-outline'}
+            variant="secondary"
+            onPress={fromPhoto ? handleChoosePhoto : handleRescan}
+            loading={fromPhoto && picking}
+            style={styles.flex}
+          />
+        </View>
+      </View>
+    );
+  }
 
   // The whole QR screen is camera chrome, always dark (the status bar is light
   // here too — see lib/status-bar-style.ts), including the permission step.
@@ -136,10 +229,23 @@ export default function QrScreen() {
           </Text>
           <PrimaryButton
             title={mustGoToSettings ? 'Open Settings' : 'Allow camera'}
+            icon={mustGoToSettings ? 'settings-outline' : 'camera-outline'}
             onPress={mustGoToSettings ? () => Linking.openSettings() : requestPermission}
             style={styles.permBtn}
           />
+          {canDetectBarcodes() ? (
+            <PrimaryButton
+              title="Choose photo"
+              icon="images-outline"
+              variant="secondary"
+              onPress={handleChoosePhoto}
+              loading={picking}
+              disabled={picking}
+              style={styles.permSecondary}
+            />
+          ) : null}
         </View>
+        {result ? renderResult() : null}
       </View>
     );
   }
@@ -173,35 +279,27 @@ export default function QrScreen() {
         </View>
       )}
 
-      {/* Result sheet */}
-      {result && (
-        <View style={[styles.resultSheet, { backgroundColor: colors.card, paddingBottom: insets.bottom + Spacing.lg }]}>
-          <Text style={[Type.sectionLabel, { color: colors.muted }]}>{formatType(result.type)}</Text>
-          <Text style={[Type.body, styles.resultData, { color: colors.text }]} numberOfLines={4} selectable>
-            {result.data}
-          </Text>
-
-          {isUrl(result.data) ? (
-            <PrimaryButton title="Open link" icon="open-outline" onPress={handleOpen} />
-          ) : null}
-          <View style={styles.resultActions}>
-            <PrimaryButton
-              title="Copy"
-              icon="copy-outline"
-              variant={isUrl(result.data) ? 'secondary' : 'primary'}
-              onPress={handleCopy}
-              style={styles.flex}
-            />
-            <PrimaryButton
-              title="Scan again"
-              icon="scan-outline"
-              variant="secondary"
-              onPress={handleRescan}
-              style={styles.flex}
-            />
-          </View>
+      {!result && canDetectBarcodes() ? (
+        <View style={[styles.photoBar, { paddingBottom: insets.bottom + Spacing.xl }]} pointerEvents="box-none">
+          <Pressable
+            onPress={handleChoosePhoto}
+            disabled={picking}
+            accessibilityRole="button"
+            accessibilityLabel="Choose photo"
+            accessibilityHint="Reads a QR code or barcode from a photo"
+            style={({ pressed }) => [
+              styles.photoBtn,
+              { backgroundColor: colors.chromeRaised, borderColor: colors.chromeBorder },
+              (pressed || picking) && { opacity: 0.6 },
+            ]}
+          >
+            <Ionicons name="images-outline" size={20} color={colors.chromeText} />
+            <Text style={[Type.subhead, { color: colors.chromeText }]}>{picking ? 'Reading photo…' : 'Choose photo'}</Text>
+          </Pressable>
         </View>
-      )}
+      ) : null}
+
+      {result ? renderResult() : null}
     </View>
   );
 }
@@ -231,7 +329,19 @@ const styles = StyleSheet.create({
     padding: Spacing.xl,
     gap: Spacing.md,
   },
-  resultData: { lineHeight: 22 },
+  resultHead: { flexDirection: 'row', alignItems: 'center', minHeight: 22 },
+  nextBtn: { flexDirection: 'row', alignItems: 'center', gap: 2, minHeight: HIT, marginVertical: -11 },
+  photoBar: { position: 'absolute', left: 0, right: 0, bottom: 0, alignItems: 'center' },
+  photoBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    minHeight: HIT,
+    paddingHorizontal: Spacing.xl,
+    borderRadius: Radius.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  permSecondary: { alignSelf: 'stretch', marginTop: Spacing.md },
   resultActions: { flexDirection: 'row', gap: Spacing.md },
   permTitle: { marginTop: Spacing.lg, marginBottom: Spacing.sm, textAlign: 'center' },
   permIcon: { width: 80, height: 80, borderRadius: 40, alignItems: 'center', justifyContent: 'center' },

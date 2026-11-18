@@ -1,14 +1,38 @@
 // lib/save-scan.ts
+//
+// SAVING NEW PAGES WITH THEIR SOURCE PHOTO. `pages` takes, per page, either
+//  - a string: a finished image URI (document-camera page, rendered PDF page,
+//    an already-cropped image) — stored exactly as before; or
+//  - a SourcePageInput { sourceUri, quad, rotation? } (lib/page-source.ts): the
+//    photo as captured plus the page outline on it (VisionOcr.detectQuad
+//    format; null = the whole photo). The page is rendered from the photo
+//    (perspective-corrected, at `quality`) and — unless Settings › Keep
+//    original photos is off — the photo is kept as the page's source, so Crop
+//    can later show all of it and the crop can be widened.
+// Inputs that are disposable temps (Caches, tmp, scanner output) are deleted
+// once stored, sources included.
 import * as Crypto from 'expo-crypto';
 import { Document } from '../types/document';
-import { saveDocument, updateDocumentWith } from './storage';
+import { keepSourcesEnabled, saveDocument, updateDocumentWith } from './storage';
 import { copyPageWithQuality, copyPdfToStorage, deleteDisposableTemps, deleteDocumentFiles, moveScannerOutputToCaches } from './files';
 import { ocrAvailable, extractDocText } from './ocr';
 import { titleFromText } from './auto-name';
 import { withDocLock } from './bake';
+import {
+  discardPrepared,
+  inputUri,
+  installPreparedSource,
+  isSourceInput,
+  prepareSourcePage,
+  type PreparedSourcePage,
+  type ScanPageInput,
+} from './page-source';
+
+export type { ScanPageInput, SourcePageInput } from './page-source';
 
 export type SaveScanInput = {
-  pages?: string[];
+  /** Finished image URIs and/or photos with their page outline (see the header). */
+  pages?: ScanPageInput[];
   pdfUri?: string;
   name: string;
   quality: number;
@@ -41,7 +65,7 @@ export type SaveScanResult = { id: string; pages: string[] };
 export async function saveScan(input: SaveScanInput): Promise<SaveScanResult> {
   const { pdfUri, name, quality, nameIsDefault } = input;
   // Scanner pages never stay in Documents (shown in the Files app), whoever called.
-  const pages = moveScannerOutputToCaches(input.pages ?? []);
+  const pages = (input.pages ?? []).map(p => (isSourceInput(p) ? p : moveScannerOutputToCaches([p])[0]));
   if (!pdfUri && pages.length === 0) {
     throw new Error('saveScan: nothing to save — no pages and no pdfUri');
   }
@@ -60,12 +84,24 @@ export async function saveScan(input: SaveScanInput): Promise<SaveScanResult> {
     }
 
     const savedPages: string[] = [];
+    const keep = pages.some(isSourceInput) ? await keepSourcesEnabled() : false;
     for (let i = 0; i < pages.length; i++) {
+      const page = pages[i];
+      let prepared: PreparedSourcePage | null = null;
       try {
-        savedPages.push(await copyPageWithQuality(pages[i], id, i, quality));
+        if (isSourceInput(page)) {
+          prepared = await prepareSourcePage(page, quality, keep);
+          // Already at `quality` and within the size cap: stored as it is.
+          savedPages.push(await copyPageWithQuality(prepared.page, id, i, 1));
+          installPreparedSource(prepared, id, i);
+        } else {
+          savedPages.push(await copyPageWithQuality(page, id, i, quality));
+        }
       } catch (err) {
         const m = err instanceof Error ? err.message : String(err);
         throw new Error(`Page ${i + 1}: ${m}`);
+      } finally {
+        discardPrepared(prepared);
       }
     }
 
@@ -78,7 +114,7 @@ export async function saveScan(input: SaveScanInput): Promise<SaveScanResult> {
       ...(nameIsDefault ? { defaultName: name } : {}),
     };
     await saveDocument(doc);
-    deleteDisposableTemps(pages);
+    deleteDisposableTemps(pages.map(inputUri));
     return { id, pages: savedPages };
   } catch (err) {
     try { deleteDocumentFiles(id); } catch { /* secondary failure — keep the original error */ }

@@ -11,6 +11,8 @@ public class PdfDocumentView: ExpoView {
   let onLoadError = EventDispatcher()
   private var loadedPath: String?
   private var lastFitScale: CGFloat = 0
+  /// Page to show once the document is loaded and laid out (initialPage prop).
+  private var pendingPage: Int?
 
   public required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
@@ -38,6 +40,7 @@ public class PdfDocumentView: ExpoView {
       pdfView.scaleFactor = pdfView.scaleFactorForSizeToFit
     }
     lastFitScale = pdfView.scaleFactorForSizeToFit
+    applyPendingPage()
   }
 
   func setSource(_ uri: String) {
@@ -58,6 +61,26 @@ public class PdfDocumentView: ExpoView {
     pdfView.scaleFactor = pdfView.scaleFactorForSizeToFit
     lastFitScale = pdfView.scaleFactor
     pageChanged()
+    applyPendingPage()
+  }
+
+  /// Opens the document at this page (zero-based) instead of the first, e.g.
+  /// the page that was on screen before an edit reloaded the file. Applied once.
+  func setInitialPage(_ page: Int) {
+    pendingPage = page > 0 ? page : nil
+    applyPendingPage()
+  }
+
+  private func applyPendingPage() {
+    guard let index = pendingPage, let doc = pdfView.document, bounds.width > 0, bounds.height > 0 else { return }
+    pendingPage = nil
+    guard let page = doc.page(at: min(index, doc.pageCount - 1)) else { return }
+    // After this layout pass, so the fit scale is in place before scrolling.
+    DispatchQueue.main.async { [weak self] in
+      guard let self = self, self.pdfView.document === doc else { return }
+      self.pdfView.go(to: page)
+      self.pageChanged()
+    }
   }
 
   func setBackground(_ hex: String) {
