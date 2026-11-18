@@ -14,12 +14,9 @@ import {
 import { useLocalSearchParams, useNavigation, useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import * as ImagePicker from 'expo-image-picker';
-import * as DocumentPicker from 'expo-document-picker';
 import { Document } from '@/types/document';
 import {
   getDocuments,
-  deleteDocuments,
   deleteFolder,
   getSortPreference,
   saveSortPreference,
@@ -27,18 +24,18 @@ import {
   patchDocument,
   renameFolder,
   saveFolder,
-  getScanSettings,
+  restoreDocuments,
+  trashDocuments,
   SortKey,
 } from '@/lib/storage';
-import { autoCropDocuments } from '@/lib/document-detect';
-import { deleteDocumentFiles } from '@/lib/files';
 import { mergeIntoNew } from '@/lib/doc-ops';
 import { matchesQuery, sortDocuments } from '@/lib/doc-list';
 import { useScan } from '@/contexts/scan-context';
 import { useTheme } from '@/contexts/theme-context';
 import { notifySuccess, selection } from '@/lib/haptics';
 import { BottomSheet, SheetGroup, SheetHeader, SheetRow } from '@/components/bottom-sheet';
-import { DocumentCard, DocumentCardSkeleton } from '@/components/document-card';
+import { DocumentCard, DocumentCardSkeleton, DocumentRow, DocumentRowSkeleton } from '@/components/document-card';
+import { FilesLayout, getFilesLayout, saveFilesLayout } from '@/lib/view-pref';
 import { EmptyState } from '@/components/empty-state';
 import { SortSheet } from '@/components/sort-sheet';
 import { MoveFolderSheet } from '@/components/move-folder-sheet';
@@ -47,6 +44,9 @@ import { PrimaryButton } from '@/components/primary-button';
 import { SearchField } from '@/components/search-field';
 import { useDocumentActions } from '@/components/document-actions';
 import { useToast } from '@/components/toast';
+import { useImportDocuments } from '@/components/use-import';
+import { MultiShareSheet } from '@/components/multi-share-sheet';
+import { ExportSheet } from '@/components/export-sheet';
 import { HIT, Radius, Spacing, Type } from '@/lib/theme';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
@@ -68,17 +68,28 @@ export default function FilesScreen() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [selecting, setSelecting] = useState(false);
   const [bulkMoveVisible, setBulkMoveVisible] = useState(false);
+  const [shareVisible, setShareVisible] = useState(false);
+  // Frozen when Share opens, so the sheet keeps its documents while it closes.
+  const [shareDocs, setShareDocs] = useState<Document[]>([]);
   const [folderActions, setFolderActions] = useState<string | null>(null);
   const [folderPrompt, setFolderPrompt] = useState<FolderPrompt | null>(null);
   const [folderName, setFolderNameState] = useState('');
   const folderNameRef = useRef('');
   const setFolderName = useCallback((v: string) => { folderNameRef.current = v; setFolderNameState(v); }, []);
   const pendingAfterSheet = useRef<(() => void) | null>(null);
-  const importing = useRef(false);
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const params = useLocalSearchParams<{ action?: string }>();
-  const { lastSaved, saveAndOpen } = useScan();
+  const params = useLocalSearchParams<{ action?: string; folder?: string }>();
+  const [layout, setLayout] = useState<FilesLayout>('grid');
+  useEffect(() => { getFilesLayout().then(setLayout); }, []);
+  const toggleLayout = useCallback(() => {
+    setLayout(prev => {
+      const next = prev === 'grid' ? 'list' : 'grid';
+      saveFilesLayout(next);
+      return next;
+    });
+  }, []);
+  const { lastSaved } = useScan();
   const { colors } = useTheme();
   const toast = useToast();
 
@@ -119,9 +130,10 @@ export default function FilesScreen() {
   useEffect(() => { if (lastSaved > 0) load(); }, [lastSaved, load]);
 
   // A folder that was deleted or renamed elsewhere can't stay selected.
+  // (Only once the folders have loaded: a folder opened from Home arrives first.)
   useEffect(() => {
-    if (activeFolder !== null && !folders.includes(activeFolder)) setActiveFolder(null);
-  }, [folders, activeFolder]);
+    if (loaded && activeFolder !== null && !folders.includes(activeFolder)) setActiveFolder(null);
+  }, [loaded, folders, activeFolder]);
 
   const q = searchQuery.trim().toLowerCase();
   const displayedDocuments = useMemo(() => {
@@ -137,54 +149,7 @@ export default function FilesScreen() {
 
   // ── Import ────────────────────────────────────────────────────────────────
 
-  const handleImportImages = useCallback(async () => {
-    if (importing.current) return;
-    importing.current = true;
-    try {
-      // Honor the user's Scan Quality preference when importing from the library.
-      const settings = await getScanSettings();
-      const qualityMap = { low: 0.5, medium: 0.75, high: 0.9 };
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsMultipleSelection: true,
-        orderedSelection: true,
-        quality: qualityMap[settings.quality],
-      });
-      if (result.canceled || !result.assets.length) return;
-      // Photos of a page on a desk: find the page and straighten it, like the
-      // in-app scanner does. Falls back to the original photo per image.
-      const pages = await autoCropDocuments(result.assets.map(a => a.uri), qualityMap[settings.quality]);
-      const id = await saveAndOpen({ pages });
-      if (id) router.push({ pathname: '/viewer', params: { id } });
-    } catch (err) {
-      console.error('Import images failed', err);
-      Alert.alert("Couldn't import photos", 'Check that Scan Kit can access your photos, then try again.');
-    } finally {
-      importing.current = false;
-    }
-  }, [saveAndOpen, router]);
-
-  const handleImportFiles = useCallback(async () => {
-    if (importing.current) return;
-    importing.current = true;
-    try {
-      const result = await DocumentPicker.getDocumentAsync({
-        type: ['application/pdf', 'image/*'],
-        copyToCacheDirectory: true,
-      });
-      if (result.canceled || !result.assets.length) return;
-      const asset = result.assets[0];
-      const id = asset.mimeType === 'application/pdf'
-        ? await saveAndOpen({ pdfUri: asset.uri })
-        : await saveAndOpen({ pages: await autoCropDocuments([asset.uri]) });
-      if (id) router.push({ pathname: '/viewer', params: { id } });
-    } catch (err) {
-      console.error('Import files failed', err);
-      Alert.alert("Couldn't import file", 'Choose a PDF or an image and try again.');
-    } finally {
-      importing.current = false;
-    }
-  }, [saveAndOpen, router]);
+  const { importImages: handleImportImages, importFile: handleImportFiles } = useImportDocuments();
 
   // Handle URL params from Tools / Home shortcuts. Clear the param after firing
   // so it doesn't re-trigger every time the tab regains focus.
@@ -195,6 +160,15 @@ export default function FilesScreen() {
     if (action === 'importImages') handleImportImages();
     else if (action === 'importFiles') handleImportFiles();
   }, [params.action, router, handleImportImages, handleImportFiles]);
+
+  // Home's folder shortcuts open Files filtered to that folder.
+  useEffect(() => {
+    if (params.folder === undefined) return;
+    const folder = params.folder;
+    router.setParams({ folder: undefined } as any);
+    setSearchQuery('');
+    setActiveFolder(folder || null);
+  }, [params.folder, router]);
 
   /** Close a sheet, then run `fn` once it is fully gone (native pickers need that). */
   const afterAddSheet = (fn: () => void) => () => {
@@ -293,9 +267,10 @@ export default function FilesScreen() {
   const handleBatchDelete = useCallback(() => {
     const n = selectedIds.size;
     if (n === 0) return;
+    const plural = n !== 1;
     Alert.alert(
-      `Delete ${n} document${n !== 1 ? 's' : ''}?`,
-      'This can’t be undone.',
+      `Delete ${n} document${plural ? 's' : ''}?`,
+      `${plural ? 'They move' : 'It moves'} to Recently deleted, where you can restore ${plural ? 'them' : 'it'} for 30 days.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -305,21 +280,39 @@ export default function FilesScreen() {
             try {
               const ids = Array.from(selectedIds);
               const idSet = new Set(ids);
-              await deleteDocuments(ids);
-              ids.forEach(id => { try { deleteDocumentFiles(id); } catch {} });
+              // Soft delete: records and files stay until Recently deleted is emptied.
+              await trashDocuments(ids);
               setDocuments(prev => prev.filter(d => !idSet.has(d.id)));
               exitSelect();
               notifySuccess();
-              toast.show(`${n} document${n !== 1 ? 's' : ''} deleted`);
+              toast.show(plural ? `${n} documents moved to Recently deleted` : 'Moved to Recently deleted', {
+                action: {
+                  label: 'Undo',
+                  onPress: () => {
+                    restoreDocuments(ids)
+                      .then(() => load())
+                      .catch(err => {
+                        console.error('Restore failed', err);
+                        Alert.alert("Couldn't restore the documents", 'Find them in Settings, Recently deleted.');
+                      });
+                  },
+                },
+              });
             } catch (err) {
               console.error('Batch delete failed', err);
-              Alert.alert("Couldn't delete documents", 'Please try again.');
+              Alert.alert("Couldn't delete the documents", 'Try again.');
             }
           },
         },
       ],
     );
-  }, [selectedIds, exitSelect, toast]);
+  }, [selectedIds, exitSelect, toast, load]);
+
+  const handleBatchShare = useCallback(() => {
+    if (selectedDocs.length === 0) return;
+    setShareDocs(selectedDocs);
+    setShareVisible(true);
+  }, [selectedDocs]);
 
   const handleBatchMove = useCallback(async (docs: Document[], folder: string | null) => {
     setBulkMoveVisible(false);
@@ -390,6 +383,13 @@ export default function FilesScreen() {
             <Text style={[styles.title, { color: colors.text }]} accessibilityRole="header">Files</Text>
             <View style={styles.headerActions}>
               <HeaderIconButton icon="checkmark-circle-outline" label="Select documents" color={colors.accent} size={23} onPress={() => enterSelect()} disabled={documents.length === 0} />
+              <HeaderIconButton
+                icon={layout === 'grid' ? 'list-outline' : 'grid-outline'}
+                label={layout === 'grid' ? 'Show as list' : 'Show as grid'}
+                color={colors.accent}
+                size={22}
+                onPress={toggleLayout}
+              />
               <HeaderIconButton icon="swap-vertical" label="Sort documents" color={colors.accent} size={22} onPress={() => setSortSheetVisible(true)} />
               <HeaderIconButton icon="add" label="Add documents or a folder" color={colors.accent} size={28} onPress={() => setAddSheetVisible(true)} />
             </View>
@@ -424,14 +424,20 @@ export default function FilesScreen() {
       )}
 
       {!loaded ? (
-        <View style={styles.gridContent}>
-          {[0, 1].map(r => (
-            <View key={r} style={styles.skeletonRow}>
-              <DocumentCardSkeleton />
-              <DocumentCardSkeleton />
-            </View>
-          ))}
-        </View>
+        layout === 'list' ? (
+          <View style={styles.listContent}>
+            {[0, 1, 2, 3].map(r => <DocumentRowSkeleton key={r} />)}
+          </View>
+        ) : (
+          <View style={styles.gridContent}>
+            {[0, 1].map(r => (
+              <View key={r} style={styles.skeletonRow}>
+                <DocumentCardSkeleton />
+                <DocumentCardSkeleton />
+              </View>
+            ))}
+          </View>
+        )
       ) : empty ? (
         <View style={[styles.flex, { paddingBottom: tabBarClearance }]}>{q ? (
           <EmptyState variant="no-search-results" query={searchQuery.trim()} />
@@ -450,23 +456,38 @@ export default function FilesScreen() {
         )}</View>
       ) : (
         <FlatList
+          // numColumns can't change on a mounted list.
+          key={layout}
           data={displayedDocuments}
           keyExtractor={d => d.id}
-          numColumns={2}
+          numColumns={layout === 'grid' ? 2 : 1}
           style={styles.list}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
           // Clear the floating tab bar, and the selection bar when it's up.
-          contentContainerStyle={[styles.gridContent, { paddingBottom: tabBarClearance + 40 }]}
-          renderItem={({ item }) => (
-            <DocumentCard
-              document={item}
-              onPress={() => handleCardPress(item)}
-              onLongPress={() => handleCardLongPress(item)}
-              isSelected={selectedIds.has(item.id)}
-              isMultiSelectMode={selecting}
-            />
-          )}
+          contentContainerStyle={[
+            layout === 'grid' ? styles.gridContent : styles.listContent,
+            { paddingBottom: tabBarClearance + 40 },
+          ]}
+          renderItem={({ item }) =>
+            layout === 'grid' ? (
+              <DocumentCard
+                document={item}
+                onPress={() => handleCardPress(item)}
+                onLongPress={() => handleCardLongPress(item)}
+                isSelected={selectedIds.has(item.id)}
+                isMultiSelectMode={selecting}
+              />
+            ) : (
+              <DocumentRow
+                document={item}
+                onPress={() => handleCardPress(item)}
+                onLongPress={() => handleCardLongPress(item)}
+                isSelected={selectedIds.has(item.id)}
+                isMultiSelectMode={selecting}
+              />
+            )
+          }
         />
       )}
 
@@ -477,6 +498,7 @@ export default function FilesScreen() {
             { bottom: insets.bottom + 8, backgroundColor: colors.card, borderColor: colors.border },
           ]}
         >
+          <BarButton icon="share-outline" label="Share" disabled={selCount === 0} onPress={handleBatchShare} />
           <BarButton icon="folder-outline" label="Move" disabled={selCount === 0} onPress={() => setBulkMoveVisible(true)} />
           <BarButton icon="git-merge-outline" label="Merge" disabled={selCount < 2} onPress={handleBatchMerge} />
           <BarButton icon="trash-outline" label="Delete" destructive disabled={selCount === 0} onPress={handleBatchDelete} />
@@ -504,7 +526,7 @@ export default function FilesScreen() {
         <SheetHeader title="Add to Files" />
         <SheetGroup>
           <SheetRow icon="images-outline" label="Import from Photos" detail="One or more photos become one document" onPress={afterAddSheet(handleImportImages)} />
-          <SheetRow icon="document-attach-outline" label="Import a file" detail="A PDF or an image from Files" onPress={afterAddSheet(handleImportFiles)} last />
+          <SheetRow icon="folder-open-outline" label="Import a file" detail="A PDF or an image from Files" onPress={afterAddSheet(handleImportFiles)} last />
         </SheetGroup>
         <SheetGroup style={{ marginBottom: 0 }}>
           <SheetRow icon="folder-outline" label="New folder" onPress={afterAddSheet(() => openFolderPrompt({ mode: 'create' }))} last />
@@ -589,6 +611,13 @@ export default function FilesScreen() {
         onCreateFolder={createFolderFromMove}
         onClose={() => setBulkMoveVisible(false)}
       />
+
+      {/* One document: the full export sheet. Several: one PDF or separate PDFs. */}
+      {shareDocs.length === 1 ? (
+        <ExportSheet visible={shareVisible} document={shareDocs[0]} onClose={() => setShareVisible(false)} />
+      ) : (
+        <MultiShareSheet visible={shareVisible} documents={shareDocs} onClose={() => setShareVisible(false)} />
+      )}
 
       {actions.sheets}
     </View>
@@ -688,6 +717,7 @@ const styles = StyleSheet.create({
   },
   list: { flex: 1 },
   gridContent: { paddingHorizontal: Spacing.gutter - 6, paddingTop: Spacing.xs },
+  listContent: { paddingHorizontal: Spacing.gutter, paddingTop: Spacing.xs },
   skeletonRow: { flexDirection: 'row' },
   multiBar: {
     position: 'absolute',

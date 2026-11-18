@@ -1,6 +1,6 @@
 // app/(tabs)/tools.tsx
 // The Tools tab: every entry opens a working flow. Labels match the title of
-// the screen they open.
+// the screen they open and fit on one line.
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, type Href } from 'expo-router';
@@ -18,6 +18,10 @@ type Tool = {
   href: Href;
 };
 
+// Genuine tools only. Anything the core screens already do lives there instead:
+// import (Files "+"), reorder / rotate / text (viewer), print / save as images /
+// smaller PDF (Export), merge (Files: select or long-press). Every section is a
+// full row of four.
 const TOOL_SECTIONS: { title: string; tools: Tool[] }[] = [
   {
     title: 'Scan',
@@ -25,33 +29,15 @@ const TOOL_SECTIONS: { title: string; tools: Tool[] }[] = [
       { id: 'whiteboard', icon: 'easel-outline', label: 'Whiteboard', href: '/tools/whiteboard' },
       { id: 'book', icon: 'book-outline', label: 'Book mode', href: '/tools/book' },
       { id: 'id-card', icon: 'id-card-outline', label: 'ID card', href: '/tools/id-card' },
-      { id: 'extract-text', icon: 'text-outline', label: 'Extract text', href: '/tools/extract-text' },
       { id: 'qr', icon: 'qr-code-outline', label: 'QR code', href: '/tools/qr' },
     ],
   },
   {
-    title: 'Import',
+    title: 'Convert',
     tools: [
-      {
-        id: 'import-photos',
-        icon: 'images-outline',
-        label: 'Import photos',
-        href: { pathname: '/(tabs)/files', params: { action: 'importImages' } } as Href,
-      },
-      {
-        id: 'import-files',
-        icon: 'folder-open-outline',
-        label: 'Import files',
-        href: { pathname: '/(tabs)/files', params: { action: 'importFiles' } } as Href,
-      },
-    ],
-  },
-  {
-    title: 'Organize',
-    tools: [
-      { id: 'merge', icon: 'layers-outline', label: 'Merge documents', href: '/tools/merge' },
+      { id: 'extract-text', icon: 'document-text-outline', label: 'Extract text', href: '/tools/extract-text' },
       { id: 'extract', icon: 'cut-outline', label: 'Extract pages', href: '/tools/extract' },
-      { id: 'reorder', icon: 'swap-vertical-outline', label: 'Reorder pages', href: '/tools/reorder' },
+      { id: 'long-image', icon: 'image-outline', label: 'Long image', href: '/tools/long-image' },
       { id: 'compress', icon: 'contract-outline', label: 'Compress', href: '/tools/compress' },
     ],
   },
@@ -64,31 +50,26 @@ const TOOL_SECTIONS: { title: string; tools: Tool[] }[] = [
       { id: 'erase-marks', icon: 'color-wand-outline', label: 'Erase marks', href: '/tools/erase-marks' },
     ],
   },
-  {
-    title: 'Share',
-    tools: [
-      { id: 'long-image', icon: 'image-outline', label: 'Long image', href: '/tools/long-image' },
-      { id: 'save-images', icon: 'file-tray-stacked-outline', label: 'Save as images', href: '/tools/save-images' },
-      { id: 'print', icon: 'print-outline', label: 'Print', href: '/tools/print' },
-    ],
-  },
 ];
 
 function ToolTile({ tool }: { tool: Tool }) {
   const { colors } = useTheme();
   const router = useRouter();
-  const isTab = typeof tool.href === 'object';
   return (
     <Pressable
       style={({ pressed }) => [styles.tile, pressed && { opacity: 0.6 }]}
-      onPress={() => (isTab ? router.navigate(tool.href) : router.push(tool.href))}
+      onPress={() => router.push(tool.href)}
       accessibilityRole="button"
       accessibilityLabel={tool.label}
     >
       <View style={[styles.iconWrap, { backgroundColor: colors.accentLight }]}>
         <Ionicons name={tool.icon} size={26} color={colors.accent} />
       </View>
-      <Text style={[styles.label, { color: colors.text }]} numberOfLines={2}>
+      <Text
+        style={[styles.label, { color: colors.text }]}
+        numberOfLines={1}
+        maxFontSizeMultiplier={1.2}
+      >
         {tool.label}
       </Text>
     </Pressable>

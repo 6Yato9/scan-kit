@@ -5,14 +5,16 @@
 // onDismissed): the follow-up is usually another modal, a share sheet or an
 // Alert, and iOS silently drops a presentation made while a modal is still
 // animating away.
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Image, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { BottomSheet, SheetGroup, SheetRow } from '@/components/bottom-sheet';
-import { documentMeta } from '@/components/document-card';
+import { formatDocDate, formatPageCount } from '@/lib/format';
 import { Document } from '@/types/document';
 import { useTheme } from '@/contexts/theme-context';
 import { Spacing, Type } from '@/lib/theme';
+import { documentBytes } from '@/lib/doc-size';
+import { formatBytes } from '@/components/tool-ui';
 
 type Props = {
   visible: boolean;
@@ -47,6 +49,12 @@ export function DocActionsSheet({
   const [shown, setShown] = useState<Document | null>(document);
   useEffect(() => { if (document) setShown(document); }, [document]);
   const pending = useRef<(() => void) | null>(null);
+  // Size on disk, so "Smaller PDF" / Compress have a number to judge by.
+  const size = useMemo(
+    () => (shown ? documentBytes(shown) : 0),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [shown?.id, shown?.updatedAt],
+  );
 
   if (!shown) return null;
   const doc = shown;
@@ -83,7 +91,8 @@ export function DocActionsSheet({
         )}
         <View style={styles.headerText}>
           <Text style={[Type.headline, { color: colors.text }]} numberOfLines={2}>{doc.name}</Text>
-          <Text style={[Type.footnote, { color: colors.muted, marginTop: 2 }]} numberOfLines={1}>{documentMeta(doc)}</Text>
+          <Text style={[Type.footnote, { color: colors.muted, marginTop: 2 }]} numberOfLines={1}>{size > 0 ? `${formatPageCount(doc)}, ${formatBytes(size)}` : formatPageCount(doc)}</Text>
+          <Text style={[Type.footnote, { color: colors.muted }]} numberOfLines={1}>{formatDocDate(doc.updatedAt)}</Text>
         </View>
       </View>
 

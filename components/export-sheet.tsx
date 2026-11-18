@@ -7,10 +7,10 @@
 // waits on the share sheet: `shareFile` returns as soon as the sheet is up, so
 // the UI can't get stuck if expo-sharing never settles. Work in progress shows a
 // progress state with Cancel, and closing the sheet cancels it too.
-import { Alert, StyleSheet, Text, View } from 'react-native';
+import { Alert, Linking, StyleSheet, Text, View } from 'react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import * as FileSystem from 'expo-file-system/legacy';
 import { File } from 'expo-file-system';
+import * as MediaLibrary from 'expo-media-library';
 import JSZip from 'jszip';
 import { generatePdf, PageSize, PdfCancelledError, PdfError, PdfQuality, PdfProgressPhase } from '@/lib/pdf';
 import {
@@ -31,6 +31,9 @@ import { useToast } from '@/components/toast';
 import { Document } from '@/types/document';
 import { useTheme } from '@/contexts/theme-context';
 import { getDocSettings } from '@/lib/storage';
+import { documentBytes } from '@/lib/doc-size';
+import { formatBytes } from '@/components/tool-ui';
+import { notifySuccess } from '@/lib/haptics';
 import { Radius, Spacing, Type } from '@/lib/theme';
 
 type Props = {
@@ -39,7 +42,7 @@ type Props = {
   onClose: () => void;
 };
 
-type Action = 'pdf' | 'searchable' | 'small' | 'images' | 'print';
+type Action = 'pdf' | 'searchable' | 'small' | 'images' | 'photos' | 'print';
 
 type Busy = { title: string; label: string; progress: number };
 
@@ -69,6 +72,7 @@ function errorMessage(err: unknown, action: Action): { title: string; body: stri
     return { title, body: 'Something went wrong while creating the PDF. Try again.' };
   }
   if (action === 'images') return { title, body: 'Couldn’t prepare the images. Check that your device has free space and try again.' };
+  if (action === 'photos') return { title: 'Couldn’t save to Photos', body: 'Check that your device has free space and try again.' };
   return { title, body: 'Something went wrong. Try again.' };
 }
 
@@ -78,6 +82,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
   const [busy, setBusy] = useState<Busy | null>(null);
   const [pageSize, setPageSize] = useState<PageSize>('A4');
   const [quality, setQuality] = useState<PdfQuality>('standard');
+  const [bytes, setBytes] = useState<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   // Bumped on every open/close so a late share-sheet callback can't close a
   // sheet the user has since reopened.
@@ -92,6 +97,9 @@ export function ExportSheet({ visible, document, onClose }: Props) {
       return;
     }
     let cancelled = false;
+    setBytes(null);
+    // File stats are synchronous; let the sheet start sliding in first.
+    const sizeTimer = setTimeout(() => { if (!cancelled) setBytes(documentBytes(document)); }, 0);
     getDocSettings()
       .then(s => {
         if (cancelled) return;
@@ -101,8 +109,11 @@ export function ExportSheet({ visible, document, onClose }: Props) {
       .catch(() => {});
     return () => {
       cancelled = true;
+      clearTimeout(sizeTimer);
     };
-  }, [visible]);
+    // Re-measure when the document's pages change (edits bump updatedAt).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, document.updatedAt]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
@@ -169,6 +180,33 @@ export function ExportSheet({ visible, document, onClose }: Props) {
 
   const runningRef = useRef(false);
 
+  /** Saves every page to the photo library (add-only permission). */
+  async function saveToPhotos(signal: AbortSignal): Promise<boolean> {
+    let perm = await MediaLibrary.getPermissionsAsync(true);
+    if (!perm.granted && perm.canAskAgain) perm = await MediaLibrary.requestPermissionsAsync(true);
+    if (!perm.granted) {
+      Alert.alert(
+        'Allow access to Photos',
+        'To save pages, let Scan Kit add photos in Settings.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Open Settings', onPress: () => { Linking.openSettings().catch(() => {}); } },
+        ],
+      );
+      return false;
+    }
+    for (let i = 0; i < pageCount; i++) {
+      if (signal.aborted) throw new CancelledError();
+      setBusy({
+        title: 'Saving to Photos',
+        label: pageCount === 1 ? 'Saving the page' : `Saving page ${i + 1} of ${pageCount}`,
+        progress: i / pageCount,
+      });
+      await MediaLibrary.saveToLibraryAsync(cleanFileUri(document.pages[i]));
+    }
+    return true;
+  }
+
   async function run(action: Action) {
     if (busy || runningRef.current) return;
     runningRef.current = true;
@@ -199,6 +237,16 @@ export function ExportSheet({ visible, document, onClose }: Props) {
         const outcome = await printFile(uri);
         if (outcome === 'printed' && sessionRef.current === session) {
           toast.show('Sent to printer');
+          onClose();
+        }
+        return;
+      }
+
+      if (action === 'photos') {
+        const saved = await saveToPhotos(signal);
+        if (saved && sessionRef.current === session) {
+          notifySuccess();
+          toast.show(pageCount === 1 ? 'Saved the page to Photos' : `Saved ${pageCount} pages to Photos`);
           onClose();
         }
         return;
@@ -248,10 +296,12 @@ export function ExportSheet({ visible, document, onClose }: Props) {
 
   const paperLabel = pageSize === 'Letter' ? 'US Letter' : 'A4';
   const pagesLabel = `${pageCount} ${pageCount === 1 ? 'page' : 'pages'}`;
+  const sizeLabel = bytes ? formatBytes(bytes) : null;
+  const subtitle = [isPdfDoc ? 'PDF' : pagesLabel, sizeLabel].filter(Boolean).join(', ');
 
   return (
     <BottomSheet visible={visible} onClose={handleClose} variant="grouped">
-      <SheetHeader title="Export" subtitle={document.name} />
+      <SheetHeader title={document.name} subtitle={subtitle} />
 
       {busy ? (
         <SheetGroup>
@@ -277,7 +327,13 @@ export function ExportSheet({ visible, document, onClose }: Props) {
           <SectionLabel style={styles.label}>Share as</SectionLabel>
           <SheetGroup>
             {isPdfDoc ? (
-              <SheetRow icon="document-text-outline" label="PDF" detail="The original PDF file" onPress={() => run('pdf')} last />
+              <SheetRow
+                icon="document-text-outline"
+                label="PDF"
+                detail={sizeLabel ? `The original file, ${sizeLabel}` : 'The original file'}
+                onPress={() => run('pdf')}
+                last
+              />
             ) : (
               <>
                 <SheetRow
@@ -301,16 +357,28 @@ export function ExportSheet({ visible, document, onClose }: Props) {
                   onPress={() => run('small')}
                 />
                 <SheetRow
-                  icon="images-outline"
+                  icon="image-outline"
                   label={pageCount === 1 ? 'JPEG image' : 'JPEG images'}
-                  detail={pageCount === 1 ? 'The page as a photo' : `${pageCount} images in a ZIP file`}
+                  detail={[
+                    pageCount === 1 ? 'The page as an image' : `${pageCount} images in one ZIP file`,
+                    sizeLabel,
+                  ].filter(Boolean).join(', ')}
                   onPress={() => run('images')}
                   last
                 />
               </>
             )}
           </SheetGroup>
-          <SheetGroup>
+          <SectionLabel style={styles.label}>Save</SectionLabel>
+          <SheetGroup style={styles.lastGroup}>
+            {!isPdfDoc && pageCount > 0 && (
+              <SheetRow
+                icon="download-outline"
+                label="Save to Photos"
+                detail={pageCount === 1 ? 'Adds the page to your photo library' : `Adds all ${pageCount} pages to your photo library`}
+                onPress={() => run('photos')}
+              />
+            )}
             <SheetRow
               icon="print-outline"
               label="Print"
@@ -327,6 +395,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
 
 const styles = StyleSheet.create({
   label: { marginTop: Spacing.xs },
+  lastGroup: { marginBottom: 0 },
   busy: { padding: Spacing.lg, gap: Spacing.md },
   track: { height: 6, borderRadius: Radius.pill, overflow: 'hidden' },
   fill: { height: 6, borderRadius: Radius.pill },

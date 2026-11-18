@@ -2,17 +2,18 @@
 // The long-press action flow shared by Home and Files: the actions sheet and
 // everything it leads to (rename, duplicate, merge, move, share/export,
 // delete). Each screen keeps its own document list; this hook updates it.
+// Delete is a soft delete into Recently deleted, with Undo in the toast.
 //
 // Rename and move use patchDocument so they only touch the fields they change
 // and never overwrite OCR text indexed in the background meanwhile.
 import { useCallback, useState } from 'react';
 import { Alert } from 'react-native';
 import { Document } from '@/types/document';
-import { deleteDocument, patchDocument, saveFolder, getFolders } from '@/lib/storage';
-import { deleteDocumentFiles } from '@/lib/files';
+import { patchDocument, restoreDocument, saveFolder, getFolders, trashDocument } from '@/lib/storage';
 import { duplicateDocument, mergeInto } from '@/lib/doc-ops';
 import { notifySuccess } from '@/lib/haptics';
 import { useToast } from '@/components/toast';
+import { useScan } from '@/contexts/scan-context';
 import { DocActionsSheet } from '@/components/doc-actions-sheet';
 import { RenameSheet } from '@/components/rename-sheet';
 import { MergeSheet } from '@/components/merge-sheet';
@@ -36,6 +37,7 @@ export function useDocumentActions({
   onSelect?: (doc: Document) => void;
 }) {
   const toast = useToast();
+  const { bumpLastSaved } = useScan();
   const [actionsTarget, setActionsTarget] = useState<Document | null>(null);
   const [renameTarget, setRenameTarget] = useState<Document | null>(null);
   const [mergeTarget, setMergeTarget] = useState<Document | null>(null);
@@ -49,26 +51,46 @@ export function useDocumentActions({
   }, [setDocuments, toast]);
 
   const handleDelete = useCallback((doc: Document) => {
-    Alert.alert('Delete document?', `“${doc.name}” will be permanently deleted.`, [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            await deleteDocument(doc.id);
-            deleteDocumentFiles(doc.id);
-            setDocuments(prev => prev.filter(d => d.id !== doc.id));
-            notifySuccess();
-            toast.show('Document deleted');
-          } catch (err) {
-            console.error('Delete failed', err);
-            Alert.alert("Couldn't delete document", 'Please try again.');
-          }
+    Alert.alert(
+      `Delete “${doc.name}”?`,
+      'It moves to Recently deleted, where you can restore it for 30 days.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              // Soft delete: the record and files stay until Recently deleted is emptied.
+              const ok = await trashDocument(doc.id);
+              setDocuments(prev => prev.filter(d => d.id !== doc.id));
+              if (!ok) return;
+              notifySuccess();
+              toast.show('Moved to Recently deleted', {
+                action: {
+                  label: 'Undo',
+                  onPress: () => {
+                    restoreDocument(doc.id)
+                      .then(restored => {
+                        if (restored) setDocuments(prev => (prev.some(d => d.id === doc.id) ? prev : [{ ...doc, trashedAt: undefined }, ...prev]));
+                        bumpLastSaved();
+                      })
+                      .catch(err => {
+                        console.error('Restore failed', err);
+                        Alert.alert("Couldn't restore the document", 'Find it in Settings, Recently deleted.');
+                      });
+                  },
+                },
+              });
+            } catch (err) {
+              console.error('Delete failed', err);
+              Alert.alert("Couldn't delete the document", 'Try again.');
+            }
+          },
         },
-      },
-    ]);
-  }, [setDocuments, toast]);
+      ],
+    );
+  }, [setDocuments, toast, bumpLastSaved]);
 
   const handleDuplicate = useCallback(async (doc: Document) => {
     try {

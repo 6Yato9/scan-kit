@@ -385,7 +385,7 @@ export default function AnnotateScreen() {
       <FilterBaker />
       <ScreenHeader
         dark
-        title="Annotate"
+        title="Mark up"
         left={<HeaderTextButton title="Cancel" color={colors.chromeText} onPress={handleCancel} />}
         right={
           saving ? (
