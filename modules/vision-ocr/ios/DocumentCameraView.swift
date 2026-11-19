@@ -426,10 +426,13 @@ public class DocumentCameraView: ExpoView, AVCaptureVideoDataOutputSampleBufferD
 
     videoOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange]
     videoOutput.alwaysDiscardsLateVideoFrames = true
-    // Analyse preview-sized frames (about 1920 x 1440), not the photo
-    // preset's full sensor size: detection needs no more, and 12 MP frames
-    // at 15 Hz cost heat and battery for nothing.
-    videoOutput.deliversPreviewSizedOutputBuffers = true
+    // Frames arrive preview-sized (about 1920 x 1440), not at the photo
+    // preset's full sensor size: with sessionPreset .photo the output's
+    // automaticallyConfiguresOutputBufferDimensions (default true) already
+    // downscales them. Never set deliversPreviewSizedOutputBuffers here:
+    // setting it while automatic configuration is on throws an Objective-C
+    // exception that aborts the app (TestFlight build 19, iPhone 13 mini,
+    // iOS 26.6 — every real device; the simulator never configures a camera).
     videoOutput.setSampleBufferDelegate(self, queue: analysisQueue)
     if session.canAddOutput(videoOutput) { session.addOutput(videoOutput) }
 
