@@ -12,6 +12,12 @@
 // Undo: it removes the new document (lib/merge-undo undoNewMerge) and comes
 // back here with the same list (lib/create-pdf-build draft), since Undo
 // usually means the order or the choice was wrong.
+//
+// Round 16: when the result is a PDF, More options set the paper and margins
+// its photos and scans are placed on — the same remembered PDF layout as the
+// export sheet's PDF options (lib/export-prefs.ts), whose defaults are
+// Document settings' paper, edge to edge, as before. A scanned-document
+// result has no paper yet: its PDF options are chosen when it is shared.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { router as stackRouter, useLocalSearchParams, useRouter } from 'expo-router';
@@ -23,7 +29,10 @@ import { useScan, QUALITY_MAP } from '@/contexts/scan-context';
 import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
-import { FooterActions, ToolIntro, ToolNote, ToolProgress, ToolScreen } from '@/components/tool-ui';
+import { FooterActions, Segmented, ToolIntro, ToolNote, ToolProgress, ToolScreen } from '@/components/tool-ui';
+import { MoreOptions } from '@/components/more-options';
+import { DEFAULT_EXPORT_LAYOUT, getExportLayout, MARGIN_LABELS, setExportLayout, type ExportLayout } from '@/lib/export-prefs';
+import type { PageSize, PdfMargin } from '@/lib/pdf';
 import { useToast } from '@/components/toast';
 import { PageRow } from '@/components/create-pdf/page-row';
 import { DocPagePicker, sourceRefusalMessage, type PickedPages } from '@/components/create-pdf/doc-page-picker';
@@ -72,6 +81,17 @@ import { notifyError, notifySuccess } from '@/lib/haptics';
 import { Radius, Spacing, Type } from '@/lib/theme';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
+
+const PAPER_OPTIONS: { value: PageSize; label: string }[] = [
+  { value: 'Auto', label: 'Auto' },
+  { value: 'A4', label: 'A4' },
+  { value: 'Letter', label: 'Letter' },
+  { value: 'Legal', label: 'Legal' },
+];
+const MARGIN_OPTIONS: { value: PdfMargin; label: string }[] = (['none', 'small', 'normal', 'wide'] as const).map(m => ({
+  value: m,
+  label: MARGIN_LABELS[m].label,
+}));
 type Adding = { label: string; done: number; total: number };
 
 /** The viewer's message for the new document. */
@@ -147,6 +167,17 @@ export default function CreatePdfScreen() {
   const [adding, setAdding] = useState<Adding | null>(null);
   const [building, setBuilding] = useState<CreateProgress | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  // The PDF layout (shared with the export sheet) and Document settings' paper.
+  const [layout, setLayoutState] = useState<ExportLayout>(DEFAULT_EXPORT_LAYOUT);
+  const layoutRef = useRef(layout);
+  const [docPaper, setDocPaper] = useState<PageSize>('Auto');
+  const [moreOpen, setMoreOpen] = useState(false);
+  const updateLayout = (patch: Partial<ExportLayout>) => {
+    const next = { ...layoutRef.current, ...patch };
+    layoutRef.current = next;
+    setLayoutState(next);
+    setExportLayout(next).catch(() => {});
+  };
 
   const busy = useRef(false);
   const mounted = useRef(true);
@@ -168,8 +199,17 @@ export default function CreatePdfScreen() {
     if (leaving.current) clearTimeout(leaving.current);
     leaving.current = null;
     getDocSettings()
-      .then(s => mounted.current && setAutoTitle(autoName(new Date(), s.namePrefix)))
+      .then(s => {
+        if (!mounted.current) return;
+        setAutoTitle(autoName(new Date(), s.namePrefix));
+        setDocPaper(s.pdfPageSize);
+      })
       .catch(() => {});
+    getExportLayout().then(l => {
+      if (!mounted.current) return;
+      layoutRef.current = l;
+      setLayoutState(l);
+    });
     return () => {
       mounted.current = false;
       abort.current?.abort();
@@ -330,6 +370,7 @@ export default function CreatePdfScreen() {
       const named = createdName(name, autoTitle ?? autoName(new Date(), (await getDocSettings().catch(() => null))?.namePrefix));
       const { doc, kind } = await buildDocument(list, sources, named.name, named.isDefault, {
         signal: ctl.signal,
+        layout: { paper: layoutRef.current.paper, margin: layoutRef.current.margin },
         onProgress: p => mounted.current && setBuilding(p),
       });
       bumpLastSaved();
@@ -432,7 +473,7 @@ export default function CreatePdfScreen() {
 
   const footerNote =
     kind === 'pdf'
-      ? 'With a PDF page among them, the result is a new PDF: PDF pages keep their text, and photos and scans are placed on your paper size from Document settings. The originals are kept.'
+      ? 'With a PDF page among them, the result is a new PDF: PDF pages keep their text, and photos and scans are placed on the paper set in More options. The originals are kept.'
       : pdfs
         ? 'The result is a new document you can still filter and crop, and export or share as a PDF. Adding a PDF page makes it a PDF instead. The originals are kept.'
         : 'The result is a new document you can still filter and crop, and export or share as a PDF. The originals are kept.';
@@ -446,6 +487,23 @@ export default function CreatePdfScreen() {
       {addBar}
       {addingLine}
       <ToolNote>{footerNote}</ToolNote>
+      {kind === 'pdf' ? (
+        <View pointerEvents={working ? 'none' : 'auto'}>
+          <MoreOptions
+            open={moreOpen}
+            onToggle={setMoreOpen}
+            changed={(layout.paper && layout.paper !== docPaper ? 1 : 0) + (layout.margin !== 'none' ? 1 : 0)}
+          >
+            <SectionLabel>Paper for photos and scans</SectionLabel>
+            <Segmented options={PAPER_OPTIONS} value={layout.paper ?? docPaper} onChange={v => updateLayout({ paper: v })} />
+            <SectionLabel>Margins</SectionLabel>
+            <Segmented options={MARGIN_OPTIONS} value={layout.margin} onChange={v => updateLayout({ margin: v })} />
+            <ToolNote>
+              {`${MARGIN_LABELS[layout.margin].detail}. PDF pages keep their own size. These are also the PDF options used when you share.`}
+            </ToolNote>
+          </MoreOptions>
+        </View>
+      ) : null}
     </View>
   );
 

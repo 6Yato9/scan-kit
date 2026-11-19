@@ -31,15 +31,22 @@ import { Image } from 'react-native';
 import { recognizeLines, OcrLine } from './ocr';
 import { VisionOcr } from '../modules/vision-ocr/src';
 
-/** 'Auto' shapes the paper like the scanned pages (a receipt gets a tall, narrow page). */
-export type PageSize = 'Auto' | 'A4' | 'Letter';
+/**
+ * 'Auto' shapes the paper like the scanned pages (a receipt gets a tall,
+ * narrow page). 'Legal' (US Legal, 8.5 × 14 in) was added in round 16 for the
+ * export options; Document settings still store only Auto / A4 / Letter.
+ */
+export type PageSize = 'Auto' | 'A4' | 'Letter' | 'Legal';
+/** A fixed paper size (everything but 'Auto'). */
+export type FixedPaper = Exclude<PageSize, 'Auto'>;
 export type PdfQuality = 'high' | 'standard' | 'small';
 type Paper = { width: number; height: number };
 
 /** Standard paper sizes in PostScript points (1 in = 72 pt). */
-export const PAPER_SIZES_PT: Record<'A4' | 'Letter', Paper> = {
+export const PAPER_SIZES_PT: Record<FixedPaper, Paper> = {
   A4: { width: 595, height: 842 },
   Letter: { width: 612, height: 792 },
+  Legal: { width: 612, height: 1008 },
 };
 
 /** Auto pages get the long edge of A4, so they look and print at a familiar scale. */
@@ -86,6 +93,7 @@ export function autoPaperSize(sizes: ({ width: number; height: number } | null |
 /** Short user-facing name for a paper setting. */
 export function paperLabel(pageSize: PageSize): string {
   if (pageSize === 'Auto') return 'Auto';
+  if (pageSize === 'Legal') return 'US Legal';
   return pageSize === 'Letter' ? 'US Letter' : 'A4';
 }
 
@@ -120,12 +128,52 @@ export type GeneratePdfOptions = {
   /** Give up waiting for the renderer after this long. Default 30 s + 3 s per page. */
   timeoutMs?: number;
   /**
-   * Page numbers printed bottom-centre on every sheet: 'number' ("3") or
-   * 'of-total' ("3 of 12"). Drawn into the PDF only; the stored pages are
-   * untouched. Default 'off'.
+   * Page numbers printed on every sheet: 'number' ("3") or 'of-total'
+   * ("3 of 12"). Drawn into the PDF only; the stored pages are untouched.
+   * Default 'off'.
    */
   pageNumbers?: PageNumberStyle;
+  /** Where the page number sits. Default 'bottom-center' (the only place before round 16). */
+  pageNumberPosition?: PageNumberPosition;
+  /**
+   * Paper orientation for A4 / Letter / Legal. 'auto' (default, as before):
+   * each page gets the orientation of its scan when the build can merge runs,
+   * otherwise portrait. 'portrait' / 'landscape' force it for every page.
+   * Ignored for 'Auto' paper, which is shaped like the scan anyway.
+   */
+  orientation?: PdfOrientation;
+  /** White space around the page image on the paper. Default 'none' (edge to edge, as before). */
+  margin?: PdfMargin;
+  /**
+   * Longest image edge in pixels, overriding the preset's (Compress › custom
+   * size). Pages are always re-encoded then. Long documents keep their caps.
+   */
+  maxEdge?: number;
 };
+
+// ── Layout options (round 16) ───────────────────────────────────────────────
+
+export type PdfOrientation = 'auto' | 'portrait' | 'landscape';
+export const PDF_ORIENTATIONS: readonly PdfOrientation[] = ['auto', 'portrait', 'landscape'];
+
+export type PdfMargin = 'none' | 'small' | 'normal' | 'wide';
+export const PDF_MARGINS: readonly PdfMargin[] = ['none', 'small', 'normal', 'wide'];
+/** Margin widths in points: none, ¼ in, ½ in, 1 in. */
+export const PDF_MARGIN_PT: Record<PdfMargin, number> = { none: 0, small: 18, normal: 36, wide: 72 };
+/**
+ * A margin never takes more than this share of the paper's shorter side, so a
+ * narrow 'Auto' receipt page with a 1-inch margin still shows its receipt.
+ */
+export const MAX_MARGIN_SHARE = 0.15;
+
+/** The margin actually used on `paper`, in points (see MAX_MARGIN_SHARE). */
+export function marginOn(paper: { width: number; height: number }, margin: PdfMargin | undefined): number {
+  const want = PDF_MARGIN_PT[margin ?? 'none'] ?? 0;
+  return Math.max(0, Math.min(want, Math.min(paper.width, paper.height) * MAX_MARGIN_SHARE));
+}
+
+export type PageNumberPosition = 'bottom-center' | 'bottom-right' | 'top-right';
+export const PAGE_NUMBER_POSITIONS: readonly PageNumberPosition[] = ['bottom-center', 'bottom-right', 'top-right'];
 
 // ── Page numbers ────────────────────────────────────────────────────────────
 
@@ -145,15 +193,33 @@ export function pageNumberLabel(style: PageNumberStyle | undefined, index: numbe
 export const PAGE_NUMBER_FONT_PT = 9;
 export const PAGE_NUMBER_BOTTOM_PT = 14;
 
+/** Side inset of a page number placed on the right, in points (inside the printer margin). */
+export const PAGE_NUMBER_SIDE_PT = 22;
+
 /**
- * The page number, centred at the bottom of the SHEET (the paper, not the
- * image on it), inside the usual 0.2-inch printer margin. It sits on a small
- * white label so it reads on a scan that runs to the edge of the paper too.
+ * The page number on the SHEET (the paper, not the image on it), inside the
+ * usual 0.2-inch printer margin: centred at the bottom by default, or at the
+ * bottom or top right. With a page margin wider than that, it sits in the
+ * margin's band, level with the image's edge. It is on a small white label so
+ * it reads on a scan that runs to the edge of the paper too. The default
+ * markup is exactly what it was before positions existed.
  */
-export function pageNumberHtml(style: PageNumberStyle | undefined, index: number, total: number): string {
+export function pageNumberHtml(
+  style: PageNumberStyle | undefined,
+  index: number,
+  total: number,
+  position: PageNumberPosition = 'bottom-center',
+  marginPt = 0,
+): string {
   const label = pageNumberLabel(style, index, total);
   if (!label) return '';
-  return `<div class="pn"><span>${escapeHtml(label)}</span></div>`;
+  if (position === 'bottom-center') return `<div class="pn"><span>${escapeHtml(label)}</span></div>`;
+  const side = r4(Math.max(PAGE_NUMBER_SIDE_PT, marginPt));
+  const vertical = position === 'top-right' ? `bottom:auto;top:calc(${PAGE_NUMBER_BOTTOM_PT} * var(--pt));` : '';
+  return (
+    `<div class="pn" style="${vertical}text-align:right;padding-right:calc(${side} * var(--pt))">` +
+    `<span>${escapeHtml(label)}</span></div>`
+  );
 }
 
 export class PdfError extends Error {
@@ -228,6 +294,27 @@ export function fitContain(
 }
 
 /**
+ * fitContain inside the paper less `marginPt` on every side; the box is still
+ * returned as fractions of the WHOLE paper. A zero margin is exactly fitContain.
+ */
+export function fitWithMargin(
+  img: { width: number; height: number },
+  paper: { width: number; height: number },
+  marginPt: number,
+): { left: number; top: number; width: number; height: number } {
+  if (!(marginPt > 0)) return fitContain(img, paper);
+  const inner = { width: paper.width - 2 * marginPt, height: paper.height - 2 * marginPt };
+  if (inner.width <= 0 || inner.height <= 0) return fitContain(img, paper);
+  const box = fitContain(img, inner);
+  return {
+    left: (marginPt + box.left * inner.width) / paper.width,
+    top: (marginPt + box.top * inner.height) / paper.height,
+    width: (box.width * inner.width) / paper.width,
+    height: (box.height * inner.height) / paper.height,
+  };
+}
+
+/**
  * Rounds a size estimate up to two significant figures in the unit it is shown
  * in (KB below 1 MB, tenths of a MB above), so "about 150 KB" is never less
  * than the estimate itself: 126 KB → 130 KB, 1.21 MB → 1.3 MB, 9 KB → 9 KB.
@@ -248,9 +335,18 @@ export function roundUpEstimate(bytes: number): number {
   return Math.ceil(mb / step - 1e-9) * step * MB;
 }
 
+/** Longest image edge (px) of each preset, for screens that show or compare them. */
+export function presetMaxEdge(quality: PdfQuality): number {
+  return QUALITY[quality].maxEdge;
+}
+
+/** Bounds of a custom `maxEdge` (Compress): below 800 px small print is unreadable; above 2400 nothing is gained. */
+export const MIN_CUSTOM_EDGE = 800;
+export const MAX_CUSTOM_EDGE = 2400;
+
 /** Cap the long edge for big documents so the inlined HTML stays a sane size. */
-function maxEdgeFor(quality: PdfQuality, pageCount: number): number {
-  const base = QUALITY[quality].maxEdge;
+function maxEdgeFor(quality: PdfQuality, pageCount: number, override?: number): number {
+  const base = override && override > 0 ? Math.round(override) : QUALITY[quality].maxEdge;
   if (pageCount > 40) return Math.min(base, 1500);
   if (pageCount > 20) return Math.min(base, 2000);
   return base;
@@ -278,8 +374,8 @@ export type PageStat = { bytes: number; width: number; height: number };
  * edge. Good to within about 25% — enough for "about 1.2 MB" next to an
  * export option.
  */
-export function estimatePdfBytes(pages: PageStat[], quality: PdfQuality, searchable = false): number {
-  const maxEdge = maxEdgeFor(quality, pages.length);
+export function estimatePdfBytes(pages: PageStat[], quality: PdfQuality, searchable = false, maxEdgeOverride?: number): number {
+  const maxEdge = maxEdgeFor(quality, pages.length, maxEdgeOverride);
   let total = 1_000;
   for (const p of pages) {
     const long = Math.max(p.width, p.height);
@@ -287,6 +383,29 @@ export function estimatePdfBytes(pages: PageStat[], quality: PdfQuality, searcha
     total += p.bytes * scale * scale * RENDER_RATIO + PAGE_OVERHEAD + (searchable ? TEXT_OVERHEAD : 0);
   }
   return Math.round(total);
+}
+
+/**
+ * The largest image size (long edge, px, a multiple of 50 between
+ * MIN_CUSTOM_EDGE and MAX_CUSTOM_EDGE) whose estimated PDF, rounded up the way
+ * it is shown, fits in `targetBytes`; null when even the smallest doesn't.
+ * Pure: Compress's "Fit under" choices. The estimate leans high, so the file
+ * made at this size normally comes in under the target; the screen still
+ * reports the real size.
+ */
+export function maxEdgeForTarget(pages: PageStat[], targetBytes: number, searchable = false): number | null {
+  const fits = (edge: number) => roundUpEstimate(estimatePdfBytes(pages, 'standard', searchable, edge)) <= targetBytes;
+  if (!fits(MIN_CUSTOM_EDGE)) return null;
+  let lo = MIN_CUSTOM_EDGE / 50;
+  let hi = MAX_CUSTOM_EDGE / 50;
+  if (fits(hi * 50)) return hi * 50;
+  // Invariant: lo fits, hi doesn't (the estimate only grows with the edge).
+  while (hi - lo > 1) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (fits(mid * 50)) lo = mid;
+    else hi = mid;
+  }
+  return lo * 50;
 }
 
 export type PreparedImage = { b64: string; mime: string; width: number; height: number };
@@ -297,8 +416,10 @@ async function prepareImage(
   quality: PdfQuality,
   maxEdge: number,
   knownSize?: { width: number; height: number } | null,
+  forceReencode = false,
 ): Promise<PreparedImage> {
-  const preset = QUALITY[quality];
+  const base = QUALITY[quality];
+  const preset = forceReencode ? { ...base, reencode: true } : base;
   const natural = knownSize !== undefined ? knownSize : await getImageSize(uri);
   const tooBig = !natural || Math.max(natural.width, natural.height) > maxEdge;
 
@@ -502,10 +623,17 @@ export function planPaperRuns(
   sizes: ({ width: number; height: number } | null | undefined)[],
   pageSize: PageSize,
   perPage: boolean,
+  orientation: PdfOrientation = 'auto',
 ): PaperRun[] {
   const n = sizes.length;
   if (n === 0) return [];
-  const fixed = pageSize === 'Auto' ? null : PAPER_SIZES_PT[pageSize];
+  const fixed = pageSize === 'Auto' ? null : PAPER_SIZES_PT[pageSize] ?? PAPER_SIZES_PT.A4;
+  // A forced orientation puts every page on the same paper: one run.
+  if (fixed && orientation !== 'auto') {
+    const landscape = orientation === 'landscape';
+    const paper = landscape === fixed.width > fixed.height ? fixed : { width: fixed.height, height: fixed.width };
+    return [{ start: 0, end: n, paper }];
+  }
   if (!perPage) return [{ start: 0, end: n, paper: fixed ?? autoPaperSize(sizes) }];
 
   const usable = (s: (typeof sizes)[number]) => !!s && s.width > 0 && s.height > 0;
@@ -552,10 +680,12 @@ export function buildSheet(
   pageIndex: number,
   paper: Paper,
   overlayHtml: GeneratePdfOptions['overlayHtml'],
-  numbering?: { style: PageNumberStyle | undefined; total: number },
+  numbering?: { style: PageNumberStyle | undefined; total: number; position?: PageNumberPosition },
+  margin?: PdfMargin,
 ): string {
   const { img } = page;
-  const box = fitContain(img, paper);
+  const marginPt = marginOn(paper, margin);
+  const box = fitWithMargin(img, paper, marginPt);
   const boxPt = { width: r4(box.width * paper.width), height: r4(box.height * paper.height) };
   const text = page.ocr ? ocrSpans(page.ocr.lines, page.ocr.original, boxPt.height) : '';
   const overlay = overlayHtml ? `<div class="o">${overlayHtml(pageIndex, boxPt)}</div>` : '';
@@ -563,7 +693,7 @@ export function buildSheet(
     `<div class="s"><div class="b" style="left:${r4(box.left * 100)}%;top:${r4(box.top * 100)}%;` +
     `width:${r4(box.width * 100)}%;height:${r4(box.height * 100)}%">` +
     `<img src="data:${img.mime};base64,${img.b64}">${text}${overlay}</div>` +
-    `${numbering ? pageNumberHtml(numbering.style, pageIndex, numbering.total) : ''}</div>`
+    `${numbering ? pageNumberHtml(numbering.style, pageIndex, numbering.total, numbering.position, marginPt) : ''}</div>`
   );
 }
 
@@ -581,8 +711,10 @@ async function renderRun(
   throwIfAborted(signal);
   const { paper } = run;
   const sheets: string[] = [];
-  const numbering = { style: opts.pageNumbers, total };
-  for (let i = run.start; i < run.end; i++) sheets.push(buildSheet(pages[i - run.start], i, paper, opts.overlayHtml, numbering));
+  const numbering = { style: opts.pageNumbers, total, position: opts.pageNumberPosition };
+  for (let i = run.start; i < run.end; i++) {
+    sheets.push(buildSheet(pages[i - run.start], i, paper, opts.overlayHtml, numbering, opts.margin));
+  }
   const html = buildPdfHtml(sheets, paper);
   sheets.length = 0; // let the per-page strings go before the native call
 
@@ -660,7 +792,8 @@ export async function generatePdf(
 
   const n = pages.length;
   const uris = pages.map(cleanUri);
-  const maxEdge = maxEdgeFor(quality, n);
+  const maxEdge = maxEdgeFor(quality, n, opts.maxEdge);
+  const forceReencode = !!opts.maxEdge;
 
   // Plan the print jobs from each page's pixel size alone (no pixels are read
   // yet), so a long document never has every page's image in memory at once:
@@ -678,7 +811,7 @@ export async function generatePdf(
 
     let img: PreparedImage;
     try {
-      img = await prepareImage(uri, quality, maxEdge, naturals[i]);
+      img = await prepareImage(uri, quality, maxEdge, naturals[i], forceReencode);
     } catch {
       throw new PdfError(`Couldn’t read page ${i + 1}.`, 'read');
     }
@@ -710,7 +843,8 @@ export async function generatePdf(
   };
 
   const canMerge = canMergePdfs();
-  const planned = planPaperRuns(naturals, pageSize, canMerge);
+  const orientation = opts.orientation ?? 'auto';
+  const planned = planPaperRuns(naturals, pageSize, canMerge, orientation);
   const runs = canMerge ? splitLongRuns(planned) : planned;
   if (runs.length > 1) {
     try {
@@ -725,7 +859,7 @@ export async function generatePdf(
       if (n > MAX_RUN_PAGES) throw new PdfError('Couldn’t create the PDF.', 'render');
     }
   }
-  const single = runs.length === 1 ? runs[0] : planPaperRuns(naturals, pageSize, false)[0];
+  const single = runs.length === 1 ? runs[0] : planPaperRuns(naturals, pageSize, false, orientation)[0];
   return renderRun(await prepareRun(runs.length === 1)(single), single, opts, n);
 }
 

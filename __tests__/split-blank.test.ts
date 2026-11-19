@@ -95,7 +95,7 @@ jest.mock('../lib/bake', () => ({
 const mockIndex = jest.fn(async () => {});
 jest.mock('../lib/save-scan', () => ({ indexDocText: () => mockIndex() }));
 
-import { splitDocument, splitRanges } from '../lib/doc-ops';
+import { splitDocument, splitDocumentParts, splitRanges } from '../lib/doc-ops';
 import { blankPageSize, blankPageUndo, canUndoBlankPage, insertBlankPageFiles, removeBlankPageFiles, solidGrayJpeg } from '../lib/blank-page';
 
 /** A scanned document whose page i is "p<i>", with shadows on some pages. */
@@ -193,6 +193,34 @@ describe('splitDocument', () => {
     expect(mockDocs.has('part-1')).toBe(false);
     expect([...mockFs.keys()].some(k => k.includes('/part-'))).toBe(false);
     expect(mockTrash).not.toHaveBeenCalled();
+  });
+});
+
+describe('splitDocumentParts (round 16: every N pages, by ranges)', () => {
+  test('one document per part, named (1), (2), (3); pages left out are not copied', async () => {
+    seed('src', 5, { filters: ['bw', 'original', 'enhanced', 'original', 'grayscale'] });
+    mockFs.set(`${ROOT}/src/page-4.orig.jpg`, 'o4');
+    const r = await splitDocumentParts('src', [[0, 1], [2], [4]], { expectedCount: 5 });
+    expect(r.parts.map(d => d.name)).toEqual(['Lease (1)', 'Lease (2)', 'Lease (3)']);
+    expect(r.parts.map(d => d.pages.length)).toEqual([2, 1, 1]);
+    expect(file(r.parts[2].id, 0)).toBe('p4');
+    expect(file(r.parts[2].id, 0, '.orig.jpg')).toBe('o4');
+    expect(r.parts[0].filters).toEqual(['bw', 'original']);
+    expect(r.parts[2].filters).toEqual(['grayscale']);
+    // Newest first in "Date added": (1) before (2) before (3).
+    expect(r.parts[0].createdAt).toBeGreaterThan(r.parts[1].createdAt);
+    expect(r.parts[1].createdAt).toBeGreaterThan(r.parts[2].createdAt);
+    expect(mockDocs.get('src').trashedAt).toBeUndefined();
+  });
+
+  test('parts planned from the stored page count; a page outside it is refused, nothing made', async () => {
+    seed('src', 4);
+    const r = await splitDocumentParts('src', n => [[0, 1], [2, 3]].filter(p => p[0] < n));
+    expect(r.parts).toHaveLength(2);
+    seed('two', 2);
+    await expect(splitDocumentParts('two', [[0], [5]])).rejects.toThrow();
+    await expect(splitDocumentParts('two', [[]])).rejects.toThrow();
+    expect([...mockDocs.keys()].filter(k => k !== 'src' && k !== 'two').length).toBe(2);
   });
 });
 

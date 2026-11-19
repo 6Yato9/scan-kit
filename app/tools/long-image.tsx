@@ -1,6 +1,11 @@
 // app/tools/long-image.tsx
 // Stacks every page of a document into one tall image, previews it, and shares
 // it. Rendering happens in an off-screen WebView canvas (lib/long-image.ts).
+//
+// Round 16: spacing between pages on the screen; under More options an outer
+// margin, the background colour, the widest the pages may be and the JPEG
+// quality — remembered (lib/tool-prefs.ts), defaults exactly the old image.
+// Changing a choice drops the preview, so what is shown is what is shared.
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Image, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { LocalWebView } from '@/components/local-webview';
@@ -8,9 +13,24 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
-import { NoDocumentsScreen, ToolNote, ToolScreen, isImageDoc, isSinglePageDoc, useToolDocuments } from '@/components/tool-ui';
+import { ColorSwatches, NoDocumentsScreen, Segmented, ToolNote, ToolScreen, isImageDoc, isSinglePageDoc, useToolDocuments } from '@/components/tool-ui';
+import { MoreOptions } from '@/components/more-options';
+import { readToolPrefs, TOOL_PREF_KEYS, writeToolPrefs } from '@/lib/tool-prefs';
 import { ToolDocPicker, useToolDoc } from '@/components/tool-doc';
-import { buildLongImageHtml, planLongImage, type LongImagePlan } from '@/lib/long-image';
+import {
+  BACKGROUND_HEX,
+  buildLongImageHtml,
+  DEFAULT_LONG_IMAGE,
+  JPEG_QUALITY,
+  parseLongImageOptions,
+  planLongImage,
+  WIDTH_CHOICES,
+  type LongImageBackground,
+  type LongImageOptions,
+  type LongImagePlan,
+  type LongImageQuality,
+  type LongImageSpace,
+} from '@/lib/long-image';
 import { deleteQuietly, exportFileName, makeExportDir, shareFile } from '@/lib/share';
 import { notifyError, notifySuccess } from '@/lib/haptics';
 import { Radius, Spacing } from '@/lib/theme';
@@ -28,6 +48,23 @@ const isMultiPageImageDoc = (d: Document) => isImageDoc(d) && d.pages.length >= 
 
 type Output = { uri: string; dir: string; plan: LongImagePlan; docName: string; docId: string };
 
+const SPACE_OPTIONS: { value: LongImageSpace; label: string }[] = [
+  { value: 'none', label: 'None' },
+  { value: 'small', label: 'Small' },
+  { value: 'large', label: 'Large' },
+];
+const BACKGROUND_OPTIONS: { value: LongImageBackground; label: string; color: string }[] = [
+  { value: 'white', label: 'White', color: BACKGROUND_HEX.white },
+  { value: 'grey', label: 'Grey', color: BACKGROUND_HEX.grey },
+  { value: 'black', label: 'Black', color: BACKGROUND_HEX.black },
+];
+const WIDTH_OPTIONS = WIDTH_CHOICES.map(w => ({ value: String(w), label: `${w.toLocaleString('en-US')} px` }));
+const QUALITY_OPTIONS: { value: LongImageQuality; label: string }[] = [
+  { value: 'smaller', label: 'Smaller file' },
+  { value: 'standard', label: 'Standard' },
+  { value: 'best', label: 'Best' },
+];
+
 export default function LongImageScreen() {
   const { colors } = useTheme();
   const { width: screenW } = useWindowDimensions();
@@ -43,6 +80,33 @@ export default function LongImageScreen() {
 
   const { doc, docId, setDocId, fixed } = useToolDoc(docs);
   const working = job !== null;
+  const [opts, setOptsState] = useState<LongImageOptions>(DEFAULT_LONG_IMAGE);
+  const optsRef = useRef(opts);
+  const [moreOpen, setMoreOpen] = useState(false);
+  useEffect(() => {
+    let live = true;
+    readToolPrefs(TOOL_PREF_KEYS.longImage, parseLongImageOptions).then(o => {
+      if (!live) return;
+      optsRef.current = o;
+      setOptsState(o);
+    });
+    return () => { live = false; };
+  }, []);
+  /** A new choice: remembered, and the image made with the old one goes. */
+  const setOpts = (patch: Partial<LongImageOptions>) => {
+    if (working) return;
+    const next = { ...optsRef.current, ...patch };
+    optsRef.current = next;
+    setOptsState(next);
+    writeToolPrefs(TOOL_PREF_KEYS.longImage, next).catch(() => {});
+    deleteQuietly(outputRef.current?.dir);
+    setOutput(null);
+  };
+  const changed =
+    (opts.margin !== DEFAULT_LONG_IMAGE.margin ? 1 : 0) +
+    (opts.background !== DEFAULT_LONG_IMAGE.background ? 1 : 0) +
+    (opts.maxWidth !== DEFAULT_LONG_IMAGE.maxWidth ? 1 : 0) +
+    (opts.quality !== DEFAULT_LONG_IMAGE.quality ? 1 : 0);
 
   // Remove the rendered file when leaving the screen.
   useEffect(
@@ -70,8 +134,13 @@ export default function LongImageScreen() {
     const srcs = doc.pages.map(p => p.split('?')[0]);
     const sizes: { width: number; height: number }[] = [];
     for (const s of srcs) sizes.push(await imageSize(s));
-    const plan = planLongImage(sizes);
-    setJob({ html: buildLongImageHtml(srcs, plan), plan, doc });
+    const o = optsRef.current;
+    const plan = planLongImage(sizes, o);
+    setJob({
+      html: buildLongImageHtml(srcs, plan, { background: BACKGROUND_HEX[o.background], quality: JPEG_QUALITY[o.quality] }),
+      plan,
+      doc,
+    });
     timer.current = setTimeout(fail, TIMEOUT_MS);
   };
 
@@ -148,18 +217,36 @@ export default function LongImageScreen() {
         note="Documents with two or more pages."
         onPick={d => setDocId(d.id)}
       />
+      <View pointerEvents={working ? 'none' : 'auto'}>
+        <SectionLabel>Space between pages</SectionLabel>
+        <Segmented options={SPACE_OPTIONS} value={opts.gap} onChange={v => setOpts({ gap: v })} />
+        <MoreOptions open={moreOpen} onToggle={setMoreOpen} changed={changed}>
+          <SectionLabel>Margin around the pages</SectionLabel>
+          <Segmented options={SPACE_OPTIONS} value={opts.margin} onChange={v => setOpts({ margin: v })} />
+          <SectionLabel>Background</SectionLabel>
+          <ColorSwatches options={BACKGROUND_OPTIONS} value={opts.background} onChange={v => setOpts({ background: v })} />
+          <ToolNote>The color of the space between and around the pages.</ToolNote>
+          <SectionLabel>Page width</SectionLabel>
+          <Segmented options={WIDTH_OPTIONS} value={String(opts.maxWidth)} onChange={v => setOpts({ maxWidth: Number(v) })} />
+          <ToolNote>
+            The widest the pages can be. Pages are never enlarged, and many pages are made narrower to fit in one image.
+          </ToolNote>
+          <SectionLabel>Image quality</SectionLabel>
+          <Segmented options={QUALITY_OPTIONS} value={opts.quality} onChange={v => setOpts({ quality: v })} />
+        </MoreOptions>
+      </View>
       {shown ? (
         <>
           <SectionLabel>Preview</SectionLabel>
           <View style={[styles.preview, { backgroundColor: colors.card, borderColor: colors.thumbBorder }]}>
             <Image
               source={{ uri: shown.uri }}
-              style={{ width: previewW, height: (previewW * shown.plan.totalHeight) / shown.plan.width }}
+              style={{ width: previewW, height: (previewW * shown.plan.totalHeight) / shown.plan.canvasWidth }}
               resizeMode="contain"
               accessibilityLabel={`Long image of ${shown.docName}`}
             />
           </View>
-          <ToolNote>{`${shown.plan.width} × ${shown.plan.totalHeight} pixels, ${shown.plan.heights.length} pages.`}</ToolNote>
+          <ToolNote>{`${shown.plan.canvasWidth.toLocaleString('en-US')} × ${shown.plan.totalHeight.toLocaleString('en-US')} pixels, ${shown.plan.heights.length} pages.`}</ToolNote>
         </>
       ) : (
         <ToolNote>All pages are stacked top to bottom into a single JPEG you can share or save to Photos.</ToolNote>

@@ -14,6 +14,13 @@
 // boxed again, wider. Undo is offered in the viewer only while its toast
 // shows; "Save as a copy" leaves the original as it is.
 //
+// Round 16: the boxes' colour (black by default, or any palette colour —
+// white for a clean look, gray, red…) and an optional "REDACTED" across each
+// box, set in a Style sheet (the chip beside the find shortcuts) and
+// remembered (lib/stamp-prefs.ts). Whatever the colour, a box is burned in
+// fully opaque, so the pixels under it are replaced, never just covered; the
+// word is drawn on top of the opaque box afterwards.
+//
 // Imported PDFs are listed with Convert (components/tool-doc.tsx): a PDF's
 // text layer can't be redacted in place, so its pages become images first,
 // and once they are redacted the PDF kept for undoing that conversion is
@@ -34,6 +41,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';
 import { HeaderTextButton } from '@/components/screen-header';
+import { AppSwitch } from '@/components/app-switch';
+import { BottomSheet, SheetHeader } from '@/components/bottom-sheet';
+import { ColorPalette } from '@/components/color-palette';
 import {
   FooterActions,
   NoDocumentsScreen,
@@ -62,15 +72,21 @@ import {
 import { discardConvertStashes, findInDocument, findLeftovers, ocrAvailable } from '@/lib/redact-run';
 import { OcrAbortedError } from '@/lib/ocr';
 import { notifyError, notifySuccess, selection } from '@/lib/haptics';
+import { REDACT_LABEL } from '@/lib/stamp';
+import { INK_PALETTE, TOOL_INKS, contrastOn, inkHex, inkLabel, type InkChoice } from '@/lib/stamp-colors';
+import { DEFAULT_REDACT_PREFS, loadRedactPrefs, saveRedactPrefs, type RedactPrefs } from '@/lib/stamp-prefs';
 import { HIT, Radius, Spacing, Type } from '@/lib/theme';
 import type { Document } from '@/types/document';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
-const PRESETS: { kind: 'email' | 'phone'; label: string; icon: IconName }[] = [
-  { kind: 'email', label: 'Email addresses', icon: 'mail-outline' },
-  { kind: 'phone', label: 'Phone numbers', icon: 'call-outline' },
+const PRESETS: { kind: 'email' | 'phone'; label: string; spoken: string; icon: IconName }[] = [
+  { kind: 'email', label: 'Emails', spoken: 'email addresses', icon: 'mail-outline' },
+  { kind: 'phone', label: 'Phone numbers', spoken: 'phone numbers', icon: 'call-outline' },
 ];
+
+/** Box colours: the palette, in Redact's own pure black and mid gray. */
+const BOX_COLORS = INK_PALETTE.map(p => ({ value: p.id, label: p.label, color: TOOL_INKS.redact[p.id] ?? p.hex }));
 
 /** Boxes per page index. */
 type PageBoxes = Record<number, RedactBox[]>;
@@ -96,6 +112,26 @@ export default function RedactScreen() {
   const [status, setStatus] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ current: number; total: number; text?: boolean } | null>(null);
   const [area, setArea] = useState<{ width: number; height: number } | null>(null);
+  // How the boxes are burned in, remembered; a choice made before the
+  // remembered one arrives wins (a ref: it must never lag a render behind).
+  const [look, setLook] = useState<RedactPrefs>(DEFAULT_REDACT_PREFS);
+  const [styling, setStyling] = useState(false);
+  const lookTouched = useRef(false);
+  const setLookPatch = (patch: Partial<RedactPrefs>) => {
+    lookTouched.current = true;
+    setLook(prev => ({ ...prev, ...patch }));
+  };
+  useEffect(() => {
+    let live = true;
+    loadRedactPrefs().then(p => {
+      if (live && !lookTouched.current) setLook(p);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+  const fill = inkHex(look.color, look.customColor, TOOL_INKS.redact, 'black');
+  const colorName = look.color === 'custom' ? 'your custom color' : inkLabel(look.color).toLowerCase();
   // What was searched for, to check after redacting that none of it is still readable.
   const finders = useRef<Finder[]>([]);
   const findAbort = useRef<AbortController | null>(null);
@@ -243,8 +279,10 @@ export default function RedactScreen() {
     findAbort.current?.abort();
     const pages = [...targets];
     const specs = new Map(pages.map(i => [i, rects(boxes[i])] as const));
+    saveRedactPrefs(look);
+    const style = { fill, label: look.label };
     const render = (pageUri: string, origUri: string | null, index: number) =>
-      stamper.stamp(pageUri, origUri, { kind: 'redact', boxes: specs.get(index) ?? [] });
+      stamper.stamp(pageUri, origUri, { kind: 'redact', boxes: specs.get(index) ?? [], ...style });
     const onProgress = (done: number, n: number) => setProgress({ current: done, total: n, text: done >= n });
     setSelectedId(null);
     setProgress({ current: 0, total: pages.length });
@@ -294,7 +332,7 @@ export default function RedactScreen() {
     const where = targets.length > 1 ? `${targets.length} pages` : doc.pages.length > 1 ? `page ${targets[0] + 1}` : 'the page';
     Alert.alert(
       `Redact ${where}?`,
-      'The boxes are burned into the page in solid black, and the text under them is removed from the document. You can undo it only until the confirmation at the bottom of the screen goes away.',
+      `The boxes are burned into the page in solid ${colorName}${look.label ? ', with “REDACTED” across them' : ''}, and the text under them is removed from the document. You can undo it only until the confirmation at the bottom of the screen goes away.`,
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Save as a copy', onPress: () => { void apply('copy'); } },
@@ -432,7 +470,7 @@ export default function RedactScreen() {
               onPress={() => { void runFind({ kind: p.kind }, p.kind); }}
               disabled={!doc || !canFind || busy || !!finding}
               accessibilityRole="button"
-              accessibilityLabel={`Find all ${p.label.toLowerCase()}`}
+              accessibilityLabel={`Find all ${p.spoken}`}
               style={({ pressed }) => [
                 styles.chip,
                 { backgroundColor: colors.accentLight },
@@ -441,11 +479,25 @@ export default function RedactScreen() {
               ]}
             >
               <Ionicons name={p.icon} size={15} color={colors.accent} />
-              <Text style={[Type.footnote, styles.chipText, { color: colors.accent }]} numberOfLines={1}>
+              <Text style={[Type.footnote, styles.chipText, { color: colors.accent }]} numberOfLines={1} maxFontSizeMultiplier={1.4}>
                 {p.label}
               </Text>
             </Pressable>
           ))}
+          {/* How the boxes look: a swatch of their colour, and the sheet to change it. */}
+          <Pressable
+            onPress={() => setStyling(true)}
+            disabled={busy}
+            accessibilityRole="button"
+            accessibilityLabel="Box style"
+            accessibilityValue={{ text: `${inkLabel(look.color)}${look.label ? ', labeled' : ''}` }}
+            style={({ pressed }) => [styles.chip, styles.styleChip, { backgroundColor: colors.card }, pressed && { opacity: 0.6 }]}
+          >
+            <View style={[styles.styleDot, { backgroundColor: fill, borderColor: colors.ring }]} />
+            <Text style={[Type.footnote, styles.chipText, { color: colors.text }]} numberOfLines={1} maxFontSizeMultiplier={1.4}>
+              Style
+            </Text>
+          </Pressable>
         </View>
         <Text style={[Type.footnote, styles.hint, { color: colors.muted }]} numberOfLines={2} accessibilityLiveRegion="polite">
           {hint}
@@ -470,6 +522,8 @@ export default function RedactScreen() {
             selectedId={selectedId}
             onSelect={setSelectedId}
             onChange={setPageBoxes}
+            fill={fill}
+            label={look.label ? { text: REDACT_LABEL, color: contrastOn(fill) } : null}
           />
         ) : (
           <View style={[styles.placeholder, { borderColor: colors.border, width: pageW + pad, height: pageH + pad }]}>
@@ -507,6 +561,27 @@ export default function RedactScreen() {
           <Ionicons name="chevron-forward" size={22} color={!doc || page >= pageCount - 1 ? colors.faint : colors.accent} />
         </Pressable>
       </View>
+
+      <BottomSheet visible={styling} onClose={() => setStyling(false)} variant="grouped">
+        <SheetHeader title="Box style" subtitle="Boxes are burned in solid, so what’s under them is gone." />
+        <View style={styles.sheetBody}>
+          <ColorPalette
+            options={BOX_COLORS}
+            value={look.color}
+            onChange={v => setLookPatch({ color: v as InkChoice })}
+            custom={look.customColor}
+            onCustomChange={customColor => setLookPatch({ customColor })}
+            accessibilityLabel="Box color"
+          />
+          <View style={[styles.switchRow, { backgroundColor: colors.card }]}>
+            <Text style={[Type.body, styles.flex, { color: colors.text }]} maxFontSizeMultiplier={1.5}>
+              Show “REDACTED” on boxes
+            </Text>
+            <AppSwitch value={look.label} onValueChange={label => setLookPatch({ label })} accessibilityLabel="Show REDACTED on boxes" />
+          </View>
+          <PrimaryButton title="Done" onPress={() => setStyling(false)} />
+        </View>
+      </BottomSheet>
     </ToolScreen>
   );
 }
@@ -537,6 +612,18 @@ const styles = StyleSheet.create({
     minHeight: 34,
   },
   chipText: { fontWeight: '600' },
+  styleChip: { marginLeft: 'auto' },
+  styleDot: { width: 14, height: 14, borderRadius: 7, borderWidth: StyleSheet.hairlineWidth },
+  flex: { flex: 1 },
+  sheetBody: { gap: Spacing.md, paddingHorizontal: Spacing.lg, paddingBottom: Spacing.sm },
+  switchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    borderRadius: Radius.md,
+    paddingHorizontal: Spacing.lg,
+    minHeight: HIT + 8,
+  },
   hint: { marginTop: Spacing.sm, marginHorizontal: Spacing.xs, lineHeight: 18, minHeight: 18 },
   pageArea: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: Spacing.gutter, paddingTop: Spacing.sm },
   placeholder: {

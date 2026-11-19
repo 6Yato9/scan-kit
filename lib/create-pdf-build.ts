@@ -30,6 +30,7 @@ import { filePrint, samePrint } from './pdf-edit';
 import { joinPdfPageTexts } from './pdf-text';
 import { isSessionPath, isSessionUnlocked, readablePdfUri } from './pdf-session';
 import { generatePdf, PdfCancelledError } from './pdf';
+import type { ExportLayout } from './export-prefs';
 import { ocrAvailable } from './ocr';
 import { getDocSettings, getDocument, saveDocument } from './storage';
 import { indexDocText } from './save-scan';
@@ -169,6 +170,13 @@ function discardDraftFiles(d: CreateDraft): void {
 export type BuildOptions = {
   signal?: AbortSignal;
   onProgress?: (p: CreateProgress) => void;
+  /**
+   * Round 16: how photos and scans are placed on paper in a PDF result
+   * (Create PDF's paper and margins, shared with the export sheet's PDF
+   * options). Absent: Document settings' paper and quality, edge to edge, as
+   * before. A `paper` of null still follows Document settings.
+   */
+  layout?: Pick<ExportLayout, 'paper' | 'margin'>;
 };
 
 export type BuildResult = { doc: Document; kind: 'pdf' | 'scan' };
@@ -371,7 +379,8 @@ async function buildPdf(items: CreateItem[], sources: PdfSource[], name: string,
       const settings = await getDocSettings().catch(() => null);
       const base = done;
       rendered = await generatePdf(images, {
-        pageSize: settings?.pdfPageSize ?? 'Auto',
+        pageSize: options.layout?.paper ?? settings?.pdfPageSize ?? 'Auto',
+        margin: options.layout?.margin,
         quality: settings?.pdfQuality ?? 'standard',
         searchable: ocrAvailable(),
         signal,

@@ -2,19 +2,27 @@
 // Copy chosen pages of a document into a new document (lib/doc-ops
 // extractPages). Each page travels with its .orig shadow so its filter
 // metadata stays truthful.
+//
+// Round 16: under More options, pages can also be chosen by number ("1-3, 5",
+// lib/page-ranges.ts; the field follows taps on the grid and the grid follows
+// the field) or as all odd / all even pages (fronts and backs scanned as one
+// stack).
 import { useState } from 'react';
-import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/contexts/theme-context';
 import { PageThumb } from '@/components/page-thumb';
 import { PrimaryButton } from '@/components/primary-button';
 import { NoDocumentsScreen, SectionRow, ToolScreen, isSinglePageDoc, pageCountLabel, useToolDocuments } from '@/components/tool-ui';
+import { SectionLabel } from '@/components/section-label';
 import { ToolDocPicker, useToolDoc } from '@/components/tool-doc';
 import { FilterBaker } from '@/components/filter-baker';
 import { extractPages } from '@/lib/doc-ops';
+import { MoreOptions } from '@/components/more-options';
+import { oddEvenPages, pagesInRanges, parsePageRanges, selectionLabel } from '@/lib/page-ranges';
 import { notifyError, notifySuccess } from '@/lib/haptics';
-import { Radius, Spacing } from '@/lib/theme';
+import { Radius, Spacing, Type } from '@/lib/theme';
 import type { Document } from '@/types/document';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
 
@@ -26,6 +34,10 @@ export default function ExtractScreen() {
   const { docs: singles, loaded: singlesLoaded } = useToolDocuments(isSinglePageDoc);
   const [pages, setPages] = useState<Set<number>>(new Set());
   const [saving, setSaving] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  // The selection as typed page numbers; kept in step with taps on the grid.
+  const [rangeText, setRangeText] = useState('');
+  const [rangeError, setRangeError] = useState<string | null>(null);
 
   const { doc, docId, setDocId, fixed, fromViewer } = useToolDoc(docs);
 
@@ -33,15 +45,41 @@ export default function ExtractScreen() {
     if (d.id === docId) return;
     setDocId(d.id);
     setPages(new Set());
+    setRangeText('');
+    setRangeError(null);
   };
 
-  const toggle = (i: number) =>
-    setPages(prev => {
-      const next = new Set(prev);
-      if (next.has(i)) next.delete(i);
-      else next.add(i);
-      return next;
-    });
+  /** A new selection from the grid or a button: the field shows it as ranges. */
+  const select = (next: Set<number>) => {
+    setPages(next);
+    setRangeText(selectionLabel(next));
+    setRangeError(null);
+  };
+
+  const toggle = (i: number) => {
+    const next = new Set(pages);
+    if (next.has(i)) next.delete(i);
+    else next.add(i);
+    select(next);
+  };
+
+  /** Typed page numbers select those pages as soon as they make sense. */
+  const typeRanges = (text: string) => {
+    setRangeText(text);
+    if (!doc) return;
+    if (!text.trim()) {
+      setPages(new Set());
+      setRangeError(null);
+      return;
+    }
+    const r = parsePageRanges(text, doc.pages.length);
+    if (r.ok) {
+      setPages(new Set(pagesInRanges(r.ranges)));
+      setRangeError(null);
+    } else {
+      setRangeError(r.error);
+    }
+  };
 
   const allSelected = !!doc && pages.size === doc.pages.length;
 
@@ -109,7 +147,7 @@ export default function ExtractScreen() {
           <SectionRow
             label={`Pages, ${pages.size} selected`}
             action={allSelected ? 'Select none' : 'Select all'}
-            onAction={() => setPages(allSelected ? new Set() : new Set(doc.pages.map((_, i) => i)))}
+            onAction={() => select(allSelected ? new Set() : new Set(doc.pages.map((_, i) => i)))}
           />
           <View style={styles.grid}>
             {doc.pages.map((uri, i) => {
@@ -142,6 +180,43 @@ export default function ExtractScreen() {
               );
             })}
           </View>
+          <MoreOptions open={moreOpen} onToggle={setMoreOpen}>
+            <SectionLabel>Select by page number</SectionLabel>
+            <TextInput
+              style={[Type.body, styles.input, { color: colors.text, backgroundColor: colors.card }]}
+              value={rangeText}
+              onChangeText={typeRanges}
+              placeholder={doc.pages.length > 3 ? `For example 1-2, ${doc.pages.length}` : 'For example 1, 2'}
+              placeholderTextColor={colors.muted}
+              keyboardType="numbers-and-punctuation"
+              autoCorrect={false}
+              returnKeyType="done"
+              editable={!saving}
+              accessibilityLabel="Pages to extract"
+            />
+            <Text
+              style={[Type.footnote, styles.note, { color: rangeError ? colors.danger : colors.muted }]}
+              accessibilityLiveRegion="polite"
+            >
+              {rangeError ?? 'Numbers and ranges, separated by commas. “7-” runs to the last page.'}
+            </Text>
+            <View style={styles.chips}>
+              {(['odd', 'even'] as const).map(which => (
+                <Pressable
+                  key={which}
+                  onPress={() => select(new Set(oddEvenPages(doc.pages.length, which)))}
+                  disabled={saving}
+                  accessibilityRole="button"
+                  accessibilityLabel={which === 'odd' ? 'Select odd pages' : 'Select even pages'}
+                  style={({ pressed }) => [styles.chip, { backgroundColor: colors.card }, pressed && styles.pressed]}
+                >
+                  <Text style={[Type.subhead, { color: colors.text }]} numberOfLines={1} maxFontSizeMultiplier={1.4}>
+                    {which === 'odd' ? 'Odd pages' : 'Even pages'}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          </MoreOptions>
         </>
       ) : null}
     </ToolScreen>
@@ -181,4 +256,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   checkEmpty: { borderWidth: 1.5 },
+  input: { borderRadius: Radius.md, paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md, minHeight: 50 },
+  note: { marginTop: Spacing.sm, marginHorizontal: Spacing.xs, lineHeight: 18 },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm, marginTop: Spacing.md },
+  chip: { borderRadius: Radius.pill, paddingHorizontal: Spacing.lg, minHeight: 36, justifyContent: 'center' },
+  pressed: { opacity: 0.6 },
 });

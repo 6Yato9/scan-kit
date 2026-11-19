@@ -21,7 +21,9 @@ import { LocalWebView } from '@/components/local-webview';
 import { saveScan, indexDocText } from '@/lib/save-scan';
 import { getDocSettings, getScanSettings } from '@/lib/storage';
 import { getImageSize } from '@/lib/image-size';
-import { buildIdCardSheetHtml, planIdCardSheet, sheetPaperFor } from '@/lib/id-card-sheet';
+import { buildIdCardSheetHtml, ID_CARD_SCALES, planIdCardSheet, sheetPaperFor, type IdCardSize, type SheetPaper } from '@/lib/id-card-sheet';
+import { MoreOptions } from '@/components/more-options';
+import { oneOf, readToolPrefs, TOOL_PREF_KEYS, writeToolPrefs } from '@/lib/tool-prefs';
 import { autoName } from '@/lib/auto-name';
 import { notifyError, notifySuccess } from '@/lib/haptics';
 import { alertScanError, cameraTempUri, deleteTempFiles, pickPhotos, renderSourcePage, scanPagesWithCamera } from '@/lib/tool-scan';
@@ -49,6 +51,27 @@ async function toShot(page: ScanPageInput): Promise<Shot> {
 const QUALITY = { low: 0.5, medium: 0.75, high: 0.9 } as const;
 
 type Layout = 'one' | 'two';
+
+/**
+ * Round 16 options for the one-page layout (remembered in lib/tool-prefs.ts):
+ * the paper (null = Document settings, as before) and the card's size on it
+ * (real size, as before, or enlarged 150 % for small print).
+ */
+type IdCardPrefs = { paper: SheetPaper | null; size: IdCardSize };
+function parseIdCardPrefs(o: Record<string, unknown>): IdCardPrefs {
+  return {
+    paper: o.paper === 'A4' || o.paper === 'Letter' ? o.paper : null,
+    size: oneOf<IdCardSize>(['actual', 'large'], o.size, 'actual'),
+  };
+}
+const PAPER_OPTIONS: { value: SheetPaper; label: string }[] = [
+  { value: 'A4', label: 'A4' },
+  { value: 'Letter', label: 'US Letter' },
+];
+const SIZE_OPTIONS: { value: IdCardSize; label: string }[] = [
+  { value: 'actual', label: 'Real size' },
+  { value: 'large', label: 'Enlarged 150%' },
+];
 const LAYOUTS: { value: Layout; label: string }[] = [
   { value: 'one', label: 'One page' },
   { value: 'two', label: 'Two pages' },
@@ -81,13 +104,28 @@ export default function IdCardScreen() {
   const [back, setBack] = useState<Shot | null>(null);
   const [saving, setSaving] = useState(false);
   const [layout, setLayout] = useState<Layout>('one');
-  const [paperLabel, setPaperLabel] = useState<'A4' | 'Letter'>('A4');
+  // Document settings' paper, used unless More options chose one.
+  const [docPaper, setDocPaper] = useState<SheetPaper>('A4');
+  const [prefs, setPrefsState] = useState<IdCardPrefs>({ paper: null, size: 'actual' });
+  const prefsRef = useRef(prefs);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const paperLabel: SheetPaper = prefs.paper ?? docPaper;
+  const setPrefs = (patch: Partial<IdCardPrefs>) => {
+    const next = { ...prefsRef.current, ...patch };
+    prefsRef.current = next;
+    setPrefsState(next);
+    writeToolPrefs(TOOL_PREF_KEYS.idCard, next).catch(() => {});
+  };
   // The off-screen canvas composing the one-page sheet, while it runs.
   const [compose, setCompose] = useState<{ html: string; key: number } | null>(null);
   const composeWait = useRef<{ resolve: (dataUrl: string) => void; reject: (err: Error) => void } | null>(null);
   const busy = useRef(false);
   useEffect(() => {
-    getDocSettings().then(s => setPaperLabel(sheetPaperFor(s.pdfPageSize))).catch(() => {});
+    getDocSettings().then(s => setDocPaper(sheetPaperFor(s.pdfPageSize))).catch(() => {});
+    readToolPrefs(TOOL_PREF_KEYS.idCard, parseIdCardPrefs).then(p => {
+      prefsRef.current = p;
+      setPrefsState(p);
+    });
   }, []);
   // Captures not saved when the screen closes are temp files: remove them.
   const shotsRef = useRef<(Shot | null)[]>([]);
@@ -178,7 +216,13 @@ export default function IdCardScreen() {
       const sizes = [];
       for (const src of srcs) sizes.push((await getImageSize(src)) ?? { width: 856, height: 540 });
       const docSettings = await getDocSettings().catch(() => null);
-      const plan = planIdCardSheet(sizes, sheetPaperFor(docSettings?.pdfPageSize));
+      const chosen = prefsRef.current;
+      const plan = planIdCardSheet(
+        sizes,
+        chosen.paper ?? sheetPaperFor(docSettings?.pdfPageSize),
+        undefined,
+        ID_CARD_SCALES[chosen.size],
+      );
       const dataUrl = await composeSheet(buildIdCardSheetHtml(srcs.map(u => u.split('?')[0]), plan));
       const out = cameraTempUri('id-sheet');
       temps.push(out);
@@ -284,9 +328,25 @@ export default function IdCardScreen() {
       {slot('back', back)}
       <ToolNote>
         {layout === 'one'
-          ? `Both sides go on one ${paperLabel} page at the card’s real size, 85.6 × 54 mm, ready to print at 100%. It stays on this device.`
+          ? prefs.size === 'large'
+            ? `Both sides go on one ${paperLabel === 'Letter' ? 'US Letter' : 'A4'} page, enlarged to 150% (128 × 81 mm) so small print is easier to read. It stays on this device.`
+            : `Both sides go on one ${paperLabel === 'Letter' ? 'US Letter' : 'A4'} page at the card’s real size, 85.6 × 54 mm, ready to print at 100%. It stays on this device.`
           : 'Each side is saved as its own page of one document. It stays on this device.'}
       </ToolNote>
+      {layout === 'one' ? (
+        <View pointerEvents={saving ? 'none' : 'auto'}>
+          <MoreOptions
+            open={moreOpen}
+            onToggle={setMoreOpen}
+            changed={(prefs.paper && prefs.paper !== docPaper ? 1 : 0) + (prefs.size !== 'actual' ? 1 : 0)}
+          >
+            <SectionLabel>Paper</SectionLabel>
+            <Segmented options={PAPER_OPTIONS} value={paperLabel} onChange={v => setPrefs({ paper: v })} />
+            <SectionLabel>Card size</SectionLabel>
+            <Segmented options={SIZE_OPTIONS} value={prefs.size} onChange={v => setPrefs({ size: v })} />
+          </MoreOptions>
+        </View>
+      ) : null}
       {compose ? (
         <View style={styles.host} pointerEvents="none">
           <LocalWebView

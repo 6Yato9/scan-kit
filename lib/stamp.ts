@@ -7,6 +7,7 @@
 import { formatDate, formatDateTime } from './format';
 import { escapeHtml } from './pdf';
 import { BAKE_MAX_PIXELS } from './bake-html';
+import { contrastOn, cssColor, inkHex, normalizeHex, type InkChoice } from './stamp-colors';
 
 const FONT = 'Helvetica,Arial,sans-serif';
 
@@ -88,6 +89,15 @@ export const TILED_DEFAULT_STRENGTH = 20;
  */
 export const TILE_GAP_EM = 2;
 export const TILE_ROW_EM = 4;
+
+/**
+ * The watermark's ink as a hex: a palette id (gray, red and blue are exactly
+ * STAMP_RGB) or 'custom' with its hex; anything unreadable is gray, the
+ * default, as before.
+ */
+export function watermarkInkHex(color: InkChoice | StampColor | string, customColor?: string | null): string {
+  return inkHex(color, customColor, {}, 'gray');
+}
 
 /** What the user chose for the look of a watermark (sizes and strengths null = automatic). */
 export type WatermarkLook = {
@@ -227,6 +237,87 @@ export function watermarkOverlay(
 
 export type Corner = 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left';
 
+// ── Timestamp look (round 16) ───────────────────────────────────────────────
+//
+// Size (points on an A4-wide page, like the Watermark's), text colour and
+// strength, regular or bold, a highlight box behind the text (none or a
+// colour, with its own opacity) and an optional border. Every field may be
+// absent: then it is what the tool always drew — 1.6% of the page width
+// (about 9.5 pt on A4), #222 text in Helvetica regular on a white box at 85%,
+// no border — so a default timestamp is unchanged pixel for pixel.
+
+/** Text size limits, in points on an A4-wide page (WATERMARK_REF_WIDTH_PT). */
+export const TIMESTAMP_SIZE_RANGE = { min: 6, max: 48 };
+/** Strength (text opacity) and highlight opacity limits, in percent. */
+export const TIMESTAMP_STRENGTH_RANGE = { min: 10, max: 100 };
+/** The original look's numbers. */
+export const TIMESTAMP_TEXT_HEX = '#222222';
+export const TIMESTAMP_HIGHLIGHT_HEX = '#ffffff';
+export const TIMESTAMP_HIGHLIGHT_OPACITY = 0.85;
+/** Border width, as a fraction of the font size. */
+export const TIMESTAMP_BORDER_EM = 0.1;
+
+export function clampTimestampSize(pt: number): number {
+  return Math.min(TIMESTAMP_SIZE_RANGE.max, Math.max(TIMESTAMP_SIZE_RANGE.min, Math.round(pt)));
+}
+
+export function clampPercent(pct: number, min = TIMESTAMP_STRENGTH_RANGE.min, max = TIMESTAMP_STRENGTH_RANGE.max): number {
+  return Math.min(max, Math.max(min, Math.round(pct)));
+}
+
+/** How a timestamp looks, as the spec carries it (lib/stamp.ts StampSpec 'timestamp'). */
+export type TimestampLookSpec = {
+  /** Points on an A4-wide page; absent / null: the original 1.6% of the page width. */
+  sizePt?: number | null;
+  /** Text colour '#rrggbb'; absent: #222. */
+  color?: string;
+  /** Text opacity 0..1; absent: 1. */
+  opacity?: number;
+  /** Absent / false: regular (the original). */
+  bold?: boolean;
+  /** Highlight box colour '#rrggbb', or null for none; absent: white. */
+  highlight?: string | null;
+  /** Highlight opacity 0..1; absent: 0.85. */
+  highlightOpacity?: number;
+  /** A border round the box in the text colour; absent / false: none. */
+  border?: boolean;
+};
+
+/**
+ * The timestamp's look worked out: font size (fraction of the page width),
+ * weight, and the CSS colours the canvas and the preview paint with.
+ */
+export function resolveTimestampLook(look: TimestampLookSpec): {
+  fontFrac: number;
+  sizePt: number;
+  autoSize: boolean;
+  weight: '500' | '700';
+  ink: string;
+  bg: string | null;
+  border: string | null;
+  borderEm: number;
+} {
+  const finiteN = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n);
+  const unit = (n: unknown, d: number) => (finiteN(n) ? Math.min(1, Math.max(0, n)) : d);
+  const autoSize = !finiteN(look.sizePt);
+  const fontFrac = autoSize ? TIMESTAMP_FONT_FRACTION : clampTimestampSize(look.sizePt as number) / WATERMARK_REF_WIDTH_PT;
+  const textHex = normalizeHex(look.color) ?? TIMESTAMP_TEXT_HEX;
+  const opacity = unit(look.opacity, 1);
+  const hl = look.highlight === null ? null : normalizeHex(look.highlight) ?? TIMESTAMP_HIGHLIGHT_HEX;
+  return {
+    fontFrac,
+    sizePt: Math.round(fontFrac * WATERMARK_REF_WIDTH_PT),
+    autoSize,
+    // 500 is what the tool always asked for; Helvetica has no 500, so WebKit
+    // (and the preview, which asks for 400) draws its regular face.
+    weight: look.bold ? '700' : '500',
+    ink: cssColor(textHex, opacity),
+    bg: hl ? cssColor(hl, unit(look.highlightOpacity, TIMESTAMP_HIGHLIGHT_OPACITY)) : null,
+    border: look.border ? cssColor(textHex, opacity) : null,
+    borderEm: TIMESTAMP_BORDER_EM,
+  };
+}
+
 /**
  * Inset from the page edges, as a fraction of the page width. The stamp lives
  * in the page's outer margin: about 10pt from the edge and about 10pt type on
@@ -326,12 +417,26 @@ export function signatureOverlay(sig: Signature, p: Placement): string {
 
 /** What to draw on a page, in page-relative terms. */
 export type StampSpec =
-  | { kind: 'signature'; signature: Signature; placement: Placement; ink?: SignatureInk }
+  | {
+      kind: 'signature';
+      signature: Signature;
+      placement: Placement;
+      ink?: SignatureInk;
+      /** Any ink '#rrggbb' (round 16 palette); wins over `ink` when valid. */
+      inkHex?: string;
+      /** 0..1; absent: fully opaque. */
+      opacity?: number;
+    }
   | {
       kind: 'watermark';
       text: string;
       style: WatermarkStyle;
-      color: StampColor;
+      /** A palette id (gray / red / blue were the original three) or 'custom'. */
+      color: StampColor | InkChoice;
+      /** The hex for color 'custom'. */
+      customColor?: string | null;
+      /** Absent / true: bold (the original); false: regular. */
+      bold?: boolean;
       /** Absent: 'single' (the one look there was before Tiled). */
       layout?: WatermarkLayout;
       /** Points on an A4-wide page; absent / null: automatic (see WatermarkLook). */
@@ -339,7 +444,7 @@ export type StampSpec =
       /** Ink opacity in percent; absent / null: automatic. */
       strength?: number | null;
     }
-  | {
+  | ({
       kind: 'timestamp';
       text: string;
       corner: Corner;
@@ -348,18 +453,50 @@ export type StampSpec =
        * 1 = right / bottom; lib/placement.ts). Absent: the corner's.
        */
       anchor?: { x: number; y: number };
-    }
+    } & TimestampLookSpec)
   | {
       kind: 'redact';
-      /** Opaque black boxes, each as fractions (0..1) of the page width / height. */
+      /** Opaque boxes, each as fractions (0..1) of the page width / height. */
       boxes: RedactRect[];
+      /** Opaque fill '#rrggbb'; absent or invalid: black (REDACT_FILL). */
+      fill?: string;
+      /** Print REDACT_LABEL across each box, in black or white for contrast. */
+      label?: boolean;
     };
 
 /** A redaction box as fractions (0..1) of the page: x, w of the width; y, h of the height. */
 export type RedactRect = { x: number; y: number; w: number; h: number };
 
-/** The fill a redaction is burned in with: pure black, fully opaque. */
+/** The fill a redaction is burned in with by default: pure black, fully opaque. */
 export const REDACT_FILL = '#000000';
+
+/**
+ * The optional word across a redaction box, and its width in em in Helvetica
+ * Bold (the sum of the letters' advance widths: R 722, E 667, D 722, A 722,
+ * C 722, T 611, E 667, D 722 per 1000). Both the canvas and the preview size
+ * it from this constant, not from measuring, so they agree exactly.
+ */
+export const REDACT_LABEL = 'REDACTED';
+export const REDACT_LABEL_EM = 5.555;
+/** The label fills at most this share of the box's width and height. */
+export const REDACT_LABEL_FIT = { w: 0.86, h: 0.62 };
+/** Below this size in pixels (canvas) the label is left out: a box too small to carry it. */
+export const REDACT_LABEL_MIN_PX = 5;
+
+/**
+ * Font size for the label in a box `w` × `h` (pixels or points): as large as
+ * fits REDACT_LABEL_FIT of both sides, 0 when it would be smaller than `minSize`.
+ */
+export function redactLabelSize(w: number, h: number, minSize = REDACT_LABEL_MIN_PX): number {
+  if (!(w > 0) || !(h > 0)) return 0;
+  const f = Math.min((w * REDACT_LABEL_FIT.w) / REDACT_LABEL_EM, h * REDACT_LABEL_FIT.h);
+  return f >= minSize ? f : 0;
+}
+
+/** The fill a redaction spec burns in: any opaque '#rrggbb', else black. */
+export function redactFill(fill: unknown): string {
+  return normalizeHex(fill) ?? REDACT_FILL;
+}
 
 /**
  * The boxes clamped to the page, with empty or invalid ones dropped. A box
@@ -408,6 +545,8 @@ export type ResolvedStamp =
       w: number;
       /** Ink to recolour the strokes to; null keeps them as drawn (black). */
       tint: string | null;
+      /** Present only below 1: the signature's opacity. */
+      alpha?: number;
     }
   | {
       kind: 'watermark';
@@ -415,6 +554,8 @@ export type ResolvedStamp =
       layout: 'rotated' | 'center' | 'footer' | 'tiled';
       angle: number;
       fontFrac: number;
+      /** CSS font weight: '700' (the original) or '400'. */
+      weight: '400' | '700';
       ink: string;
       /** Tiled only: spacing in font sizes (watermarkTiles). */
       gapEm: number;
@@ -434,31 +575,65 @@ export type ResolvedStamp =
       padV: number;
       padH: number;
       radius: number;
+      /** CSS font weight. */
+      weight: '500' | '700';
       ink: string;
-      bg: string;
+      /** Highlight box fill; null: no box. */
+      bg: string | null;
+      /** Border colour; null: none. Its width is borderEm font sizes. */
+      border: string | null;
+      borderEm: number;
     }
-  | { kind: 'redact'; rects: RedactRect[]; fill: string };
+  | {
+      kind: 'redact';
+      rects: RedactRect[];
+      fill: string;
+      /** Present only when asked for: the word and its colour. */
+      label?: { text: string; ink: string; em: number; fitW: number; fitH: number; minPx: number };
+    };
 
-/** Matches Ink.stampText / Ink.stampBg in lib/theme.ts and timestampOverlay above. */
-const STAMP_TEXT = '#222222';
-const STAMP_BG = 'rgba(255,255,255,0.85)';
+/**
+ * The ink a signature spec lands in, or null to keep the strokes as drawn
+ * (they are saved in SIGNATURE_INK.black).
+ */
+export function signatureTint(spec: { ink?: SignatureInk; inkHex?: string }): string | null {
+  const hex = normalizeHex(spec.inkHex);
+  if (hex) return hex === SIGNATURE_INK.black ? null : hex;
+  const ink = spec.ink ?? 'black';
+  return ink === 'black' ? null : SIGNATURE_INK[ink] ?? null;
+}
 
 export function resolveStamp(spec: StampSpec): ResolvedStamp {
   if (spec.kind === 'redact') {
-    return { kind: 'redact', rects: cleanRedactRects(spec.boxes), fill: REDACT_FILL };
+    const fill = redactFill(spec.fill);
+    const out: Extract<ResolvedStamp, { kind: 'redact' }> = { kind: 'redact', rects: cleanRedactRects(spec.boxes), fill };
+    if (spec.label) {
+      out.label = {
+        text: REDACT_LABEL,
+        ink: contrastOn(fill),
+        em: REDACT_LABEL_EM,
+        fitW: REDACT_LABEL_FIT.w,
+        fitH: REDACT_LABEL_FIT.h,
+        minPx: REDACT_LABEL_MIN_PX,
+      };
+    }
+    return out;
   }
   if (spec.kind === 'signature') {
-    const ink = spec.ink ?? 'black';
-    return {
+    const out: Extract<ResolvedStamp, { kind: 'signature' }> = {
       kind: 'signature',
       x: spec.placement.x,
       y: spec.placement.y,
       w: spec.placement.w,
-      tint: ink === 'black' ? null : SIGNATURE_INK[ink],
+      tint: signatureTint(spec),
     };
+    const a = spec.opacity;
+    if (typeof a === 'number' && Number.isFinite(a) && a < 1) out.alpha = Math.max(0.05, a);
+    return out;
   }
   if (spec.kind === 'watermark') {
-    const [r, g, b] = STAMP_RGB[spec.color] ?? STAMP_RGB.gray;
+    const rgb = hexToRgbOrGray(watermarkInkHex(spec.color, spec.customColor));
+    const [r, g, b] = rgb;
     const look = resolveWatermarkLook(spec.text, spec);
     const tiled = look.layout === 'tiled';
     return {
@@ -467,6 +642,7 @@ export function resolveStamp(spec: StampSpec): ResolvedStamp {
       layout: tiled ? 'tiled' : spec.style === 'diagonal' ? 'rotated' : spec.style,
       angle: tiled || spec.style === 'diagonal' ? WATERMARK_ANGLE : 0,
       fontFrac: look.fontFrac,
+      weight: spec.bold === false ? '400' : '700',
       ink: `rgba(${r},${g},${b},${look.opacity})`,
       gapEm: TILE_GAP_EM,
       rowEm: TILE_ROW_EM,
@@ -475,20 +651,32 @@ export function resolveStamp(spec: StampSpec): ResolvedStamp {
   }
   const [v, h] = spec.corner.split('-');
   const unit = (n: unknown, fallback: number) => (typeof n === 'number' && Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : fallback);
+  const look = resolveTimestampLook(spec);
   return {
     kind: 'timestamp',
     text: spec.text,
     corner: spec.corner,
     ax: unit(spec.anchor?.x, h === 'right' ? 1 : 0),
     ay: unit(spec.anchor?.y, v === 'bottom' ? 1 : 0),
-    fontFrac: TIMESTAMP_FONT_FRACTION,
+    fontFrac: look.fontFrac,
     insetFrac: CORNER_INSET,
-    padV: 0.35,
-    padH: 0.6,
-    radius: 0.3,
-    ink: STAMP_TEXT,
-    bg: STAMP_BG,
+    padV: TIMESTAMP_PAD.v,
+    padH: TIMESTAMP_PAD.h,
+    radius: TIMESTAMP_PAD.radius,
+    weight: look.weight,
+    ink: look.ink,
+    bg: look.bg,
+    border: look.border,
+    borderEm: look.borderEm,
   };
+}
+
+/** The timestamp box's padding and corner radius, in font sizes (the preview uses the same). */
+export const TIMESTAMP_PAD = { v: 0.35, h: 0.6, radius: 0.3 };
+
+function hexToRgbOrGray(hex: string): [number, number, number] {
+  const n = parseInt(hex.slice(1), 16);
+  return Number.isFinite(n) && hex.length === 7 ? [(n >> 16) & 255, (n >> 8) & 255, n & 255] : STAMP_RGB.gray;
 }
 
 /** True when the spec has something to draw (a watermark needs text, a signature a PNG). */
@@ -577,6 +765,24 @@ function drawStamp(ctx, w, h, s, sig) {
       var px = redactRect(s.rects[ri], w, h);
       if (px.w > 0 && px.h > 0) ctx.fillRect(px.x, px.y, px.w, px.h);
     }
+    // The optional word goes on top of the opaque boxes, drawn afterwards:
+    // the pixels under every box are already gone.
+    if (s.label) {
+      var L = s.label;
+      for (var li = 0; li < s.rects.length; li++) {
+        var lp = redactRect(s.rects[li], w, h);
+        var lf = Math.min(lp.w * L.fitW / L.em, lp.h * L.fitH);
+        if (!(lf >= L.minPx)) continue;
+        ctx.save();
+        ctx.beginPath(); ctx.rect(lp.x, lp.y, lp.w, lp.h); ctx.clip();
+        ctx.font = '700 ' + lf + 'px ' + STAMP_FONT;
+        ctx.fillStyle = L.ink;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(L.text, lp.x + lp.w / 2, lp.y + lp.h / 2);
+        ctx.restore();
+      }
+    }
   } else if (s.kind === 'signature') {
     var n = sigSize(sig);
     var sw = Math.min(s.w * w, w);
@@ -585,12 +791,13 @@ function drawStamp(ctx, w, h, s, sig) {
     var sx = Math.min(Math.max(0, s.x * w), w - sw);
     var sy = Math.min(Math.max(0, s.y * h), h - sh);
     ctx.imageSmoothingQuality = 'high';
+    if (s.alpha) ctx.globalAlpha = s.alpha;
     ctx.drawImage(sig, sx, sy, sw, sh);
   } else if (s.kind === 'watermark') {
     var f = s.fontFrac * w;
     var ls = 0.04 * f;
     var chars = Array.from(s.text);
-    ctx.font = '700 ' + f + 'px ' + STAMP_FONT;
+    ctx.font = (s.weight || '700') + ' ' + f + 'px ' + STAMP_FONT;
     ctx.fillStyle = s.ink;
     ctx.textBaseline = 'middle';
     var tw = spacedWidth(ctx, chars, ls);
@@ -615,15 +822,25 @@ function drawStamp(ctx, w, h, s, sig) {
   } else if (s.kind === 'timestamp') {
     var f2 = s.fontFrac * w;
     var inset = s.insetFrac * w;
-    ctx.font = '500 ' + f2 + 'px ' + STAMP_FONT;
+    ctx.font = (s.weight || '500') + ' ' + f2 + 'px ' + STAMP_FONT;
     var bw = ctx.measureText(s.text).width + 2 * s.padH * f2;
     var bh = f2 * 1.15 + 2 * s.padV * f2;
     // Between the inset edges: 0 = left / top, 1 = right / bottom (the corners).
     var bx = inset + s.ax * Math.max(0, w - 2 * inset - bw);
     var by = inset + s.ay * Math.max(0, h - 2 * inset - bh);
-    ctx.fillStyle = s.bg;
-    roundRect(ctx, bx, by, bw, bh, s.radius * f2);
-    ctx.fill();
+    if (s.bg) {
+      ctx.fillStyle = s.bg;
+      roundRect(ctx, bx, by, bw, bh, s.radius * f2);
+      ctx.fill();
+    }
+    if (s.border) {
+      // Inside the box, as the preview's borderWidth is.
+      var lw = Math.max(1, s.borderEm * f2);
+      ctx.strokeStyle = s.border;
+      ctx.lineWidth = lw;
+      roundRect(ctx, bx + lw / 2, by + lw / 2, bw - lw, bh - lw, Math.max(0, s.radius * f2 - lw / 2));
+      ctx.stroke();
+    }
     ctx.fillStyle = s.ink;
     ctx.textBaseline = 'middle';
     ctx.fillText(s.text, bx + s.padH * f2, by + bh / 2);

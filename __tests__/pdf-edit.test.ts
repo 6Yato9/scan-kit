@@ -161,6 +161,8 @@ import {
   splitNames,
   splitPlans,
   splitStoredPdf,
+  splitStoredPdfParts,
+  partPlans,
   undoPdfEdit,
 } from '../lib/pdf-edit';
 import { indexPdfText, resetPdfTextForTests } from '../lib/pdf-text';
@@ -459,6 +461,25 @@ describe('splitStoredPdf', () => {
     mockPageCounts.set(PDF, 3);
     mockLocked.add(PDF);
     await expect(splitStoredPdf('d1', 0)).rejects.toMatchObject({ kind: 'locked' });
+    expect(mockDocs.size).toBe(1);
+  });
+});
+
+describe('splitStoredPdfParts (round 16)', () => {
+  test('one PDF per part, pages as chosen, text kept; the original stays', async () => {
+    const r = await splitStoredPdfParts('d1', n => partPlans([[0], [2, 3], [1]], n));
+    expect(mockNative.pdfEditPages.mock.calls.map((c: any[]) => c[2])).toEqual([[0], [2, 3], [1]]);
+    expect(r.parts.map(d => d.name)).toEqual(['Lease (1)', 'Lease (2)', 'Lease (3)']);
+    expect(r.parts.every(d => d.folder === 'Home' && d.pages.length === 0)).toBe(true);
+    expect(r.originalTrashed).toBe(false);
+    expect(mockFs.get(PDF)).toBe('v1');
+    expect(workDirs()).toEqual([]);
+  });
+
+  test('a part outside the PDF is refused before anything is written', async () => {
+    expect(() => partPlans([[0], [9]], 4)).toThrow(RangeError);
+    await expect(splitStoredPdfParts('d1', n => (n === 99 ? partPlans([[0]], n) : []))).rejects.toMatchObject({ kind: 'changed' });
+    expect(mockNative.pdfEditPages).not.toHaveBeenCalled();
     expect(mockDocs.size).toBe(1);
   });
 });

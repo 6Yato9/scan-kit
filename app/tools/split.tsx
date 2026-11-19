@@ -7,19 +7,32 @@
 // text stays selectable. Either way the parts are "<name> (1)" and
 // "<name> (2)" in the same folder, and the original is kept unless the user
 // chooses to move it to Recently deleted.
-import { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+//
+// Round 16: three ways to split, chosen at the top (remembered, with the
+// part size, in lib/tool-prefs.ts):
+// - At a page (the default, as before): two documents, cut after the page tapped.
+// - Every N pages: equal parts of N pages (the last may be shorter), e.g. a
+//   stack of two-page forms scanned in one go.
+// - By ranges: typed ranges, one document per range ("1-3, 4-8, 9"; pages
+//   left out aren't copied), parsed by lib/page-ranges.ts.
+// Parts are "<name> (1)", "<name> (2)", … (lib/doc-ops splitDocumentParts,
+// lib/pdf-edit splitStoredPdfParts) and the first part opens.
+import { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/contexts/theme-context';
 import { useScan } from '@/contexts/scan-context';
 import { PageThumb } from '@/components/page-thumb';
 import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
-import { NoDocumentsScreen, OptionList, ToolNote, ToolScreen, isSinglePageDoc, useToolDocuments } from '@/components/tool-ui';
+import { NoDocumentsScreen, OptionList, Segmented, ToolNote, ToolScreen, isSinglePageDoc, useToolDocuments } from '@/components/tool-ui';
+import { ValueSlider } from '@/components/value-slider';
+import { chunkPages, describeParts, parsePageRanges, parseSplitPrefs, type SplitMode, type SplitPrefs } from '@/lib/page-ranges';
+import { readToolPrefs, TOOL_PREF_KEYS, writeToolPrefs } from '@/lib/tool-prefs';
 import { ToolDocPicker, useToolDoc } from '@/components/tool-doc';
 import { FilterBaker } from '@/components/filter-baker';
-import { splitDocument, splitRanges } from '@/lib/doc-ops';
-import { canEditPdfPages, PdfEditError, splitStoredPdf } from '@/lib/pdf-edit';
+import { splitDocumentParts, splitRanges } from '@/lib/doc-ops';
+import { canEditPdfPages, partPlans, PdfEditError, splitStoredPdfParts } from '@/lib/pdf-edit';
 import { useReadablePdfUri, withNoPasswordNote } from '@/lib/pdf-session';
 import { pdfPageThumbnails } from '@/lib/pdf-thumb';
 import { notifyError, notifySuccess } from '@/lib/haptics';
@@ -35,6 +48,14 @@ const KEEP_OPTIONS: { value: Keep; label: string; detail: string }[] = [
 ];
 
 const range = (a: number, b: number) => (a === b ? `page ${a}` : `pages ${a}–${b}`);
+/** "two documents" (the classic split's words), "1 document", "6 documents". */
+const documentsLabel = (n: number) => (n === 2 ? 'two documents' : n === 1 ? '1 document' : `${n} documents`);
+
+const MODE_OPTIONS: { value: SplitMode; label: string }[] = [
+  { value: 'at', label: 'At a page' },
+  { value: 'every', label: 'Every N pages' },
+  { value: 'ranges', label: 'By ranges' },
+];
 
 export default function SplitScreen() {
   const router = useRouter();
@@ -47,6 +68,25 @@ export default function SplitScreen() {
   const { doc, setDocId, fixed, fromViewer } = useToolDoc(docs);
   const [after, setAfter] = useState<number | null>(null);
   const [keep, setKeep] = useState<Keep>('keep');
+  const [prefs, setPrefsState] = useState<SplitPrefs>({ mode: 'at', every: 1 });
+  const prefsRef = useRef(prefs);
+  const setPrefs = (patch: Partial<SplitPrefs>) => {
+    const next = { ...prefsRef.current, ...patch };
+    prefsRef.current = next;
+    setPrefsState(next);
+    writeToolPrefs(TOOL_PREF_KEYS.split, next).catch(() => {});
+  };
+  useEffect(() => {
+    let live = true;
+    readToolPrefs(TOOL_PREF_KEYS.split, parseSplitPrefs).then(p => {
+      if (!live) return;
+      prefsRef.current = p;
+      setPrefsState(p);
+    });
+    return () => { live = false; };
+  }, []);
+  // "By ranges": what was typed, for this document only.
+  const [rangeText, setRangeText] = useState('');
   const [saving, setSaving] = useState(false);
   // An imported PDF's pages as thumbnails (its page count comes from them).
   const [pdfThumbs, setPdfThumbs] = useState<{ docId: string; uris: string[] } | null>(null);
@@ -74,11 +114,30 @@ export default function SplitScreen() {
   const count = thumbs?.length ?? 0;
   // The split point: after the page tapped; by default the middle.
   const at = after != null && after < count - 1 ? after : Math.max(0, Math.ceil(count / 2) - 1);
-  const parts = count > 1 ? splitRanges(count, at) : null;
+  const mode = prefs.mode;
+  // Every N: at most count - 1 per part (N = count would be no split at all).
+  const every = Math.min(Math.max(1, prefs.every), Math.max(1, count - 1));
+  const parsed = mode === 'ranges' && count > 0 && rangeText.trim() ? parsePageRanges(rangeText, count) : null;
+  // The documents this split makes (0-based pages), or null while it can't run.
+  const parts: number[][] | null =
+    count < 2
+      ? null
+      : mode === 'at'
+        ? splitRanges(count, at)
+        : mode === 'every'
+          ? chunkPages(count, every)
+          : parsed?.ok
+            ? parsed.ranges
+            : null;
+  // The last page of each part gets the cut mark in the grid (At a page, Every N).
+  const cutAfter = new Set(mode === 'ranges' || !parts ? [] : parts.slice(0, -1).map(p => p[p.length - 1]));
+  // By ranges: pages no range names are dimmed (they aren't copied).
+  const used = mode === 'ranges' && parts ? new Set(parts.flat()) : null;
 
   const pick = (d: Document) => {
     setDocId(d.id);
     setAfter(null);
+    setRangeText('');
   };
 
   const split = () => {
@@ -88,7 +147,7 @@ export default function SplitScreen() {
     if (doc.pdfUri && unlockedForSession && keep === 'trash') {
       Alert.alert(
         'Split without the password?',
-        'The two new documents won’t need a password, and the protected original moves to Recently deleted.',
+        `The new ${parts.length === 1 ? 'document won’t' : 'documents won’t'} need a password, and the protected original moves to Recently deleted.`,
         [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Split', isPreferred: true, onPress: () => { runSplit(); } },
@@ -104,19 +163,21 @@ export default function SplitScreen() {
     setSaving(true);
     try {
       const trashOriginal = keep === 'trash';
+      const plan = parts;
       const result = doc.pdfUri
-        ? await splitStoredPdf(doc.id, at, { trashOriginal })
-        : await splitDocument(doc.id, at, { trashOriginal, expectedCount: count });
+        ? await splitStoredPdfParts(doc.id, n => (n === count ? partPlans(plan, n) : []), { trashOriginal })
+        : await splitDocumentParts(doc.id, plan, { trashOriginal, expectedCount: count });
       bumpLastSaved();
       notifySuccess();
+      const made = documentsLabel(result.parts.length);
       const notice = withNoPasswordNote(
         result.originalTrashed
-          ? 'Split into two documents. The original is in Recently deleted.'
-          : 'Split into two documents. The original is kept.',
+          ? `Split into ${made}. The original is in Recently deleted.`
+          : `Split into ${made}. The original is kept.`,
         [doc.id],
       );
       // The first part opens; the viewer says what happened.
-      navigateWhenUnlocked(() => router.replace({ pathname: '/viewer', params: { id: result.first.id, notice } }));
+      navigateWhenUnlocked(() => router.replace({ pathname: '/viewer', params: { id: result.parts[0].id, notice } }));
     } catch (err) {
       notifyError();
       if (err instanceof PdfEditError && err.kind === 'locked') {
@@ -156,9 +217,9 @@ export default function SplitScreen() {
       busy={saving}
       footer={
         <PrimaryButton
-          title="Split into two documents"
+          title={parts ? `Split into ${documentsLabel(parts.length)}` : mode === 'at' ? 'Split into two documents' : 'Split'}
           onPress={split}
-          disabled={!parts}
+          disabled={!parts || parts.length < 1 || (mode !== 'ranges' && parts.length < 2)}
           loading={saving}
         />
       }
@@ -177,26 +238,72 @@ export default function SplitScreen() {
 
       {doc ? (
         <>
-          <SectionLabel>{parts ? `Split after page ${at + 1}` : 'Pages'}</SectionLabel>
+          <SectionLabel>Split</SectionLabel>
+          <View pointerEvents={saving ? 'none' : 'auto'}>
+            <Segmented options={MODE_OPTIONS} value={mode} onChange={v => setPrefs({ mode: v })} />
+          </View>
+          {mode === 'every' && count > 2 ? (
+            <>
+              <SectionLabel>Pages per document</SectionLabel>
+              <ValueSlider
+                label="Pages per document"
+                value={every}
+                min={1}
+                max={count - 1}
+                format={v => String(v)}
+                onChange={v => setPrefs({ every: v })}
+              />
+            </>
+          ) : null}
+          {mode === 'ranges' ? (
+            <>
+              <SectionLabel>Page ranges</SectionLabel>
+              <TextInput
+                style={[Type.body, styles.input, { color: colors.text, backgroundColor: colors.card }]}
+                value={rangeText}
+                onChangeText={setRangeText}
+                placeholder={count > 3 ? `For example 1-2, 3-${count}` : 'For example 1, 2'}
+                placeholderTextColor={colors.muted}
+                keyboardType="numbers-and-punctuation"
+                autoCorrect={false}
+                returnKeyType="done"
+                editable={!saving}
+                accessibilityLabel="Page ranges"
+              />
+              <Text
+                style={[Type.footnote, styles.summary, { color: parsed && !parsed.ok ? colors.danger : colors.muted }]}
+                accessibilityLiveRegion="polite"
+              >
+                {parsed && !parsed.ok
+                  ? parsed.error
+                  : 'Each range becomes its own document. Separate ranges with commas; pages you leave out aren’t copied.'}
+              </Text>
+            </>
+          ) : null}
+          <SectionLabel>{mode === 'at' && parts ? `Split after page ${at + 1}` : 'Pages'}</SectionLabel>
           {thumbs ? (
             <View style={styles.grid}>
               {thumbs.map((uri, i) => {
-                const first = i <= at;
+                // At a page: the first part is outlined. Every N: parts alternate. Ranges: named pages.
+                const partIndex = parts && mode === 'every' ? Math.floor(i / every) : 0;
+                const first = mode === 'at' ? i <= at : mode === 'every' ? partIndex % 2 === 0 : !!used?.has(i);
                 const last = i === count - 1;
+                const tappable = mode === 'at' && !last;
                 return (
                   <Pressable
                     key={`${uri}-${i}`}
-                    onPress={() => { if (!last) setAfter(i); }}
-                    disabled={last || saving}
-                    accessibilityRole="button"
-                    accessibilityLabel={last ? `Page ${i + 1}` : `Split after page ${i + 1}`}
-                    accessibilityState={{ selected: i === at }}
+                    onPress={() => { if (tappable) setAfter(i); }}
+                    disabled={!tappable || saving}
+                    accessibilityRole={tappable ? 'button' : 'image'}
+                    accessibilityLabel={tappable ? `Split after page ${i + 1}` : `Page ${i + 1}`}
+                    accessibilityState={{ selected: mode === 'at' && i === at }}
                     style={styles.cell}
                   >
                     <View
                       style={[
                         styles.page,
                         { backgroundColor: colors.placeholder, borderColor: first ? colors.accent : colors.border },
+                        used && !used.has(i) && styles.unused,
                       ]}
                     >
                       <PageThumb uri={uri} style={styles.pageImg} />
@@ -204,7 +311,7 @@ export default function SplitScreen() {
                         <Text style={[styles.badgeText, { color: colors.onAccent }]}>{i + 1}</Text>
                       </View>
                     </View>
-                    {i === at ? (
+                    {cutAfter.has(i) ? (
                       // The cut: a bar in the gap after the chosen page.
                       <View style={[styles.cut, { backgroundColor: colors.accent }]} />
                     ) : null}
@@ -219,10 +326,12 @@ export default function SplitScreen() {
               <ActivityIndicator color={colors.muted} />
             </View>
           )}
-          {parts ? (
+          {parts && mode === 'at' ? (
             <Text style={[Type.footnote, styles.summary, { color: colors.muted }]}>
               {`“${doc.name} (1)” gets ${range(1, parts[0].length)}, “${doc.name} (2)” gets ${range(parts[0].length + 1, count)}. Tap a page to split after it.`}
             </Text>
+          ) : parts ? (
+            <Text style={[Type.footnote, styles.summary, { color: colors.muted }]}>{`${describeParts(parts)}.`}</Text>
           ) : null}
 
           <SectionLabel>Original</SectionLabel>
@@ -252,5 +361,7 @@ const styles = StyleSheet.create({
   badgeText: { fontSize: 12, fontWeight: '700' },
   cut: { position: 'absolute', right: Spacing.md / 2 - 1.5, top: 4, bottom: 4, width: 3, borderRadius: 1.5 },
   loading: { paddingVertical: Spacing.xxl, alignItems: 'center' },
-  summary: { marginTop: Spacing.md, marginHorizontal: Spacing.xs },
+  summary: { marginTop: Spacing.md, marginHorizontal: Spacing.xs, lineHeight: 18 },
+  input: { borderRadius: Radius.md, paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md, minHeight: 50 },
+  unused: { opacity: 0.35 },
 });

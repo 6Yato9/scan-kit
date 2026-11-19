@@ -59,12 +59,16 @@ export function planIdCardSheet(
   sides: { width: number; height: number }[],
   paper: SheetPaper = 'A4',
   dpi: number = SHEET_DPI,
+  scale: number = 1,
 ): IdSheetPlan {
   const mm = PAPER_MM[paper];
   const width = Math.round(px(mm.width, dpi));
   const height = Math.round(px(mm.height, dpi));
-  const cardW = px(ID1_MM.width, dpi);
-  const cardH = px(ID1_MM.height, dpi);
+  // Round 16: "Enlarged" draws the card bigger (ID_CARD_SCALES), like a
+  // copier's enlarge; 1 is real size. Always kept inside its half sheet.
+  const k = Math.max(0.5, Math.min(scale, maxCardScale(paper)));
+  const cardW = px(ID1_MM.width * k, dpi);
+  const cardH = px(ID1_MM.height * k, dpi);
   const half = height / 2;
   const cards = sides.slice(0, 2).map((s, i): CardBox => {
     const portrait = s.height > s.width;
@@ -77,6 +81,16 @@ export function planIdCardSheet(
     };
   });
   return { paper, dpi, width, height, cards };
+}
+
+/** Card sizes on the one-page sheet: real size (default) or enlarged 150 %, for small print. */
+export type IdCardSize = 'actual' | 'large';
+export const ID_CARD_SCALES: Record<IdCardSize, number> = { actual: 1, large: 1.5 };
+
+/** The largest scale at which a card still fits its half of `paper`, with 10 mm to spare each way. */
+export function maxCardScale(paper: SheetPaper): number {
+  const mm = PAPER_MM[paper];
+  return Math.min((mm.width - 20) / ID1_MM.width, (mm.height / 2 - 20) / ID1_MM.height);
 }
 
 /** The card's width on the sheet in millimetres (for tests and the note). */

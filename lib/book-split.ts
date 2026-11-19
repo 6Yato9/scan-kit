@@ -35,3 +35,21 @@ export async function splitSpreads(uris: string[]): Promise<{ pages: string[]; t
   }
   return { pages, temps };
 }
+
+// ── Reading order (round 16) ────────────────────────────────────────────────
+
+/** Left to right (Latin scripts; the default) or right to left (Arabic, Hebrew, manga…). */
+export type ReadingOrder = 'ltr' | 'rtl';
+
+/**
+ * One spread's pages (left page first, as splitting returns them) in reading
+ * order: reversed for right-to-left books. A single page passes through.
+ */
+export function orderSpread<T>(halves: T[], order: ReadingOrder): T[] {
+  return order === 'rtl' && halves.length === 2 ? [halves[1], halves[0]] : halves;
+}
+
+/** The remembered reading order; anything unknown is left to right. Pure. */
+export function parseBookPrefs(o: Record<string, unknown>): { order: ReadingOrder } {
+  return { order: o.order === 'rtl' ? 'rtl' : 'ltr' };
+}

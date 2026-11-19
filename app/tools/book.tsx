@@ -4,12 +4,20 @@
 // With Scan Kit's camera each half keeps the photo, split down the page's
 // true middle in perspective (lib/capture-session.ts splitSpread), so either
 // page can be re-cropped later.
-import { useRef, useState } from 'react';
-import { Alert } from 'react-native';
+//
+// Round 16: reading order (remembered in lib/tool-prefs.ts). Left to right
+// (the default, as before) keeps each spread's left page first; right to left
+// (Arabic, Hebrew, Persian and Urdu books, manga) puts its right page first.
+import { useEffect, useRef, useState } from 'react';
+import { Alert, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useScan } from '@/contexts/scan-context';
 import { PrimaryButton } from '@/components/primary-button';
-import { ToolIntro, ToolScreen } from '@/components/tool-ui';
+import { Segmented, ToolIntro, ToolNote, ToolScreen } from '@/components/tool-ui';
+import { MoreOptions } from '@/components/more-options';
+import { SectionLabel } from '@/components/section-label';
+import { orderSpread, parseBookPrefs, type ReadingOrder } from '@/lib/book-split';
+import { readToolPrefs, TOOL_PREF_KEYS, writeToolPrefs } from '@/lib/tool-prefs';
 import { splitSpreads } from '@/lib/book-split';
 import { notifyError } from '@/lib/haptics';
 import { alertScanError, deleteTempFiles, pickPhotos, scanPagesWithCamera } from '@/lib/tool-scan';
@@ -24,6 +32,23 @@ export default function BookScreen() {
   const router = useRouter();
   const [busy, setBusy] = useState<'camera' | 'photos' | null>(null);
   const busyRef = useRef(false);
+  const [order, setOrderState] = useState<ReadingOrder>('ltr');
+  const orderRef = useRef(order);
+  const [moreOpen, setMoreOpen] = useState(false);
+  useEffect(() => {
+    let live = true;
+    readToolPrefs(TOOL_PREF_KEYS.book, parseBookPrefs).then(p => {
+      if (!live) return;
+      orderRef.current = p.order;
+      setOrderState(p.order);
+    });
+    return () => { live = false; };
+  }, []);
+  const setOrder = (o: ReadingOrder) => {
+    orderRef.current = o;
+    setOrderState(o);
+    writeToolPrefs(TOOL_PREF_KEYS.book, { order: o }).catch(() => {});
+  };
 
   const run = async (source: 'camera' | 'photos') => {
     if (busyRef.current) return;
@@ -52,10 +77,10 @@ export default function BookScreen() {
             // A photo and its reviewed crop: split the crop, keep the photo.
             const size = await getImageSize(shot.sourceUri);
             const halves = size ? splitSpread(geometryOfInput(shot), size.width, size.height) : [geometryOfInput(shot)];
-            pages.push(...halves.map(g => toSourceInput(shot.sourceUri, g)));
+            pages.push(...orderSpread(halves.map(g => toSourceInput(shot.sourceUri, g)), orderRef.current));
           } else {
             const split = await splitSpreads([shot]);
-            pages.push(...split.pages);
+            pages.push(...orderSpread(split.pages, orderRef.current));
             temps = temps.concat(split.temps);
           }
         }
@@ -108,6 +133,24 @@ export default function BookScreen() {
           { icon: 'documents-outline', text: 'All spreads are saved, in order, as one document.' },
         ]}
       />
+      <View pointerEvents={busy ? 'none' : 'auto'}>
+        <MoreOptions open={moreOpen} onToggle={setMoreOpen} changed={order === 'rtl' ? 1 : 0}>
+          <SectionLabel>Reading order</SectionLabel>
+          <Segmented
+            options={[
+              { value: 'ltr', label: 'Left to right' },
+              { value: 'rtl', label: 'Right to left' },
+            ]}
+            value={order}
+            onChange={setOrder}
+          />
+          <ToolNote>
+            {order === 'rtl'
+              ? 'The right page of each spread comes first, for books read right to left (Arabic, Hebrew, Persian, Urdu, manga).'
+              : 'The left page of each spread comes first.'}
+          </ToolNote>
+        </MoreOptions>
+      </View>
     </ToolScreen>
   );
 }

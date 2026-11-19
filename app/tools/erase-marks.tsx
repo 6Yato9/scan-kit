@@ -3,12 +3,18 @@
 // filter into every page's pixels (lib/bake.ts). Bakes run from each page's
 // pristine .orig copy, so the viewer's Undo can put every page back exactly as
 // it was, its own earlier filter and adjustments included.
-import { useState } from 'react';
-import { Alert } from 'react-native';
+//
+// Round 16: a strength (remembered in lib/tool-prefs.ts). On the Black &
+// white filter Brightness moves the threshold (brighter = fewer dark pixels,
+// so fainter marks go) and Contrast sets how hard edges are (lib/filters.ts);
+// Standard is the +30 / +30 this tool always used.
+import { useEffect, useState } from 'react';
+import { Alert, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { PrimaryButton } from '@/components/primary-button';
 import {
   NoDocumentsScreen,
+  OptionList,
   ToolIntro,
   ToolNote,
   ToolProgress,
@@ -17,6 +23,10 @@ import {
   useToolDocuments,
 } from '@/components/tool-ui';
 import { ToolDocPicker, useToolDoc } from '@/components/tool-doc';
+import { SectionLabel } from '@/components/section-label';
+
+import { eraseAdjustment, parseEraseStrength, type EraseStrength } from '@/lib/erase-strength';
+import { readToolPrefs, TOOL_PREF_KEYS, writeToolPrefs } from '@/lib/tool-prefs';
 import { FilterBaker } from '@/components/filter-baker';
 import { bakePage, invalidateDocPreviews } from '@/lib/bake';
 import { notifyError, notifySuccess } from '@/lib/haptics';
@@ -25,7 +35,12 @@ import { navigateWhenUnlocked } from '@/lib/nav-guard';
 import { postViewerNotice } from '@/lib/viewer-notice';
 
 const ERASE_FILTER: PageFilter = 'bw';
-const ERASE_ADJUSTMENT: PageAdjustment = { brightness: 30, contrast: 30, saturation: 0 };
+
+const STRENGTH_OPTIONS: { value: EraseStrength; label: string; detail: string }[] = [
+  { value: 'light', label: 'Light', detail: 'Keeps faint print. Lifts only the lightest marks.' },
+  { value: 'standard', label: 'Standard', detail: 'Pencil, highlighter and shadows go; text stays.' },
+  { value: 'strong', label: 'Strong', detail: 'Also lifts darker marks. Thin or faint text may fade.' },
+];
 
 /** Puts every page back as it was before Erase marks (see run). */
 async function undoErase(docId: string, before: { filter: PageFilter; adjustment: PageAdjustment | undefined }[]) {
@@ -43,6 +58,16 @@ export default function EraseMarksScreen() {
   const router = useRouter();
   const { docs, loaded } = useToolDocuments();
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
+  const [strength, setStrengthState] = useState<EraseStrength>('standard');
+  useEffect(() => {
+    let live = true;
+    readToolPrefs(TOOL_PREF_KEYS.eraseMarks, parseEraseStrength).then(s => { if (live) setStrengthState(s); });
+    return () => { live = false; };
+  }, []);
+  const setStrength = (s: EraseStrength) => {
+    setStrengthState(s);
+    writeToolPrefs(TOOL_PREF_KEYS.eraseMarks, { strength: s }).catch(() => {});
+  };
 
   const { doc: selected, setDocId: setSelectedId, fixed, fromViewer } = useToolDoc(docs);
   const running = progress !== null;
@@ -56,7 +81,7 @@ export default function EraseMarksScreen() {
     let done = 0;
     const results = await Promise.allSettled(
       doc.pages.map((_, i) =>
-        bakePage(doc.id, i, ERASE_FILTER, { ...ERASE_ADJUSTMENT }).finally(() => {
+        bakePage(doc.id, i, ERASE_FILTER, eraseAdjustment(strength)).finally(() => {
           done++;
           setProgress({ current: done, total });
         }),
@@ -139,6 +164,10 @@ export default function EraseMarksScreen() {
         disabled={running}
         onPick={d => setSelectedId(d.id)}
       />
+      <View pointerEvents={running ? 'none' : 'auto'}>
+        <SectionLabel>Strength</SectionLabel>
+        <OptionList options={STRENGTH_OPTIONS} value={strength} onChange={setStrength} />
+      </View>
       <ToolNote>
         {'This changes the document itself, replacing any filters its pages have. You can undo it right\u00A0after.'}
       </ToolNote>

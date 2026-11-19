@@ -1,8 +1,14 @@
 // app/tools/extract-text.tsx
 // Recognise text from a fresh scan or from photos, then copy or share it.
 // OCR goes through lib/ocr (Apple Vision on iOS, ML Kit on Android).
-import { useRef, useState } from 'react';
+//
+// Round 16 (lib/text-format.ts, remembered in lib/tool-prefs.ts): line breaks
+// as on the page (the default, as before) or joined into paragraphs — chosen
+// before reading under More options, or switched on the result — and Share
+// as plain text (as before) or as a .txt file.
+import { useEffect, useRef, useState } from 'react';
 import { Alert, StyleSheet, View } from 'react-native';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Clipboard from 'expo-clipboard';
 import { useTheme } from '@/contexts/theme-context';
 import { useToast } from '@/components/toast';
@@ -10,12 +16,34 @@ import { PrimaryButton } from '@/components/primary-button';
 import { HeaderIconButton } from '@/components/screen-header';
 import { RecognizedText } from '@/components/recognized-text';
 import { TextActions } from '@/components/text-actions';
-import { ToolIntro, ToolProgress, ToolScreen } from '@/components/tool-ui';
+import { Segmented, ToolIntro, ToolNote, ToolProgress, ToolScreen } from '@/components/tool-ui';
+import { MoreOptions } from '@/components/more-options';
+import { SectionLabel } from '@/components/section-label';
+import {
+  DEFAULT_EXTRACT_TEXT,
+  formatRecognized,
+  paragraphText,
+  parseExtractTextPrefs,
+  textFileName,
+  type ExtractTextPrefs,
+  type LineBreaks,
+  type TextShareAs,
+} from '@/lib/text-format';
+import { readToolPrefs, TOOL_PREF_KEYS, writeToolPrefs } from '@/lib/tool-prefs';
 import { notifyError, notifySuccess, tapLight } from '@/lib/haptics';
 import { ocrAvailable, recognizeLines } from '@/lib/ocr';
 import { alertScanError, deleteTempFiles, pickPhotos, scanWithCamera } from '@/lib/tool-scan';
 import { Spacing } from '@/lib/theme';
-import { shareText } from '@/lib/share';
+import { makeExportDir, shareFile, ShareError, shareText } from '@/lib/share';
+
+const LINE_OPTIONS: { value: LineBreaks; label: string }[] = [
+  { value: 'keep', label: 'As on the page' },
+  { value: 'join', label: 'Joined' },
+];
+const SHARE_OPTIONS: { value: TextShareAs; label: string }[] = [
+  { value: 'text', label: 'Text' },
+  { value: 'file', label: '.txt file' },
+];
 
 export default function ExtractTextScreen() {
   const { colors } = useTheme();
@@ -28,17 +56,62 @@ export default function ExtractTextScreen() {
   const [editing, setEditing] = useState(false);
   const busyRef = useRef(false);
   const available = ocrAvailable();
+  const [prefs, setPrefsState] = useState<ExtractTextPrefs>(DEFAULT_EXTRACT_TEXT);
+  const prefsRef = useRef(prefs);
+  const [moreOpen, setMoreOpen] = useState(false);
+  // The text as recognized, before any formatting or edit, and the text it was formatted to.
+  const rawRef = useRef({ plain: '', paragraphs: '' });
+  const formattedRef = useRef('');
+  useEffect(() => {
+    let live = true;
+    readToolPrefs(TOOL_PREF_KEYS.extractText, parseExtractTextPrefs).then(p => {
+      if (!live) return;
+      prefsRef.current = p;
+      setPrefsState(p);
+    });
+    return () => { live = false; };
+  }, []);
+  const setPrefs = (patch: Partial<ExtractTextPrefs>) => {
+    const next = { ...prefsRef.current, ...patch };
+    prefsRef.current = next;
+    setPrefsState(next);
+    writeToolPrefs(TOOL_PREF_KEYS.extractText, next).catch(() => {});
+  };
+  /** On the result: the line breaks switched, from the recognized text (asks before dropping edits). */
+  const switchLineBreaks = (v: LineBreaks) => {
+    const apply = () => {
+      setPrefs({ lineBreaks: v });
+      const t = formatted(v);
+      formattedRef.current = t;
+      setText(t);
+    };
+    if (text !== null && text !== formattedRef.current) {
+      Alert.alert('Replace your changes?', 'The text is formatted again from what was recognized, so your edits are lost.', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Replace', style: 'destructive', onPress: apply },
+      ]);
+      return;
+    }
+    apply();
+  };
 
+  /** The text as recognized (`plain`, exactly as before) and with paragraph breaks found from the line spacing. */
   const recognize = async (uris: string[]) => {
     const parts: string[] = [];
+    const paragraphs: string[] = [];
     for (let i = 0; i < uris.length; i++) {
       setProgress({ current: i, total: uris.length });
-      const { text: t } = await recognizeLines(uris[i]);
-      if (t.trim()) parts.push(t.trim());
+      const { text: t, lines } = await recognizeLines(uris[i]);
+      if (t.trim()) {
+        parts.push(t.trim());
+        paragraphs.push(paragraphText(lines).trim() || t.trim());
+      }
     }
     setProgress({ current: uris.length, total: uris.length });
-    return parts.join('\n\n');
+    return { plain: parts.join('\n\n'), paragraphs: paragraphs.join('\n\n') };
   };
+  const formatted = (lineBreaks: LineBreaks) =>
+    lineBreaks === 'join' ? formatRecognized(rawRef.current.paragraphs, 'join') : rawRef.current.plain;
 
   const run = async (source: 'camera' | 'photos') => {
     if (busyRef.current) return;
@@ -60,7 +133,9 @@ export default function ExtractTextScreen() {
       }
       if (!uris?.length) return;
       temp = uris;
-      const result = await recognize(uris);
+      rawRef.current = await recognize(uris);
+      const result = formatted(prefsRef.current.lineBreaks);
+      formattedRef.current = result;
       setText(result);
       setFound(!!result);
       setEditing(false);
@@ -86,7 +161,19 @@ export default function ExtractTextScreen() {
 
   const handleShare = async () => {
     if (!text?.trim()) return;
-    await shareText(text); // waits while App Lock is on; dismissing isn't an error
+    if (prefs.shareAs !== 'file') {
+      await shareText(text); // waits while App Lock is on; dismissing isn't an error
+      return;
+    }
+    // A .txt file named after the first words, in its own export folder (swept at launch).
+    try {
+      const dir = await makeExportDir();
+      const uri = `${dir}${encodeURIComponent(textFileName(text))}`;
+      await FileSystem.writeAsStringAsync(uri, text, { encoding: 'utf8' });
+      await shareFile(uri, { mimeType: 'text/plain', UTI: 'public.plain-text', dialogTitle: 'Recognized text' });
+    } catch (err) {
+      Alert.alert('Couldn’t share the text file', err instanceof ShareError ? err.message : 'Try again, or share it as text.');
+    }
   };
 
   // ── Result ────────────────────────────────────────────────────────────────
@@ -129,6 +216,11 @@ export default function ExtractTextScreen() {
           // Select any part (touch and hold, drag the handles) or fix OCR
           // mistakes before copying. Nothing is saved: the photos were temporary.
           <View style={styles.result}>
+            {editing ? null : (
+              <View style={styles.format}>
+                <Segmented options={LINE_OPTIONS} value={prefs.lineBreaks} onChange={switchLineBreaks} />
+              </View>
+            )}
             <RecognizedText
               fill
               value={text}
@@ -191,6 +283,30 @@ export default function ExtractTextScreen() {
             : undefined
         }
       />
+      {available ? (
+        <View pointerEvents={busy ? 'none' : 'auto'}>
+          <MoreOptions
+            open={moreOpen}
+            onToggle={setMoreOpen}
+            changed={(prefs.lineBreaks !== 'keep' ? 1 : 0) + (prefs.shareAs !== 'text' ? 1 : 0)}
+          >
+            <SectionLabel>Line breaks</SectionLabel>
+            <Segmented options={LINE_OPTIONS} value={prefs.lineBreaks} onChange={v => setPrefs({ lineBreaks: v })} />
+            <ToolNote>
+              {prefs.lineBreaks === 'join'
+                ? 'Each paragraph comes out as one line, ready to paste into an email or a document. Words split across lines are joined.'
+                : 'Line breaks stay where they are on the page.'}
+            </ToolNote>
+            <SectionLabel>Share as</SectionLabel>
+            <Segmented options={SHARE_OPTIONS} value={prefs.shareAs} onChange={v => setPrefs({ shareAs: v })} />
+            <ToolNote>
+              {prefs.shareAs === 'file'
+                ? 'Share sends a .txt file, named after the first words, that you can save to Files or attach.'
+                : 'Share sends the text itself, to paste into a message or a note.'}
+            </ToolNote>
+          </MoreOptions>
+        </View>
+      ) : null}
     </ToolScreen>
   );
 }
@@ -201,4 +317,5 @@ const styles = StyleSheet.create({
   actions: { flexDirection: 'row', gap: Spacing.md },
   result: { flex: 1, paddingHorizontal: Spacing.gutter, paddingTop: Spacing.md, paddingBottom: Spacing.xs },
   textActions: { marginTop: Spacing.sm },
+  format: { marginBottom: Spacing.sm },
 });

@@ -98,6 +98,7 @@ export function SignaturePlacer({
   height,
   signature,
   tint,
+  opacity = 1,
   placement,
   onChange,
   onInteracting,
@@ -110,6 +111,8 @@ export function SignaturePlacer({
   signature: { dataUri: string; width: number; height: number };
   /** Ink colour to show the strokes in (null: as drawn). */
   tint: string | null;
+  /** The signature's strength (0..1), as it will be drawn into the page. */
+  opacity?: number;
   placement: Placement;
   onChange: (p: Placement) => void;
   onInteracting?: (active: boolean) => void;
@@ -325,7 +328,7 @@ export function SignaturePlacer({
                 // when the image loads, not when the style changes later.
                 key={tint ?? 'as-drawn'}
                 source={{ uri: signature.dataUri }}
-                style={[styles.fill, tint ? { tintColor: tint } : null]}
+                style={[styles.fill, tint ? { tintColor: tint } : null, opacity < 1 ? { opacity } : null]}
                 resizeMode="stretch"
               />
               <View style={[StyleSheet.absoluteFill, styles.outline, { borderColor: colors.accentFill }]} pointerEvents="none" />

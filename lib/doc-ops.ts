@@ -260,35 +260,58 @@ export type ImageSplitResult = { first: Document; second: Document; originalTras
 /**
  * Splits a scanned document after page `after` (zero-based) into two new
  * documents, "<name> (1)" and "<name> (2)", in the same folder — the same
- * names and choices as splitting an imported PDF (lib/pdf-edit.ts). Every page
- * is copied with its shadows (the unfiltered .orig, the source photo and its
- * crop geometry), filter and adjustments, so each part can still be filtered,
- * re-cropped and widened like the original. The original is kept unless
- * `trashOriginal` (then it moves to Recently deleted, where it can be restored).
- *
- * Copies from the STORED record under the source's page lock (like
- * extractPages), and refuses when its page count differs from `expectedCount`
- * (the split point would mean another page). Nothing half-made stays: if the
- * second part fails, the first is removed again.
+ * names and choices as splitting an imported PDF (lib/pdf-edit.ts). See
+ * splitDocumentParts, which does the work.
  */
 export async function splitDocument(
   sourceId: string,
   after: number,
   options: { trashOriginal?: boolean; expectedCount?: number } = {},
 ): Promise<ImageSplitResult> {
-  const ids = [Crypto.randomUUID(), Crypto.randomUUID()];
+  const r = await splitDocumentParts(sourceId, count => splitRanges(count, after), options);
+  return { first: r.parts[0], second: r.parts[1], originalTrashed: r.originalTrashed };
+}
+
+export type ImagePartsResult = { parts: Document[]; originalTrashed: boolean };
+
+/**
+ * Splits a scanned document into new documents "<name> (1)", "<name> (2)", …
+ * in the same folder, one per entry of `parts` (zero-based page indices; a
+ * function gets the stored page count, for callers that plan from it). Split
+ * › "Every N pages" and "By ranges" (round 16) as well as the classic split
+ * in two. Every page is copied with its shadows (the unfiltered .orig, the
+ * source photo and its crop geometry), filter and adjustments, so each part
+ * can still be filtered, re-cropped and widened like the original. Pages left
+ * out of every part aren't copied; a page in two ranges is copied twice. The
+ * original is kept unless `trashOriginal` (then it moves to Recently deleted,
+ * where it can be restored).
+ *
+ * Copies from the STORED record under the source's page lock (like
+ * extractPages), and refuses when its page count differs from `expectedCount`
+ * (the parts would mean other pages). Nothing half-made stays: if a part
+ * fails, the ones made so far are removed again.
+ */
+export async function splitDocumentParts(
+  sourceId: string,
+  parts: number[][] | ((count: number) => number[][]),
+  options: { trashOriginal?: boolean; expectedCount?: number } = {},
+): Promise<ImagePartsResult> {
   const made = await withDocLock(sourceId, async () => {
     const fresh = await getDocument(sourceId);
     if (!fresh || fresh.trashedAt) throw new Error('splitDocument: document missing');
     if (fresh.pdfUri || fresh.pages.length === 0) throw new Error('splitDocument: not a scanned document');
     if (options.expectedCount != null && fresh.pages.length !== options.expectedCount) throw new Error('splitDocument: document changed');
-    const parts = splitRanges(fresh.pages.length, after);
+    const plan = typeof parts === 'function' ? parts(fresh.pages.length) : parts;
+    if (plan.length < 1 || plan.some(p => p.length === 0 || p.some(i => !Number.isInteger(i) || i < 0 || i >= fresh.pages.length))) {
+      throw new RangeError('splitDocument: no such page');
+    }
+    const ids = plan.map(() => Crypto.randomUUID());
     const now = Date.now();
     const docs: Document[] = [];
     try {
-      for (let k = 0; k < 2; k++) {
-        // The first part sorts as the newer of the two in "Date added".
-        const doc = copyPagesToNew(fresh, parts[k], ids[k], `${fresh.name} (${k + 1})`, now + (1 - k));
+      for (let k = 0; k < plan.length; k++) {
+        // The first part sorts as the newest in "Date added", the rest in order after it.
+        const doc = copyPagesToNew(fresh, plan[k], ids[k], `${fresh.name} (${k + 1})`, now + (plan.length - 1 - k));
         await saveDocument(doc);
         docs.push(doc);
       }
@@ -301,7 +324,7 @@ export async function splitDocument(
       }
       throw err;
     }
-    return { first: docs[0], second: docs[1] };
+    return docs;
   });
   let originalTrashed = false;
   if (options.trashOriginal) {
@@ -311,8 +334,8 @@ export async function splitDocument(
       console.warn('Split: could not move the original to Recently deleted', err);
     }
   }
-  for (const d of [made.first, made.second]) {
+  for (const d of made) {
     indexDocText(d.id, d.pages).catch(err => console.warn('Index split part failed', err));
   }
-  return { ...made, originalTrashed };
+  return { parts: made, originalTrashed };
 }

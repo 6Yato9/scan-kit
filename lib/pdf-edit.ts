@@ -673,6 +673,32 @@ export async function splitStoredPdf(
   after: number,
   options: { trashOriginal?: boolean; password?: string | null } = {},
 ): Promise<SplitResult> {
+  const r = await splitStoredPdfParts(docId, count => splitPlans(count, after), options);
+  return { first: r.parts[0], second: r.parts[1], originalTrashed: r.originalTrashed };
+}
+
+export type SplitPartsResult = { parts: Document[]; originalTrashed: boolean };
+
+/** One plan per part, from 0-based page lists (Split › Every N pages / By ranges). */
+export function partPlans(parts: number[][], count: number): PdfPlan[] {
+  if (parts.length < 1 || parts.some(p => p.length === 0 || p.some(i => !Number.isInteger(i) || i < 0 || i >= count))) {
+    throw new RangeError('no such page');
+  }
+  return parts.map(p => p.map(source => ({ source, rotate: 0 })));
+}
+
+/**
+ * Splits document `docId`'s PDF into new documents "<name> (1)", "<name>
+ * (2)", … in the same folder, one per plan (`plans` may be a function of the
+ * PDF's page count, read under the lock). PDFKit copies the pages without
+ * redrawing them, so their text stays. Original kept unless `trashOriginal`.
+ * Rejects with PdfEditError; nothing is created then.
+ */
+export async function splitStoredPdfParts(
+  docId: string,
+  plans: PdfPlan[] | ((count: number) => PdfPlan[]),
+  options: { trashOriginal?: boolean; password?: string | null } = {},
+): Promise<SplitPartsResult> {
   const edit = VisionOcr?.pdfEditPages;
   const info = VisionOcr?.pdfInfo;
   if (typeof edit !== 'function' || typeof info !== 'function') throw new PdfEditError('unavailable', 'pdfEditPages missing');
@@ -696,34 +722,37 @@ export async function splitStoredPdf(
     } catch (err) {
       throw classify(err);
     }
-    let plans: [PdfPlan, PdfPlan];
+    let planned: PdfPlan[];
     try {
-      plans = splitPlans(count, after);
+      planned = typeof plans === 'function' ? plans(count) : plans;
+      if (planned.length < 1 || planned.some(p => p.length === 0 || p.some(st => st.source < 0 || st.source >= count))) {
+        throw new RangeError('no such page');
+      }
     } catch {
       throw new PdfEditError('changed', 'nothing to split');
     }
     const work = newWorkDir(docId);
     const created: string[] = [];
     try {
-      const names = splitNames(doc.name);
       const docs: Document[] = [];
-      for (let k = 0; k < 2; k++) {
+      for (let k = 0; k < planned.length; k++) {
         const out = new File(work, `part-${k + 1}.pdf`);
-        const { sources, rotations } = planArgs(plans[k]);
+        const { sources, rotations } = planArgs(planned[k]);
         try {
           const n = await edit(source, out.uri, sources, rotations, options.password ?? null);
-          if (n !== plans[k].length) throw new PdfEditError('failed', 'split not verified');
+          if (n !== planned[k].length) throw new PdfEditError('failed', 'split not verified');
         } catch (err) {
           throw classify(err);
         }
         const text = await readText(out.uri);
         const id = Crypto.randomUUID();
         created.push(id);
-        const now = Date.now() + k; // the first part sorts as the newer of the two in "Date added"
+        // The first part sorts as the newest in "Date added", the rest in order after it.
+        const now = Date.now() + (planned.length - 1 - k);
         const pdfUri = copyPdfToStorage(out.uri, id);
         const part: Document = {
           id,
-          name: names[k],
+          name: `${doc.name} (${k + 1})`,
           pages: [],
           pdfUri,
           folder: doc.folder,
@@ -734,7 +763,7 @@ export async function splitStoredPdf(
         await saveDocument(part);
         docs.push(part);
       }
-      return { first: docs[0], second: docs[1] };
+      return docs;
     } catch (err) {
       // Nothing half-made stays: the parts saved so far go again.
       for (const id of created) {
@@ -754,7 +783,7 @@ export async function splitStoredPdf(
       console.warn('Split: could not move the original to Recently deleted', err);
     }
   }
-  return { ...made, originalTrashed };
+  return { parts: made, originalTrashed };
 }
 
 // ── Merge ────────────────────────────────────────────────────────────────────

@@ -1,8 +1,10 @@
 // lib/watermark-prefs.ts
 // The Watermark tool's remembered choices (app/tools/watermark.tsx): the text,
-// Single or Tiled, the style, the colour, and the size and strength chosen for
-// each type. One additive key of its own: nothing here touches documents or
-// other settings.
+// Single or Tiled, the style, the colour (a palette id, or 'custom' with its
+// hex — round 16), bold or regular, and the size and strength chosen for each
+// type. One additive key of its own: nothing here touches documents or other
+// settings. Round 16 only added fields (`customColor`, `bold`) and colour ids,
+// so a value saved by round 15 loads unchanged.
 //
 // Reading is forgiving on purpose. A stored value from an older build (or a
 // later one with fields this build doesn't know) loads field by field: a field
@@ -12,10 +14,10 @@
 import {
   clampWatermarkSize,
   clampWatermarkStrength,
-  type StampColor,
   type WatermarkLayout,
   type WatermarkStyle,
 } from './stamp';
+import { normalizeHex, parseInkChoice, type InkChoice } from './stamp-colors';
 
 const KEY = '@scan_kit_watermark';
 
@@ -26,7 +28,11 @@ export type WatermarkPrefs = {
   text: string;
   layout: WatermarkLayout;
   style: WatermarkStyle;
-  color: StampColor;
+  color: InkChoice;
+  /** The hex for color 'custom' (null until one is picked). */
+  customColor: string | null;
+  /** Bold (the original) or regular. */
+  bold: boolean;
   /** Points on an A4-wide page. Kept per type: a good tile size is far smaller than a single mark. */
   size: PerLayout;
   /** Ink opacity in percent. */
@@ -41,13 +47,14 @@ export const DEFAULT_WATERMARK_PREFS: WatermarkPrefs = {
   layout: 'single',
   style: 'diagonal',
   color: 'gray',
+  customColor: null,
+  bold: true,
   size: { single: null, tiled: null },
   strength: { single: null, tiled: null },
 };
 
 const LAYOUTS: readonly WatermarkLayout[] = ['single', 'tiled'];
 const STYLES: readonly WatermarkStyle[] = ['diagonal', 'center', 'footer'];
-const COLORS: readonly StampColor[] = ['gray', 'red', 'blue'];
 
 function oneOf<T extends string>(v: unknown, allowed: readonly T[], fallback: T): T {
   return allowed.includes(v as T) ? (v as T) : fallback;
@@ -77,7 +84,9 @@ export function parseWatermarkPrefs(raw: string | null | undefined): WatermarkPr
     text: text || d.text,
     layout: oneOf(o.layout, LAYOUTS, d.layout),
     style: oneOf(o.style, STYLES, d.style),
-    color: oneOf(o.color, COLORS, d.color),
+    color: parseInkChoice(o.color, d.color),
+    customColor: normalizeHex(o.customColor),
+    bold: typeof o.bold === 'boolean' ? o.bold : d.bold,
     size: perLayout(o.size, clampWatermarkSize),
     strength: perLayout(o.strength, (_l, n) => clampWatermarkStrength(n)),
   };

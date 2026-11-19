@@ -331,10 +331,36 @@ export function addProposals(
 // ── After redacting ────────────────────────────────────────────────────────
 
 /**
+ * Where the "REDACTED" label Redact can print across its boxes (lib/stamp.ts
+ * REDACT_LABEL) is read in a line, as [start, end) character indices: any
+ * word holding "DACT", or starting "REDAC" (text recognition may drop or
+ * misread a letter of it).
+ */
+export function labelSpans(text: string): { start: number; end: number }[] {
+  const chars = Array.from(text);
+  const out: { start: number; end: number }[] = [];
+  let i = 0;
+  while (i < chars.length) {
+    if (/\s/.test(chars[i])) {
+      i += 1;
+      continue;
+    }
+    let j = i;
+    while (j < chars.length && !/\s/.test(chars[j])) j += 1;
+    const word = chars.slice(i, j).join('').toUpperCase();
+    if (word.includes('DACT') || word.includes('REDAC')) out.push({ start: i, end: j });
+    i = j;
+  }
+  return out;
+}
+
+/**
  * The matches of `finders` (search terms, patterns) still readable on a
  * redacted page whose centre lies under one of the applied boxes: the box
  * didn't fully cover them. (A match outside every box was left on purpose —
- * the user removed that proposal — and isn't reported.)
+ * the user removed that proposal — and isn't reported.) A match inside the
+ * word "REDACTED" is the label printed on a box, not a leftover: searching
+ * "red" must not find it again under every labelled box.
  */
 export function leftoverMatches(
   lines: readonly OcrLine[],
@@ -343,11 +369,19 @@ export function leftoverMatches(
   applied: readonly RedactRect[],
 ): RedactRect[] {
   const out: RedactRect[] = [];
+  if (!img || !(img.width > 0) || !(img.height > 0)) return out;
   for (const finder of finders) {
-    for (const r of findOnPage(lines, img, finder)) {
-      const cx = r.x + r.w / 2;
-      const cy = r.y + r.h / 2;
-      if (applied.some(b => cx >= b.x && cx <= b.x + b.w && cy >= b.y && cy <= b.y + b.h)) out.push(r);
+    for (const line of lines) {
+      if (!line.text || !(line.width > 0) || !(line.height > 0)) continue;
+      const labels = labelSpans(line.text);
+      const hits = finder.kind === 'term' ? findInText(line.text, finder.term) : findPattern(line.text, finder.kind);
+      for (const h of hits) {
+        if (labels.some(l => h.start >= l.start && h.end <= l.end)) continue;
+        const r = matchBox(line, h.start, h.end, img);
+        const cx = r.x + r.w / 2;
+        const cy = r.y + r.h / 2;
+        if (applied.some(b => cx >= b.x && cx <= b.x + b.w && cy >= b.y && cy <= b.y + b.h)) out.push(r);
+      }
     }
   }
   return out;

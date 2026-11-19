@@ -255,7 +255,7 @@ describe('remembered choices', () => {
         text: '  PAID  ',
         layout: 'mosaic',
         style: 'wavy',
-        color: 'green',
+        color: 'chartreuse',
         size: { single: 999, tiled: '20', extra: 5 },
         strength: { single: 3, tiled: 55.4 },
         futureField: { a: 1 },
@@ -266,6 +266,8 @@ describe('remembered choices', () => {
       layout: 'single',
       style: 'diagonal',
       color: 'gray',
+      customColor: null,
+      bold: true,
       size: { single: WATERMARK_SIZE_RANGE.single.max, tiled: null },
       strength: { single: 10, tiled: 55 },
     });
@@ -280,6 +282,8 @@ describe('remembered choices', () => {
       layout: 'tiled' as const,
       style: 'center' as const,
       color: 'blue' as const,
+      customColor: null,
+      bold: true,
       size: { single: 60, tiled: 18 },
       strength: { single: null, tiled: 35 },
     };

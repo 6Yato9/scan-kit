@@ -5,7 +5,9 @@
 //   selected box's corner to resize it, to any shape;
 // - the selected box has a remove button just above it.
 // Boxes show slightly see-through, so the user can check what they cover;
-// they are burned in solid black.
+// they are burned in solid black — or, from round 16, in the colour chosen in
+// Redact's style sheet (`fill`), with "REDACTED" across them when asked
+// (`label`, sized exactly as lib/stamp.ts burns it).
 //
 // One pan gesture covers the whole page and decides at touch-down what the
 // drag does (resize a corner, move a box, or draw a new one), so there are no
@@ -16,13 +18,15 @@
 // drawn exactly round a line of small print. Boxes are kept in page points
 // (the page at its fitted size); only what is drawn is scaled.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Image, Pressable, StyleSheet, View, type AccessibilityActionEvent } from 'react-native';
+import { Image, Pressable, StyleSheet, Text, View, type AccessibilityActionEvent } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/theme-context';
 import { Ink, Radius, Spacing } from '@/lib/theme';
 import { selection, tapLight } from '@/lib/haptics';
 import { HANDLES, moveBox, type Box, type Handle } from '@/lib/placement';
+import { redactLabelSize } from '@/lib/stamp';
+import { isLight } from '@/lib/stamp-colors';
 import {
   MIN_REDACT_POINTS,
   boxAt,
@@ -76,6 +80,8 @@ export function RedactEditor({
   selectedId,
   onSelect,
   onChange,
+  fill = Ink.black,
+  label = null,
 }: {
   /** The page image (file URI). */
   uri: string;
@@ -87,6 +93,10 @@ export function RedactEditor({
   onSelect: (id: string | null) => void;
   /** The page's boxes after a draw, move, resize or removal. */
   onChange: (boxes: RedactBox[]) => void;
+  /** The colour the boxes will be burned in (default black). */
+  fill?: string;
+  /** The word printed across each box, and its colour; null for none. */
+  label?: { text: string; color: string } | null;
 }) {
   const { colors } = useTheme();
   const bounds = useMemo(() => ({ width, height }), [width, height]);
@@ -313,7 +323,25 @@ export function RedactEditor({
                   ]}
                   onAccessibilityAction={onA11y(id)}
                 >
-                  <View style={[StyleSheet.absoluteFill, { backgroundColor: Ink.black, opacity: BOX_OPACITY }]} />
+                  <View
+                    style={[
+                      StyleSheet.absoluteFill,
+                      { backgroundColor: fill, opacity: BOX_OPACITY },
+                      // A white box on white paper still shows where it is.
+                      isLight(fill) ? [styles.lightEdge, { borderColor: colors.ring }] : null,
+                    ]}
+                  />
+                  {label && redactLabelSize(box.w, box.h, 0.5) > 0 ? (
+                    <View style={styles.labelWrap} pointerEvents="none">
+                      <Text
+                        style={[styles.label, { color: label.color, fontSize: redactLabelSize(box.w, box.h, 0.5) }]}
+                        numberOfLines={1}
+                        allowFontScaling={false}
+                      >
+                        {label.text}
+                      </Text>
+                    </View>
+                  ) : null}
                   {on ? <View style={[StyleSheet.absoluteFill, styles.outline, { borderColor: colors.accentFill }]} /> : null}
                 </View>
               );
@@ -327,7 +355,7 @@ export function RedactEditor({
                   { left: drawing.x, top: drawing.y, width: drawing.w, height: drawing.h, borderColor: colors.accentFill },
                 ]}
               >
-                <View style={[StyleSheet.absoluteFill, { backgroundColor: Ink.black, opacity: BOX_OPACITY * 0.8 }]} />
+                <View style={[StyleSheet.absoluteFill, { backgroundColor: fill, opacity: BOX_OPACITY * 0.8 }]} />
               </View>
             ) : null}
             {sel && !live
@@ -386,6 +414,10 @@ const styles = StyleSheet.create({
   clip: { overflow: 'hidden' },
   box: { position: 'absolute' },
   outline: { borderWidth: 2 },
+  lightEdge: { borderWidth: StyleSheet.hairlineWidth },
+  labelWrap: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  // Helvetica Bold, as the canvas draws it (lib/stamp.ts REDACT_LABEL_EM).
+  label: { fontFamily: 'Helvetica', fontWeight: '700' },
   dot: {
     position: 'absolute',
     width: DOT,

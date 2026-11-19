@@ -10,6 +10,11 @@
 // The choices are remembered for next time once a watermark is added
 // (lib/watermark-prefs.ts).
 //
+// Round 16: the colour comes from the shared stamp palette, or Custom (hue
+// and shade), and the text can be bold (the original) or regular. Strength
+// and weight sit under "More options", which opens by itself when either
+// isn't the default.
+//
 // The preview stays pinned above the controls while they scroll, so every
 // change shows at once, and it is drawn from the same resolved numbers as the
 // bake (lib/stamp.ts resolveStamp / watermarkTiles), in the same font.
@@ -19,7 +24,6 @@ import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
 import {
-  ColorSwatches,
   FooterActions,
   NoDocumentsScreen,
   PagePreview,
@@ -35,16 +39,16 @@ import { ToolDocPicker, useConvertiblePdfs, useToolDoc, type PickerConvert } fro
 import { FilterBaker } from '@/components/filter-baker';
 import { reportStampFailure, usePageStamper, useStampFinish } from '@/components/page-stamper';
 import { ValueSlider } from '@/components/value-slider';
+import { ColorPalette } from '@/components/color-palette';
+import { MoreOptions } from '@/components/more-options';
 import { copyName, stampCopy, stampPages, targetPages } from '@/lib/page-stamp';
 import { notifySuccess } from '@/lib/haptics';
 import {
-  STAMP_RGB,
   WATERMARK_SIZE_RANGE,
   WATERMARK_STRENGTH_RANGE,
   resolveStamp,
   resolveWatermarkLook,
   watermarkTiles,
-  type StampColor,
   type StampSpec,
   type WatermarkLayout,
   type WatermarkStyle,
@@ -56,6 +60,7 @@ import {
   saveWatermarkPrefs,
   type PerLayout,
 } from '@/lib/watermark-prefs';
+import { INK_PALETTE, type InkChoice } from '@/lib/stamp-colors';
 import { Radius, Spacing, Type } from '@/lib/theme';
 
 const LAYOUTS: { value: WatermarkLayout; label: string }[] = [
@@ -67,14 +72,14 @@ const STYLES: { value: WatermarkStyle; label: string }[] = [
   { value: 'center', label: 'Centered' },
   { value: 'footer', label: 'Footer' },
 ];
-const COLORS: { value: StampColor; label: string }[] = [
-  { value: 'gray', label: 'Gray' },
-  { value: 'red', label: 'Red' },
-  { value: 'blue', label: 'Blue' },
+const COLORS = INK_PALETTE.map(p => ({ value: p.id, label: p.label, color: p.hex }));
+const WEIGHTS: { value: 'bold' | 'regular'; label: string }[] = [
+  { value: 'bold', label: 'Bold' },
+  { value: 'regular', label: 'Regular' },
 ];
 
-/** The canvas draws in Helvetica Bold (lib/stamp.ts STAMP_FONT); so does the preview. */
-const PREVIEW_FONT = { fontFamily: 'Helvetica', fontWeight: '700' as const };
+/** The canvas draws in Helvetica (lib/stamp.ts STAMP_FONT), bold or regular; so does the preview. */
+const previewFont = (weight: '400' | '700') => ({ fontFamily: 'Helvetica', fontWeight: weight });
 /** Text is measured once at this size; its width scales with the font size. */
 const MEASURE_PT = 100;
 
@@ -88,7 +93,10 @@ export default function WatermarkScreen() {
   const [text, setText] = useState(d.text);
   const [layout, setLayout] = useState<WatermarkLayout>(d.layout);
   const [style, setStyle] = useState<WatermarkStyle>(d.style);
-  const [color, setColor] = useState<StampColor>(d.color);
+  const [color, setColor] = useState<InkChoice>(d.color);
+  const [customColor, setCustomColor] = useState<string | null>(d.customColor);
+  const [bold, setBold] = useState(d.bold);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [size, setSize] = useState<PerLayout>(d.size);
   const [strength, setStrength] = useState<PerLayout>(d.strength);
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
@@ -107,8 +115,12 @@ export default function WatermarkScreen() {
       setLayout(p.layout);
       setStyle(p.style);
       setColor(p.color);
+      setCustomColor(p.customColor);
+      setBold(p.bold);
       setSize(p.size);
       setStrength(p.strength);
+      // Something under More options isn't the default: show it.
+      if (!p.bold || p.strength.single != null || p.strength.tiled != null) setMoreOpen(true);
     });
     return () => {
       live = false;
@@ -131,6 +143,8 @@ export default function WatermarkScreen() {
     text: label,
     style,
     color,
+    customColor,
+    bold,
     layout,
     sizePt: size[layout],
     strength: strength[layout],
@@ -140,7 +154,7 @@ export default function WatermarkScreen() {
   /** Watermarks every page of the document itself (Undo in the viewer), or of a copy. */
   const apply = async (mode: 'in-place' | 'copy') => {
     if (!doc || !label || progress) return;
-    saveWatermarkPrefs({ text: label, layout, style, color, size, strength });
+    saveWatermarkPrefs({ text: label, layout, style, color, customColor, bold, size, strength });
     const render = (pageUri: string, origUri: string | null) => stamper.stamp(pageUri, origUri, spec);
     const pages = targetPages(doc.pages.length, 0, true);
     const onProgress = (done: number, total: number) => setProgress({ current: done, total });
@@ -308,26 +322,48 @@ export default function WatermarkScreen() {
         onChange={setSizeValue}
       />
 
-      <SectionRow label="Strength" action={look.autoStrength ? undefined : 'Reset'} onAction={() => setStrengthValue(null)} />
-      <ValueSlider
-        label="Watermark strength"
-        value={look.strength}
-        min={WATERMARK_STRENGTH_RANGE.min}
-        max={WATERMARK_STRENGTH_RANGE.max}
-        step={5}
-        format={v => `${v}%`}
-        onChange={setStrengthValue}
-      />
-
       <SectionLabel>Color</SectionLabel>
-      <ColorSwatches
-        options={COLORS.map(c => ({ ...c, color: `rgb(${STAMP_RGB[c.value].join(',')})` }))}
+      <ColorPalette
+        options={COLORS}
         value={color}
         onChange={v => {
           touch();
-          setColor(v);
+          setColor(v as InkChoice);
         }}
+        custom={customColor}
+        onCustomChange={hex => {
+          touch();
+          setCustomColor(hex);
+        }}
+        accessibilityLabel="Watermark color"
       />
+
+      <MoreOptions
+        open={moreOpen}
+        onToggle={setMoreOpen}
+        changed={(look.autoStrength ? 0 : 1) + (bold ? 0 : 1)}
+      >
+        <SectionRow label="Strength" action={look.autoStrength ? undefined : 'Reset'} onAction={() => setStrengthValue(null)} />
+        <ValueSlider
+          label="Watermark strength"
+          value={look.strength}
+          min={WATERMARK_STRENGTH_RANGE.min}
+          max={WATERMARK_STRENGTH_RANGE.max}
+          step={5}
+          format={v => `${v}%`}
+          onChange={setStrengthValue}
+        />
+
+        <SectionLabel>Weight</SectionLabel>
+        <Segmented
+          options={WEIGHTS}
+          value={bold ? 'bold' : 'regular'}
+          onChange={v => {
+            touch();
+            setBold(v === 'bold');
+          }}
+        />
+      </MoreOptions>
 
       <ToolNote>Size is in points on an A4-wide page and scales with each page. The watermark becomes part of every page, and you can undo it right after. To keep this document as it is, save a watermarked copy instead.</ToolNote>
     </ToolScreen>
@@ -347,7 +383,9 @@ function WatermarkLayer({ spec, width, height }: { spec: StampSpec; width: numbe
   const [measured, setMeasured] = useState<{ text: string; w: number } | null>(null);
   if (r.kind !== 'watermark' || !r.text) return null;
   const fontSize = r.fontFrac * width;
-  const textStyle = { ...PREVIEW_FONT, fontSize, color: r.ink, letterSpacing: fontSize * 0.04 };
+  // Bold and regular measure differently: a width is only reused for the same text in the same weight.
+  const measureKey = `${r.weight}|${r.text}`;
+  const textStyle = { ...previewFont(r.weight), fontSize, color: r.ink, letterSpacing: fontSize * 0.04 };
   const textEl = (
     <Text style={textStyle} numberOfLines={1} allowFontScaling={false}>
       {r.text}
@@ -369,7 +407,7 @@ function WatermarkLayer({ spec, width, height }: { spec: StampSpec; width: numbe
 
   // Until measured, the width the fit formula assumes (0.62 em a character).
   const unitW =
-    measured && measured.text === r.text ? measured.w / MEASURE_PT : [...r.text].length * 0.62 * 1.04;
+    measured && measured.text === measureKey ? measured.w / MEASURE_PT : [...r.text].length * 0.62 * 1.04;
   const textW = unitW * fontSize;
   const tiles = watermarkTiles(width, height, fontSize, textW, r.angle, r.gapEm, r.rowEm);
   const boxW = textW * 2 + fontSize * 2;
@@ -378,12 +416,12 @@ function WatermarkLayer({ spec, width, height }: { spec: StampSpec; width: numbe
     <View style={styles.clip}>
       <View style={styles.measure} pointerEvents="none">
         <Text
-          style={{ ...PREVIEW_FONT, fontSize: MEASURE_PT, letterSpacing: MEASURE_PT * 0.04 }}
+          style={{ ...previewFont(r.weight), fontSize: MEASURE_PT, letterSpacing: MEASURE_PT * 0.04 }}
           numberOfLines={1}
           allowFontScaling={false}
           onLayout={e => {
             const w = e.nativeEvent.layout.width;
-            if (w > 0 && (measured?.text !== r.text || Math.abs(measured.w - w) > 0.5)) setMeasured({ text: r.text, w });
+            if (w > 0 && (measured?.text !== measureKey || Math.abs(measured.w - w) > 0.5)) setMeasured({ text: measureKey, w });
           }}
         >
           {r.text}

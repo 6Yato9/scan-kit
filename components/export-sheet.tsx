@@ -7,9 +7,8 @@
 // waits on the share sheet: `shareFile` returns as soon as the sheet is up, so
 // the UI can't get stuck if expo-sharing never settles. Work in progress shows a
 // progress state with Cancel, and closing the sheet cancels it too.
-import { Alert, Image, Linking, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Linking, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { File } from 'expo-file-system';
 import {
   canProtectPdf,
   estimatePdfBytes,
@@ -23,9 +22,23 @@ import {
   PdfProgressPhase,
   PdfProtectError,
   roundUpEstimate,
+  type PageNumberPosition,
   type PageNumberStyle,
+  type PdfMargin,
+  type PdfOrientation,
 } from '@/lib/pdf';
-import { getExportPageNumbers, setExportPageNumbers } from '@/lib/export-prefs';
+import {
+  DEFAULT_EXPORT_LAYOUT,
+  getExportLayout,
+  getExportPageNumbers,
+  isDefaultLayout,
+  layoutSummary,
+  MARGIN_LABELS,
+  setExportLayout,
+  setExportPageNumbers,
+  type ExportLayout,
+} from '@/lib/export-prefs';
+import { AppSwitch } from '@/components/app-switch';
 import { buildScanPdf, protectDocumentPdf } from '@/lib/pdf-protect';
 import { SegmentedControl } from '@/components/segmented-control';
 import {
@@ -53,13 +66,14 @@ import { Document } from '@/types/document';
 import { useTheme } from '@/contexts/theme-context';
 import { getDocSettings } from '@/lib/storage';
 import { documentBytes } from '@/lib/doc-size';
+import { pageStats } from '@/lib/page-stats';
 import { formatBytes } from '@/components/tool-ui';
 import { zipFiles } from '@/lib/zip-stream';
 import { notifySuccess } from '@/lib/haptics';
 import { canFlattenPdf, flattenPdfCopy, pdfShareInfo, shouldOfferFlatten } from '@/lib/pdf-fill';
 import { PdfEditError } from '@/lib/pdf-edit';
 import { PdfSessionError, readablePdfUri } from '@/lib/pdf-session';
-import { Radius, Spacing, Type } from '@/lib/theme';
+import { HIT, Radius, Spacing, Type } from '@/lib/theme';
 
 type Props = {
   visible: boolean;
@@ -76,27 +90,6 @@ type BuiltFile = { uri: string; mimeType: string; UTI: string };
 type BuiltImages = { uris: string[] };
 
 class CancelledError extends Error {}
-
-function imageSize(uri: string): Promise<{ width: number; height: number }> {
-  return new Promise(resolve => {
-    Image.getSize(uri, (width, height) => resolve({ width, height }), () => resolve({ width: 0, height: 0 }));
-  });
-}
-
-/** Stored bytes and pixel size of every page, for the export size estimates. */
-async function pageStats(pages: string[]): Promise<PageStat[]> {
-  return Promise.all(
-    pages.map(async p => {
-      const uri = cleanFileUri(p);
-      let bytes = 0;
-      try {
-        const f = new File(uri);
-        bytes = f.exists ? f.size ?? 0 : 0;
-      } catch {}
-      return { bytes, ...(await imageSize(uri)) };
-    }),
-  );
-}
 
 const PDF_FILE = { mimeType: 'application/pdf', UTI: 'com.adobe.pdf' };
 
@@ -152,11 +145,21 @@ export function ExportSheet({ visible, document, onClose }: Props) {
   const { colors, isDark } = useTheme();
   const toast = useToast();
   const [busy, setBusy] = useState<Busy | null>(null);
+  // Document settings' paper: what the PDF uses unless PDF options choose one.
   const [pageSize, setPageSize] = useState<PageSize>('A4');
-  // Always standard: the old "PDF image quality" setting is gone (a stored
-  // 'high' would otherwise stick with no way to change it). "Smaller PDF"
-  // covers size.
-  const quality: PdfQuality = 'standard';
+  // PDF options (round 16): paper, orientation, margins, image quality, page
+  // number position and the text layer, remembered between exports
+  // (lib/export-prefs.ts). The defaults make exactly the PDF this sheet made
+  // before the options existed: Document settings' paper, standard quality.
+  // The old Document settings "PDF image quality" stays unused here: a stored
+  // 'high' would stick with no way to change it from this sheet.
+  const [layout, setLayout] = useState<ExportLayout>(DEFAULT_EXPORT_LAYOUT);
+  const quality: PdfQuality = layout.quality;
+  const paper: PageSize = layout.paper ?? pageSize;
+  const layoutRef = useRef(layout);
+  const [optionsMode, setOptionsMode] = useState(false);
+  // The shared file's name for this export only ('' = the document's name).
+  const [fileName, setFileName] = useState('');
   // Page numbers on exported PDFs (and print): remembered between exports.
   const [pageNumbers, setPageNumbers] = useState<PageNumberStyle>('off');
   const [bytes, setBytes] = useState<number | null>(null);
@@ -184,10 +187,12 @@ export function ExportSheet({ visible, document, onClose }: Props) {
       abortRef.current = null;
       setBusy(null);
       setPwMode(false);
+      setOptionsMode(false);
       setPw('');
       setPw2('');
       return;
     }
+    setFileName('');
     let cancelled = false;
     setBytes(null);
     setStats(null);
@@ -206,6 +211,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
       })
       .catch(() => {});
     getExportPageNumbers().then(p => { if (!cancelled) setPageNumbers(p); });
+    getExportLayout().then(l => { if (!cancelled) setLayout(l); });
     setCanFlatten(false);
     setNeedsPassword(false);
     if (document.pdfUri) {
@@ -232,10 +238,14 @@ export function ExportSheet({ visible, document, onClose }: Props) {
 
   const isPdfDoc = !!document.pdfUri;
   const pageCount = document.pages.length;
+  // Every shared file (and the print job) is named after this.
+  const outName = fileName.trim() || document.name;
   // The recognized text (search index): shared as plain text, ready to paste.
   // Hidden when the document has none yet.
   const docText = document.ocrText?.trim() ?? '';
-  const canSearchable = !isPdfDoc && pageCount > 0 && ocrAvailable();
+  const ocrCan = !isPdfDoc && pageCount > 0 && ocrAvailable();
+  // PDF options can turn the text layer off (faster, a little smaller).
+  const canSearchable = ocrCan && layout.searchable;
   const canProtect = canProtectPdf() && (isPdfDoc || pageCount > 0);
   // Several pages go out as separate images (what Messages, Mail and photo
   // apps want) when this build can share several files at once; the ZIP stays
@@ -262,6 +272,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
       quality: q,
       searchable,
       pageNumbers,
+      layout,
       signal,
       onProgress: (done, total, phase) => {
         if (signal.aborted) return;
@@ -276,7 +287,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
     const title = pageCount === 1 ? 'Preparing image' : 'Preparing images';
     if (pageCount === 1) {
       setBusy({ title, label: 'Preparing image', progress: 0.5 });
-      const uri = await placeExportFile(document.pages[0], dir, exportFileName(document.name, 'jpg'), 'copy');
+      const uri = await placeExportFile(document.pages[0], dir, exportFileName(outName, 'jpg'), 'copy');
       return { uri, mimeType: 'image/jpeg', UTI: 'public.jpeg' };
     }
     if (!asZip) {
@@ -286,7 +297,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
       for (let i = 0; i < pageCount; i++) {
         if (signal.aborted) throw new CancelledError();
         setBusy({ title, label: `Adding page ${i + 1} of ${pageCount}`, progress: (i / pageCount) * 0.95 });
-        const name = exportFileName(`${document.name} - page ${String(i + 1).padStart(digits, '0')}`, 'jpg');
+        const name = exportFileName(`${outName} - page ${String(i + 1).padStart(digits, '0')}`, 'jpg');
         uris.push(await placeExportFile(document.pages[i], dir, name, 'copy'));
       }
       return { uris };
@@ -295,7 +306,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
     // does): each page is copied in 1 MB chunks, STORED (JPEGs don't compress
     // further), so memory stays flat however many pages there are — never the
     // whole archive in memory twice (r12 device review B2).
-    const uri = `${dir}${encodeURIComponent(exportFileName(document.name, 'zip'))}`;
+    const uri = `${dir}${encodeURIComponent(exportFileName(outName, 'zip'))}`;
     const pages = [...document.pages];
     const date = new Date(document.updatedAt || document.createdAt || Date.now());
     await zipFiles(
@@ -413,7 +424,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
           if (signal.aborted) await deleteQuietly(raw);
           check();
           // Named after the document so the print job isn't called "<uuid>.pdf".
-          uri = await placeExportFile(raw, await makeExportDir(), exportFileName(document.name, 'pdf'), 'move');
+          uri = await placeExportFile(raw, await makeExportDir(), exportFileName(outName, 'pdf'), 'move');
         }
         check();
         setBusy(null);
@@ -443,7 +454,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
         // then a protected copy under the document's name. The unprotected
         // temp file is deleted straight away; only the protected one is shared.
         const title = 'Creating protected PDF';
-        const out = `${dir}${encodeURIComponent(exportFileName(document.name, 'pdf'))}`;
+        const out = `${dir}${encodeURIComponent(exportFileName(outName, 'pdf'))}`;
         // A protected PDF unlocked this session: from its decrypted copy, with the new password.
         const source = isPdfDoc ? { pdfUri: await readablePdfUri(document) } : document;
         const uri = await protectDocumentPdf(source, out, password ?? '', {
@@ -458,12 +469,12 @@ export function ExportSheet({ visible, document, onClose }: Props) {
       } else if (action === 'flat' && isPdfDoc) {
         // A copy with the form values and signatures drawn into the pages; the stored PDF is untouched.
         setBusy({ title: 'Flattening PDF', label: 'Flattening PDF', progress: 0.5 });
-        const out = `${dir}${encodeURIComponent(exportFileName(document.name, 'pdf'))}`;
+        const out = `${dir}${encodeURIComponent(exportFileName(outName, 'pdf'))}`;
         const uri = await flattenPdfCopy(await readablePdfUri(document), out);
         file = { uri, ...PDF_FILE };
       } else if (isPdfDoc) {
         setBusy({ title: 'Preparing PDF', label: 'Preparing PDF', progress: 0.5 });
-        const uri = await placeExportFile(document.pdfUri!, dir, exportFileName(document.name, 'pdf'), 'copy');
+        const uri = await placeExportFile(document.pdfUri!, dir, exportFileName(outName, 'pdf'), 'copy');
         file = { uri, ...PDF_FILE };
       } else if (action === 'images' || action === 'zip') {
         file = await buildImages(signal, dir, action === 'zip' || !shareImagesApart);
@@ -475,7 +486,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
         const raw = await buildPdf(q, canSearchable, signal, title);
         if (signal.aborted) await deleteQuietly(raw);
         check();
-        const uri = await placeExportFile(raw, dir, exportFileName(document.name, 'pdf'), 'move');
+        const uri = await placeExportFile(raw, dir, exportFileName(outName, 'pdf'), 'move');
         file = { uri, ...PDF_FILE };
       }
       check();
@@ -489,12 +500,12 @@ export function ExportSheet({ visible, document, onClose }: Props) {
         if (sessionRef.current === session) onClose();
       };
       if ('uris' in file) {
-        await shareFiles(file.uris, { dialogTitle: document.name, signal, onFinish });
+        await shareFiles(file.uris, { dialogTitle: outName, signal, onFinish });
       } else {
         await shareFile(file.uri, {
           mimeType: file.mimeType,
           UTI: file.UTI,
-          dialogTitle: document.name,
+          dialogTitle: outName,
           signal,
           onFinish,
         });
@@ -539,7 +550,17 @@ export function ExportSheet({ visible, document, onClose }: Props) {
   const submitPassword = () => {
     if (pwReady) run('protected', pw);
   };
-  const printDetail = detailLine(['Any AirPrint printer', pageSize === 'Auto' || isPdfDoc ? null : paperName(pageSize)]);
+  const printDetail = detailLine(['Any AirPrint printer', paper === 'Auto' || isPdfDoc ? null : paperName(paper)]);
+  // From the latest choice (a ref, not the render's `layout`), so two quick
+  // taps before a re-render both stick.
+  layoutRef.current = layout;
+  const updateLayout = (patch: Partial<ExportLayout>) => {
+    const next = { ...layoutRef.current, ...patch };
+    layoutRef.current = next;
+    setLayout(next);
+    setExportLayout(next).catch(() => {});
+  };
+  const optionsSummary = layoutSummary(layout, paper, ocrCan);
   const choosePageNumbers = (p: PageNumberStyle) => {
     setPageNumbers(p);
     setExportPageNumbers(p).catch(() => {});
@@ -552,16 +573,23 @@ export function ExportSheet({ visible, document, onClose }: Props) {
     { value: 'of-total', label: `1 of ${pageTotal}` },
   ];
   const numbersLabel = pageNumberOptions[1].label;
+  // Where PDF options put them (bottom centre unless chosen otherwise).
+  const where =
+    layout.numberPosition === 'top-right' ? 'At the top right' : layout.numberPosition === 'bottom-right' ? 'At the bottom right' : 'At the bottom';
   const pageNumberNote =
     pageNumbers === 'number'
-      ? `At the bottom of each page: ${numbersLabel}${pageTotal > 3 ? '…' : ''}`
+      ? `${where} of each page: ${numbersLabel}${pageTotal > 3 ? '…' : ''}`
       : pageNumbers === 'of-total'
-        ? `At the bottom of each page: 1 of ${pageTotal}${pageTotal > 1 ? `, 2 of ${pageTotal}${pageTotal > 2 ? '…' : ''}` : ''}`
+        ? `${where} of each page: 1 of ${pageTotal}${pageTotal > 1 ? `, 2 of ${pageTotal}${pageTotal > 2 ? '…' : ''}` : ''}`
         : 'Added at the bottom of each page of a PDF or print.';
 
   return (
     <BottomSheet visible={visible} onClose={handleClose} variant="grouped">
-      <SheetHeader title={document.name} subtitle={subtitle} />
+      {optionsMode && !busy ? (
+        <SheetHeader title={isPdfDoc ? 'File name' : 'PDF options'} subtitle={document.name} />
+      ) : (
+        <SheetHeader title={document.name} subtitle={subtitle} />
+      )}
 
       {busy ? (
         <SheetGroup>
@@ -641,8 +669,129 @@ export function ExportSheet({ visible, document, onClose }: Props) {
             />
           </View>
         </>
-      ) : (
+      ) : optionsMode ? (
+        // PDF options: everything past the common choices, in one scrolling
+        // panel of the sheet (an Alert or a second Modal can't open over it).
         <>
+          <ScrollView style={styles.optionsScroll} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
+            {!isPdfDoc ? (
+              <>
+                <SectionLabel style={styles.label}>Paper</SectionLabel>
+                <SheetGroup>
+                  <View style={styles.numbersBody}>
+                    <SegmentedControl options={PAPER_OPTIONS} value={paper} onChange={v => updateLayout({ paper: v })} />
+                    <Text style={[Type.footnote, styles.numbersNote, { color: colors.muted }]} numberOfLines={2}>
+                      {`${PAPER_NOTES[paper]}${layout.paper === null ? ' · From Document settings' : ''}`}
+                    </Text>
+                  </View>
+                </SheetGroup>
+                {paper !== 'Auto' ? (
+                  <>
+                    <SectionLabel style={styles.label}>Orientation</SectionLabel>
+                    <SheetGroup>
+                      <View style={styles.numbersBody}>
+                        <SegmentedControl
+                          options={ORIENTATION_OPTIONS}
+                          value={layout.orientation}
+                          onChange={v => updateLayout({ orientation: v })}
+                        />
+                        <Text style={[Type.footnote, styles.numbersNote, { color: colors.muted }]} numberOfLines={2}>
+                          {ORIENTATION_NOTES[layout.orientation]}
+                        </Text>
+                      </View>
+                    </SheetGroup>
+                  </>
+                ) : null}
+                <SectionLabel style={styles.label}>Margins</SectionLabel>
+                <SheetGroup>
+                  <View style={styles.numbersBody}>
+                    <SegmentedControl options={MARGIN_OPTIONS} value={layout.margin} onChange={v => updateLayout({ margin: v })} />
+                    <Text style={[Type.footnote, styles.numbersNote, { color: colors.muted }]} numberOfLines={2}>
+                      {MARGIN_LABELS[layout.margin].detail}
+                    </Text>
+                  </View>
+                </SheetGroup>
+                <SectionLabel style={styles.label}>Image quality</SectionLabel>
+                <SheetGroup>
+                  {QUALITY_OPTIONS.map((q, i) => (
+                    <SheetRow
+                      key={q.value}
+                      label={q.label}
+                      detail={detailLine([q.detail, estimate(q.value)])}
+                      selected={layout.quality === q.value}
+                      onPress={() => updateLayout({ quality: q.value })}
+                      last={i === QUALITY_OPTIONS.length - 1}
+                    />
+                  ))}
+                </SheetGroup>
+                {pageNumbers !== 'off' ? (
+                  <>
+                    <SectionLabel style={styles.label}>Page number position</SectionLabel>
+                    <SheetGroup>
+                      <View style={styles.numbersBody}>
+                        <SegmentedControl
+                          options={POSITION_OPTIONS}
+                          value={layout.numberPosition}
+                          onChange={v => updateLayout({ numberPosition: v })}
+                        />
+                      </View>
+                    </SheetGroup>
+                  </>
+                ) : null}
+                {ocrCan ? (
+                  <SheetGroup style={styles.switchGroup}>
+                    <View style={styles.switchRow}>
+                      <View style={styles.switchText}>
+                        <Text style={[Type.body, { color: colors.text }]}>Searchable text</Text>
+                        <Text style={[Type.footnote, styles.switchDetail, { color: colors.muted }]}>
+                          {layout.searchable
+                            ? 'Text in the PDF can be searched, selected and copied.'
+                            : 'Off: the PDF is only pictures of the pages. Faster to make.'}
+                        </Text>
+                      </View>
+                      <AppSwitch
+                        value={layout.searchable}
+                        onValueChange={v => updateLayout({ searchable: v })}
+                        accessibilityLabel="Searchable text"
+                      />
+                    </View>
+                  </SheetGroup>
+                ) : null}
+              </>
+            ) : null}
+            <SectionLabel style={styles.label}>File name</SectionLabel>
+            <SheetGroup style={styles.pwGroup}>
+              <TextInput
+                style={[Type.body, styles.pwInput, { color: colors.text }]}
+                value={fileName}
+                onChangeText={setFileName}
+                placeholder={document.name}
+                placeholderTextColor={colors.muted}
+                autoCorrect={false}
+                keyboardAppearance={isDark ? 'dark' : 'light'}
+                returnKeyType="done"
+                maxLength={80}
+                accessibilityLabel="File name"
+              />
+            </SheetGroup>
+            <Text style={[Type.footnote, styles.pwHint, { color: colors.muted }]}>
+              For this export only. The document keeps its name.
+            </Text>
+          </ScrollView>
+          <View style={styles.optionsActions}>
+            <PrimaryButton title="Done" onPress={() => setOptionsMode(false)} />
+            {!isPdfDoc && !isDefaultLayout(layout) ? (
+              <PrimaryButton
+                title="Restore defaults"
+                variant="secondary"
+                onPress={() => updateLayout(DEFAULT_EXPORT_LAYOUT)}
+              />
+            ) : null}
+          </View>
+        </>
+      ) : (
+        // Scrolls when it is taller than the sheet may be (large text, small phones).
+        <ScrollView style={styles.optionsScroll}>
           {/* PDF and print only (JPEG images stay as stored). Imported PDFs
               are shared as the file itself, so they get no numbers. */}
           {!isPdfDoc && pageCount > 0 ? (
@@ -658,6 +807,16 @@ export function ExportSheet({ visible, document, onClose }: Props) {
               </SheetGroup>
             </>
           ) : null}
+          <SheetGroup>
+            <SheetRow
+              icon={isPdfDoc ? 'text-outline' : 'options-outline'}
+              label={isPdfDoc ? 'File name' : 'PDF options'}
+              detail={isPdfDoc ? outName : optionsSummary}
+              onPress={() => setOptionsMode(true)}
+              chevron
+              last
+            />
+          </SheetGroup>
           <SectionLabel style={styles.label}>Share as</SectionLabel>
           <SheetGroup>
             {isPdfDoc ? (
@@ -761,7 +920,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
               An imported PDF is shared as it is. Page numbers can be added to scanned documents.
             </Text>
           ) : null}
-        </>
+        </ScrollView>
       )}
     </BottomSheet>
   );
@@ -782,4 +941,51 @@ const styles = StyleSheet.create({
   numbersBody: { padding: Spacing.sm, gap: Spacing.sm },
   numbersNote: { paddingHorizontal: Spacing.sm },
   pdfNote: { marginTop: Spacing.sm, marginHorizontal: Spacing.xs, lineHeight: 18 },
+  // The options panel scrolls inside the sheet (whose height is capped).
+  optionsScroll: { flexGrow: 0, flexShrink: 1 },
+  optionsActions: { gap: Spacing.sm, marginTop: Spacing.md },
+  switchGroup: { marginTop: Spacing.lg },
+  // Same metrics as SheetRow (components/bottom-sheet.tsx).
+  switchRow: { flexDirection: 'row', alignItems: 'center', minHeight: HIT + 6, paddingLeft: Spacing.lg, paddingRight: Spacing.lg, gap: Spacing.md },
+  switchText: { flex: 1, paddingVertical: Spacing.md },
+  switchDetail: { marginTop: 1, lineHeight: 18 },
 });
+
+// ── PDF options ──────────────────────────────────────────────────────────────
+
+const PAPER_OPTIONS: { value: PageSize; label: string }[] = [
+  { value: 'Auto', label: 'Auto' },
+  { value: 'A4', label: 'A4' },
+  { value: 'Letter', label: 'Letter' },
+  { value: 'Legal', label: 'Legal' },
+];
+const PAPER_NOTES: Record<PageSize, string> = {
+  Auto: 'Each page’s paper is shaped like its scan',
+  A4: 'A4, 210 × 297 mm',
+  Letter: 'US Letter, 8.5 × 11 in',
+  Legal: 'US Legal, 8.5 × 14 in',
+};
+const ORIENTATION_OPTIONS: { value: PdfOrientation; label: string }[] = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'portrait', label: 'Portrait' },
+  { value: 'landscape', label: 'Landscape' },
+];
+const ORIENTATION_NOTES: Record<PdfOrientation, string> = {
+  auto: 'Each page turns to match its scan',
+  portrait: 'Every page upright; wide scans are scaled to fit',
+  landscape: 'Every page sideways; tall scans are scaled to fit',
+};
+const MARGIN_OPTIONS: { value: PdfMargin; label: string }[] = (['none', 'small', 'normal', 'wide'] as const).map(m => ({
+  value: m,
+  label: MARGIN_LABELS[m].label,
+}));
+const QUALITY_OPTIONS: { value: PdfQuality; label: string; detail: string }[] = [
+  { value: 'high', label: 'High', detail: 'Sharpest, for printing' },
+  { value: 'standard', label: 'Standard', detail: 'Clear text' },
+  { value: 'small', label: 'Small', detail: 'For email' },
+];
+const POSITION_OPTIONS: { value: PageNumberPosition; label: string }[] = [
+  { value: 'bottom-center', label: 'Bottom' },
+  { value: 'bottom-right', label: 'Bottom right' },
+  { value: 'top-right', label: 'Top right' },
+];

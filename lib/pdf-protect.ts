@@ -34,7 +34,7 @@ import {
   type PageSize,
   type PdfQuality,
 } from './pdf';
-import { getExportPageNumbers } from './export-prefs';
+import { getExportLayout, getExportPageNumbers, type ExportLayout } from './export-prefs';
 import { ocrAvailable } from './ocr';
 import { BakeWaitAborted, waitForPendingBakes, withDocLock } from './bake';
 import { copyPdfToStorage, deleteDocumentFiles } from './files';
@@ -190,6 +190,13 @@ export async function buildScanPdf(
     quality?: PdfQuality;
     /** The export sheet's own choice; read from the export prefs when absent. */
     pageNumbers?: PageNumberStyle;
+    /**
+     * The export sheet's PDF options (paper, orientation, margins, number
+     * position); read from the export prefs when absent, so Protect PDF makes
+     * the same PDF Share does. A `paper` of null follows Document settings.
+     * Its `quality` applies only when `quality` isn't given.
+     */
+    layout?: ExportLayout;
     /** When Document settings can't be read. */
     fallbackPageSize?: PageSize;
     signal?: AbortSignal;
@@ -199,11 +206,15 @@ export async function buildScanPdf(
   // Read settings fresh so a change made a moment ago is honoured.
   const settings = await getDocSettings().catch(() => null);
   const pageNumbers = opts.pageNumbers ?? (await getExportPageNumbers());
+  const layout = opts.layout ?? (await getExportLayout());
   return generatePdf(pages, {
-    pageSize: settings?.pdfPageSize ?? opts.fallbackPageSize ?? 'A4',
-    quality: opts.quality ?? 'standard',
+    pageSize: layout.paper ?? settings?.pdfPageSize ?? opts.fallbackPageSize ?? 'A4',
+    quality: opts.quality ?? layout.quality,
     searchable: opts.searchable,
     pageNumbers,
+    pageNumberPosition: layout.numberPosition,
+    orientation: layout.orientation,
+    margin: layout.margin,
     signal: opts.signal,
     onProgress: opts.onProgress,
   });

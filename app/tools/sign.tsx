@@ -6,6 +6,13 @@
 // document itself: the signature is drawn into the page (and its unfiltered
 // shadow), so the pages stay searchable and re-filterable, and the viewer
 // offers Undo (lib/page-stamp.ts). "Save as a copy" signs a duplicate.
+//
+// Round 16: the ink comes from the shared stamp palette (black and blue are
+// the inks signatures were always drawn in) or Custom; "More options" sets the
+// signature's exact size (as a share of the page width, the same number the
+// corner handles change) and its strength (opacity). Saved signatures are
+// untouched: they stay black PNGs and are recoloured only as they are drawn
+// into the page. The ink and strength are remembered (lib/stamp-prefs.ts).
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
@@ -26,7 +33,6 @@ import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
 import { AppSwitch } from '@/components/app-switch';
 import {
-  ColorSwatches,
   FooterActions,
   NoDocumentsScreen,
   PagePreview,
@@ -42,23 +48,22 @@ import { FilterBaker } from '@/components/filter-baker';
 import { PageThumb } from '@/components/page-thumb';
 import { reportStampFailure, usePageStamper, useStampFinish } from '@/components/page-stamper';
 import { SignaturePlacer } from '@/components/placement-frame';
+import { ColorPalette } from '@/components/color-palette';
+import { MoreOptions } from '@/components/more-options';
+import { ValueSlider } from '@/components/value-slider';
 import { signaturePadHtml } from '@/components/signature-pad';
 import { useRouter } from 'expo-router';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
 import { canFillPdf, pdfFillHref } from '@/lib/pdf-fill';
 import { signBlockedReason, useFillAccessMap } from '@/lib/fill-access';
-import { emptySpotPlacement, lineToPageRect, type PageRect } from '@/lib/placement';
+import { emptySpotPlacement, lineToPageRect, maxBoxWidth, minBoxWidth, type PageRect } from '@/lib/placement';
 import { recognizeLines } from '@/lib/ocr';
 import { getImageSize } from '@/lib/image-size';
 import { copyName, stampCopy, stampPages, targetPages } from '@/lib/page-stamp';
 import { notifySuccess, tapLight } from '@/lib/haptics';
-import {
-  SIGNATURE_INK,
-  clampPlacement,
-  type Placement,
-  type Signature,
-  type SignatureInk,
-} from '@/lib/stamp';
+import { clampPlacement, signatureHeightFraction, signatureTint, type Placement, type Signature } from '@/lib/stamp';
+import { INK_PALETTE, TOOL_INKS, inkHex, type InkChoice } from '@/lib/stamp-colors';
+import { DEFAULT_SIGN_PREFS, SIGN_STRENGTH_RANGE, loadSignPrefs, saveSignPrefs } from '@/lib/stamp-prefs';
 import { HIT, Ink, Radius, Spacing, Type } from '@/lib/theme';
 import type { Document } from '@/types/document';
 import {
@@ -77,10 +82,12 @@ const PAD_HEIGHT = 180;
 const START_WIDTH = 0.38;
 /** After the last stroke, how long before the screen scrolls the page into view. */
 const REVEAL_AFTER_DRAW_MS = 1200;
-const INKS: { value: SignatureInk; label: string; color: string }[] = [
-  { value: 'black', label: 'Black', color: SIGNATURE_INK.black },
-  { value: 'blue', label: 'Blue', color: SIGNATURE_INK.blue },
-];
+/** Every palette ink but white (a white signature vanishes on paper), in Sign's own black and blue. */
+const INKS = INK_PALETTE.filter(p => p.id !== 'white').map(p => ({
+  value: p.id,
+  label: p.label,
+  color: TOOL_INKS.sign[p.id] ?? p.hex,
+}));
 
 export default function SignScreen() {
   const { colors } = useTheme();
@@ -96,7 +103,28 @@ export default function SignScreen() {
   const [drawing, setDrawing] = useState(false);
   const [pageIndex, setPageIndex] = useState(0);
   const [everyPage, setEveryPage] = useState(false);
-  const [ink, setInk] = useState<SignatureInk>('black');
+  const [ink, setInk] = useState<InkChoice>(DEFAULT_SIGN_PREFS.ink);
+  const [customInk, setCustomInk] = useState<string | null>(DEFAULT_SIGN_PREFS.customInk);
+  const [strength, setStrength] = useState(DEFAULT_SIGN_PREFS.strength);
+  const [moreOpen, setMoreOpen] = useState(false);
+  // The remembered ink arrives a moment after the screen opens; a choice the
+  // user has made by then wins (a ref: it must never lag a render behind).
+  const inkTouched = useRef(false);
+  useEffect(() => {
+    let live = true;
+    loadSignPrefs().then(p => {
+      if (!live || inkTouched.current) return;
+      setInk(p.ink === 'white' ? 'black' : p.ink);
+      setCustomInk(p.customInk);
+      setStrength(p.strength);
+      if (p.strength !== DEFAULT_SIGN_PREFS.strength) setMoreOpen(true);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+  const inkColor = inkHex(ink, customInk, TOOL_INKS.sign, 'black');
+  const tint = signatureTint({ inkHex: inkColor });
   const [placement, setPlacement] = useState<Placement | null>(null);
   // A finger is moving or resizing the signature: the screen doesn't scroll.
   const [placing, setPlacing] = useState(false);
@@ -246,7 +274,8 @@ export default function SignScreen() {
   /** Signs the document itself (Undo in the viewer), or a copy of it. */
   const apply = async (mode: 'in-place' | 'copy') => {
     if (!doc || !sig || !place || progress) return;
-    const spec = { kind: 'signature' as const, signature: sig, placement: place, ink };
+    saveSignPrefs({ ink, customInk, strength });
+    const spec = { kind: 'signature' as const, signature: sig, placement: place, inkHex: inkColor, opacity: strength / 100 };
     const render = (pageUri: string, origUri: string | null) => stamper.stamp(pageUri, origUri, spec);
     const onProgress = (done: number, total: number) => setProgress({ current: done, total });
     setProgress({ current: 0, total: pages.length });
@@ -325,6 +354,12 @@ export default function SignScreen() {
   // a signature, and the pad's "Sign here" says what to do. An instruction on a
   // disabled button ("Choose or draw a signature") read as a broken control.
   const buttonTitle = doc ? `Sign ${pagesLabel}` : 'Sign';
+  // The size slider's range: what the corner handles allow on this preview.
+  const ratio = sig ? sig.height / sig.width : 1;
+  const sizeRange = {
+    min: Math.ceil((minBoxWidth({ width: previewW, height: previewH }, ratio) / previewW) * 100),
+    max: Math.floor((maxBoxWidth({ width: previewW, height: previewH }, ratio) / previewW) * 100),
+  };
   const multiPage = !!doc && doc.pages.length > 1;
 
   return (
@@ -485,7 +520,8 @@ export default function SignScreen() {
           width={previewW}
           height={previewH}
           signature={sig}
-          tint={ink === 'black' ? null : SIGNATURE_INK[ink]}
+          tint={tint}
+          opacity={strength / 100}
           placement={place}
           onChange={p => setPlacement(clampPlacement(sig, p, aspect))}
           onInteracting={setPlacing}
@@ -504,7 +540,20 @@ export default function SignScreen() {
 
       {/* 4. Ink */}
       <SectionLabel>Ink</SectionLabel>
-      <ColorSwatches options={INKS} value={ink} onChange={setInk} />
+      <ColorPalette
+        options={INKS}
+        value={ink}
+        onChange={v => {
+          inkTouched.current = true;
+          setInk(v as InkChoice);
+        }}
+        custom={customInk}
+        onCustomChange={hex => {
+          inkTouched.current = true;
+          setCustomInk(hex);
+        }}
+        accessibilityLabel="Ink color"
+      />
 
       {multiPage ? (
         <View style={[styles.switchRow, { backgroundColor: colors.card }]}>
@@ -512,6 +561,43 @@ export default function SignScreen() {
           <AppSwitch value={everyPage} onValueChange={setEveryPage} accessibilityLabel="Sign every page" />
         </View>
       ) : null}
+      <MoreOptions open={moreOpen} onToggle={setMoreOpen} changed={strength !== DEFAULT_SIGN_PREFS.strength ? 1 : 0}>
+        {sig && place ? (
+          <>
+            <SectionLabel>Size</SectionLabel>
+            <ValueSlider
+              label="Signature size"
+              value={Math.round(place.w * 100)}
+              min={sizeRange.min}
+              max={sizeRange.max}
+              step={1}
+              format={v => `${v}% wide`}
+              onChange={v => setPlacement(resizeAboutCentre(sig, place, v / 100, aspect))}
+            />
+          </>
+        ) : null}
+        <SectionRow
+          label="Strength"
+          action={strength !== DEFAULT_SIGN_PREFS.strength ? 'Reset' : undefined}
+          onAction={() => {
+            inkTouched.current = true;
+            setStrength(DEFAULT_SIGN_PREFS.strength);
+          }}
+        />
+        <ValueSlider
+          label="Signature strength"
+          value={strength}
+          min={SIGN_STRENGTH_RANGE.min}
+          max={SIGN_STRENGTH_RANGE.max}
+          step={5}
+          format={v => `${v}%`}
+          onChange={v => {
+            inkTouched.current = true;
+            setStrength(v);
+          }}
+        />
+      </MoreOptions>
+
       <ToolNote>The signature becomes part of the page, and you can undo it right after. To keep this document as it is, save a signed copy instead.</ToolNote>
     </ToolScreen>
   );
@@ -570,6 +656,16 @@ const styles = StyleSheet.create({
   },
   orDraw: { marginTop: Spacing.sm, marginBottom: Spacing.sm, paddingHorizontal: Spacing.xs },
 });
+
+/**
+ * The placement resized to `w` of the page width about its centre (the
+ * size slider), then kept whole on the page.
+ */
+function resizeAboutCentre(sig: Signature, p: Placement, w: number, aspect: number): Placement {
+  const h0 = signatureHeightFraction(sig, p, aspect);
+  const h1 = signatureHeightFraction(sig, { ...p, w }, aspect);
+  return clampPlacement(sig, { w, x: p.x + (p.w - w) / 2, y: p.y + (h0 - h1) / 2 }, aspect);
+}
 
 /**
  * The text lines on a page, as page fractions, so a new signature can start
