@@ -18,6 +18,7 @@ import {
   forgetSignature,
   listSavedSignatures,
   loadSavedSignature,
+  signatureId,
   type SavedSignature,
   type SignatureKind,
 } from '@/lib/saved-signatures';
@@ -82,20 +83,33 @@ export function parsePadMessage(data: string): Signature | null {
 
 const PAD_HEIGHT = 170;
 
+/** A tile in the sheet: one used earlier in this session, or a saved one. */
+type Tile = { id: string; uri: string; session?: Signature; saved?: SavedSignature };
+
+/** Session ones first (newest first), then saved ones not already shown; at most `max`. */
+export function signatureTiles(recent: readonly Signature[], saved: readonly SavedSignature[], max = 3): Tile[] {
+  const tiles: Tile[] = recent.map(sig => ({ id: signatureId(sig.dataUri), uri: sig.dataUri, session: sig }));
+  for (const s of saved) if (!tiles.some(t => t.id === s.id)) tiles.push({ id: s.id, uri: s.uri, saved: s });
+  return tiles.slice(0, max);
+}
+
 /**
- * Pick a saved signature (or initials), or draw one, in a sheet. `onPick` runs
- * when the user taps Add; the sheet then closes. Present whatever follows from
- * `onDismissed` (BottomSheet).
+ * Pick a saved signature (or initials), or draw one, in a sheet. `recent`:
+ * the ones used in this session (Fill & sign), shown first, so one drawn once
+ * is placed again with one tap. `onPick` runs when the user taps Add; the
+ * sheet then closes. Present whatever follows from `onDismissed` (BottomSheet).
  */
 export function SignatureSheet({
   visible,
   kind,
+  recent = [],
   onPick,
   onClose,
   onDismissed,
 }: {
   visible: boolean;
   kind: SignatureKind;
+  recent?: readonly Signature[];
   onPick: (sig: Signature) => void;
   onClose: () => void;
   onDismissed?: () => void;
@@ -116,10 +130,15 @@ export function SignatureSheet({
       .then(list => {
         setSaved(list);
         // The last one used is ready to go: one tap on Add.
-        setPick(list[0]?.id ?? null);
+        setPick(signatureTiles(recent, list)[0]?.id ?? null);
       })
-      .catch(() => setSaved([]));
+      .catch(() => {
+        setSaved([]);
+        setPick(signatureTiles(recent, [])[0]?.id ?? null);
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, kind]);
+  const tiles = signatureTiles(recent, saved);
 
   // The pad draws in the theme's text colour; a theme change reloads it empty.
   const html = useMemo(() => signaturePadHtml(colors.text, Ink.signature, PAD_HEIGHT), [colors.text]);
@@ -161,11 +180,16 @@ export function SignatureSheet({
       onPick(drawn);
       return;
     }
-    const s = saved.find(x => x.id === pick);
-    if (!s) return;
+    const t = tiles.find(x => x.id === pick);
+    if (!t) return;
+    if (t.session) {
+      onPick(t.session);
+      return;
+    }
+    if (!t.saved) return;
     setLoading(true);
     try {
-      onPick(await loadSavedSignature(s));
+      onPick(await loadSavedSignature(t.saved));
     } catch {
       Alert.alert(initials ? 'Couldn’t load your initials' : 'Couldn’t load the signature', 'Draw it in the box instead.');
     } finally {
@@ -173,41 +197,43 @@ export function SignatureSheet({
     }
   };
 
-  const ready = !!drawn || (!!pick && saved.some(s => s.id === pick));
+  const ready = !!drawn || (!!pick && tiles.some(t => t.id === pick));
   const noun = initials ? 'initials' : 'signature';
+  const subtitle = tiles.length
+    ? initials ? 'Tap your initials, or draw new ones.' : 'Tap a signature, or draw a new one.'
+    : initials ? 'Draw your initials in the box.' : 'Draw your signature in the box.';
 
   return (
     <BottomSheet visible={visible} onClose={onClose} onDismissed={onDismissed}>
-      <SheetHeader
-        title={initials ? 'Your initials' : 'Your signature'}
-        subtitle={saved.length ? `Tap a saved ${noun}, or draw a new one.` : `Draw your ${noun} in the box.`}
-      />
+      <SheetHeader title={initials ? 'Your initials' : 'Your signature'} subtitle={subtitle} />
       <View style={styles.body}>
-        {saved.length ? (
-          <View style={styles.savedRow}>
-            {saved.map((s, i) => {
-              const on = pick === s.id && !drawn;
+        {tiles.length ? (
+          <View style={styles.savedRow} accessibilityRole="radiogroup">
+            {tiles.map((t, i) => {
+              const on = pick === t.id && !drawn;
+              const s = t.saved;
               return (
                 <Pressable
-                  key={s.id}
+                  key={t.id}
                   onPress={() => {
-                    setPick(s.id);
+                    setPick(t.id);
                     if (drawn) clear();
                     tapLight();
                   }}
-                  onLongPress={() => remove(s)}
+                  onLongPress={s ? () => remove(s) : undefined}
                   accessibilityRole="radio"
                   accessibilityState={{ selected: on, checked: on }}
                   accessibilityLabel={i === 0 ? `Last used ${noun}` : `Earlier ${noun}`}
-                  accessibilityHint="Touch and hold to remove it"
+                  accessibilityHint={s ? 'Touch and hold to remove it' : undefined}
                   style={({ pressed }) => [
                     styles.savedTile,
+                    { maxWidth: tiles.length > 2 ? '34%' : '50%' },
                     { backgroundColor: colors.bg, borderColor: on ? colors.accent : colors.thumbBorder },
                     on && styles.savedTileOn,
                     pressed && { opacity: 0.7 },
                   ]}
                 >
-                  <Image key={colors.text} source={{ uri: s.uri }} style={[styles.savedImg, { tintColor: colors.text }]} resizeMode="contain" />
+                  <Image key={colors.text} source={{ uri: t.uri }} style={[styles.savedImg, { tintColor: colors.text }]} resizeMode="contain" />
                   {on ? (
                     <View style={[styles.savedCheck, { backgroundColor: colors.accentFill }]}>
                       <Ionicons name="checkmark" size={13} color={colors.onAccent} />
@@ -250,7 +276,7 @@ export function SignatureSheet({
           ) : null}
         </View>
         <Text style={[Type.footnote, styles.note, { color: colors.muted }]}>
-          {`Scan Kit keeps your last two ${initials ? 'sets of initials' : 'signatures'} on this iPhone only.`}
+          {initials ? 'Your last two sets of initials are kept on this iPhone only.' : 'Your last two signatures are kept on this iPhone only.'}
         </Text>
         <PrimaryButton
           title={initials ? 'Add initials' : 'Add signature'}
@@ -264,11 +290,11 @@ export function SignatureSheet({
 }
 
 const styles = StyleSheet.create({
-  body: { paddingHorizontal: Spacing.gutter, paddingBottom: Spacing.md, gap: Spacing.md },
+  // BottomSheet already pads its content: in line with SheetHeader, like every sheet.
+  body: { paddingHorizontal: Spacing.xs, paddingBottom: Spacing.md, gap: Spacing.md },
   savedRow: { flexDirection: 'row', gap: Spacing.sm },
   savedTile: {
     flex: 1,
-    maxWidth: '50%',
     height: 72,
     borderRadius: Radius.md,
     borderWidth: StyleSheet.hairlineWidth,

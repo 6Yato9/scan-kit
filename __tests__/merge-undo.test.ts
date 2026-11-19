@@ -51,6 +51,11 @@ const mockIndex = jest.fn(async (_id: string, _pages: string[]) => {});
 jest.mock('../lib/save-scan', () => ({ indexDocText: (id: string, pages: string[]) => mockIndex(id, pages) }));
 
 import {
+  MERGE_UNDO_FAILED_TITLE,
+  mergedIntoMessage,
+  mergedNewMessage,
+  mergeUndoneMessage,
+  newMergeUndoFailedMessage,
   checkMergeUndo,
   mergeUndoRefusal,
   mergeUndoRefusalMessage,
@@ -209,7 +214,8 @@ describe('undoMergeInto (Home, Files)', () => {
     seed('t', 3);
     const undo = mergeUndoToken('t', 1, 2)!;
     mockLayout = 1; // a page was moved since
-    await expect(undoMergeInto(undo)).rejects.toMatchObject({ kind: 'pages-changed' });
+    // Marked as a refusal, so runPageEdit re-targets no bake (r13b code M2).
+    await expect(undoMergeInto(undo)).rejects.toMatchObject({ kind: 'pages-changed', editRefused: true });
     expect(mockStored.t.pages).toHaveLength(3);
     expect(mockFiles.size).toBe(3 * SUFFIXES.length);
     expect(mockIndex).not.toHaveBeenCalled();
@@ -219,7 +225,32 @@ describe('undoMergeInto (Home, Files)', () => {
     seed('t', 3);
     const undo = mergeUndoToken('t', 1, 2)!;
     delete mockStored.t;
-    await expect(undoMergeInto(undo)).rejects.toMatchObject({ kind: 'missing' });
+    await expect(undoMergeInto(undo)).rejects.toMatchObject({ kind: 'missing', editRefused: true });
+  });
+
+  test('a record gone between the check and the write is no refusal: the files were already removed', async () => {
+    seed('t', 3);
+    const undo = mergeUndoToken('t', 1, 2)!;
+    const storage = jest.requireMock('../lib/storage');
+    storage.updateDocumentWith.mockImplementationOnce(async () => false);
+    await expect(undoMergeInto(undo)).rejects.toMatchObject({ kind: 'missing', editRefused: false });
+  });
+});
+
+describe('one wording at every entry point (r13b)', () => {
+  test('done, undone and failed', () => {
+    expect(mergedNewMessage(2)).toBe('Merged 2 documents. The originals are kept.');
+    expect(mergedIntoMessage(1, 'from', 'Lease')).toBe('Added 1 page from “Lease”');
+    expect(mergedIntoMessage(3, 'to', 'Invoice')).toBe('Added 3 pages to “Invoice”');
+    expect(mergeUndoneMessage()).toBe('Merge undone');
+    expect(mergeUndoneMessage('deleted')).toBe('Merge undone');
+    expect(mergeUndoneMessage('missing', true)).toBe('Merge undone');
+    expect(mergeUndoneMessage('trashed')).toBe('Merged document moved to Recently deleted');
+    expect(mergeUndoneMessage('trashed', true)).toBe('Merged PDF moved to Recently deleted');
+    expect(newMergeUndoFailedMessage(true)).toBe('Try again, or delete the merged PDF yourself.');
+    // Typographic apostrophes in every alert.
+    expect(MERGE_UNDO_FAILED_TITLE).toBe('Couldn’t undo the merge');
+    for (const k of ['missing', 'pages-changed', 'pages-edited'] as const) expect(mergeUndoRefusalMessage(k)).not.toMatch(/'/);
   });
 });
 

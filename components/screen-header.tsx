@@ -51,12 +51,15 @@ export function HeaderTextButton({
   disabled,
   color,
   emphasis = false,
+  maxFontSizeMultiplier,
 }: {
   title: string;
   onPress: () => void;
   disabled?: boolean;
   color?: string;
   emphasis?: boolean;
+  /** Caps how far the label grows with Dynamic Type (like a UIKit bar button); default: uncapped. */
+  maxFontSizeMultiplier?: number;
 }) {
   const { colors } = useTheme();
   return (
@@ -67,7 +70,7 @@ export function HeaderTextButton({
       accessibilityRole="button"
       style={({ pressed }) => [styles.textBtn, (pressed || disabled) && { opacity: disabled ? 0.35 : 0.5 }]}
     >
-      <Text style={[Type.body, { color: color ?? colors.accent, fontWeight: emphasis ? '600' : '400' }]}>
+      <Text style={[Type.body, { color: color ?? colors.accent, fontWeight: emphasis ? '600' : '400' }]} maxFontSizeMultiplier={maxFontSizeMultiplier}>
         {title}
       </Text>
     </Pressable>
@@ -85,6 +88,7 @@ export function ScreenHeader({
   withInset = true,
   fillLeft = false,
   backDisabled = false,
+  maxTitleScale,
 }: {
   title?: string;
   /** Renders a back (or close) button in the left slot. */
@@ -106,6 +110,8 @@ export function ScreenHeader({
   fillLeft?: boolean;
   /** Show the back/close button dimmed and inert (e.g. while a change is being written). */
   backDisabled?: boolean;
+  /** Caps how far the title grows with Dynamic Type (like a UIKit navigation bar); default: uncapped. */
+  maxTitleScale?: number;
 }) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
@@ -129,7 +135,7 @@ export function ScreenHeader({
       <View style={styles.row}>
         <View style={[styles.side, styles.sideLeft]}>{leftContent}</View>
         {title ? (
-          <Text style={[Type.headline, styles.title, { color: fg }]} numberOfLines={1} accessibilityRole="header">
+          <Text style={[Type.headline, styles.title, { color: fg }]} numberOfLines={1} accessibilityRole="header" maxFontSizeMultiplier={maxTitleScale}>
             {title}
           </Text>
         ) : (

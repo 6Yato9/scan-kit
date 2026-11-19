@@ -54,7 +54,14 @@ export type PickerConvert = {
    * (Sign → Fill & sign). The row says `label`; `onOpen` runs once the sheet
    * has closed; `note` replaces the "convert it first" line.
    */
-  open?: { label: string; hint: string; note: string; onOpen: (pdf: Document) => void };
+  open?: {
+    label: string;
+    hint: string;
+    note: string;
+    onOpen: (pdf: Document) => void;
+    /** Why this PDF can't be opened there (its author forbids it): the row is shown dimmed with it, not tappable. */
+    blocked?: (pdf: Document) => string | null;
+  };
 };
 
 export function useToolDoc(docs: Document[]) {
@@ -303,6 +310,8 @@ export function ToolDocPicker({
                     doc={d}
                     action={convert?.open?.label}
                     hint={convert?.open?.hint}
+                    opens={!!convert?.open}
+                    blocked={convert?.open?.blocked?.(d) ?? null}
                     onPress={() => {
                       pendingConvert.current = d;
                       setOpen(false);
@@ -321,25 +330,56 @@ export function ToolDocPicker({
   );
 }
 
-/** An imported PDF in the picker: the row says what tapping it does (Convert, or `action`). */
-function ConvertRow({ doc, onPress, action = 'Convert', hint = 'Converts it to pages' }: { doc: Document; onPress: () => void; action?: string; hint?: string }) {
+/**
+ * An imported PDF in the picker. Converting: the row ends in a Convert button.
+ * Opening in another tool (`opens`, e.g. Sign → Fill & sign): a plain chevron,
+ * the note under the list says where it goes. `blocked`: why it can't be used
+ * (dimmed, not tappable, the reason as its second line).
+ */
+function ConvertRow({
+  doc,
+  onPress,
+  action = 'Convert',
+  hint = 'Converts it to pages',
+  opens = false,
+  blocked = null,
+}: {
+  doc: Document;
+  onPress: () => void;
+  action?: string;
+  hint?: string;
+  opens?: boolean;
+  blocked?: string | null;
+}) {
   const { colors } = useTheme();
   return (
     <Pressable
       onPress={onPress}
+      disabled={!!blocked}
       accessibilityRole="button"
       accessibilityLabel={`${doc.name}, PDF`}
-      accessibilityHint={hint}
-      style={({ pressed }) => [styles.convertRow, pressed && { backgroundColor: colors.separator }]}
+      accessibilityHint={blocked ? `Not available. ${blocked}.` : hint}
+      accessibilityState={{ disabled: !!blocked }}
+      style={({ pressed }) => [styles.convertRow, pressed && !blocked && { backgroundColor: colors.separator }]}
     >
-      <DocThumb doc={doc} />
-      <View style={styles.text}>
+      <View style={blocked ? styles.dimmed : null}>
+        <DocThumb doc={doc} />
+      </View>
+      <View style={[styles.text, blocked ? styles.dimmed : null]}>
         <Text style={[Type.body, { color: colors.text }]} numberOfLines={1}>
           {doc.name}
         </Text>
-        <Text style={[Type.footnote, styles.meta, { color: colors.muted }]}>PDF</Text>
+        <Text style={[Type.footnote, styles.meta, { color: colors.muted }]} numberOfLines={2}>
+          {blocked ? `PDF · ${blocked}` : 'PDF'}
+        </Text>
       </View>
-      <Text style={[Type.subhead, styles.convertAction, { color: colors.accent }]}>{action}</Text>
+      {blocked ? (
+        <Ionicons name="lock-closed-outline" size={17} color={colors.faint} />
+      ) : opens ? (
+        <Ionicons name="chevron-forward" size={18} color={colors.faint} />
+      ) : (
+        <Text style={[Type.subhead, styles.convertAction, { color: colors.accent }]}>{action}</Text>
+      )}
     </Pressable>
   );
 }
@@ -396,4 +436,5 @@ const styles = StyleSheet.create({
     minHeight: HIT + 16,
   },
   convertAction: { fontWeight: '600' },
+  dimmed: { opacity: 0.45 },
 });

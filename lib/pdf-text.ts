@@ -46,6 +46,18 @@ export function bumpPdfTextGeneration(docId: string): void {
 }
 
 /**
+ * How many times `docId`'s PDF was replaced in place this session (the
+ * viewer reloads its PDF view when it changes: a tool outside the viewer —
+ * Protect, Flatten, Unlock PDF — rewrote the file under the same path).
+ * `version` (the record's updatedAt) is only there so a memoizing compiler
+ * reads this again whenever the record changes.
+ */
+export function pdfFileGeneration(docId: string, version?: number): number {
+  void version;
+  return generations.get(docId) ?? 0;
+}
+
+/**
  * Reads the embedded text of document `docId`'s PDF into its `ocrText`.
  * Fire-and-forget safe: never rejects. The write happens only if the record
  * still points at the same PDF (not converted, replaced or deleted meanwhile),

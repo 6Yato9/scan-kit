@@ -144,3 +144,14 @@ test('finishAddedPages bakes each filter group, and adjusted pages with their ad
   expect((bakePages as jest.Mock).mock.calls).toEqual([['d1', [1, 2], 'bw']]);
   expect(mockBakePage).toHaveBeenCalledWith('d1', 3, 'grayscale', adj);
 });
+
+test('finishAddedPages with onBaked bakes page by page and reports only the pages it wrote (r13b)', async () => {
+  mockBakePage.mockImplementation(async (_id: string, index: number) => index !== 2); // page 2: superseded
+  const baked: number[] = [];
+  finishAddedPages(mockDoc, [1, 2, 3], ['bw', 'bw', 'original'], undefined, { onBaked: i => baked.push(i) });
+  await new Promise(r => setTimeout(r, 0));
+  expect((bakePages as jest.Mock)).not.toHaveBeenCalled();
+  expect(mockBakePage.mock.calls.map(c => [c[1], c[2]])).toEqual([[1, 'bw'], [2, 'bw']]);
+  expect(baked).toEqual([1]);
+  mockBakePage.mockImplementation(async () => true);
+});

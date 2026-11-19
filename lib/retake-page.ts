@@ -60,6 +60,8 @@ export type RetakeUndo = {
 export type RetakeResult = { doc: Document; undo: RetakeUndo | null };
 
 export class RetakeError extends Error {
+  /** Always thrown before anything is touched: runPageEdit re-targets no bake (lib/bake.ts isEditRefused). */
+  readonly editRefused = true;
   constructor(readonly kind: 'missing-page' | 'pages-moved' | 'expired', message: string) {
     super(message);
     this.name = 'RetakeError';

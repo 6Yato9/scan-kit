@@ -189,6 +189,18 @@ export function insertBlankPageFiles(
   };
 }
 
+/**
+ * Undo refused (the pages moved since): thrown before anything is touched, so
+ * runPageEdit re-targets no bake (lib/bake.ts isEditRefused).
+ */
+export class BlankPageUndoRefused extends Error {
+  readonly editRefused = true;
+  constructor() {
+    super('blank-page: pages changed since');
+    this.name = 'BlankPageUndoRefused';
+  }
+}
+
 /** What Undo needs to take an inserted blank page out again. */
 export type BlankPageUndo = { docId: string; index: number; layout: number };
 
@@ -208,7 +220,7 @@ export function canUndoBlankPage(undo: BlankPageUndo, doc: Pick<Document, 'pages
 
 /** Removes the inserted page (run inside runPageEdit with remapForDelete(index)); returns the record patch. */
 export function removeBlankPageFiles(doc: Document, undo: BlankPageUndo): Pick<Document, 'pages' | 'filters' | 'adjustments'> {
-  if (!canUndoBlankPage(undo, doc)) throw new Error('blank-page: pages changed since');
+  if (!canUndoBlankPage(undo, doc)) throw new BlankPageUndoRefused();
   const n = doc.pages.length;
   deleteSinglePage(doc.id, undo.index, n);
   const dir = docDir(doc.id);

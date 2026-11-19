@@ -47,6 +47,16 @@ import {
   withDocLock,
 } from '@/lib/bake';
 import { addPagesToDocument, finishAddedPages } from '@/lib/add-pages';
+import {
+  addedPagesMessage,
+  addPagesUndoneMessage,
+  addPagesUndoRefusalMessage,
+  addPagesUndoRemap,
+  noteAddedPageBaked,
+  removeAddedPages,
+  type AddPagesUndo,
+} from '@/lib/add-pages-undo';
+import { MergeUndoError, reindexAfterMergeUndo } from '@/lib/merge-undo';
 import { addPagesFilter, retakeLook, withReviewFilters } from '@/lib/review-filter';
 import { RetakeError, retakePage, undoRetake, type RetakeUndo } from '@/lib/retake-page';
 import { duplicateDocument } from '@/lib/doc-ops';
@@ -60,7 +70,7 @@ import {
   type ConvertUndo,
 } from '@/lib/convert-pdf';
 import { indexDocText } from '@/lib/save-scan';
-import { indexPdfText, needsPdfText } from '@/lib/pdf-text';
+import { indexPdfText, needsPdfText, pdfFileGeneration } from '@/lib/pdf-text';
 import { PdfUnlockError, pdfUnlockAvailable, unlockStoredPdf } from '@/lib/pdf-unlock';
 import { subscribeViewerNotices, takeViewerNotice } from '@/lib/viewer-notice';
 import { takeNewDocumentNote, uncroppedMessage } from '@/lib/new-doc-note';
@@ -70,6 +80,7 @@ import { insertAt, restoreStashedPage, stashPage } from '@/lib/page-undo';
 import { notifySuccess, notifyError } from '@/lib/haptics';
 import { ocrAvailable, recognizeLines, extractDocText } from '@/lib/ocr';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
+import { reportViewerIdle } from '@/lib/quick-actions';
 import {
   exportFileName,
   makeExportDir,
@@ -195,6 +206,15 @@ function ViewerContent({
   const [pdfError, setPdfError] = useState<'locked' | 'unreadable' | null>(null);
   // Bumped after a locked PDF is unlocked: the PDF view loads the new file.
   const [pdfReload, setPdfReload] = useState(0);
+  // The PDF was rewritten in place by a tool outside the viewer (Tools ›
+  // Protect / Flatten / Unlock PDF, and their Undo): the view loads the new
+  // file, and an earlier "locked" state is read again (r13b).
+  const pdfFileGen = document?.pdfUri ? pdfFileGeneration(document.id, document.updatedAt) : 0;
+  const [seenFileGen, setSeenFileGen] = useState(pdfFileGen);
+  if (seenFileGen !== pdfFileGen) {
+    setSeenFileGen(pdfFileGen);
+    setPdfError(null);
+  }
   const [unlocking, setUnlocking] = useState(false);
   const [bannerDismissed, dismissBanner] = useConvertBannerDismissed(id);
   const ocrIndexingRef = useRef(false);
@@ -727,6 +747,35 @@ function ViewerContent({
 
   // ── Add pages ─────────────────────────────────────────────────────────────
 
+  /**
+   * Undo for Add pages: takes exactly the added pages out again while they are
+   * still as added (lib/add-pages-undo.ts); refuses, changing nothing, when
+   * pages were added, moved, deleted or edited since.
+   */
+  const undoAddPages = useCallback(async (undo: AddPagesUndo) => {
+    try {
+      const next = await editDocument({ remap: addPagesUndoRemap(undo) }, async fresh => removeAddedPages(fresh, undo));
+      reindexAfterMergeUndo(next);
+      // The page on screen was one of the added ones: show the last that stays.
+      if (pageRef.current >= undo.start) {
+        const last = undo.start - 1;
+        setCurrentPage(last);
+        setTimeout(() => flatListRef.current?.scrollToOffset({ offset: last * screenWidth, animated: false }), 60);
+      }
+      notifySuccess();
+      toast.show(addPagesUndoneMessage(undo.count));
+    } catch (err) {
+      notifyError();
+      if (err instanceof MergeUndoError && err.editRefused) {
+        Alert.alert('Couldn’t undo', addPagesUndoRefusalMessage(err.kind, undo.count));
+        return;
+      }
+      console.error('Undo add pages failed', err);
+      Alert.alert('Couldn’t remove the added pages', 'Try again.');
+      reload().catch(() => {});
+    }
+  }, [editDocument, screenWidth, toast, reload]);
+
   const addFrom = useCallback(async (source: 'camera' | 'photos') => {
     const doc = docRef.current;
     if (!doc || adding) return;
@@ -743,7 +792,10 @@ function ViewerContent({
         // camera keeps each photo so the new pages can be re-cropped later,
         // and its review offers the filter, as for a new scan.
         // Either way the app lock can't close it from under this call.
-        const scanned = await withReviewFilters(startFilter, () => scanPagesWithCamera());
+        // The review says where the pages go: "Add 3 pages", "New page 5".
+        const scanned = await withReviewFilters(startFilter, () => scanPagesWithCamera(), {
+          purpose: { kind: 'add', docName: doc.name, pageCount: doc.pages.length },
+        });
         uris = scanned.pages ?? [];
         filters = scanned.filters;
       } else {
@@ -763,13 +815,24 @@ function ViewerContent({
         filters = uris.map(() => startFilter);
       }
       if (!uris.length) return;
-      const { doc: next, added } = await addPagesToDocument(doc.id, uris, QUALITY_MAP[settings.quality]);
+      const { doc: next, added, undo } = await addPagesToDocument(doc.id, uris, QUALITY_MAP[settings.quality]);
       setDocument(withPendingChoices(next));
-      finishAddedPages(next, added, filters.length === added.length ? filters : startFilter);
+      // The look chosen in the review is baked straight away; that bake is
+      // part of adding them, so Undo still takes the pages out after it.
+      finishAddedPages(next, added, filters.length === added.length ? filters : startFilter, undefined, {
+        onBaked: undo ? index => noteAddedPageBaked(undo, index) : undefined,
+      });
       notifySuccess();
       const first = added[0];
       setCurrentPage(first);
       setTimeout(() => flatListRef.current?.scrollToIndex({ index: first, animated: true }), 100);
+      // Like a merge, with Undo (also kept in the "…" menu, lib/last-undo.ts).
+      if (undo) {
+        toast.show(addedPagesMessage(added.length), { action: { label: 'Undo', onPress: () => { undoAddPages(undo); } } });
+      } else {
+        lastUndo.drop();
+        toast.show(addedPagesMessage(added.length));
+      }
     } catch (err) {
       if (err instanceof ToolScanError) {
         alertScanError(err);
@@ -779,13 +842,13 @@ function ViewerContent({
       if (/cancel/i.test(msg)) return;
       console.error('Add pages failed', err);
       notifyError();
-      Alert.alert("Couldn't add pages", source === 'camera'
+      Alert.alert('Couldn’t add pages', source === 'camera'
         ? 'The scanner couldn’t be opened. Try again.'
         : 'The photos couldn’t be added. Try again.');
     } finally {
       setAdding(false);
     }
-  }, [adding, withPendingChoices]);
+  }, [adding, withPendingChoices, toast, undoAddPages, lastUndo]);
 
   const handleAddMore = useCallback(() => {
     if (Platform.OS === 'ios') {
@@ -829,11 +892,11 @@ function ViewerContent({
       // Refused because the pages moved since (or the saved copy is gone):
       // nothing changed, and trying again won't help.
       if (err instanceof RetakeError) {
-        Alert.alert("Couldn't undo", err.message);
+        Alert.alert('Couldn’t undo', err.message);
         return;
       }
       console.error('Undo retake failed', err);
-      Alert.alert("Couldn't restore the page", 'Try again.');
+      Alert.alert('Couldn’t restore the page', 'Try again.');
       reload().catch(() => {});
     }
   }, [id, withPendingChoices, reload]);
@@ -864,7 +927,7 @@ function ViewerContent({
     } catch (err) {
       console.error('Retake failed', err);
       notifyError();
-      Alert.alert("Couldn't replace the page", 'Your page is unchanged. Try again.');
+      Alert.alert('Couldn’t replace the page', 'Your page is unchanged. Try again.');
       reload().catch(() => {});
     } finally {
       retakingRef.current = false;
@@ -888,9 +951,9 @@ function ViewerContent({
           () => scanPagesWithCamera({
             maxPages: 1,
             title: doc.pages.length > 1 ? `Retake page ${index + 1}` : 'Retake page',
-            doneLabel: 'Replace',
+            doneLabel: 'Replace page',
           }),
-          { adjustment: look.adjustment },
+          { adjustment: look.adjustment, purpose: { kind: 'replace', page: index, pageCount: doc.pages.length } },
         );
         uris = scanned.pages;
         if (scanned.filters[0]) look.filter = scanned.filters[0];
@@ -1343,6 +1406,15 @@ function ViewerContent({
     offerUndo: useCallback((message: string, run: () => void) => { lastUndo.offer(message, run); }, [lastUndo]),
   });
 
+  // The Search quick action may close this viewer only while nothing is in
+  // progress and no panel or sheet is open (lib/quick-actions.ts).
+  const idle = status !== 'loading' && !editTab && !moreVisible && !rotating && !reorderVisible && !reorderSaving
+    && !renameVisible && !cropVisible && !adding && !retaking && !moveVisible && ocr === null && !converting
+    && !unlocking && !exportVisible;
+  useEffect(() => {
+    reportViewerIdle(idle);
+    return () => reportViewerIdle(false);
+  }, [idle]);
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -1539,6 +1611,8 @@ function ViewerContent({
         {convertAvailable && !convertRefused && !pdfError && (converting || bannerDismissed === false) ? (
           <PdfConvertBanner
             converting={converting}
+            docId={document.id}
+            pdfUri={document.pdfUri}
             onConvert={handleConvertPdf}
             onDismiss={() => {
               dismissBanner();
@@ -1569,7 +1643,7 @@ function ViewerContent({
         ) : PdfDocumentView ? (
           <>
             <PdfDocumentView
-              key={`${pdfReload}-${pdfTools.viewKey}`}
+              key={`${pdfReload}-${pdfTools.viewKey}-${pdfFileGen}`}
               initialPage={pdfTools.initialPage}
               source={document.pdfUri.split('?')[0]}
               backgroundHex={colors.chrome}

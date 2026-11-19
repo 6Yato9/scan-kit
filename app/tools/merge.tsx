@@ -8,9 +8,14 @@
 // mergeDocumentsToPdf: PDF pages keep their text, scans are rendered on the
 // paper size from Document settings) — the same two paths as Files' select
 // mode and the viewer's "Merge with another document".
+//
+// The result opens in the viewer (it replaces this screen, so closing it goes
+// back to Tools). Its Undo removes the merged copy and comes back HERE, with
+// the same documents chosen in the same order (`ids`), since "undo" usually
+// means the order or the choice was wrong.
 import { useState } from 'react';
 import { Alert, StyleSheet, Text } from 'react-native';
-import { router as stackRouter, useRouter } from 'expo-router';
+import { router as stackRouter, useLocalSearchParams, useRouter } from 'expo-router';
 import { useScan } from '@/contexts/scan-context';
 import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';
@@ -20,7 +25,14 @@ import { mergeIntoNew } from '@/lib/doc-ops';
 import { canMergePdfDocuments, mergeDocumentsToPdf, needsPdfMerge, PdfEditError, type MergeProgress } from '@/lib/pdf-edit';
 import { notifyError, notifySuccess } from '@/lib/haptics';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
-import { newMergeUndo, undoNewMerge } from '@/lib/merge-undo';
+import {
+  MERGE_UNDO_FAILED_TITLE,
+  mergedNewMessage,
+  mergeUndoneMessage,
+  newMergeUndo,
+  newMergeUndoFailedMessage,
+  undoNewMerge,
+} from '@/lib/merge-undo';
 import { postViewerNotice } from '@/lib/viewer-notice';
 import { useToast } from '@/components/toast';
 import { Spacing, Type } from '@/lib/theme';
@@ -30,6 +42,12 @@ import type { Document } from '@/types/document';
 const isMergeable = (d: Document, pdfMerge = canMergePdfDocuments()) =>
   !d.trashedAt && (d.pdfUri ? pdfMerge : d.pages.length > 0);
 
+/** The documents chosen on arrival (`ids`: comma-separated, in order), e.g. after Undo. */
+function initialMergeOrder(ids: string | string[] | undefined): string[] {
+  const raw = Array.isArray(ids) ? ids.join(',') : ids ?? '';
+  return [...new Set(raw.split(',').map(s => s.trim()).filter(Boolean))];
+}
+
 /** The merged document's name: like Files' select mode, after the first one chosen. */
 function mergedName(first: Document): string {
   return `Merged ${first.name}`.slice(0, 120);
@@ -37,13 +55,15 @@ function mergedName(first: Document): string {
 
 export default function MergeScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ ids?: string }>();
   const { colors } = useTheme();
   const { bumpLastSaved } = useScan();
   const toast = useToast();
   const pdfMerge = canMergePdfDocuments();
   const { docs, loaded } = useToolDocuments(d => isMergeable(d, pdfMerge));
   // Chosen documents, in the order they will appear.
-  const [order, setOrder] = useState<string[]>([]);
+  // (Ids of documents that no longer exist are simply never shown as chosen.)
+  const [order, setOrder] = useState<string[]>(() => initialMergeOrder(params.ids));
   const [progress, setProgress] = useState<MergeProgress | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -59,32 +79,39 @@ export default function MergeScreen() {
     setSaving(true);
     try {
       const name = mergedName(chosen[0]);
-      const merged = needsPdfMerge(chosen)
+      const pdf = needsPdfMerge(chosen);
+      const merged = pdf
         ? await mergeDocumentsToPdf(chosen, name, { onProgress: setProgress })
         : await mergeIntoNew(chosen, name);
       bumpLastSaved();
       notifySuccess();
       // The viewer shows the message, with Undo (it covers the app-wide toast
-      // host). Undo closes the viewer and removes the merged copy; the
-      // originals were never touched (lib/merge-undo).
+      // host; its "…" menu keeps the Undo too). Undo closes the viewer,
+      // removes the merged copy — the originals were never touched
+      // (lib/merge-undo) — and reopens Merge with the same choice.
       const undo = newMergeUndo(merged);
+      const picked = chosen.map(d => d.id).join(',');
       postViewerNotice({
         docId: merged.id,
-        message: `Merged ${chosen.length} documents. The originals are kept.`,
+        message: mergedNewMessage(chosen.length),
         action: {
           label: 'Undo',
           onPress: () => {
-            navigateWhenUnlocked(() => stackRouter.back());
+            // The copy goes first, so Merge reopens without it in its list.
             undoNewMerge(undo)
               .then(outcome => {
                 bumpLastSaved();
                 notifySuccess();
-                toast.show(outcome === 'trashed' ? 'Merged document moved to Recently deleted' : 'Merge undone');
+                navigateWhenUnlocked(() => {
+                  stackRouter.back();
+                  stackRouter.push({ pathname: '/tools/merge', params: { ids: picked } });
+                });
+                toast.show(mergeUndoneMessage(outcome, pdf));
               })
               .catch(err => {
                 console.error('Undo merge failed', err);
                 notifyError();
-                Alert.alert("Couldn't undo the merge", 'Try again, or delete the merged document yourself.');
+                Alert.alert(MERGE_UNDO_FAILED_TITLE, newMergeUndoFailedMessage(pdf));
               });
           },
         },

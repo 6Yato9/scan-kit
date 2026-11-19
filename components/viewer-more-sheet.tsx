@@ -13,6 +13,9 @@ import { AppIcon, type AppIconName } from '@/components/app-icon';
 import { useTheme } from '@/contexts/theme-context';
 import { Radius, Spacing, Type } from '@/lib/theme';
 
+/** Tool tiles per row: the scanned-document menu's four (Sign, Redact, Watermark, Timestamp). */
+const TILES_PER_ROW = 4;
+
 export type MoreAction = {
   key: string;
   /** Ionicons, or one of AppIcon's SF Symbol glyphs (Sign's signature, Rename's pencil). */
@@ -58,6 +61,8 @@ export function ViewerMoreSheet({ visible, title, subtitle, tools, groups, onClo
       <ScrollView bounces={false} showsVerticalScrollIndicator={false} style={styles.scroll}>
         {tools && tools.length > 0 ? (
           <View style={styles.tools}>
+            {/* Always a row of four equal tiles, left-aligned: one tool (an imported
+                PDF's Fill & sign) is a tile, not a bar stretched across the sheet. */}
             {tools.map(t => (
               <Pressable
                 key={t.key}
@@ -75,6 +80,9 @@ export function ViewerMoreSheet({ visible, title, subtitle, tools, groups, onClo
                   {t.label}
                 </Text>
               </Pressable>
+            ))}
+            {Array.from({ length: Math.max(0, TILES_PER_ROW - (tools.length % TILES_PER_ROW || TILES_PER_ROW)) }, (_, i) => (
+              <View key={`spacer-${i}`} style={styles.spacer} importantForAccessibility="no" accessibilityElementsHidden />
             ))}
           </View>
         ) : null}
@@ -100,9 +108,10 @@ export function ViewerMoreSheet({ visible, title, subtitle, tools, groups, onClo
 
 const styles = StyleSheet.create({
   scroll: { flexGrow: 0 },
-  tools: { flexDirection: 'row', gap: Spacing.xs + 2, marginBottom: Spacing.md },
+  tools: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.xs + 2, marginBottom: Spacing.md },
   tool: {
-    flex: 1,
+    flexGrow: 1,
+    flexBasis: '20%',
     minHeight: 72,
     borderRadius: Radius.md,
     alignItems: 'center',
@@ -110,5 +119,6 @@ const styles = StyleSheet.create({
     gap: Spacing.xs + 2,
     paddingHorizontal: 0,
   },
+  spacer: { flexGrow: 1, flexBasis: '20%' },
   toolLabel: { fontWeight: '600', letterSpacing: -0.2 },
 });

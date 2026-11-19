@@ -447,6 +447,82 @@ public class VisionOcrModule: Module {
       }
     }
     // MARK: End of fill & sign.
+
+    // MARK: Flatten for sharing + fill test hook (PdfFlattener.swift, round 13b, agent F1).
+    // Call through lib/pdf-fill.ts, which checks presence.
+
+    /// Writes a flattened copy (form values, signatures, added text and notes
+    /// drawn into the pages as vector content; links kept), verified before it
+    /// resolves to its page count. Rejects ERR_PDF_LOCKED ("locked"),
+    /// ERR_PDF_RESTRICTED ("restricted"), ERR_PDF_FLATTEN otherwise.
+    AsyncFunction("pdfFlatten") { (inputUri: String, outputUri: String, promise: Promise) in
+      DispatchQueue.global(qos: .userInitiated).async {
+        func path(_ u: String) -> String { URL(string: u).flatMap { $0.isFileURL ? $0.path : nil } ?? u }
+        do {
+          let n = try autoreleasepool { try PdfFlattener.flatten(inputPath: path(inputUri), outputPath: path(outputUri)) }
+          promise.resolve(n)
+        } catch {
+          let message = error.localizedDescription
+          let code = message == PdfEditor.lockedMessage ? "ERR_PDF_LOCKED"
+            : message == PdfEditor.restrictedMessage ? "ERR_PDF_RESTRICTED" : "ERR_PDF_FLATTEN"
+          promise.reject(code, message)
+        }
+      }
+    }
+
+    /// Debug builds only: makes pdfFill burn its additions into the pages (the
+    /// fallback for a PDFKit that doesn't record their appearance), to test it.
+    /// Returns whether the switch exists in this build.
+    Function("pdfFillForceFallback") { (on: Bool) -> Bool in
+      #if DEBUG
+      PdfFiller.forceBurnFallback = on
+      return true
+      #else
+      return false
+      #endif
+    }
+    // MARK: End of flatten.
+
+    // MARK: Remove restrictions (PdfUnrestrict.swift, round 13b, agent U).
+    // Call through lib/pdf-unrestrict.ts, which checks presence.
+
+    /// { pageCount, encrypted, locked, passwordAccepted, permissions } of a
+    /// PDF, opened with `password` when it needs one. Rejects ERR_PDF_INFO
+    /// when it can't be opened.
+    AsyncFunction("pdfPermissions") { (uri: String, password: String?, promise: Promise) in
+      DispatchQueue.global(qos: .userInitiated).async {
+        func path(_ u: String) -> String { URL(string: u).flatMap { $0.isFileURL ? $0.path : nil } ?? u }
+        do {
+          let info = try autoreleasepool { try PdfUnrestrict.info(path: path(uri), password: password) }
+          promise.resolve(info)
+        } catch {
+          promise.reject("ERR_PDF_INFO", error.localizedDescription)
+        }
+      }
+    }
+
+    /// Writes an unencrypted copy with every restriction removed (text,
+    /// forms, annotations and bookmarks kept), verified before it resolves to
+    /// { pageCount, encrypted, method }. Rejects ERR_PDF_LOCKED ("locked")
+    /// when a password is needed, ERR_PDF_PASSWORD ("wrong-password"),
+    /// ERR_PDF_UNRESTRICT otherwise.
+    AsyncFunction("unrestrictPdf") { (inputUri: String, outputUri: String, password: String?, promise: Promise) in
+      DispatchQueue.global(qos: .userInitiated).async {
+        func path(_ u: String) -> String { URL(string: u).flatMap { $0.isFileURL ? $0.path : nil } ?? u }
+        do {
+          let result = try autoreleasepool {
+            try PdfUnrestrict.unrestrict(inputPath: path(inputUri), outputPath: path(outputUri), password: password)
+          }
+          promise.resolve(result)
+        } catch {
+          let message = error.localizedDescription
+          let code = message == PdfUnrestrict.lockedMessage ? "ERR_PDF_LOCKED"
+            : message == PdfUnrestrict.wrongPasswordMessage ? "ERR_PDF_PASSWORD" : "ERR_PDF_UNRESTRICT"
+          promise.reject(code, message)
+        }
+      }
+    }
+    // MARK: End of remove restrictions.
   }
 
   private static func loadImage(_ uri: String) throws -> UIImage {

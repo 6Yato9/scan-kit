@@ -56,6 +56,7 @@ import {
   bakePages,
   BakeWaitAborted,
   hasPendingBakes,
+  isEditRefused,
   pendingBakeCount,
   waitForPendingBakes,
   pendingBakesFor,
@@ -280,6 +281,52 @@ describe('latest choice wins (core #10)', () => {
     expect(pendingBakesFor('doc1').size).toBe(0);
     expect(changes).toContain('doc1');
     unsub();
+  });
+});
+
+describe('a refused edit re-targets no bake (r13b code M2)', () => {
+  class Refused extends Error { readonly editRefused = true; }
+
+  test('isEditRefused only recognises errors that say so', () => {
+    expect(isEditRefused(new Refused())).toBe(true);
+    expect(isEditRefused(new Error('x'))).toBe(false);
+    expect(isEditRefused(Object.assign(new Error('x'), { editRefused: false }))).toBe(false);
+    expect(isEditRefused(null)).toBe(false);
+  });
+
+  test('an Undo refused before touching anything leaves a running bake for a trailing page alone', async () => {
+    // Say pages 0-2 were merged, then page 3 was added with "B&W": its bake runs.
+    const done = bakePage('doc1', 3, 'bw', undefined);
+    await flush();
+    const running = takeNextJob()!;
+    // The merge's Undo (remap: page 2 onwards go) refuses: pages changed since.
+    await expect(runPageEdit('doc1', { remap: i => (i >= 2 ? -1 : i) }, () => { throw new Refused('pages-changed'); }))
+      .rejects.toThrow('pages-changed');
+    completeJob(running.id, 'data:image/jpeg;base64,BW');
+    await expect(done).resolves.toBe(true);
+    expect(writes()).toEqual([[page(3), 'BW']]);
+    expect(mockSetPageBaked).toHaveBeenCalledWith('doc1', 3, 'bw', undefined);
+  });
+
+  test('an edit that failed some other way still counts as having changed the pages', async () => {
+    const done = bakePage('doc1', 3, 'bw', undefined);
+    await flush();
+    const running = takeNextJob()!;
+    await expect(runPageEdit('doc1', { remap: i => (i >= 2 ? -1 : i) }, () => { throw new Error('disk'); }))
+      .rejects.toThrow('disk');
+    completeJob(running.id, 'data:image/jpeg;base64,BW');
+    await expect(done).resolves.toBe(false);
+    expect(mockWriteAsStringAsync).not.toHaveBeenCalled();
+  });
+
+  test('the Undo that does go ahead drops the bakes of the pages it removed', async () => {
+    const done = bakePage('doc1', 3, 'bw', undefined);
+    await flush();
+    const running = takeNextJob()!;
+    await runPageEdit('doc1', { remap: i => (i >= 2 ? -1 : i) }, () => {});
+    completeJob(running.id, 'data:image/jpeg;base64,BW');
+    await expect(done).resolves.toBe(false);
+    expect(mockWriteAsStringAsync).not.toHaveBeenCalled();
   });
 });
 

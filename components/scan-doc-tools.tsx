@@ -22,10 +22,15 @@ import type { PageEdit } from '@/lib/bake';
 import { remapForDelete } from '@/lib/bake';
 import { mergeIntoWithUndo, splitDocument } from '@/lib/doc-ops';
 import {
+  MERGE_UNDO_FAILED_TITLE,
+  mergedIntoMessage,
+  mergedNewMessage,
   MergeUndoError,
+  mergeUndoneMessage,
   mergeUndoRefusalMessage,
   mergeUndoRemap,
   newMergeUndo,
+  newMergeUndoFailedMessage,
   reindexAfterMergeUndo,
   removeMergedPages,
   undoNewMerge,
@@ -34,6 +39,7 @@ import {
 } from '@/lib/merge-undo';
 import { mergeDocumentsToPdf, needsPdfMerge, PdfEditError } from '@/lib/pdf-edit';
 import {
+  BlankPageUndoRefused,
   blankPageSize,
   blankPageUndo,
   canUndoBlankPage,
@@ -51,8 +57,6 @@ import type { MoreAction } from '@/components/viewer-more-sheet';
 import { MergeSheet } from '@/components/merge-sheet';
 
 type Toast = { show: (message: string, options?: { action?: { label: string; onPress: () => void } }) => void };
-
-class BlankUndoRefused extends Error {}
 
 type Options = {
   /** Null while loading; an imported PDF gets nothing here. */
@@ -97,14 +101,15 @@ export function useScanDocTools({ document, page, editDocument, toast, router, s
   const undoBlank = useCallback(async (undo: BlankPageUndo) => {
     try {
       await editDocument({ remap: remapForDelete(undo.index) }, async fresh => {
-        if (!canUndoBlankPage(undo, fresh)) throw new BlankUndoRefused();
+        // Refused before anything is touched: no bake is re-targeted (lib/bake.ts isEditRefused).
+        if (!canUndoBlankPage(undo, fresh)) throw new BlankPageUndoRefused();
         return removeBlankPageFiles(fresh, undo);
       });
       if (mounted.current) showPage(Math.max(0, undo.index - 1));
       notifySuccess();
     } catch (err) {
       notifyError();
-      if (err instanceof BlankUndoRefused) {
+      if (err instanceof BlankPageUndoRefused) {
         Alert.alert('Couldn’t undo', 'The pages have been moved or deleted since, so the blank page can’t be taken out.');
       } else {
         console.error('Undo blank page failed', err);
@@ -213,17 +218,19 @@ export function useScanDocTools({ document, page, editDocument, toast, router, s
       // The page on screen was one of the merged ones: show the last that stays.
       if (mounted.current && pageRef.current >= undo.start) showPage(undo.start - 1);
       notifySuccess();
+      // The same confirmation from the toast's Undo and the "…" menu's row.
+      if (mounted.current) toast.show(mergeUndoneMessage());
     } catch (err) {
       notifyError();
-      if (err instanceof MergeUndoError) {
-        Alert.alert('Couldn’t undo the merge', mergeUndoRefusalMessage(err.kind));
+      if (err instanceof MergeUndoError && err.editRefused) {
+        Alert.alert(MERGE_UNDO_FAILED_TITLE, mergeUndoRefusalMessage(err.kind));
       } else {
         console.error('Undo merge failed', err);
-        Alert.alert('Couldn’t undo the merge', 'Try again.');
+        Alert.alert(MERGE_UNDO_FAILED_TITLE, 'Try again.');
         reload().catch(() => {});
       }
     }
-  }, [editDocument, showPage, reload]);
+  }, [editDocument, showPage, reload, toast]);
 
   /** Undo for a merge that made a new PDF: it goes; both originals were never touched. */
   const undoPdfMerge = useCallback((undo: NewMergeUndo) => {
@@ -231,12 +238,12 @@ export function useScanDocTools({ document, page, editDocument, toast, router, s
       .then(outcome => {
         onCreated?.();
         notifySuccess();
-        if (mounted.current) toast.show(outcome === 'trashed' ? 'Merged PDF moved to Recently deleted' : 'Merge undone');
+        if (mounted.current) toast.show(mergeUndoneMessage(outcome, true));
       })
       .catch(err => {
         console.error('Undo merge failed', err);
         notifyError();
-        Alert.alert('Couldn’t undo the merge', 'Try again, or delete the merged PDF yourself.');
+        Alert.alert(MERGE_UNDO_FAILED_TITLE, newMergeUndoFailedMessage(true));
       });
   }, [onCreated, toast]);
 
@@ -252,8 +259,8 @@ export function useScanDocTools({ document, page, editDocument, toast, router, s
         if (mounted.current) {
           // The toast opens the new PDF; its Undo waits in the "…" menu.
           const undo = newMergeUndo(merged);
-          offerUndo?.('Merged into a new PDF', () => undoPdfMerge(undo));
-          toast.show(`Saved “${merged.name}”`, {
+          offerUndo?.(mergedNewMessage(2), () => undoPdfMerge(undo));
+          toast.show(mergedNewMessage(2), {
             action: { label: 'Open', onPress: () => router.replace({ pathname: '/viewer', params: { id: merged.id } }) },
           });
         }
@@ -268,7 +275,7 @@ export function useScanDocTools({ document, page, editDocument, toast, router, s
       if (mounted.current) {
         showPage(result.doc.pages.length - added);
         toast.show(
-          `Added ${added} page${added === 1 ? '' : 's'} from “${source.name}”`,
+          mergedIntoMessage(added, 'from', source.name),
           undo ? { action: { label: 'Undo', onPress: () => { undoMerge(undo); } } } : undefined,
         );
       }

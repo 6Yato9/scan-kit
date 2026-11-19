@@ -25,6 +25,7 @@ import {
   type NativeFillInfo,
   type NativeFillPage,
   type NativeMark,
+  type NativePdfInfo,
 } from '../modules/vision-ocr/src';
 import { PdfEditError, rewriteStoredPdf, undoPdfEdit, type FilePrint, type PdfEditResult, type PdfEditUndo, filePrint, samePrint } from './pdf-edit';
 import { SIGNATURE_INK, type Signature, type SignatureInk } from './stamp';
@@ -195,7 +196,23 @@ export function clampRect(r: DisplayRect): DisplayRect {
 // ── The form ─────────────────────────────────────────────────────────────────
 
 export type FieldEdit = { value?: string; on?: boolean };
+/**
+ * The user's changes to the form. Text and choice values are keyed by the
+ * field's name (fieldKey): one field can show on several pages (several
+ * widgets) and has one value, so editing it anywhere changes it everywhere.
+ * Checkboxes and radio buttons are keyed by widget id.
+ */
 export type FieldEdits = Record<string, FieldEdit>;
+
+/** Where a text or choice field's value lives in FieldEdits: its fully-qualified name (its widget id if it has none). */
+export function fieldKey(f: Pick<NativeFillField, 'id' | 'name'>): string {
+  return f.name ? `name:${f.name}` : f.id;
+}
+
+/** `edits` with text or choice field `f` (and so every widget of it) set to `value`. */
+export function setFieldText(edits: FieldEdits, f: Pick<NativeFillField, 'id' | 'name'>, value: string): FieldEdits {
+  return { ...edits, [fieldKey(f)]: { value } };
+}
 
 /**
  * What to call a field: the form's own description, else its name made
@@ -223,9 +240,8 @@ export function isFillable(f: NativeFillField): boolean {
 
 /** A field's value as it stands with `edits` applied. */
 export function fieldValue(f: NativeFillField, edits: FieldEdits): FieldEdit {
-  const e = edits[f.id];
-  if (f.kind === 'checkbox' || f.kind === 'radio') return { on: e?.on ?? !!f.on };
-  return { value: e?.value ?? f.value ?? '' };
+  if (f.kind === 'checkbox' || f.kind === 'radio') return { on: edits[f.id]?.on ?? !!f.on };
+  return { value: edits[fieldKey(f)]?.value ?? edits[f.id]?.value ?? f.value ?? '' };
 }
 
 /**
@@ -234,7 +250,20 @@ export function fieldValue(f: NativeFillField, edits: FieldEdits): FieldEdit {
  * (Radio buttons, like on paper, aren't un-chosen by a second tap.)
  */
 export function toggleButton(f: NativeFillField, fields: readonly NativeFillField[], edits: FieldEdits): FieldEdits {
-  if (f.kind === 'checkbox') return { ...edits, [f.id]: { on: !fieldValue(f, edits).on } };
+  if (f.kind === 'checkbox') {
+    const on = !fieldValue(f, edits).on;
+    const next = { ...edits, [f.id]: { on } };
+    if (!f.name) return next;
+    // The same checkbox shown on several pages (same name and on-value)
+    // follows; one with the same name but another on-value is a choice
+    // between them (like radio buttons), so it turns off.
+    for (const g of fields) {
+      if (g.kind !== 'checkbox' || g.name !== f.name || g.id === f.id) continue;
+      if ((g.onValue ?? '') === (f.onValue ?? '')) next[g.id] = { on };
+      else if (on) next[g.id] = { on: false };
+    }
+    return next;
+  }
   if (f.kind !== 'radio') return edits;
   const next = { ...edits };
   for (const g of fields) {
@@ -246,15 +275,24 @@ export function toggleButton(f: NativeFillField, fields: readonly NativeFillFiel
 /** Fields whose value differs from what the PDF has, as pdfFill wants them. */
 export function planFieldValues(fields: readonly NativeFillField[], edits: FieldEdits): NativeFieldValue[] {
   const out: NativeFieldValue[] = [];
+  // A text or choice field goes once, whichever page it was edited on: native
+  // writes the value to every widget of the field.
+  const sent = new Set<string>();
   for (const f of fields) {
-    const e = edits[f.id];
-    if (!e || !isFillable(f)) continue;
+    if (!isFillable(f)) continue;
     if (f.kind === 'checkbox' || f.kind === 'radio') {
-      if (e.on === undefined || e.on === !!f.on) continue;
+      const e = edits[f.id];
+      if (!e || e.on === undefined || e.on === !!f.on) continue;
       out.push({ id: f.id, name: f.name, kind: f.kind, on: e.on });
     } else {
+      const key = fieldKey(f);
+      const e = edits[key] ?? edits[f.id];
+      if (!e || sent.has(key)) continue;
       const value = f.maxLength && f.maxLength > 0 ? (e.value ?? '').slice(0, f.maxLength) : (e.value ?? '');
-      if (value === (f.value ?? '')) continue;
+      // Unchanged only if every widget of the field already shows it.
+      const widgets = f.name ? fields.filter(g => g.name === f.name && g.kind === f.kind) : [f];
+      if (widgets.every(g => (g.value ?? '') === value)) continue;
+      sent.add(key);
       out.push({ id: f.id, name: f.name, kind: f.kind, value });
     }
   }
@@ -266,6 +304,117 @@ export function planFieldValues(fields: readonly NativeFillField[], edits: Field
     out.push({ id: f.id, name: f.name, kind: 'radio', on: fieldValue(f, edits).on });
   }
   return out;
+}
+
+// ── Signed and XFA PDFs (pure) ──────────────────────────────────────────────
+
+export type FillNotice = {
+  /** 'confirm': ask before saving; 'note': say once; 'blocked': nothing can be filled in here. */
+  level: 'confirm' | 'note' | 'blocked';
+  title: string;
+  body: string;
+};
+
+/**
+ * What the fill screen must tell the user about this PDF before they work on
+ * it (null: nothing). Saving rewrites the whole file, which breaks any digital
+ * signature in it; an XFA form shows its own layer in Acrobat, and only the
+ * AcroForm fields under it can be filled here.
+ */
+export function fillNotice(info: Pick<NativeFillInfo, 'signed' | 'certified' | 'xfa' | 'fields'>): FillNotice | null {
+  const fillable = (info.fields ?? []).some(isFillable);
+  if (info.xfa && !fillable) {
+    return {
+      level: 'blocked',
+      title: 'This form needs Adobe Acrobat',
+      body: 'It’s an XFA form, made for Adobe Acrobat Reader. Open it there to fill it in.',
+    };
+  }
+  if (info.signed || info.certified) {
+    return {
+      level: 'confirm',
+      title: 'Saving will invalidate this PDF’s digital signature',
+      body: info.certified
+        ? 'Its author certified it against changes. After saving, apps like Adobe Acrobat will show the signature as invalid. You can undo right after saving.'
+        : 'After saving, apps like Adobe Acrobat will show its signature as invalid. You can undo right after saving.',
+    };
+  }
+  if (info.xfa) {
+    return {
+      level: 'note',
+      title: 'Only the visible fields can be filled in',
+      body: 'This is an XFA form. Adobe Acrobat may show it differently from other apps.',
+    };
+  }
+  return null;
+}
+
+// ── Flattened copy for sharing (pure decision + native wrapper) ─────────────
+
+/** True when this build can write a flattened copy. */
+export function canFlattenPdf(): boolean {
+  return typeof VisionOcr?.pdfFlatten === 'function' && typeof VisionOcr?.pdfInfo === 'function';
+}
+
+/**
+ * Whether Share offers "Flattened PDF" for a PDF with this pdfInfo: it has
+ * form fields or additions (signatures, text, notes) to burn in, opens
+ * without a password, its permissions allow commenting and filling, and it
+ * isn't digitally signed (a flattened copy would carry a broken signature).
+ * Older builds (no counts) never offer it.
+ */
+export function shouldOfferFlatten(info: NativePdfInfo | null | undefined): boolean {
+  if (!info || info.locked) return false;
+  if (!((info.formFields ?? 0) > 0 || (info.annotations ?? 0) > 0)) return false;
+  if (info.signed || info.certified) return false;
+  if (info.encrypted && !(info.canAnnotate && info.canFillForms)) return false;
+  return true;
+}
+
+/** Reads what the Share sheet needs to decide (null when it can't be read). */
+export async function pdfShareInfo(pdfUri: string): Promise<NativePdfInfo | null> {
+  const read = VisionOcr?.pdfInfo;
+  if (typeof read !== 'function') return null;
+  try {
+    return await read(clean(pdfUri), null);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True when the PDF holds a digital signature (or is certified): any change
+ * to the file, a page edit included, invalidates it. False when unknown.
+ */
+export async function isDigitallySigned(pdfUri: string): Promise<boolean> {
+  const info = await pdfShareInfo(pdfUri);
+  return !!(info && (info.signed || info.certified));
+}
+
+/** The question asked before changing a digitally signed PDF (page edits). */
+export const SIGNED_PDF_CHANGE = {
+  title: 'Changing this PDF will invalidate its digital signature',
+  body: 'Apps like Adobe Acrobat will show its signature as invalid. You can undo right after.',
+  confirm: 'Change anyway',
+} as const;
+
+/**
+ * Writes a flattened copy of `pdfUri` to `outUri` (form values, signatures
+ * and added text drawn into the pages; their text stays text; links kept).
+ * The stored PDF is not touched. Rejects with PdfEditError.
+ */
+export async function flattenPdfCopy(pdfUri: string, outUri: string): Promise<string> {
+  const flatten = VisionOcr?.pdfFlatten;
+  if (typeof flatten !== 'function') throw new PdfEditError('unavailable', 'pdfFlatten missing');
+  try {
+    await flatten(clean(pdfUri), clean(outUri));
+  } catch (err) {
+    const e = classifyNative(err);
+    const code = (err as { code?: string } | null)?.code ?? '';
+    if (code === 'ERR_PDF_RESTRICTED') throw new PdfEditError('restricted', e.message);
+    throw e;
+  }
+  return outUri;
 }
 
 // ── Messages ─────────────────────────────────────────────────────────────────

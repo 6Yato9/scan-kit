@@ -22,6 +22,20 @@ test('labels name the change', () => {
   expect(undoLabelFor('Something new')).toBe('Undo last change');
 });
 
+test('Create / Unlock / Protect / Flatten PDF name their Undo, as a copy or in place', () => {
+  expect(undoLabelFor('PDF created from 5 pages')).toBe('Undo create PDF');
+  expect(undoLabelFor('PDF unlocked. The original is kept.')).toBe('Undo unlock PDF');
+  expect(undoLabelFor('PDF unlocked')).toBe('Undo unlock PDF');
+  expect(undoLabelFor('Restrictions removed. The original is kept.')).toBe('Undo unlock PDF');
+  expect(undoLabelFor('Restrictions removed')).toBe('Undo unlock PDF');
+  expect(undoLabelFor('PDF protected. The original is kept.')).toBe('Undo protect PDF');
+  expect(undoLabelFor('PDF protected')).toBe('Undo protect PDF');
+  expect(undoLabelFor('PDF flattened. The original is kept.')).toBe('Undo flatten');
+  expect(undoLabelFor('PDF flattened')).toBe('Undo flatten');
+  // Not mistaken for one another or for a page edit.
+  expect(undoLabelFor('PDF protectedness')).toBe('Undo last change');
+});
+
 test('the offer stays until used, and runs once whether from the toast or the menu', () => {
   const slot = new LastUndo();
   const run = jest.fn();
@@ -150,5 +164,7 @@ test('merge Undo gets its own menu label (r13)', () => {
   expect(undoLabelFor('Added 3 pages from “Lease”')).toBe('Undo merge');
   expect(undoLabelFor('Added 1 page to “Invoice”')).toBe('Undo merge');
   expect(undoLabelFor('Merged into a new PDF')).toBe('Undo merge');
+  expect(undoLabelFor('PDF created from 5 pages. The originals are kept.')).toBe('Undo create PDF');
+  expect(undoLabelFor('Document created from 1 page. The originals are kept.')).toBe('Undo create PDF');
   expect(undoLabelFor('Merged 2 documents. The originals are kept.')).toBe('Undo merge');
 });

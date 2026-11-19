@@ -26,6 +26,12 @@
 // Undo runs under the document's page lock (runPageEdit) with a remap that
 // drops the removed pages, so an in-flight filter bake for one of them is
 // dropped and the cached filter previews are cleared (lib/bake.ts applyEdit).
+// A REFUSED Undo throws MergeUndoError before touching anything, which
+// runPageEdit recognises (isEditRefused): no remap, so bakes still running
+// for pages added since (say, through Add pages) are not dropped.
+//
+// Add pages (lib/add-pages-undo.ts) uses the same fingerprint and removal:
+// it also appends trailing pages.
 //
 // MERGES THAT MAKE A NEW DOCUMENT (Tools › Merge, Files' select mode, merging
 // with an imported PDF) leave every original untouched; Undo removes the new
@@ -62,9 +68,15 @@ export type MergeUndo = {
 export type MergeUndoRefusal = 'missing' | 'pages-changed' | 'pages-edited';
 
 export class MergeUndoError extends Error {
-  constructor(readonly kind: MergeUndoRefusal) {
+  /**
+   * Nothing was changed (the check refused before any file was touched), so
+   * runPageEdit leaves in-flight bakes alone (lib/bake.ts isEditRefused).
+   */
+  readonly editRefused: boolean;
+  constructor(readonly kind: MergeUndoRefusal, nothingChanged = true) {
     super(`merge undo refused: ${kind}`);
     this.name = 'MergeUndoError';
+    this.editRefused = nothingChanged;
   }
 }
 
@@ -181,7 +193,9 @@ export async function undoMergeInto(undo: MergeUndo): Promise<Document> {
       next = { ...latest, ...patch };
       return patch;
     });
-    if (!written || !next) throw new MergeUndoError('missing');
+    // The record went between the read and the write: the files are already
+    // gone, so this is no refusal (bakes for them must still be dropped).
+    if (!written || !next) throw new MergeUndoError('missing', false);
     return next as Document;
   });
   reindexAfterMergeUndo(doc);
@@ -191,6 +205,46 @@ export async function undoMergeInto(undo: MergeUndo): Promise<Document> {
 /** The text index no longer holds the removed pages' words (outside the page lock). */
 export function reindexAfterMergeUndo(doc: Pick<Document, 'id' | 'pages'>): void {
   indexDocText(doc.id, doc.pages).catch(err => console.warn('Re-index after merge undo failed', err));
+}
+
+// ── What the user is told (one wording at every entry point) ─────────────────
+//
+// Merges happen in the viewer ("…" → Merge with another document), from Home
+// and Files (long-press → Merge, Files' select mode), in Tools › Merge, and
+// for imported PDFs (pdf-page-tools). Every one says the same thing:
+//   done:     "Added 3 pages from “B”" / "Added 3 pages to “A”" (into a
+//             document) or "Merged 2 documents. The originals are kept." (new);
+//   undone:   "Merge undone" — or, when the new copy was changed since and so
+//             kept in Recently deleted, "Merged document (PDF) moved to
+//             Recently deleted";
+//   refused:  "Couldn’t undo the merge" with the reason (mergeUndoRefusalMessage);
+//   failed:   "Couldn’t undo the merge" — "Try again."
+
+/** The alert title whenever a merge Undo is refused or fails. */
+export const MERGE_UNDO_FAILED_TITLE = 'Couldn’t undo the merge';
+
+/** The toast after a merge made a new document of `count` documents (scans or a PDF). */
+export function mergedNewMessage(count: number): string {
+  return `Merged ${count} documents. The originals are kept.`;
+}
+
+/** The toast after pages were merged into a document, from inside it ("from") or from a list ("to"). */
+export function mergedIntoMessage(added: number, direction: 'from' | 'to', name: string): string {
+  return `Added ${added === 1 ? '1 page' : `${added} pages`} ${direction} “${name}”`;
+}
+
+/**
+ * The confirmation once a merge was undone. `outcome` is undoNewMerge's
+ * (absent for a merge into a document: its pages came out); `pdf` names the
+ * kept copy when it was a PDF.
+ */
+export function mergeUndoneMessage(outcome?: NewMergeUndoOutcome, pdf = false): string {
+  return outcome === 'trashed' ? `Merged ${pdf ? 'PDF' : 'document'} moved to Recently deleted` : 'Merge undone';
+}
+
+/** The alert body when removing a merge's new document failed (not refused). */
+export function newMergeUndoFailedMessage(pdf = false): string {
+  return `Try again, or delete the merged ${pdf ? 'PDF' : 'document'} yourself.`;
 }
 
 /** What to tell the user when Undo refused. */

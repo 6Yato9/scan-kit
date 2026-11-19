@@ -70,17 +70,32 @@ enum PdfEditor {
   /// Write options that keep an encrypted document (one that opened without
   /// a password: an owner password with permissions) protected. PDFKit's
   /// plain write(to:) drops the encryption, and with it the author's
-  /// restrictions; this writes the permissions PDFKit read back, under a new
-  /// random owner password (the original can't be known without asking for
-  /// it). PDFKit maps them onto the PDF's permission bits as best it can: the
-  /// file stays encrypted and keeps its printing, copying and page-assembly
-  /// restrictions, but PDFKit can't express every combination exactly (e.g.
-  /// "fill forms but don't comment" comes out as allowing both).
+  /// restrictions; this writes the author's permissions under a new random
+  /// owner password (the original can't be known without asking for it).
+  ///
+  /// PDFKit's getter reports `allowsDocumentChanges` whenever form filling,
+  /// commenting or page assembly is allowed (the "superset" rule in
+  /// PDFDocument.h). Written back, that bit becomes the PDF's real "modify
+  /// contents" permission (/P bit 4), which in revision 3+ also grants
+  /// assembly, commenting and form filling: one edit would loosen the file.
+  /// So it is cleared: every other permission then round-trips to the
+  /// author's exact /P (measured with qpdf for assembly-only, form-only,
+  /// annotate, print-only and "all but copying" sources). For a source that
+  /// really allowed "modify contents" this only tightens that one bit, which
+  /// Scan Kit never uses. The writers also read the result back and refuse it
+  /// if any permission went from off to on (`PdfStructure.widenedPermissions`).
   static func keepProtectionOptions(_ doc: PDFDocument) -> [PDFDocumentWriteOption: Any] {
     guard doc.isEncrypted, !doc.isLocked else { return [:] }
+    return protectionOptions(permissions: doc.accessPermissions.rawValue)
+  }
+
+  /// Owner-password write options for `permissions` (PDFKit's raw bits), the
+  /// derived "document changes" bit cleared (see keepProtectionOptions).
+  static func protectionOptions(permissions: UInt) -> [PDFDocumentWriteOption: Any] {
+    let raw = permissions & ~PDFAccessPermissions.allowsDocumentChanges.rawValue
     return [
       .ownerPasswordOption: UUID().uuidString + UUID().uuidString,
-      .accessPermissionsOption: NSNumber(value: doc.accessPermissions.rawValue),
+      .accessPermissionsOption: NSNumber(value: raw),
     ]
   }
 
@@ -96,13 +111,32 @@ enum PdfEditor {
     let wasLocked = doc.isLocked
     var locked = wasLocked
     if locked, let pw = password, !pw.isEmpty, doc.unlock(withPassword: pw) { locked = false }
-    return [
+    var out: [String: Any] = [
       "pageCount": doc.pageCount,
       "locked": locked,
       "encrypted": doc.isEncrypted,
       // Page edits would be refused (restrictedMessage).
       "restricted": !locked && isRestricted(doc, unlocked: wasLocked),
     ]
+    if !locked {
+      // What else the file holds (round 13b): Fill & sign and Share use it.
+      out["canAnnotate"] = PdfFiller.canAnnotate(doc)
+      out["canFillForms"] = PdfFiller.canFillForms(doc)
+      var widgets = 0
+      var additions = 0
+      for i in 0..<doc.pageCount {
+        for a in doc.page(at: i)?.annotations ?? [] {
+          if a.type == "Widget" { widgets += 1 } else if PdfFlattener.flattens(a) { additions += 1 }
+        }
+      }
+      out["formFields"] = widgets
+      out["annotations"] = additions
+      let facts = PdfStructure.formFacts(path: path)
+      out["signed"] = facts.signed
+      out["certified"] = facts.certified
+      out["xfa"] = facts.xfa
+    }
+    return out
   }
 
   /// A blank page the size and orientation of `like`: PDFKit's own empty page
@@ -235,14 +269,28 @@ enum PdfEditor {
     try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
     // In place, an owner-password PDF stays protected (see keepProtectionOptions);
     // a document rebuilt after unlocking is written without a password.
+    let wasEncrypted = doc.isEncrypted && !unlocked
+    // Taken before writing: what the author allowed (see keepProtectionOptions).
+    let source = wasEncrypted ? PDFDocument(url: URL(fileURLWithPath: inputPath)) : nil
     guard out.write(to: url, withOptions: unlocked ? [:] : keepProtectionOptions(doc)) else {
       try? FileManager.default.removeItem(at: url)
       throw fail(8, "Could not write the PDF")
     }
+    // A form's widgets keep the appearances PDFKit drew (PdfStructure).
+    PdfStructure.settleNeedAppearances(at: url)
     // Read back what was written: never hand over a file that isn't exactly the plan.
     guard let check = PDFDocument(url: url), !check.isLocked, check.pageCount == targets.count else {
       try? FileManager.default.removeItem(at: url)
       throw fail(9, "The edited PDF could not be verified")
+    }
+    // Never looser than the author made it: still encrypted, no permission turned on.
+    if wasEncrypted {
+      let widened = source.map { PdfStructure.widenedPermissions(source: $0, written: check) } ?? "source unreadable"
+      if let what = widened {
+        NSLog("PdfEditor: refused, permissions widened (%@)", what)
+        try? FileManager.default.removeItem(at: url)
+        throw fail(9, "The edited PDF could not be verified")
+      }
     }
     for k in 0..<expected.count {
       guard let p = check.page(at: k), normalized(p.rotation) == expected[k] else {

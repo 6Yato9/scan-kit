@@ -51,6 +51,9 @@ export function ViewerToolbar({ items }: { items: ToolbarItem[] }) {
           <Text
             style={[Type.caption, styles.label, { color: colors.chromeText }]}
             numberOfLines={1}
+            // Large text: a long label ("Fill & sign") shrinks a little rather than being cut off.
+            adjustsFontSizeToFit
+            minimumFontScale={0.75}
             maxFontSizeMultiplier={1.3}
           >
             {item.label}

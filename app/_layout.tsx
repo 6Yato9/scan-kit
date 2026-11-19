@@ -236,7 +236,11 @@ function ThemedStack() {
       <Stack.Screen name="tools/compress" options={toolOptions} />
       <Stack.Screen name="tools/extract" options={toolOptions} />
       <Stack.Screen name="tools/merge" options={toolOptions} />
+      <Stack.Screen name="tools/create-pdf" options={toolOptions} />
       <Stack.Screen name="tools/split" options={toolOptions} />
+      <Stack.Screen name="tools/unrestrict" options={toolOptions} />
+      <Stack.Screen name="tools/protect" options={toolOptions} />
+      <Stack.Screen name="tools/flatten" options={toolOptions} />
       <Stack.Screen name="tools/watermark" options={toolOptions} />
       <Stack.Screen name="tools/timestamp" options={toolOptions} />
       <Stack.Screen name="tools/sign" options={toolOptions} />

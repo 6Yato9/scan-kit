@@ -15,9 +15,14 @@ import { Document } from '@/types/document';
 import { patchDocument, restoreDocument, saveFolder, getFolders, trashDocument } from '@/lib/storage';
 import { duplicateDocument, mergeIntoWithUndo } from '@/lib/doc-ops';
 import {
+  MERGE_UNDO_FAILED_TITLE,
+  mergedIntoMessage,
+  mergedNewMessage,
   MergeUndoError,
+  mergeUndoneMessage,
   mergeUndoRefusalMessage,
   newMergeUndo,
+  newMergeUndoFailedMessage,
   undoMergeInto,
   undoNewMerge,
   type MergeUndo,
@@ -92,14 +97,14 @@ export function useDocumentActions({
                       })
                       .catch(err => {
                         console.error('Restore failed', err);
-                        Alert.alert("Couldn't restore the document", 'Find it in Settings, Recently deleted.');
+                        Alert.alert('Couldn’t restore the document', 'Find it in Settings, Recently deleted.');
                       });
                   },
                 },
               });
             } catch (err) {
               console.error('Delete failed', err);
-              Alert.alert("Couldn't delete the document", 'Try again.');
+              Alert.alert('Couldn’t delete the document', 'Try again.');
             }
           },
         },
@@ -114,7 +119,7 @@ export function useDocumentActions({
       toast.show('Document duplicated');
     } catch (err) {
       console.error('Duplicate failed', err);
-      Alert.alert("Couldn't duplicate document", 'There may not be enough free space. Please try again.');
+      Alert.alert('Couldn’t duplicate document', 'There may not be enough free space. Please try again.');
     }
   }, [setDocuments, toast]);
 
@@ -127,24 +132,24 @@ export function useDocumentActions({
       setDocuments(prev => prev.map(d => (d.id === doc.id ? { ...d, name: newName, updatedAt } : d)));
     } catch (err) {
       console.error('Rename failed', err);
-      Alert.alert("Couldn't rename document", 'Please try again.');
+      Alert.alert('Couldn’t rename document', 'Please try again.');
     }
   }, [setDocuments, dropMissing]);
 
-  /** Undo for a merge that made a new document: it goes; the originals were never touched. */
-  const undoNewMergeDoc = useCallback((undo: NewMergeUndo) => {
+  /** Undo for a merge that made a new document (a PDF here): it goes; the originals were never touched. */
+  const undoNewMergeDoc = useCallback((undo: NewMergeUndo, pdf: boolean) => {
     undoNewMerge(undo)
       .then(outcome => {
         setDocuments(prev => prev.filter(d => d.id !== undo.docId));
         bumpLastSaved();
         notifySuccess();
         // Changed since the merge: kept in Recently deleted rather than deleted.
-        if (outcome === 'trashed') toast.show('Moved to Recently deleted');
+        toast.show(mergeUndoneMessage(outcome, pdf));
       })
       .catch(err => {
         console.error('Undo merge failed', err);
         notifyError();
-        Alert.alert("Couldn't undo the merge", 'Try again, or delete the merged document yourself.');
+        Alert.alert(MERGE_UNDO_FAILED_TITLE, newMergeUndoFailedMessage(pdf));
       });
   }, [setDocuments, bumpLastSaved, toast]);
 
@@ -154,18 +159,19 @@ export function useDocumentActions({
       .then(updated => {
         setDocuments(prev => prev.map(d => (d.id === updated.id ? updated : d)));
         notifySuccess();
+        toast.show(mergeUndoneMessage());
       })
       .catch(err => {
         notifyError();
         // Refused (the document changed since): nothing was touched.
-        if (err instanceof MergeUndoError) {
-          Alert.alert("Couldn't undo the merge", mergeUndoRefusalMessage(err.kind));
+        if (err instanceof MergeUndoError && err.editRefused) {
+          Alert.alert(MERGE_UNDO_FAILED_TITLE, mergeUndoRefusalMessage(err.kind));
           return;
         }
         console.error('Undo merge failed', err);
-        Alert.alert("Couldn't undo the merge", 'Try again.');
+        Alert.alert(MERGE_UNDO_FAILED_TITLE, 'Try again.');
       });
-  }, [setDocuments]);
+  }, [setDocuments, toast]);
 
   const handleMerge = useCallback(async (target: Document, source: Document) => {
     // An imported PDF in the pair: one new PDF, both originals kept (lib/pdf-edit).
@@ -176,7 +182,7 @@ export function useDocumentActions({
         bumpLastSaved();
         notifySuccess();
         const undo = newMergeUndo(merged);
-        toast.show(`Saved “${merged.name}”`, { action: { label: 'Undo', onPress: () => undoNewMergeDoc(undo) } });
+        toast.show(mergedNewMessage(2), { action: { label: 'Undo', onPress: () => undoNewMergeDoc(undo, true) } });
       } catch (err) {
         const locked = err instanceof PdfEditError && err.kind === 'locked';
         if (err instanceof PdfEditError && err.kind === 'restricted') {
@@ -186,8 +192,8 @@ export function useDocumentActions({
         if (!locked) console.error('PDF merge failed', err);
         const who = locked ? [target, source].find(d => d.id === (err as PdfEditError).docId) : null;
         Alert.alert(
-          locked ? `“${who?.name ?? 'This PDF'}” is password protected` : "Couldn't merge documents",
-          locked ? 'Open it and enter its password, then merge again.' : 'There may not be enough free space. Please try again.',
+          locked ? `“${who?.name ?? 'This PDF'}” is password protected` : 'Couldn’t merge the documents',
+          locked ? 'Open it and enter its password, then merge again.' : 'There may not be enough free space. Try again.',
         );
       }
       return;
@@ -199,12 +205,12 @@ export function useDocumentActions({
       setDocuments(prev => prev.map(d => (d.id === updated.id ? updated : d)));
       notifySuccess();
       toast.show(
-        `Added ${added} page${added === 1 ? '' : 's'} to “${target.name}”`,
+        mergedIntoMessage(added, 'to', target.name),
         undo ? { action: { label: 'Undo', onPress: () => undoMergeIntoDoc(undo) } } : undefined,
       );
     } catch (err) {
       console.error('Merge failed', err);
-      Alert.alert("Couldn't merge documents", 'There may not be enough free space. Please try again.');
+      Alert.alert('Couldn’t merge the documents', 'There may not be enough free space. Try again.');
     }
   }, [setDocuments, dropMissing, toast, bumpLastSaved, undoNewMergeDoc, undoMergeIntoDoc]);
 
@@ -219,7 +225,7 @@ export function useDocumentActions({
       toast.show(folder ? `Moved to “${folder}”` : 'Removed from folder');
     } catch (err) {
       console.error('Move to folder failed', err);
-      Alert.alert("Couldn't move document", 'Please try again.');
+      Alert.alert('Couldn’t move document', 'Please try again.');
     }
   }, [setDocuments, dropMissing, toast]);
 

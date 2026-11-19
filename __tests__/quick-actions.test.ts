@@ -11,6 +11,10 @@ import {
   QUICK_ACTION_TYPES,
   quickActionsAvailable,
   quickActionStep,
+  appStackRoutes,
+  isViewerIdle,
+  onlyViewerAboveTabs,
+  reportViewerIdle,
   setQuickActionsNativeForTests,
   takePendingQuickAction,
   waitForLockSettled,
@@ -117,6 +121,38 @@ describe('quickActionStep', () => {
       expect(quickActionStep('import-file', { ...resting, pathname })).toEqual({ kind: 'run', over: 'screen' });
       expect(quickActionStep('search', { ...resting, pathname })).toEqual({ kind: 'ignore', reason: 'screen-open' });
     }
+  });
+
+  test('search closes a plain viewer (nothing in progress, nothing above the tabs but it) and only that (r13b)', () => {
+    expect(quickActionStep('search', { ...resting, pathname: '/viewer', idleViewer: true })).toEqual({ kind: 'run', over: 'idle-viewer' });
+    // Busy, or not known to be idle: left alone.
+    expect(quickActionStep('search', { ...resting, pathname: '/viewer', idleViewer: false })).toEqual({ kind: 'ignore', reason: 'screen-open' });
+    // The flag only ever counts for the viewer itself.
+    expect(quickActionStep('search', { ...resting, pathname: '/annotate', idleViewer: true })).toEqual({ kind: 'ignore', reason: 'screen-open' });
+    // Still behind the lock, onboarding, a capture and an open sheet.
+    expect(quickActionStep('search', { ...resting, pathname: '/viewer', idleViewer: true, held: true })).toEqual({ kind: 'wait', until: 'lock' });
+    expect(quickActionStep('search', { ...resting, pathname: '/viewer', idleViewer: true, capturing: true })).toEqual({ kind: 'ignore', reason: 'capturing' });
+    expect(quickActionStep('search', { ...resting, pathname: '/viewer', idleViewer: true, overlay: true })).toEqual({ kind: 'ignore', reason: 'overlay' });
+    // Other actions over the viewer are unchanged.
+    expect(quickActionStep('scan', { ...resting, pathname: '/viewer', idleViewer: true })).toEqual({ kind: 'run', over: 'screen' });
+  });
+
+  test('the viewer counts as plain only alone above the tabs, and while it says it is idle', () => {
+    expect(onlyViewerAboveTabs([{ name: '(tabs)' }, { name: 'viewer' }])).toBe(true);
+    expect(onlyViewerAboveTabs([{ name: '(tabs)' }, { name: 'viewer' }, { name: 'viewer' }])).toBe(false);
+    expect(onlyViewerAboveTabs([{ name: '(tabs)' }, { name: 'tools/merge' }])).toBe(false);
+    expect(onlyViewerAboveTabs([{ name: '(tabs)' }])).toBe(false);
+    expect(onlyViewerAboveTabs(undefined)).toBe(false);
+    // expo-router wraps the app's stack in its own "__root" route.
+    const wrapped = { routes: [{ name: '__root', state: { routes: [{ name: '(tabs)', state: { routes: [{ name: 'files' }] } }, { name: 'viewer' }] } }] };
+    expect(appStackRoutes(wrapped)?.map(r => r.name)).toEqual(['(tabs)', 'viewer']);
+    expect(onlyViewerAboveTabs(appStackRoutes(wrapped))).toBe(true);
+    expect(appStackRoutes({ routes: [{ name: '__root', state: { routes: [{ name: '(tabs)' }] } }] })?.map(r => r.name)).toEqual(['(tabs)']);
+    expect(isViewerIdle()).toBe(false);
+    reportViewerIdle(true);
+    expect(isViewerIdle()).toBe(true);
+    reportViewerIdle(false);
+    expect(isViewerIdle()).toBe(false);
   });
 });
 

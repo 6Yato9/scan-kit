@@ -61,6 +61,11 @@ export type NativeFillField = {
   /** "page:annotationIndex", as pdfFill expects it back. */
   id: string;
   page: number;
+  /**
+   * The fully-qualified field name ("applicant.name"). Several widgets (the
+   * same field on several pages) share it, and one value: pdfFill writes a
+   * text or choice value to every widget of the field.
+   */
   name: string;
   kind: 'text' | 'choice' | 'checkbox' | 'radio' | 'signature';
   rect: number[];
@@ -88,6 +93,31 @@ export type NativeFillInfo = {
   canFillForms: boolean;
   pages: NativeFillPage[];
   fields: NativeFillField[];
+  /** Newer builds (13b): the PDF holds a digital signature, which saving invalidates. */
+  signed?: boolean;
+  /** Newer builds: certified by its author (DocMDP): any change breaks the certification. */
+  certified?: boolean;
+  /** Newer builds: an XFA form; only its AcroForm fields (if any) are filled here. */
+  xfa?: boolean;
+};
+/** pdfInfo. Fields marked "newer builds" are absent before round 13b (and when `locked`). */
+export type NativePdfInfo = {
+  pageCount: number;
+  locked: boolean;
+  encrypted: boolean;
+  /** Opens without a password but its permissions don't allow changing its pages. */
+  restricted?: boolean;
+  /** Newer builds: what the permissions allow. */
+  canAnnotate?: boolean;
+  canFillForms?: boolean;
+  /** Newer builds: form widgets, and other shown annotations (notes, stamps, ink; not links). */
+  formFields?: number;
+  annotations?: number;
+  /** Newer builds: holds a digital signature (any change invalidates it); certified (DocMDP). */
+  signed?: boolean;
+  certified?: boolean;
+  /** Newer builds: an XFA form (only its AcroForm fields, if any, can be filled here). */
+  xfa?: boolean;
 };
 export type NativeFieldValue = { id: string; name: string; kind: string; value?: string; on?: boolean };
 export type NativeMark = {
@@ -99,6 +129,27 @@ export type NativeMark = {
   color?: string;
   /** base64 PNG (a data: URI is fine). */
   image?: string;
+};
+// ── Remove restrictions (round 13b). The eight PDFAccessPermissions bits.
+export type NativePdfPermissions = {
+  printLow: boolean;
+  printHigh: boolean;
+  changeContent: boolean;
+  assemblePages: boolean;
+  copy: boolean;
+  accessibility: boolean;
+  comment: boolean;
+  fillForms: boolean;
+};
+export type NativePdfPermissionsInfo = {
+  pageCount: number;
+  encrypted: boolean;
+  /** Still needs a password (none given, or it didn't open it). */
+  locked: boolean;
+  /** The password given opened it. */
+  passwordAccepted: boolean;
+  /** All false while locked. */
+  permissions: NativePdfPermissions;
 };
 /** How a system form presented by the module ended. */
 export type PresentOutcome = 'saved' | 'cancelled' | 'denied' | 'unavailable';
@@ -163,7 +214,7 @@ type VisionOcrNative = {
    * without a password but its permissions don't allow changing its pages, so
    * pdfEditPages / mergePdfs reject it with ERR_PDF_RESTRICTED ("restricted").
    */
-  pdfInfo?: (uri: string, password?: string | null) => Promise<{ pageCount: number; locked: boolean; encrypted: boolean; restricted?: boolean }>;
+  pdfInfo?: (uri: string, password?: string | null) => Promise<NativePdfInfo>;
   /** Moves `srcUri` over `destUri` in one atomic rename (dest is never missing or partial). */
   replaceFile?: (srcUri: string, destUri: string) => Promise<string>;
   /** Upright JPEG copy (EXIF orientation baked into the pixels), long edge capped at maxEdge (never upscaled). */
@@ -210,6 +261,33 @@ type VisionOcrNative = {
    * ERR_PDF_FILL otherwise.
    */
   pdfFill?: (inputUri: string, outputUri: string, fields: NativeFieldValue[], marks: NativeMark[]) => Promise<number>;
+  // ── Flatten for sharing (round 13b, PdfFlattener.swift). Call through lib/pdf-fill.ts.
+  /**
+   * Writes a flattened copy: form values, signatures, added text and notes
+   * drawn into the pages (text stays vector text), links kept, the same
+   * permissions. Verified before it resolves to the page count. Rejects
+   * ERR_PDF_LOCKED, ERR_PDF_RESTRICTED ("restricted"), ERR_PDF_FLATTEN.
+   */
+  pdfFlatten?: (inputUri: string, outputUri: string) => Promise<number>;
+  /** Debug builds: pdfFill burns its additions into the pages (its fallback). Returns false in release builds. */
+  pdfFillForceFallback?: (on: boolean) => boolean;
+  // ── Remove restrictions (round 13b, PdfUnrestrict.swift). Call through
+  // lib/pdf-unrestrict.ts, which checks presence.
+  /** What a PDF's permissions allow, opened with `password` when it needs one. Rejects ERR_PDF_INFO. */
+  pdfPermissions?: (uri: string, password?: string | null) => Promise<NativePdfPermissionsInfo>;
+  /**
+   * Writes an unencrypted copy with every restriction removed (pages never
+   * redrawn: text, forms, annotations and bookmarks kept), verified before it
+   * resolves. `encrypted` is true only for the last-resort copy that keeps an
+   * encryption dictionary with every permission granted and no open password.
+   * Rejects ERR_PDF_LOCKED ("locked"), ERR_PDF_PASSWORD ("wrong-password"),
+   * ERR_PDF_UNRESTRICT.
+   */
+  unrestrictPdf?: (
+    inputUri: string,
+    outputUri: string,
+    password?: string | null,
+  ) => Promise<{ pageCount: number; encrypted: boolean; method: 'rewrite' | 'pdfkit' | 'permissions' }>;
   addListener?:<E extends 'onSpeechProgress' | 'onSpeechState'>(
     event: E,
     listener: (e: E extends 'onSpeechProgress' ? SpeechProgressEvent : SpeechStateEvent) => void,

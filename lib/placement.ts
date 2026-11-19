@@ -242,3 +242,97 @@ export function emptySpotPlacement(ratio: number, pageAspect: number, text: read
   }
   return best;
 }
+
+// ── Zoom and pan (Fill & sign, round 13b) ───────────────────────────────────
+//
+// A page shown zoomed is laid out at its zoomed size (so text, field values
+// and signatures stay sharp, and handles keep their on-screen size) and moved
+// inside a viewport. `View` is that layout: zoom `z` (1 = fitted) and where
+// the page's top-left corner sits in the viewport, in points.
+
+export type PageView = { z: number; x: number; y: number };
+export type Size = { w: number; h: number };
+
+export const MIN_ZOOM = 1;
+export const MAX_ZOOM = 4;
+/** Double tap on a fitted page zooms to this. */
+export const DOUBLE_TAP_ZOOM = 2.5;
+
+/**
+ * Keeps a page of fitted size `fit`, zoomed by `v.z`, inside `viewport`: centred
+ * on an axis where it (plus `margin` each side) fits, else never pulled further
+ * in than `margin` from either edge. The zoom is clamped to MIN..MAX_ZOOM.
+ */
+export function clampView(v: PageView, fit: Size, viewport: Size, margin: Size = { w: 0, h: 0 }): PageView {
+  const z = clamp(Number.isFinite(v.z) ? v.z : 1, MIN_ZOOM, MAX_ZOOM);
+  const w = fit.w * z;
+  const h = fit.h * z;
+  const axis = (pos: number, size: number, room: number, m: number) => {
+    if (size + m * 2 <= room) return (room - size) / 2;
+    return clamp(Number.isFinite(pos) ? pos : 0, room - size - m, m);
+  };
+  return { z, x: axis(v.x, w, viewport.w, margin.w), y: axis(v.y, h, viewport.h, margin.h) };
+}
+
+/** The page fitted and centred (zoom 1). */
+export function fittedView(fit: Size, viewport: Size): PageView {
+  return clampView({ z: 1, x: 0, y: 0 }, fit, viewport);
+}
+
+/**
+ * Zoomed by `scale` about the viewport point (fx, fy), which keeps the page
+ * point under it, then moved by (dx, dy) — a pinch whose fingers also travelled.
+ * Not clamped (see clampView).
+ */
+export function zoomViewAbout(v: PageView, scale: number, fx: number, fy: number, dx = 0, dy = 0): PageView {
+  const s = scale > 0 && Number.isFinite(scale) ? scale : 1;
+  return { z: v.z * s, x: fx + (v.x - fx) * s + dx, y: fy + (v.y - fy) * s + dy };
+}
+
+/**
+ * The live transform (RN order: translate, then scale about the view's
+ * centre) that shows a page laid out at `v` as if it had been zoomed by
+ * `scale` about (fx, fy) and moved by (dx, dy).
+ */
+export function liveTransform(v: PageView, size: Size, scale: number, fx: number, fy: number, dx: number, dy: number): { tx: number; ty: number; s: number } {
+  const cx = v.x + size.w / 2;
+  const cy = v.y + size.h / 2;
+  return { tx: (1 - scale) * (fx - cx) + dx, ty: (1 - scale) * (fy - cy) + dy, s: scale };
+}
+
+/**
+ * Moves a zoomed page as little as possible so `rect` (fractions of the page)
+ * shows inside the viewport's `visible` band (top and bottom, in viewport
+ * points), with `pad` points around it. The zoom is unchanged.
+ */
+export function revealRect(
+  v: PageView,
+  fit: Size,
+  viewport: Size,
+  rect: { x: number; y: number; w: number; h: number },
+  visible: { top: number; bottom: number } = { top: 0, bottom: viewport.h },
+  pad = 16,
+  margin: Size = { w: 0, h: 0 },
+): PageView {
+  const w = fit.w * v.z;
+  const h = fit.h * v.z;
+  const left = v.x + rect.x * w;
+  const right = left + rect.w * w;
+  const top = v.y + rect.y * h;
+  const bottom = top + rect.h * h;
+  let x = v.x;
+  let y = v.y;
+  if (right + pad > viewport.w) x -= right + pad - viewport.w;
+  if (left - pad + (x - v.x) < 0) x += -(left - pad + (x - v.x));
+  if (bottom + pad > visible.bottom) y -= bottom + pad - visible.bottom;
+  if (top - pad + (y - v.y) < visible.top) y += visible.top - (top - pad + (y - v.y));
+  return clampView({ z: v.z, x, y }, fit, viewport, margin);
+}
+
+/**
+ * How far (points) a tap may land outside a box and still hit it, so a small
+ * target is at least `target` points across: never less than `slop`.
+ */
+export function hitSlopFor(size: number, slop: number, target = 44): number {
+  return Math.max(slop, (target - Math.max(0, size)) / 2);
+}

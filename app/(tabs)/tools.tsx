@@ -20,9 +20,12 @@ type Tool = {
 // Genuine tools only. Anything the core screens already do lives there instead:
 // import (Files "+"), reorder / rotate / text (viewer) and print / save as
 // images (Export). Every section is one or two full rows of four, so icons
-// line up down the screen. Pages holds the whole-document verbs (Merge, Split,
-// Extract pages, Compress) that also live in Files' select mode and the
-// viewer's "…" menu, so they can be found without knowing those places.
+// line up down the screen. Pages holds what makes or takes apart documents
+// (Merge, Create PDF, Split, Extract pages); PDF holds what changes the file
+// itself (Compress, Unlock, Protect, Flatten). The whole-document verbs also
+// live in Files' select mode and the viewer's "…" menu, so they can be found
+// without knowing those places. Flatten uses the layers glyph of Share's
+// "Flattened PDF"; Create PDF a document with files attached.
 // QR code sits in Convert beside Extract text: both read what is printed on a
 // page or photo (a camera or a photo), while Scan holds the capture modes.
 const TOOL_SECTIONS: { title: string; tools: Tool[] }[] = [
@@ -48,9 +51,18 @@ const TOOL_SECTIONS: { title: string; tools: Tool[] }[] = [
     title: 'Pages',
     tools: [
       { id: 'merge', icon: 'git-merge-outline', label: 'Merge', href: '/tools/merge' },
+      { id: 'create-pdf', icon: 'document-attach-outline', label: 'Create PDF', href: '/tools/create-pdf' },
       { id: 'split', icon: 'split', label: 'Split', href: '/tools/split' },
       { id: 'extract', icon: 'cut-outline', label: 'Extract pages', href: '/tools/extract' },
+    ],
+  },
+  {
+    title: 'PDF',
+    tools: [
       { id: 'compress', icon: 'contract-outline', label: 'Compress', href: { pathname: '/tools/compress', params: { mode: 'pdf' } } },
+      { id: 'unrestrict', icon: 'lock-open-outline', label: 'Unlock PDF', href: '/tools/unrestrict' },
+      { id: 'protect', icon: 'lock-closed-outline', label: 'Protect PDF', href: '/tools/protect' },
+      { id: 'flatten', icon: 'layers-outline', label: 'Flatten PDF', href: '/tools/flatten' },
     ],
   },
   {

@@ -23,6 +23,7 @@
 //   eraser and highlighter beside it (Ionicons' pencil is heavier).
 // - 'split' (Split a PDF): one frame divided in two; the scissors already
 //   mean Extract pages.
+// - 'initials' (Fill & sign): letters on a dotted signing line.
 // The pencil is a solid stroke rather than an outline, so it is drawn at the
 // light weight to sit with the outline icons around it.
 // Android and web fall back to the nearest Ionicon.
@@ -41,7 +42,8 @@ type SymbolGlyph =
   | 'eraser'
   | 'highlighter'
   | 'pen'
-  | 'split';
+  | 'split'
+  | 'initials';
 export type AppIconName = IoniconName | SymbolGlyph;
 
 const SYMBOLS: Record<
@@ -66,6 +68,9 @@ const SYMBOLS: Record<
   pen: { symbol: 'pencil', fallback: 'pencil-outline', scale: 1 },
   // A document split in two (Split, PDF pages).
   split: { symbol: 'rectangle.split.1x2', fallback: 'documents-outline', scale: 0.95 },
+  // Initials (Fill & sign): letters on a signing line (iOS 13+). Not a
+  // fingerprint, which already means Touch ID on the lock screen.
+  initials: { symbol: 'textformat.abc.dottedunderline', fallback: 'text-outline', scale: 1.1 },
 };
 
 export function isSymbolGlyph(name: AppIconName): name is SymbolGlyph {

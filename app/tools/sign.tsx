@@ -46,6 +46,7 @@ import { signaturePadHtml } from '@/components/signature-pad';
 import { useRouter } from 'expo-router';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
 import { canFillPdf, pdfFillHref } from '@/lib/pdf-fill';
+import { signBlockedReason, useFillAccessMap } from '@/lib/fill-access';
 import { emptySpotPlacement, lineToPageRect, type PageRect } from '@/lib/placement';
 import { recognizeLines } from '@/lib/ocr';
 import { getImageSize } from '@/lib/image-size';
@@ -90,6 +91,7 @@ export default function SignScreen() {
   const { docs, loaded, reload } = useToolDocuments();
   // Imported PDFs: listed in the picker with Convert, never a dead end.
   const { pdfs, loaded: pdfsLoaded, reload: reloadPdfs } = useConvertiblePdfs();
+  const pdfAccess = useFillAccessMap(canFillPdf() ? pdfs : []);
   const [sig, setSig] = useState<Signature | null>(null);
   const [drawing, setDrawing] = useState(false);
   const [pageIndex, setPageIndex] = useState(0);
@@ -283,8 +285,10 @@ export default function SignScreen() {
       ? {
           label: 'Fill & sign',
           hint: 'Opens it in Fill & sign',
-          note: 'PDFs are signed as they are, in Fill & sign: their text stays text, and you can fill in their forms.',
+          note: 'PDFs open in Fill & sign, where you can fill in their forms and sign them as they are.',
           onOpen: pdf => { navigateWhenUnlocked(() => router.replace(pdfFillHref(pdf.id, 'last'))); },
+          // Its author forbids signing: say so here, not on a dead-end screen.
+          blocked: pdf => signBlockedReason(pdfAccess[pdf.id]),
         }
       : undefined,
     onConverted: d => {

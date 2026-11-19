@@ -34,7 +34,11 @@
 //      open ABOVE it, as the viewer's own Add pages does, and the new document
 //      opens above that; closing it returns to the screen as it was. Search
 //      lives in Files, under that screen, so it can't be reached without
-//      closing it: it is ignored and the user stays where they were.
+//      closing it. It does close a plain viewer: the only screen above the
+//      tabs, showing a document with nothing in progress and no panel open
+//      (the viewer reports that, reportViewerIdle) — closing it loses nothing,
+//      exactly like its back button. Over any other screen Search is ignored
+//      and the user stays where they were.
 import { AppState } from 'react-native';
 import { requireOptionalNativeModule } from 'expo';
 
@@ -76,12 +80,18 @@ export type QuickActionState = {
   capturing: boolean;
   /** A sheet, alert or other modal is presented (native check); null = not known yet / not available. */
   overlay: boolean | null;
+  /**
+   * The only screen above the tabs is a viewer with nothing in progress and no
+   * panel open (isViewerIdle, and the root stack holds just the tabs and it).
+   * Absent = false.
+   */
+  idleViewer?: boolean;
 };
 
 export type QuickActionStep =
   | { kind: 'wait'; until: 'lock' | 'onboarding' | 'import' }
   | { kind: 'ignore'; reason: 'capturing' | 'overlay' | 'screen-open' }
-  | { kind: 'run'; over: 'tab' | 'screen' };
+  | { kind: 'run'; over: 'tab' | 'screen' | 'idle-viewer' };
 
 /** What to do with `action` now (see the header for the policy). */
 export function quickActionStep(action: QuickActionId, s: QuickActionState): QuickActionStep {
@@ -91,8 +101,53 @@ export function quickActionStep(action: QuickActionId, s: QuickActionState): Qui
   if (s.capturing || s.pathname === '/camera') return { kind: 'ignore', reason: 'capturing' };
   if (s.overlay === true) return { kind: 'ignore', reason: 'overlay' };
   if (TAB_PATHS.includes(s.pathname)) return { kind: 'run', over: 'tab' };
-  if (action === 'search') return { kind: 'ignore', reason: 'screen-open' };
+  if (action === 'search') {
+    // Files is under the screen: only a plain viewer may be closed to get there.
+    return s.pathname === '/viewer' && s.idleViewer === true
+      ? { kind: 'run', over: 'idle-viewer' }
+      : { kind: 'ignore', reason: 'screen-open' };
+  }
   return { kind: 'run', over: 'screen' };
+}
+
+// ── The viewer's "nothing in progress" flag ──────────────────────────────────
+
+let viewerIdle = false;
+
+/**
+ * The viewer reports whether it may be closed without losing anything (no
+ * edit, save, capture or conversion running; no panel or sheet open). It
+ * reports false when it goes away.
+ */
+export function reportViewerIdle(idle: boolean): void {
+  viewerIdle = idle;
+}
+
+export function isViewerIdle(): boolean {
+  return viewerIdle;
+}
+
+type NavState = { routes?: readonly NavRoute[] } | undefined;
+type NavRoute = { name: string; state?: NavState };
+
+/**
+ * The app's root stack routes in `state` (expo-router's root navigation
+ * state): its own wrapper route ("__root") is looked through.
+ */
+export function appStackRoutes(state: NavState): readonly NavRoute[] | undefined {
+  let s = state;
+  for (let depth = 0; depth < 4 && s?.routes; depth++) {
+    const only = s.routes.length === 1 ? s.routes[0] : null;
+    if (!only || only.name === '(tabs)' || !only.state) return s.routes;
+    s = only.state;
+  }
+  return s?.routes;
+}
+
+/** True when the root stack holds the tabs and, above them, nothing but one viewer. */
+export function onlyViewerAboveTabs(routes: readonly { name: string }[] | undefined): boolean {
+  if (!routes || routes.length !== 2) return false;
+  return routes[0].name === '(tabs)' && routes[1].name === 'viewer';
 }
 
 /**

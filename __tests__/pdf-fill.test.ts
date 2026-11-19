@@ -47,8 +47,13 @@ import {
   displayPointToPage,
   displayRectToPage,
   displaySize,
+  canFlattenPdf,
+  fieldKey,
   fieldLabel,
+  fieldValue,
   fillMessage,
+  fillNotice,
+  flattenPdfCopy,
   fillStoredPdf,
   firstChangedPage,
   normalizeRotation,
@@ -57,6 +62,8 @@ import {
   pageRectToDisplay,
   planFieldValues,
   planMarks,
+  setFieldText,
+  shouldOfferFlatten,
   stepFontSize,
   subscribePdfRewrites,
   takePendingRewrite,
@@ -337,5 +344,108 @@ describe('fieldLabel', () => {
     expect(fieldLabel({ name: 'page1.applicant.email-address' })).toBe('Email address');
     expect(fieldLabel({ name: 'Text1[0]' })).toBe('Text1');
     expect(fieldLabel({ name: '' })).toBe('Field');
+  });
+});
+
+describe('one field shown on several pages (several widgets)', () => {
+  // "ref" on pages 1 and 2; "a.name" and "b.name" are different fields.
+  const fields = [
+    field({ id: '0:0', page: 0, name: 'ref', value: '' }),
+    field({ id: '1:0', page: 1, name: 'ref', value: '' }),
+    field({ id: '0:1', page: 0, name: 'a.name', value: '' }),
+    field({ id: '0:2', page: 0, name: 'b.name', value: '' }),
+    field({ id: '0:3', page: 0, name: 'ok', kind: 'checkbox', on: false, onValue: 'Yes' }),
+    field({ id: '1:1', page: 1, name: 'ok', kind: 'checkbox', on: false, onValue: 'Yes' }),
+    field({ id: '1:2', page: 1, name: 'size', kind: 'checkbox', on: false, onValue: 'S' }),
+    field({ id: '1:3', page: 1, name: 'size', kind: 'checkbox', on: false, onValue: 'M' }),
+  ];
+
+  test('keyed by the fully-qualified name, not by widget', () => {
+    expect(fieldKey(fields[0])).toBe(fieldKey(fields[1]));
+    expect(fieldKey(fields[2])).not.toBe(fieldKey(fields[3]));
+    expect(fieldKey(field({ id: '3:4', name: '' }))).toBe('3:4');
+  });
+
+  test('typing on page 2 shows on page 1, and is sent once', () => {
+    const edits = setFieldText({}, fields[1], 'REF-9');
+    expect(fieldValue(fields[0], edits).value).toBe('REF-9');
+    expect(fieldValue(fields[1], edits).value).toBe('REF-9');
+    expect(fieldValue(fields[2], edits).value).toBe('');
+    expect(planFieldValues(fields, edits)).toEqual([{ id: '0:0', name: 'ref', kind: 'text', value: 'REF-9' }]);
+  });
+
+  test('the last edit wins wherever it was made (never two values for one field)', () => {
+    let edits = setFieldText({}, fields[0], 'A');
+    edits = setFieldText(edits, fields[1], 'B');
+    expect(fieldValue(fields[0], edits).value).toBe('B');
+    expect(planFieldValues(fields, edits)).toEqual([{ id: '0:0', name: 'ref', kind: 'text', value: 'B' }]);
+  });
+
+  test('a value every widget already shows is not sent; one only some show is', () => {
+    const same = [field({ id: '0:0', name: 'r', value: 'x' }), field({ id: '1:0', page: 1, name: 'r', value: 'x' })];
+    expect(planFieldValues(same, setFieldText({}, same[1], 'x'))).toEqual([]);
+    const mixed = [field({ id: '0:0', name: 'r', value: 'x' }), field({ id: '1:0', page: 1, name: 'r', value: '' })];
+    expect(planFieldValues(mixed, setFieldText({}, mixed[0], 'x'))).toEqual([{ id: '0:0', name: 'r', kind: 'text', value: 'x' }]);
+  });
+
+  test('edits keyed by widget id (older screens) still count', () => {
+    expect(fieldValue(fields[2], { '0:1': { value: 'Old' } }).value).toBe('Old');
+    expect(planFieldValues(fields, { '0:1': { value: 'Old' } })).toEqual([{ id: '0:1', name: 'a.name', kind: 'text', value: 'Old' }]);
+  });
+
+  test('a checkbox on two pages toggles as one; same-name checkboxes with other values turn off', () => {
+    const edits = toggleButton(fields[4], fields, {});
+    expect(edits).toEqual({ '0:3': { on: true }, '1:1': { on: true } });
+    let sizes = toggleButton(fields[6], fields, {});
+    expect(sizes).toEqual({ '1:2': { on: true }, '1:3': { on: false } });
+    sizes = toggleButton(fields[7], fields, sizes);
+    expect(sizes).toEqual({ '1:2': { on: false }, '1:3': { on: true } });
+  });
+});
+
+describe('signed and XFA PDFs', () => {
+  const text = field({ id: '0:0', name: 'n' });
+  test('nothing to say for a plain PDF (and older builds without the flags)', () => {
+    expect(fillNotice({ fields: [text] })).toBeNull();
+    expect(fillNotice({ fields: [], signed: false, xfa: false })).toBeNull();
+  });
+  test('a digitally signed or certified PDF asks before saving', () => {
+    expect(fillNotice({ fields: [text], signed: true })).toMatchObject({ level: 'confirm', title: expect.stringMatching(/invalidate.*digital signature/) });
+    expect(fillNotice({ fields: [], certified: true })?.level).toBe('confirm');
+  });
+  test('an XFA form: a note when it has fillable fields, blocked when it has none', () => {
+    expect(fillNotice({ fields: [text], xfa: true })?.level).toBe('note');
+    expect(fillNotice({ fields: [], xfa: true })?.level).toBe('blocked');
+    expect(fillNotice({ fields: [field({ id: '0:0', readOnly: true })], xfa: true })?.level).toBe('blocked');
+  });
+});
+
+describe('flattened copy for sharing', () => {
+  const base = { pageCount: 2, locked: false, encrypted: false, canAnnotate: true, canFillForms: true, formFields: 0, annotations: 0 };
+  test('offered only for a PDF with something to burn in', () => {
+    expect(shouldOfferFlatten({ ...base })).toBe(false);
+    expect(shouldOfferFlatten({ ...base, formFields: 3 })).toBe(true);
+    expect(shouldOfferFlatten({ ...base, annotations: 1 })).toBe(true);
+  });
+  test('never for an unreadable, locked, signed or restricted PDF, or an older build', () => {
+    expect(shouldOfferFlatten(null)).toBe(false);
+    expect(shouldOfferFlatten({ pageCount: 2, locked: false, encrypted: false })).toBe(false);
+    expect(shouldOfferFlatten({ ...base, annotations: 1, locked: true })).toBe(false);
+    expect(shouldOfferFlatten({ ...base, annotations: 1, signed: true })).toBe(false);
+    expect(shouldOfferFlatten({ ...base, annotations: 1, encrypted: true, canAnnotate: false })).toBe(false);
+    expect(shouldOfferFlatten({ ...base, annotations: 1, encrypted: true })).toBe(true);
+  });
+  test('the native call: presence-checked; restricted is reported as such', async () => {
+    expect(canFlattenPdf()).toBe(false);
+    await expect(flattenPdfCopy('file:///d.pdf', 'file:///o.pdf')).rejects.toMatchObject({ kind: 'unavailable' });
+    mockNative.pdfInfo = jest.fn();
+    mockNative.pdfFlatten = jest.fn(async () => 2);
+    expect(canFlattenPdf()).toBe(true);
+    await expect(flattenPdfCopy('file:///d.pdf?v=3', 'file:///o.pdf')).resolves.toBe('file:///o.pdf');
+    expect(mockNative.pdfFlatten).toHaveBeenCalledWith('file:///d.pdf', 'file:///o.pdf');
+    mockNative.pdfFlatten = jest.fn(async () => { throw Object.assign(new Error('restricted'), { code: 'ERR_PDF_RESTRICTED' }); });
+    await expect(flattenPdfCopy('file:///d.pdf', 'file:///o.pdf')).rejects.toMatchObject({ kind: 'restricted' });
+    delete mockNative.pdfInfo;
+    delete mockNative.pdfFlatten;
   });
 });

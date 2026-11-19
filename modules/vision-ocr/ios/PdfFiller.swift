@@ -131,6 +131,7 @@ enum PdfFiller {
         fields.append(f)
       }
     }
+    let facts = PdfStructure.formFacts(path: path)
     return [
       "pageCount": doc.pageCount,
       "encrypted": doc.isEncrypted,
@@ -138,6 +139,11 @@ enum PdfFiller {
       "canFillForms": canFillForms(doc),
       "pages": pages,
       "fields": fields,
+      // Saving rewrites the file, which invalidates a digital signature.
+      "signed": facts.signed,
+      "certified": facts.certified,
+      // An XFA form: only its AcroForm fields (if any) can be filled here.
+      "xfa": facts.xfa,
     ]
   }
 
@@ -230,7 +236,10 @@ enum PdfFiller {
   }
 
   static func parseMarks(_ list: [[String: Any]], pageCount: Int) throws -> [Mark] {
-    try list.map { m in
+    // The same signature or initials placed on many pages is decoded once
+    // (each decode is a full-size bitmap).
+    var images: [String: CGImage] = [:]
+    return try list.map { m in
       guard let page = m["page"] as? Int, page >= 0, page < pageCount,
             let r = m["rect"] as? [Double], r.count == 4, r.allSatisfy({ $0.isFinite }), r[2] > 0, r[3] > 0,
             let kind = m["kind"] as? String, ["text", "check", "cross", "image"].contains(kind) else {
@@ -239,21 +248,63 @@ enum PdfFiller {
       let ink = color(m["color"] as? String)
       let text = (m["text"] as? String) ?? ""
       if kind == "text" && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { throw fail(22, "Empty text") }
-      let image = kind == "image" ? try inkImage((m["image"] as? String) ?? "", ink: ink) : nil
+      var image: CGImage?
+      if kind == "image" {
+        let src = (m["image"] as? String) ?? ""
+        let key = "\(m["color"] as? String ?? "")|\(src)"
+        if let cached = images[key] {
+          image = cached
+        } else {
+          let decoded = try inkImage(src, ink: ink)
+          images[key] = decoded
+          image = decoded
+        }
+      }
       let size = CGFloat((m["fontSize"] as? Double) ?? 12)
       return Mark(page: page, rect: CGRect(x: r[0], y: r[1], width: r[2], height: r[3]), kind: kind, text: text,
                   fontSize: max(2, min(size, 400)), color: ink, image: image)
     }
   }
 
+  /// Test hook (debug builds, VisionOcr.pdfFillForceFallback): always use
+  /// the burn-in fallback, as if PDFKit hadn't recorded the additions' drawing.
+  static var forceBurnFallback = false
+  /// Internal: the additions' appearances weren't in the written file.
+  static let appearancesMissingCode = 19
+
   /// Fills `inputPath`'s form fields and adds `marks`, writing the result to
   /// `outputPath` and reading it back (see the header). Returns the page count.
   ///
-  /// fields: [{ id: "page:index", name, kind, value?, on? }] (from `info`)
+  /// fields: [{ id: "page:index", name, kind, value?, on? }] (from `info`).
+  ///         A text or choice value goes to EVERY widget of the field (the
+  ///         same field shown on several pages); a checkbox state to every
+  ///         widget of the field with the same on-value.
   /// marks:  [{ page, rect: [x, y, w, h] in the page's PDF space, kind:
   ///            "text" | "check" | "cross" | "image", text?, fontSize? (pt),
   ///            color? "#rrggbb", image? base64 PNG }]
+  ///
+  /// The additions are annotations whose drawing PDFKit records as their
+  /// appearance. Apple doesn't document that PDFKit does this, so when the
+  /// read-back finds an appearance missing (seen on no iOS so far, but iOS 15
+  /// to 18 aren't testable here) the fill is done again with the additions
+  /// burned into the pages instead (PdfFlattener: the page's content redrawn
+  /// as vector, the additions on top, its fields, links and notes moved over
+  /// live). Either way the result is verified before it is handed over.
   static func fill(inputPath: String, outputPath: String, fields: [[String: Any]], marks rawMarks: [[String: Any]]) throws -> Int {
+    #if DEBUG
+    if forceBurnFallback {
+      return try fillOnce(inputPath: inputPath, outputPath: outputPath, fields: fields, marks: rawMarks, burn: true)
+    }
+    #endif
+    do {
+      return try fillOnce(inputPath: inputPath, outputPath: outputPath, fields: fields, marks: rawMarks, burn: false)
+    } catch let error as NSError where error.domain == "PdfFiller" && error.code == appearancesMissingCode {
+      NSLog("PdfFiller: appearances not recorded by PDFKit; burning the additions into the pages")
+      return try fillOnce(inputPath: inputPath, outputPath: outputPath, fields: fields, marks: rawMarks, burn: true)
+    }
+  }
+
+  static func fillOnce(inputPath: String, outputPath: String, fields: [[String: Any]], marks rawMarks: [[String: Any]], burn: Bool) throws -> Int {
     let doc = try openUnlocked(inputPath)
     let count = doc.pageCount
     guard count > 0 else { throw fail(4, "The PDF has no pages") }
@@ -265,9 +316,16 @@ enum PdfFiller {
     var rotations: [Int] = []
     for i in 0..<count { rotations.append(PdfEditor.normalized(doc.page(at: i)?.rotation ?? 0)) }
 
+    // Every widget of the document, with its page, for fields that have several.
+    var widgets: [(annotation: PDFAnnotation, page: Int)] = []
+    for i in 0..<count {
+      for a in doc.page(at: i)?.annotations ?? [] where a.type == "Widget" { widgets.append((a, i)) }
+    }
+
     // Form fields, each checked against what `info` said it was.
-    typealias Expect = (annotation: PDFAnnotation, page: Int, index: Int, kind: String, value: String?, on: Bool?)
+    typealias Expect = (annotation: PDFAnnotation, page: Int, kind: String, value: String?, on: Bool?)
     var expects: [Expect] = []
+    var textValues: [String: String] = [:]
     for f in fields {
       guard let id = f["id"] as? String, let name = f["name"] as? String, let kind = f["kind"] as? String else {
         throw fail(13, changedMessage)
@@ -282,10 +340,25 @@ enum PdfFiller {
       switch kind {
       case "text", "choice":
         let value = (f["value"] as? String) ?? ""
-        a.widgetStringValue = value
-        expects.append((a, parts[0], parts[1], kind, value, nil))
-      case "checkbox", "radio":
-        expects.append((a, parts[0], parts[1], kind, nil, (f["on"] as? Bool) ?? false))
+        // One field, one value: two different values for it can't both be kept.
+        if !name.isEmpty, let other = textValues[name], other != value { throw fail(14, "Two values for one field") }
+        // Every widget of the field (all pages), so each shows the value.
+        let all = name.isEmpty ? [(annotation: a, page: parts[0])]
+          : widgets.filter { ($0.annotation.fieldName ?? "") == name && fieldKind($0.annotation) == kind }
+        for w in all where !w.annotation.isReadOnly {
+          w.annotation.widgetStringValue = value
+          expects.append((w.annotation, w.page, kind, value, nil))
+        }
+        if !name.isEmpty { textValues[name] = value }
+      case "checkbox":
+        let on = (f["on"] as? Bool) ?? false
+        let onValue = a.buttonWidgetStateString
+        let all = name.isEmpty ? [(annotation: a, page: parts[0])]
+          : widgets.filter { ($0.annotation.fieldName ?? "") == name && fieldKind($0.annotation) == "checkbox"
+              && $0.annotation.buttonWidgetStateString == onValue }
+        for w in all { expects.append((w.annotation, w.page, kind, nil, on)) }
+      case "radio":
+        expects.append((a, parts[0], kind, nil, (f["on"] as? Bool) ?? false))
       default:
         throw fail(13, changedMessage)
       }
@@ -294,7 +367,9 @@ enum PdfFiller {
     // buttons off would turn the chosen one off too. Turn the chosen ones on;
     // only a group with none chosen is turned off.
     let radioGroupsOn = Set(expects.filter { $0.kind == "radio" && $0.on == true }.map { $0.annotation.fieldName ?? "" })
-    for e in expects where e.on != nil {
+    // Offs before ons: same-name checkboxes with different on-values share
+    // one value too, so the one turned on must be set last.
+    for e in expects.filter({ $0.on == false }) + expects.filter({ $0.on == true }) {
       if e.on == true {
         e.annotation.buttonWidgetState = .onState
       } else if e.kind == "checkbox" || !radioGroupsOn.contains(e.annotation.fieldName ?? "") {
@@ -302,14 +377,13 @@ enum PdfFiller {
       }
     }
 
-    // Additions.
+    // Additions: annotations, or (burn) drawn into their pages.
     let runId = markPrefix + UUID().uuidString.prefix(8).lowercased()
     var expectedMarks: [Int: Int] = [:]
-    for (n, m) in marks.enumerated() {
-      guard let page = doc.page(at: m.page) else { throw fail(6, "Could not read page \(m.page + 1)") }
-      let media = page.bounds(for: .mediaBox)
-      let rect = m.rect.intersection(media)
-      guard !rect.isNull, rect.width >= 1, rect.height >= 1 else { throw fail(22, "Addition off the page") }
+    var burned: [Int: [CGRect]] = [:]
+    var annotationCounts: [Int: Int] = [:]
+    var holder: [PDFDocument] = []
+    func makeMark(_ m: Mark, _ rect: CGRect) -> FillMark {
       let mark = FillMark(bounds: rect, forType: .stamp, withProperties: nil)
       mark.kind = m.kind
       mark.text = m.text
@@ -317,11 +391,47 @@ enum PdfFiller {
       mark.ink = m.color
       mark.image = m.image
       mark.pageRotation = rotations[m.page]
-      mark.setValue("\(runId)-\(n)" as NSString, forAnnotationKey: markKey)
-      mark.shouldPrint = true
-      mark.shouldDisplay = true
-      page.addAnnotation(mark)
-      expectedMarks[m.page, default: 0] += 1
+      return mark
+    }
+    var placed: [(Mark, CGRect)] = []
+    for m in marks {
+      guard let page = doc.page(at: m.page) else { throw fail(6, "Could not read page \(m.page + 1)") }
+      let rect = m.rect.intersection(page.bounds(for: .mediaBox))
+      guard !rect.isNull, rect.width >= 1, rect.height >= 1 else { throw fail(22, "Addition off the page") }
+      placed.append((m, rect))
+    }
+    if burn {
+      for pageIndex in Set(placed.map { $0.0.page }).sorted() {
+        guard let page = doc.page(at: pageIndex) else { throw fail(6, "Could not read page \(pageIndex + 1)") }
+        let here = placed.filter { $0.0.page == pageIndex }
+        let fresh = try PdfFlattener.redrawn(page, holder: &holder) { ctx in
+          for (m, rect) in here { makeMark(m, rect).draw(with: .mediaBox, in: ctx) }
+        }
+        // Everything else on the page (form fields with their new values,
+        // links, notes, earlier additions) moves over, still live, once the
+        // new page is in the document (a widget keeps its field only within
+        // its own document).
+        let moving = page.annotations
+        annotationCounts[pageIndex] = moving.filter { $0.type != "Popup" }.count
+        PdfFlattener.replace(doc, at: pageIndex, with: fresh)
+        for a in moving {
+          page.removeAnnotation(a)
+          fresh.addAnnotation(a)
+        }
+        burned[pageIndex] = here.map { $0.1 }
+      }
+    } else {
+      for (n, (m, rect)) in placed.enumerated() {
+        guard let page = doc.page(at: m.page) else { throw fail(6, "Could not read page \(m.page + 1)") }
+        let mark = makeMark(m, rect)
+        mark.setValue("\(runId)-\(n)" as NSString, forAnnotationKey: markKey)
+        // The text, for search and screen readers (PdfTools.pageTexts).
+        if m.kind == "text" { mark.contents = m.text }
+        mark.shouldPrint = true
+        mark.shouldDisplay = true
+        page.addAnnotation(mark)
+        expectedMarks[m.page, default: 0] += 1
+      }
     }
 
     let url = URL(fileURLWithPath: outputPath)
@@ -332,16 +442,24 @@ enum PdfFiller {
       try? FileManager.default.removeItem(at: url)
       throw fail(8, "Could not write the PDF")
     }
+    // Readers that rebuild form appearances draw radios and choices wrongly;
+    // keep the ones PDFKit drew (PdfStructure).
+    PdfStructure.settleNeedAppearances(at: url)
 
-    // Read back: same pages and turns, the field values, every addition with
-    // its appearance. Anything else and the file is not handed over.
-    func refuse(_ why: String) -> NSError {
+    // Read back: same pages and turns, the permissions, the field values,
+    // every addition with its appearance (or burned in). Anything else and
+    // the file is not handed over.
+    func refuse(_ why: String, code: Int = 9) -> NSError {
       NSLog("PdfFiller: write not verified (%@)", why)
       try? FileManager.default.removeItem(at: url)
-      return fail(9, unverifiedMessage)
+      return NSError(domain: "PdfFiller", code: code, userInfo: [NSLocalizedDescriptionKey: unverifiedMessage])
     }
     guard let check = PDFDocument(url: url), !check.isLocked, check.pageCount == count else { throw refuse("pages") }
-    if wasEncrypted && !check.isEncrypted { throw refuse("protection") }
+    if wasEncrypted {
+      // Still protected, and never looser than the author made it.
+      guard let source = PDFDocument(url: URL(fileURLWithPath: inputPath)) else { throw refuse("source") }
+      if let widened = PdfStructure.widenedPermissions(source: source, written: check) { throw refuse("permissions: \(widened)") }
+    }
     for i in 0..<count where PdfEditor.normalized(check.page(at: i)?.rotation ?? -1) != rotations[i] { throw refuse("rotation") }
     for e in expects {
       guard let page = check.page(at: e.page) else { throw refuse("field page") }
@@ -353,10 +471,25 @@ enum PdfFiller {
       if let v = e.value, (w.widgetStringValue ?? "") != v { throw refuse("value of \(e.annotation.fieldName ?? "")") }
       if let on = e.on, (w.buttonWidgetState == .onState) != on { throw refuse("state of \(e.annotation.fieldName ?? "")") }
     }
-    if !marks.isEmpty {
+    if !expectedMarks.isEmpty {
       guard let cg = CGPDFDocument(url as CFURL) else { throw refuse("cgpdf") }
       for (page, n) in expectedMarks where appearancesWritten(cg, pageIndex: page, prefix: runId) != n {
-        throw refuse("appearances on page \(page + 1)")
+        throw refuse("appearances on page \(page + 1)", code: appearancesMissingCode)
+      }
+    }
+    if !burned.isEmpty {
+      guard let cg = CGPDFDocument(url as CFURL), let original = CGPDFDocument(URL(fileURLWithPath: inputPath) as CFURL) else {
+        throw refuse("cgpdf")
+      }
+      for (pageIndex, rects) in burned {
+        // Nothing of the page was lost, and each addition is in its content.
+        // (A note's pop-up is PDFKit's to add or drop: not counted.)
+        let now = check.page(at: pageIndex)?.annotations.map { $0.type ?? "?" }.filter { $0 != "Popup" } ?? []
+        if now.count != annotationCounts[pageIndex] { throw refuse("annotations on page \(pageIndex + 1): \(now)") }
+        guard let before = original.page(at: pageIndex + 1), let after = cg.page(at: pageIndex + 1) else { throw refuse("burned page") }
+        for r in rects where !PdfFlattener.contentDiffers(before, after, in: r) {
+          throw refuse("burned addition on page \(pageIndex + 1)")
+        }
       }
     }
     return check.pageCount

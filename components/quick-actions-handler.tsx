@@ -2,7 +2,7 @@
 // Runs home-screen quick actions (lib/quick-actions.ts has the policy). Mounted
 // once in app/_layout.tsx, after LockGate: inside ScanProvider (it scans and
 // imports like the in-app buttons) and outside the lock, which it waits for.
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { usePathname, useRootNavigationState, useRouter } from 'expo-router';
 import { useScan } from '@/contexts/scan-context';
 import { useImportDocuments } from '@/components/use-import';
@@ -14,6 +14,9 @@ import { noteNewDocument } from '@/lib/new-doc-note';
 import {
   isOverlayPresented,
   isQuickActionStale,
+  appStackRoutes,
+  isViewerIdle,
+  onlyViewerAboveTabs,
   listenForQuickActions,
   quickActionStep,
   waitForLockSettled,
@@ -29,17 +32,22 @@ type Request = { action: QuickActionId; at: number };
 export function QuickActionsHandler() {
   const router = useRouter();
   const pathname = usePathname();
-  const navReady = !!useRootNavigationState()?.key;
+  const rootState = useRootNavigationState();
+  const navReady = !!rootState?.key;
   const { triggerScan, scanning, saving } = useScan();
   const { importImages, importFile } = useImportDocuments();
   const [request, setRequest] = useState<Request | null>(null);
   const [settled, setSettled] = useState(false);
 
   // Read fresh when a held action finally runs.
-  const live = useRef({ pathname, busy: scanning || saving });
-  live.current = { pathname, busy: scanning || saving };
+  // (Written after render, never during it: the React Compiler skips
+  // components that write refs while rendering.)
+  const live = useRef({ pathname, busy: scanning || saving, routes: appStackRoutes(rootState) });
   const run = useRef({ triggerScan, importImages, importFile });
-  run.current = { triggerScan, importImages, importFile };
+  useLayoutEffect(() => {
+    live.current = { pathname, busy: scanning || saving, routes: appStackRoutes(rootState) };
+    run.current = { triggerScan, importImages, importFile };
+  });
 
   useEffect(() => listenForQuickActions(action => setRequest({ action, at: Date.now() })), []);
 
@@ -68,6 +76,7 @@ export function QuickActionsHandler() {
       lockSettled: true,
       capturing: live.current.busy || isCaptureSessionOpen() || isSystemUIOpen(),
       overlay,
+      idleViewer: isViewerIdle() && onlyViewerAboveTabs(live.current.routes),
     });
     // Held while locked; runs once unlocked and the lock screen has gone.
     return navigateWhenUnlocked(() => {
@@ -90,6 +99,10 @@ export function QuickActionsHandler() {
           await photos();
         } else if (request.action === 'import-file') {
           await file();
+        } else if (step.over === 'idle-viewer') {
+          // A plain viewer is closed first, exactly like its back button
+          // (nothing in it is lost), then Files opens with search focused.
+          navigateWhenUnlocked(() => router.dismissTo({ pathname: '/files', params: { search: '1' } }));
         } else {
           // Home's search button: Files with the search field focused.
           navigateWhenUnlocked(() => router.navigate({ pathname: '/files', params: { search: '1' } }));

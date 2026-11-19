@@ -5,6 +5,13 @@
 // Crop opens the four-corner editor on the WHOLE photo, so a crop that cut
 // into the page can be widened; Rotate turns the page; Retake goes back to
 // the camera for this page; Delete drops it. Always-dark chrome.
+//
+// When a document's own flow opened the camera (lib/review-filter.ts
+// ReviewPurpose), the review says where the pages go: the viewer's Add pages
+// confirms with "Add 3 pages" and numbers them "New page 5"; Retake confirms
+// with "Replace page". A one-page session (a retake, a business card) shows no
+// page strip and no Delete: there is nothing to pick between or reorder, and
+// Back to the camera already discards the capture.
 import { useCallback, useEffect, useRef, useState, type ComponentProps } from 'react';
 import {
   ActivityIndicator,
@@ -26,6 +33,7 @@ import { ThumbnailStrip } from '@/components/thumbnail-strip';
 import { FilterBaker } from '@/components/filter-baker';
 import { ReviewFilterTray, useFilteredPreviews, useReviewFilters } from '@/components/review-filter-tray';
 import { HIT, Spacing, Type } from '@/lib/theme';
+import { reviewLabels } from '@/lib/review-filter';
 import type { CapturedPage } from '@/lib/capture-session';
 
 type IconName = ComponentProps<typeof Ionicons>['name'];
@@ -92,10 +100,11 @@ export function CaptureReview({
   }, [width, pages.length, onSelect]);
 
   const count = pages.length;
-  const title = count === 1 ? '1 page' : `${count} pages`;
-  const caption = current
-    ? `${count > 1 ? `Page ${index + 1} of ${count}` : 'Page 1'}${current.detected ? '' : ' · No edges found, whole photo kept'}`
-    : '';
+  const labels = reviewLabels(filterSession?.purpose, count, index, doneLabel, current?.detected ?? true);
+  const title = labels.title;
+  const caption = current ? labels.caption : '';
+  // At most one page, and it is here: no strip to pick from, nothing to delete.
+  const single = !canAddMore && count <= 1;
 
   const actions: { key: string; icon: IconName; label: string; a11y: string; onPress: () => void; flip?: boolean }[] = [
     { key: 'crop', icon: 'crop-outline', label: 'Crop', a11y: 'Adjust the crop', onPress: () => onCrop(index) },
@@ -104,7 +113,9 @@ export function CaptureReview({
       ? [{ key: 'filter', icon: 'color-filter-outline' as IconName, label: 'Filter', a11y: 'Choose a filter', onPress: () => setFiltering(true) }]
       : []),
     { key: 'retake', icon: 'camera-outline', label: 'Retake', a11y: 'Retake this page', onPress: () => onRetake(index) },
-    { key: 'delete', icon: 'trash-outline', label: 'Delete', a11y: 'Delete this page', onPress: () => onDelete(index) },
+    ...(single
+      ? []
+      : [{ key: 'delete', icon: 'trash-outline' as IconName, label: 'Delete', a11y: 'Delete this page', onPress: () => onDelete(index) }]),
   ];
 
   return (
@@ -113,7 +124,7 @@ export function CaptureReview({
         dark
         title={title}
         left={<HeaderIconButton icon="chevron-back" size={28} label="Back to camera" color={colors.chromeText} onPress={onBack} />}
-        right={<HeaderTextButton title={doneLabel} emphasis color={colors.chromeAccent} onPress={onSave} disabled={!count} />}
+        right={<HeaderTextButton title={labels.doneLabel} emphasis color={colors.chromeAccent} onPress={onSave} disabled={!count} />}
       />
 
       <FlatList
@@ -148,15 +159,17 @@ export function CaptureReview({
         {caption}
       </Text>
 
-      <ThumbnailStrip
-        pages={pages.map(p => p.previewUri ?? p.sourceUri)}
-        currentPage={index}
-        onPagePress={onSelect}
-        onAddPress={onBack}
-        adding={!canAddMore}
-        onReorder={onReorder}
-        bottomInset={0}
-      />
+      {single ? null : (
+        <ThumbnailStrip
+          pages={pages.map(p => p.previewUri ?? p.sourceUri)}
+          currentPage={index}
+          onPagePress={onSelect}
+          onAddPress={onBack}
+          adding={!canAddMore}
+          onReorder={onReorder}
+          bottomInset={0}
+        />
+      )}
 
       <View style={[styles.actions, { backgroundColor: colors.chromeRaised, paddingBottom: Math.max(insets.bottom, Spacing.md) }]}>
         {actions.map(a => (

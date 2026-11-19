@@ -4,6 +4,10 @@
 // the action as a link, and a close button. Closing it hides it for that
 // document for good (Convert to pages stays in the … menu); while a
 // conversion runs it shows the progress instead, however it was started.
+//
+// On a PDF with a form, or one already filled in or signed here, converting is
+// rarely what you want (Fill & sign works on it as it is) and it flattens the
+// form: the suggestion shrinks to one quiet row whose text says so.
 import { useCallback, useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
@@ -11,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/theme-context';
 import { HIT, Radius, Spacing, Type } from '@/lib/theme';
 import type { ConvertProgress } from '@/lib/convert-pdf';
+import { useFillAccess, useFilledPdf } from '@/lib/fill-access';
 
 const DISMISSED_KEY = 'pdfConvertBanner.dismissed';
 /** Plenty for every PDF anyone keeps; the oldest ids fall off first. */
@@ -53,17 +58,68 @@ export function useConvertBannerDismissed(docId: string | undefined): [boolean |
   return [dismissed, dismiss];
 }
 
+/** What converting would flatten, for the quiet variant (null: nothing to warn about). */
+export function convertWarning(hasFields: boolean, filled: boolean): string | null {
+  if (hasFields) return 'Its form fields and any signatures become part of the page image.';
+  if (filled) return 'Its signatures and added text become part of the page image.';
+  return null;
+}
+
 export function PdfConvertBanner({
   converting,
   onConvert,
   onDismiss,
+  docId,
+  pdfUri,
 }: {
   converting: ConvertProgress | null;
   onConvert: () => void;
   onDismiss: () => void;
+  /** The PDF shown: a form, or one filled in here, gets the quiet variant. */
+  docId?: string;
+  pdfUri?: string | null;
 }) {
   const { colors } = useTheme();
   const busy = !!converting;
+  const access = useFillAccess(pdfUri ?? null);
+  const filled = useFilledPdf(docId);
+  const warning = convertWarning(!!access?.hasFields, !!filled);
+  // Which variant isn't known yet: nothing, rather than the big one flashing first.
+  if (!busy && ((pdfUri && access === null) || (docId && filled === null))) return null;
+
+  if (!busy && warning) {
+    return (
+      <View style={[styles.quiet, { borderColor: colors.chromeBorder }]}>
+        <Pressable
+          onPress={onConvert}
+          accessibilityRole="button"
+          accessibilityLabel="Convert to pages"
+          accessibilityHint={`Turns each page into an image you can crop, filter and mark up. ${warning}`}
+          style={({ pressed }) => [styles.quietBody, pressed && { opacity: 0.6 }]}
+        >
+          <Ionicons name="images-outline" size={18} color={colors.chromeMuted} style={styles.quietIcon} />
+          <View style={styles.body}>
+            <Text style={[Type.footnote, styles.quietTitle, { color: colors.chromeText }]} numberOfLines={1} maxFontSizeMultiplier={1.4}>
+              Convert to pages
+            </Text>
+            <Text style={[Type.footnote, styles.quietText, { color: colors.chromeMuted }]} numberOfLines={2} maxFontSizeMultiplier={1.4}>
+              {warning}
+            </Text>
+          </View>
+        </Pressable>
+        <Pressable
+          onPress={onDismiss}
+          style={({ pressed }) => [styles.quietClose, pressed && { opacity: 0.6 }]}
+          accessibilityRole="button"
+          accessibilityLabel="Hide this suggestion"
+          accessibilityHint="Convert to pages stays in the More actions menu"
+        >
+          <Ionicons name="close" size={16} color={colors.chromeMuted} />
+        </Pressable>
+      </View>
+    );
+  }
+
   return (
     <View style={[styles.banner, { backgroundColor: colors.chromeRaised }]} accessibilityLiveRegion="polite">
       <View style={styles.icon}>
@@ -128,6 +184,20 @@ const styles = StyleSheet.create({
   text: { marginTop: 2, lineHeight: 18 },
   action: { alignSelf: 'flex-start', marginTop: Spacing.sm },
   actionText: { fontWeight: '600' },
+  // The quiet variant: one hairline-framed row, no fill, muted icon.
+  quiet: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: Spacing.gutter,
+    marginBottom: Spacing.sm,
+    borderRadius: Radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  quietBody: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: Spacing.sm + 2, paddingLeft: Spacing.md, paddingVertical: Spacing.sm, minHeight: HIT },
+  quietIcon: { width: 20, textAlign: 'center' },
+  quietTitle: { fontWeight: '600' },
+  quietText: { lineHeight: 17 },
+  quietClose: { width: HIT, height: HIT, alignItems: 'center', justifyContent: 'center' },
   // The glyph sits in the corner; the 44pt target extends into the padding.
   close: {
     width: HIT,

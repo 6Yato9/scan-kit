@@ -32,8 +32,20 @@ import { combinedFilterRN } from './filters';
 import { enqueueBake } from './bake-queue';
 import { PREVIEW_FILTERS } from './bake';
 
+/**
+ * What the review is for, when a document's own flow opened the camera: it
+ * names the confirm button and the pages, so the review says where they go.
+ *  - 'add': the viewer's Add pages, to `docName`, which has `pageCount` pages;
+ *  - 'replace': the viewer's Retake of page `page` (zero-based) of a
+ *    `pageCount`-page document.
+ */
+export type ReviewPurpose =
+  | { kind: 'add'; docName: string; pageCount: number }
+  | { kind: 'replace'; page: number; pageCount: number };
+
 type Session = {
   defaultFilter: PageFilter;
+  purpose?: ReviewPurpose;
   /** Brightness / contrast / … applied with every filter (a retake keeps the page's); undefined = none. */
   adjustment?: PageAdjustment;
   /** The filter for every page, once the user picked one. */
@@ -51,12 +63,19 @@ export type ReviewFilterSnapshot = {
   all: PageFilter | null;
   perPage: ReadonlyMap<string, PageFilter>;
   adjustment?: PageAdjustment;
+  purpose?: ReviewPurpose;
 };
 let snapshot: ReviewFilterSnapshot | null = null;
 
 const emit = () => {
   snapshot = session
-    ? { defaultFilter: session.defaultFilter, all: session.all, perPage: new Map(session.perPage), adjustment: session.adjustment }
+    ? {
+        defaultFilter: session.defaultFilter,
+        all: session.all,
+        perPage: new Map(session.perPage),
+        adjustment: session.adjustment,
+        purpose: session.purpose,
+      }
     : null;
   for (const l of [...listeners]) { try { l(); } catch {} }
 };
@@ -80,15 +99,16 @@ const isDefaultAdj = (a: PageAdjustment | undefined) => !a || (!a.brightness && 
  * review's filter picker on, starting at `defaultFilter`. Resolves with the
  * pages and the filter chosen for each (`defaultFilter` where nothing was
  * chosen). `options.adjustment` is shown with every filter in the previews;
- * the caller saves the pages with it.
+ * the caller saves the pages with it. `options.purpose` names the review's
+ * confirm button and pages (reviewLabels).
  */
 export async function withReviewFilters(
   defaultFilter: PageFilter,
   open: () => Promise<ScanPageInput[] | null>,
-  options: { adjustment?: PageAdjustment } = {},
+  options: { adjustment?: PageAdjustment; purpose?: ReviewPurpose } = {},
 ): Promise<{ pages: ScanPageInput[] | null; filters: PageFilter[] }> {
   const adjustment = options.adjustment && !isDefaultAdj(options.adjustment) ? { ...options.adjustment } : undefined;
-  const mine: Session = { defaultFilter, adjustment, all: null, perPage: new Map() };
+  const mine: Session = { defaultFilter, adjustment, purpose: options.purpose, all: null, perPage: new Map() };
   session = mine;
   emit();
   try {
@@ -156,6 +176,47 @@ export function bakeGroups(filters: PageFilter[]): { filter: PageFilter; indices
     groups.set(f, list);
   });
   return [...groups.entries()].map(([filter, indices]) => ({ filter, indices }));
+}
+
+// ── What the review says ─────────────────────────────────────────────────────
+
+const pagesWord = (n: number) => (n === 1 ? '1 page' : `${n} pages`);
+
+/**
+ * The review's header title, confirm button and caption for the page at
+ * `index` of `count` captured, given what it is for. `doneLabel` is the
+ * camera's own (CaptureOptions.doneLabel, "Save" by default), used when no
+ * purpose names it. `found` false adds that the whole photo is kept.
+ */
+export function reviewLabels(
+  purpose: ReviewPurpose | undefined,
+  count: number,
+  index: number,
+  doneLabel: string,
+  found = true,
+): { title: string; doneLabel: string; caption: string } {
+  const noEdges = found ? '' : ' · No edges found, whole photo kept';
+  if (purpose?.kind === 'add') {
+    const at = purpose.pageCount + index + 1;
+    return {
+      title: purpose.docName,
+      doneLabel: count > 0 ? `Add ${pagesWord(count)}` : 'Add',
+      caption: `New page ${at}${count > 1 ? ` · ${index + 1} of ${count}` : ''}${noEdges}`,
+    };
+  }
+  if (purpose?.kind === 'replace') {
+    const which = purpose.pageCount > 1 ? ` ${purpose.page + 1}` : '';
+    return {
+      title: `Retake page${which}`,
+      doneLabel: 'Replace page',
+      caption: `New page${which}${noEdges}`,
+    };
+  }
+  return {
+    title: pagesWord(count),
+    doneLabel,
+    caption: `${count > 1 ? `Page ${index + 1} of ${count}` : 'Page 1'}${noEdges}`,
+  };
 }
 
 // ── Where the review starts ──────────────────────────────────────────────────

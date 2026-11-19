@@ -948,6 +948,8 @@ const TEMP_DIRS = [
   // Scan Kit camera photos and their review previews (app/camera.tsx,
   // lib/capture-session.ts): a session that never finished leaves them here.
   'scanner-src',
+  // Create PDF: staged Files PDFs, their thumbnails and build work folders (lib/create-pdf-build.ts).
+  'create-pdf',
 ];
 /** Open-in staging files older builds wrote straight into the Caches root. */
 const LEGACY_STAGED = /^(?:incoming|attempt)-\d+-/;

@@ -21,6 +21,7 @@ import { getDocument, keepSourcesEnabled, updateDocumentWith } from './storage';
 import { bakePage, bakePages, runPageEdit } from './bake';
 import { indexDocText } from './save-scan';
 import { autoCropDocument } from './document-detect';
+import { addPagesUndoToken, type AddPagesUndo } from './add-pages-undo';
 import {
   canDetectQuad,
   detectQuad,
@@ -34,7 +35,12 @@ import {
   type SourcePageInput,
 } from './page-source';
 
-export type AddPagesResult = { doc: Document; added: number[] };
+export type AddPagesResult = {
+  doc: Document;
+  added: number[];
+  /** Undo's fingerprint of the added pages (lib/add-pages-undo.ts); null when none can be offered. */
+  undo: AddPagesUndo | null;
+};
 
 export type AddPagesOptions = {
   /**
@@ -156,7 +162,14 @@ export async function addPagesToDocument(
         return patch;
       });
       if (!written || !doc) throw new Error('document missing');
-      return { doc: doc as Document, added: stored.map((_, i) => start + i) };
+      // Taken under the same lock, right after the write (as merge Undo does).
+      let undo: AddPagesUndo | null = null;
+      try {
+        undo = addPagesUndoToken(docId, start, stored.length);
+      } catch (err) {
+        console.warn('Add pages: no undo', err);
+      }
+      return { doc: doc as Document, added: stored.map((_, i) => start + i), undo };
     } catch (err) {
       for (let i = 0; i < inputs.length; i++) {
         try {
@@ -188,18 +201,32 @@ export function finishAddedPages(
   added: number[],
   filter: PageFilter | PageFilter[],
   adjustments?: (PageAdjustment | undefined)[],
+  options: {
+    /** Called once this call's bake has written page `index` (Add pages' Undo notes the new file, lib/add-pages-undo.ts). */
+    onBaked?: (index: number) => void;
+  } = {},
 ): void {
+  const { onBaked } = options;
   (async () => {
     const looks = addedLooks(added, filter, adjustments);
+    const bakeOne = (l: { index: number; filter: PageFilter; adjustment?: PageAdjustment }) =>
+      bakePage(doc.id, l.index, l.filter, l.adjustment)
+        .then(written => {
+          if (written) onBaked?.(l.index);
+          return written;
+        })
+        .catch(err => {
+          console.error('Bake failed for page', l.index, err);
+          return false;
+        });
     const plain = looks.filter(l => !l.adjustment);
     const adjusted = looks.filter(l => l.adjustment);
     await Promise.all([
-      // One bakePages call per filter: every page is tracked from the start.
-      ...bakeGroupsFor(plain).map(g => bakePages(doc.id, g.indices, g.filter)),
-      ...adjusted.map(l => bakePage(doc.id, l.index, l.filter, l.adjustment).catch(err => {
-        console.error('Bake failed for page', l.index, err);
-        return false;
-      })),
+      // Every page is requested at once, so each is tracked from the start:
+      // one bakePages call per filter, or page by page when each written page
+      // must be reported.
+      ...(onBaked ? plain.map(bakeOne) : bakeGroupsFor(plain).map(g => bakePages(doc.id, g.indices, g.filter))),
+      ...adjusted.map(bakeOne),
     ]);
     const fresh = await getDocument(doc.id);
     if (fresh) await indexDocText(fresh.id, fresh.pages);

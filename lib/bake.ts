@@ -101,18 +101,34 @@ function applyEdit(docId: string, edit: PageEdit): void {
 }
 
 /**
+ * True for an error an edit throws when it REFUSED before touching anything —
+ * an Undo whose document changed since (lib/merge-undo MergeUndoError,
+ * lib/retake-page RetakeError, …): any error with `editRefused === true`.
+ * runPageEdit then re-targets no bake, so a refused Undo can't drop the bakes
+ * of pages it never removed.
+ */
+export function isEditRefused(err: unknown): boolean {
+  return !!err && typeof err === 'object' && (err as { editRefused?: unknown }).editRefused === true;
+}
+
+/**
  * Runs a page-structure or page-pixel edit for `docId` under the document lock,
  * then re-targets any in-flight bakes accordingly (see the header comment).
  * Never call bakePage from inside `fn` and await it — that would deadlock.
  */
 export async function runPageEdit<T>(docId: string, edit: PageEdit, fn: () => Promise<T> | T): Promise<T> {
   return withDocLock(docId, async () => {
+    let result: T;
     try {
-      return await fn();
-    } finally {
-      // Even a failed edit may have touched files; treat it as having changed them.
-      applyEdit(docId, edit);
+      result = await fn();
+    } catch (err) {
+      // Even a failed edit may have touched files; treat it as having changed
+      // them — unless it refused before touching anything (isEditRefused).
+      if (!isEditRefused(err)) applyEdit(docId, edit);
+      throw err;
     }
+    applyEdit(docId, edit);
+    return result;
   });
 }
 

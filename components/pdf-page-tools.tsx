@@ -33,9 +33,17 @@ import {
   type PdfPlan,
 } from '@/lib/pdf-edit';
 import { pdfPageThumbnails } from '@/lib/pdf-thumb';
-import { canFillPdf, pdfFillHref, subscribePdfRewrites, takePendingRewrite } from '@/lib/pdf-fill';
+import { SIGNED_PDF_CHANGE, canFillPdf, isDigitallySigned, pdfFillHref, subscribePdfRewrites, takePendingRewrite } from '@/lib/pdf-fill';
+import { fillBlockedReason, useFillAccess } from '@/lib/fill-access';
 import { getDocument, getDocuments } from '@/lib/storage';
-import { newMergeUndo, undoNewMerge } from '@/lib/merge-undo';
+import {
+  MERGE_UNDO_FAILED_TITLE,
+  mergedNewMessage,
+  mergeUndoneMessage,
+  newMergeUndo,
+  newMergeUndoFailedMessage,
+  undoNewMerge,
+} from '@/lib/merge-undo';
 import { notifyError, notifySuccess } from '@/lib/haptics';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
 import { postViewerNotice } from '@/lib/viewer-notice';
@@ -110,6 +118,8 @@ export function usePdfPageTools({
   const insets = useSafeAreaInsets();
   const [busy, setBusy] = useState<Busy | null>(null);
   const busyRef = useRef(false);
+  // The user agreed to invalidate this PDF's digital signature (asked once per viewer).
+  const signedOkRef = useRef(false);
   const [viewKey, setViewKey] = useState(0);
   const [initialPage, setInitialPage] = useState(0);
   const [reorderPages, setReorderPages] = useState<string[] | null>(null);
@@ -179,6 +189,10 @@ export function usePdfPageTools({
     router.push(pdfFillHref(docId, at, true));
   }, [docId, at, router]);
   const fillAvailable = canFillPdf() && !!pdfUri;
+  // What Fill & sign may do with this PDF, read before it is offered (a PDF
+  // whose author forbids changes would open on a dead end). Re-read after edits.
+  const fillAccess = useFillAccess(fillAvailable ? pdfUri : null, viewKey);
+  const fillBlocked = fillBlockedReason(fillAccess);
 
   const explain = useCallback((err: unknown, what: string) => {
     const kind = err instanceof PdfEditError ? err.kind : 'failed';
@@ -235,6 +249,20 @@ export function usePdfPageTools({
   ): Promise<boolean> => {
     if (busyRef.current) return false;
     busyRef.current = true;
+    // A digitally signed PDF: any change invalidates the signature; ask once (F1, round 13b).
+    if (!signedOkRef.current && pdfUri && (await isDigitallySigned(pdfUri))) {
+      const go = await new Promise<boolean>(resolve => {
+        Alert.alert(SIGNED_PDF_CHANGE.title, SIGNED_PDF_CHANGE.body, [
+          { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+          { text: SIGNED_PDF_CHANGE.confirm, style: 'destructive', onPress: () => resolve(true) },
+        ], { cancelable: false });
+      });
+      if (!go || !mounted.current) {
+        busyRef.current = false;
+        return false;
+      }
+      signedOkRef.current = true;
+    }
     setBusy(kind);
     try {
       const { doc, undo } = await editStoredPdf(docId, plan);
@@ -260,7 +288,7 @@ export function usePdfPageTools({
       busyRef.current = false;
       if (mounted.current) setBusy(null);
     }
-  }, [docId, at, showEdited, toast, handleUndo, explain, showPartial]);
+  }, [docId, pdfUri, at, showEdited, toast, handleUndo, explain, showPartial]);
 
   const rotate = useCallback((degrees: 90 | -90) => {
     if (!ready) return;
@@ -387,20 +415,20 @@ export function usePdfPageTools({
         // The toast opens the new PDF; its Undo waits in the "…" menu (lib/merge-undo.ts:
         // the copy goes, the originals were never touched).
         const undo = newMergeUndo(merged);
-        offerUndo?.('Merged into a new PDF', () => {
+        offerUndo?.(mergedNewMessage(2), () => {
           undoNewMerge(undo)
             .then(outcome => {
               onCreated?.();
               notifySuccess();
-              if (mounted.current) toast.show(outcome === 'trashed' ? 'Merged PDF moved to Recently deleted' : 'Merge undone');
+              if (mounted.current) toast.show(mergeUndoneMessage(outcome, true));
             })
             .catch(err => {
               console.error('Undo merge failed', err);
               notifyError();
-              Alert.alert('Couldn’t undo the merge', 'Try again, or delete the merged PDF yourself.');
+              Alert.alert(MERGE_UNDO_FAILED_TITLE, newMergeUndoFailedMessage(true));
             });
         });
-        toast.show(`Saved “${merged.name}”`, {
+        toast.show(mergedNewMessage(2), {
           action: { label: 'Open', onPress: () => router.replace({ pathname: '/viewer', params: { id: merged.id } }) },
         });
       }
@@ -430,9 +458,13 @@ export function usePdfPageTools({
           icon: 'signature' as const,
           label: 'Fill & sign',
           a11y: 'Fill and sign',
-          hint: 'Fill in the form, add text, a date, check marks or your signature',
+          hint: fillBlocked
+            ? `Not available. ${fillBlocked}`
+            : fillAccess?.kind === 'form'
+              ? 'Fill in the form. Its author doesn’t allow adding text or signatures.'
+              : 'Fill in the form, add text, a date, check marks or your signature',
           onPress: openFill,
-          disabled: !enabled || n === 0 || busy !== null,
+          disabled: !enabled || n === 0 || busy !== null || !!fillBlocked,
         }]
       : []),
     {
@@ -458,7 +490,7 @@ export function usePdfPageTools({
     },
     {
       key: 'reorder',
-      icon: 'swap-vertical-outline',
+      icon: 'reorder-three-outline',
       label: 'Reorder',
       a11y: 'Reorder pages',
       onPress: () => { openReorder(); },
@@ -499,7 +531,7 @@ export function usePdfPageTools({
   const pageWord = n > 1 ? `page ${at + 1}` : 'page';
   /** Rows for the "…" sheet: document-level, then the page on screen. */
   const documentRows: MoreAction[] = !available ? [] : [
-    ...(ready && n > 1 ? [{ key: 'pdf-reorder', icon: 'swap-vertical-outline' as const, label: 'Reorder pages', onPress: () => { openReorder(); } }] : []),
+    ...(ready && n > 1 ? [{ key: 'pdf-reorder', icon: 'reorder-three-outline' as const, label: 'Reorder pages', onPress: () => { openReorder(); } }] : []),
     ...(canMergePdfDocuments()
       ? [{ key: 'pdf-merge', icon: 'git-merge-outline' as const, label: 'Merge with another document', onPress: openMerge }]
       : []),
@@ -548,11 +580,11 @@ export function usePdfPageTools({
   );
 
   /** The "…" sheet's tool tile. */
-  const fillTool: MoreAction | null = fillAvailable && enabled
-    ? { key: 'fill', icon: 'signature', label: 'Fill & sign', onPress: openFill }
+  const fillTool: MoreAction | null = fillAvailable && enabled && !fillBlocked
+    ? { key: 'fill', icon: 'signature', label: fillAccess?.kind === 'form' ? 'Fill in' : 'Fill & sign', onPress: openFill }
     : null;
 
-  return { available, busy, toolbar, documentRows, pageRows, deleteRow, sheets, viewKey, initialPage, fillTool };
+  return { available, busy, toolbar, documentRows, pageRows, deleteRow, sheets, viewKey, initialPage, fillTool, fillAccess };
 }
 
 const styles = StyleSheet.create({

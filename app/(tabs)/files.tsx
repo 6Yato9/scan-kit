@@ -30,13 +30,20 @@ import {
   SortKey,
 } from '@/lib/storage';
 import { mergeIntoNew } from '@/lib/doc-ops';
-import { newMergeUndo, undoNewMerge } from '@/lib/merge-undo';
+import {
+  MERGE_UNDO_FAILED_TITLE,
+  mergedNewMessage,
+  mergeUndoneMessage,
+  newMergeUndo,
+  newMergeUndoFailedMessage,
+  undoNewMerge,
+} from '@/lib/merge-undo';
 import { canMergePdfDocuments, mergeDocumentsToPdf, needsPdfMerge, PdfEditError } from '@/lib/pdf-edit';
 import { matchesQuery, searchSnippet, sortDocuments } from '@/lib/doc-list';
 import { requestFilesCopySync } from '@/lib/files-copy';
 import { useScan } from '@/contexts/scan-context';
 import { useTheme } from '@/contexts/theme-context';
-import { notifySuccess, selection } from '@/lib/haptics';
+import { notifyError, notifySuccess, selection } from '@/lib/haptics';
 import { BottomSheet, SheetGroup, SheetHeader, SheetRow } from '@/components/bottom-sheet';
 import { DocumentCard, DocumentCardSkeleton, DocumentRow, DocumentRowSkeleton } from '@/components/document-card';
 import { FilesLayout, getFilesLayout, saveFilesLayout } from '@/lib/view-pref';
@@ -379,8 +386,9 @@ export default function FilesScreen() {
     }
     // Oldest first reads naturally as one document.
     const ordered = [...mergeable].sort((a, b) => a.createdAt - b.createdAt);
+    const pdf = needsPdfMerge(ordered);
     try {
-      const merged = needsPdfMerge(ordered)
+      const merged = pdf
         ? await mergeDocumentsToPdf(ordered, `Merged ${ordered[0].name}`)
         : await mergeIntoNew(ordered, `Merged ${ordered[0].name}`);
       setDocuments(prev => [merged, ...prev]);
@@ -388,7 +396,7 @@ export default function FilesScreen() {
       notifySuccess();
       // Undo removes the merged copy; the originals were never touched (lib/merge-undo).
       const undo = newMergeUndo(merged);
-      toast.show(`Merged ${ordered.length} documents`, {
+      toast.show(mergedNewMessage(ordered.length), {
         action: {
           label: 'Undo',
           onPress: () => {
@@ -397,11 +405,12 @@ export default function FilesScreen() {
                 setDocuments(prev => prev.filter(d => d.id !== undo.docId));
                 notifySuccess();
                 // Changed since the merge: kept in Recently deleted rather than deleted.
-                if (outcome === 'trashed') toast.show('Moved to Recently deleted');
+                toast.show(mergeUndoneMessage(outcome, pdf));
               })
               .catch(err => {
                 console.error('Undo merge failed', err);
-                Alert.alert("Couldn't undo the merge", 'Try again, or delete the merged document yourself.');
+                notifyError();
+                Alert.alert(MERGE_UNDO_FAILED_TITLE, newMergeUndoFailedMessage(pdf));
               });
           },
         },
@@ -417,7 +426,7 @@ export default function FilesScreen() {
         return;
       }
       console.error('Batch merge failed', err);
-      Alert.alert("Couldn't merge documents", 'There may not be enough free space. Please try again.');
+      Alert.alert('Couldn’t merge the documents', 'There may not be enough free space. Your documents are unchanged. Try again.');
     }
   }, [canMerge, mergeable, exitSelect, toast]);
 

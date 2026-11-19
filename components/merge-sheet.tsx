@@ -35,12 +35,20 @@ export function mergeCandidates(target: Document | null, allDocs: Document[], pd
   );
 }
 
-/** The sheet's subtitle: what merging will do. */
-export function mergeSubtitle(target: Document, pdfMerge: boolean): string {
-  if (target.pdfUri) return `Makes one new PDF: “${target.name}”, then the document you pick. Both are kept.`;
-  return pdfMerge
-    ? `Its pages are added to the end of “${target.name}”. Picking a PDF makes one new PDF instead. The other document is kept.`
-    : `Its pages are added to the end of “${target.name}”. The other document is kept.`;
+/**
+ * The sheet's subtitle: what merging will do. It has two lines at most
+ * (SheetHeader), so what matters comes first and the name, which may be
+ * long, last: a cut can only shorten the name. What picking a PDF does
+ * instead is said on the PDF rows themselves (mergeRowMeta).
+ */
+export function mergeSubtitle(target: Document): string {
+  if (target.pdfUri) return `Both are kept. They become one new PDF, starting with “${target.name}”.`;
+  return `The document you pick is kept. Its pages are added to the end of “${target.name}”.`;
+}
+
+/** A row's second line: its usual meta, and for a PDF picked for a scan, that a new PDF is made instead. */
+export function mergeRowMeta(target: Document | null, item: Document, meta: string): string {
+  return target && !target.pdfUri && item.pdfUri ? `Makes a new PDF · ${meta}` : meta;
 }
 
 function Thumb({ doc }: { doc: Document }) {
@@ -70,7 +78,7 @@ export function MergeSheet({ visible, targetDoc, allDocs, onMerge, onClose }: Pr
     <BottomSheet visible={visible} onClose={onClose} variant="grouped">
       <SheetHeader
         title="Merge with another document"
-        subtitle={target ? mergeSubtitle(target, pdfMerge) : undefined}
+        subtitle={target ? mergeSubtitle(target) : undefined}
       />
       {sources.length === 0 ? (
         <View style={[styles.empty, { backgroundColor: colors.card }]}>
@@ -102,7 +110,9 @@ export function MergeSheet({ visible, targetDoc, allDocs, onMerge, onClose }: Pr
                 >
                   <View style={{ flex: 1 }}>
                     <Text style={[Type.subhead, { color: colors.text, fontWeight: '600' }]} numberOfLines={1}>{item.name}</Text>
-                    <Text style={[Type.footnote, { color: colors.muted, marginTop: 2 }]} numberOfLines={1}>{documentMeta(item)}</Text>
+                    <Text style={[Type.footnote, { color: colors.muted, marginTop: 2 }]} numberOfLines={1}>
+                      {mergeRowMeta(target, item, documentMeta(item))}
+                    </Text>
                   </View>
                   <Ionicons name="add-circle-outline" size={22} color={colors.accent} />
                 </View>

@@ -6,6 +6,8 @@ jest.mock('../lib/bake-queue', () => ({ enqueueBake: (job: any) => mockEnqueue(j
 jest.mock('../lib/bake', () => ({ PREVIEW_FILTERS: ['original', 'enhanced', 'noshadow', 'grayscale', 'bw', 'fainttext', 'photo', 'whiteboard', 'inksaver'] }));
 
 import {
+  getReviewFilterSnapshot,
+  reviewLabels,
   bakeGroups,
   chooseReviewFilter,
   filtersFor,
@@ -165,5 +167,39 @@ describe('where the review starts (r13)', () => {
       expect(getReviewFilterSnapshot().adjustment).toBeUndefined();
       return null;
     }, { adjustment: { brightness: 0, contrast: 0, saturation: 0 } });
+  });
+});
+
+describe('what the review says (r13b)', () => {
+  test('a plain scan: the page count and the camera\'s own label', () => {
+    expect(reviewLabels(undefined, 3, 1, 'Save')).toEqual({ title: '3 pages', doneLabel: 'Save', caption: 'Page 2 of 3' });
+    expect(reviewLabels(undefined, 1, 0, 'Read card', false)).toEqual({
+      title: '1 page', doneLabel: 'Read card', caption: 'Page 1 · No edges found, whole photo kept',
+    });
+  });
+
+  test('Add pages: says how many are added and where they go', () => {
+    const add = { kind: 'add' as const, docName: 'Corner Cafe', pageCount: 4 };
+    expect(reviewLabels(add, 1, 0, 'Save')).toEqual({ title: 'Corner Cafe', doneLabel: 'Add 1 page', caption: 'New page 5' });
+    expect(reviewLabels(add, 3, 2, 'Save')).toEqual({ title: 'Corner Cafe', doneLabel: 'Add 3 pages', caption: 'New page 7 · 3 of 3' });
+  });
+
+  test('Retake: replaces the page, named by its number', () => {
+    expect(reviewLabels({ kind: 'replace', page: 2, pageCount: 5 }, 1, 0, 'Replace page')).toEqual({
+      title: 'Retake page 3', doneLabel: 'Replace page', caption: 'New page 3',
+    });
+    expect(reviewLabels({ kind: 'replace', page: 0, pageCount: 1 }, 1, 0, 'Replace')).toEqual({
+      title: 'Retake page', doneLabel: 'Replace page', caption: 'New page',
+    });
+  });
+
+  test('the purpose rides in the armed session and goes with it', async () => {
+    let seen: unknown;
+    await withReviewFilters('bw', async () => {
+      seen = getReviewFilterSnapshot()?.purpose;
+      return null;
+    }, { purpose: { kind: 'add', docName: 'D', pageCount: 2 } });
+    expect(seen).toEqual({ kind: 'add', docName: 'D', pageCount: 2 });
+    expect(getReviewFilterSnapshot()).toBeNull();
   });
 });

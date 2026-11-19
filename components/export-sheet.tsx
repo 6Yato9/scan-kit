@@ -13,7 +13,6 @@ import { File } from 'expo-file-system';
 import {
   canProtectPdf,
   estimatePdfBytes,
-  generatePdf,
   MIN_PDF_PASSWORD,
   PageSize,
   PageStat,
@@ -23,11 +22,11 @@ import {
   PdfQuality,
   PdfProgressPhase,
   PdfProtectError,
-  protectPdf,
   roundUpEstimate,
   type PageNumberStyle,
 } from '@/lib/pdf';
 import { getExportPageNumbers, setExportPageNumbers } from '@/lib/export-prefs';
+import { buildScanPdf, protectDocumentPdf } from '@/lib/pdf-protect';
 import { SegmentedControl } from '@/components/segmented-control';
 import {
   cleanFileUri,
@@ -57,6 +56,8 @@ import { documentBytes } from '@/lib/doc-size';
 import { formatBytes } from '@/components/tool-ui';
 import { zipFiles } from '@/lib/zip-stream';
 import { notifySuccess } from '@/lib/haptics';
+import { canFlattenPdf, flattenPdfCopy, pdfShareInfo, shouldOfferFlatten } from '@/lib/pdf-fill';
+import { PdfEditError } from '@/lib/pdf-edit';
 import { Radius, Spacing, Type } from '@/lib/theme';
 
 type Props = {
@@ -65,7 +66,7 @@ type Props = {
   onClose: () => void;
 };
 
-type Action = 'pdf' | 'small' | 'protected' | 'images' | 'zip' | 'photos' | 'print';
+type Action = 'pdf' | 'small' | 'protected' | 'flat' | 'images' | 'zip' | 'photos' | 'print';
 
 type Busy = { title: string; label: string; progress: number };
 
@@ -135,6 +136,12 @@ function errorMessage(err: unknown, action: Action): { title: string; body: stri
     if (err.kind === 'empty') return { title, body: 'This document has no pages to export.' };
     return { title, body: 'Something went wrong while creating the PDF. Try again.' };
   }
+  if (action === 'flat') {
+    if (err instanceof PdfEditError && err.kind === 'restricted') {
+      return { title, body: 'Its author doesn’t allow changing this PDF, so it can’t be flattened. You can still share it as it is.' };
+    }
+    return { title, body: 'Couldn’t flatten this PDF. You can still share it as it is.' };
+  }
   if (action === 'images' || action === 'zip') return { title, body: 'Couldn’t prepare the images. Check that your device has free space and try again.' };
   if (action === 'photos') return { title: 'Couldn’t save to Photos', body: 'Check that your device has free space and try again.' };
   return { title, body: 'Something went wrong. Try again.' };
@@ -153,6 +160,8 @@ export function ExportSheet({ visible, document, onClose }: Props) {
   const [pageNumbers, setPageNumbers] = useState<PageNumberStyle>('off');
   const [bytes, setBytes] = useState<number | null>(null);
   const [stats, setStats] = useState<PageStat[] | null>(null);
+  // An imported PDF with form fields or additions can also go out flattened.
+  const [canFlatten, setCanFlatten] = useState(false);
   // "Password-protected PDF" asks for the password inside the sheet (an Alert
   // can't be presented over it). The password lives only in this state and is
   // cleared as soon as the PDF is protected or the sheet closes.
@@ -194,6 +203,10 @@ export function ExportSheet({ visible, document, onClose }: Props) {
       })
       .catch(() => {});
     getExportPageNumbers().then(p => { if (!cancelled) setPageNumbers(p); });
+    setCanFlatten(false);
+    if (document.pdfUri && canFlattenPdf()) {
+      pdfShareInfo(document.pdfUri).then(i => { if (!cancelled) setCanFlatten(shouldOfferFlatten(i)); });
+    }
     return () => {
       cancelled = true;
       clearTimeout(sizeTimer);
@@ -228,12 +241,11 @@ export function ExportSheet({ visible, document, onClose }: Props) {
   }, [cancelWork, onClose]);
 
   async function buildPdf(q: PdfQuality, searchable: boolean, signal: AbortSignal, title: string): Promise<string> {
-    // Read settings fresh so a change made a moment ago is honoured.
-    const settings = await getDocSettings().catch(() => null);
-    const size = settings?.pdfPageSize ?? pageSize;
     setBusy({ title, label: 'Preparing', progress: 0 });
-    return generatePdf(document.pages, {
-      pageSize: size,
+    // The same build as Tools › Protect PDF (lib/pdf-protect.ts): Document
+    // settings' paper size read fresh.
+    return buildScanPdf(document.pages, {
+      fallbackPageSize: pageSize,
       quality: q,
       searchable,
       pageNumbers,
@@ -407,22 +419,22 @@ export function ExportSheet({ visible, document, onClose }: Props) {
         // then a protected copy under the document's name. The unprotected
         // temp file is deleted straight away; only the protected one is shared.
         const title = 'Creating protected PDF';
-        let raw: string | null = null;
-        try {
-          if (!isPdfDoc) {
-            raw = await buildPdf(quality, canSearchable, signal, title);
-            check();
-          }
-          setBusy({ title, label: 'Adding the password', progress: 0.95 });
-          const out = `${dir}${encodeURIComponent(exportFileName(document.name, 'pdf'))}`;
-          const uri = await protectPdf(raw ?? document.pdfUri!, out, password ?? '');
-          file = { uri, ...PDF_FILE };
-        } finally {
-          await deleteQuietly(raw);
-        }
+        const out = `${dir}${encodeURIComponent(exportFileName(document.name, 'pdf'))}`;
+        const uri = await protectDocumentPdf(document, out, password ?? '', {
+          signal,
+          build: () => buildPdf(quality, canSearchable, signal, title),
+          beforeProtect: () => setBusy({ title, label: 'Adding the password', progress: 0.95 }),
+        });
+        file = { uri, ...PDF_FILE };
         setPw('');
         setPw2('');
         setPwMode(false);
+      } else if (action === 'flat' && isPdfDoc) {
+        // A copy with the form values and signatures drawn into the pages; the stored PDF is untouched.
+        setBusy({ title: 'Flattening PDF', label: 'Flattening PDF', progress: 0.5 });
+        const out = `${dir}${encodeURIComponent(exportFileName(document.name, 'pdf'))}`;
+        const uri = await flattenPdfCopy(document.pdfUri!, out);
+        file = { uri, ...PDF_FILE };
       } else if (isPdfDoc) {
         setBusy({ title: 'Preparing PDF', label: 'Preparing PDF', progress: 0.5 });
         const uri = await placeExportFile(document.pdfUri!, dir, exportFileName(document.name, 'pdf'), 'copy');
@@ -629,8 +641,17 @@ export function ExportSheet({ visible, document, onClose }: Props) {
                   label="PDF"
                   detail={detailLine(['Original file', sizeLabel])}
                   onPress={() => run('pdf')}
-                  last={!canProtect && !docText}
+                  last={!canFlatten && !canProtect && !docText}
                 />
+                {canFlatten ? (
+                  <SheetRow
+                    icon="layers-outline"
+                    label="Flattened PDF"
+                    detail="Form and signatures can’t be changed"
+                    onPress={() => run('flat')}
+                    last={!canProtect && !docText}
+                  />
+                ) : null}
                 {canProtect ? (
                   <SheetRow
                     icon="lock-closed-outline"
