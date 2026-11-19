@@ -38,7 +38,29 @@
           }
         ],
         "LSSupportsOpeningDocumentsInPlace": false,
-        "UIFileSharingEnabled": false
+        "UIFileSharingEnabled": false,
+        "UIApplicationShortcutItems": [
+          {
+            "UIApplicationShortcutItemType": "com.6yato9.scan-kit.scan",
+            "UIApplicationShortcutItemTitle": "Scan document",
+            "UIApplicationShortcutItemIconSymbolName": "camera"
+          },
+          {
+            "UIApplicationShortcutItemType": "com.6yato9.scan-kit.import-photos",
+            "UIApplicationShortcutItemTitle": "Import photos",
+            "UIApplicationShortcutItemIconSymbolName": "photo.on.rectangle"
+          },
+          {
+            "UIApplicationShortcutItemType": "com.6yato9.scan-kit.import-file",
+            "UIApplicationShortcutItemTitle": "Import file",
+            "UIApplicationShortcutItemIconSymbolName": "folder"
+          },
+          {
+            "UIApplicationShortcutItemType": "com.6yato9.scan-kit.search",
+            "UIApplicationShortcutItemTitle": "Search",
+            "UIApplicationShortcutItemIconSymbolName": "magnifyingglass"
+          }
+        ]
       },
       "bundleIdentifier": "com.6yato9.scan-kit"
     },

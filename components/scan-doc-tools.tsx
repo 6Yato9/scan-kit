@@ -5,8 +5,11 @@
 // The viewer puts the rows this returns in its "…" menu and renders `sheets`.
 //
 // - Merge: another scanned document's pages are appended here (lib/doc-ops
-//   mergeInto, shadows included); picking an imported PDF makes one new PDF
-//   instead (lib/pdf-edit), both kept — the same sheet and rules as Files.
+//   mergeIntoWithUndo, shadows included), with Undo (lib/merge-undo.ts: the
+//   appended pages come out again while they are unchanged); picking an
+//   imported PDF makes one new PDF instead (lib/pdf-edit), both kept — the
+//   same sheet and rules as Files. Its toast opens the new PDF; its Undo
+//   (removing the copy) is in the "…" menu.
 // - Split: "<name> (1)" and "<name> (2)" (lib/doc-ops splitDocument), keeping
 //   or trashing the original, like splitting a PDF.
 // - Blank page: a white page the size of the page on screen, inserted after
@@ -17,7 +20,18 @@ import type { useRouter } from 'expo-router';
 import type { Document } from '@/types/document';
 import type { PageEdit } from '@/lib/bake';
 import { remapForDelete } from '@/lib/bake';
-import { mergeInto, splitDocument } from '@/lib/doc-ops';
+import { mergeIntoWithUndo, splitDocument } from '@/lib/doc-ops';
+import {
+  MergeUndoError,
+  mergeUndoRefusalMessage,
+  mergeUndoRemap,
+  newMergeUndo,
+  reindexAfterMergeUndo,
+  removeMergedPages,
+  undoNewMerge,
+  type MergeUndo,
+  type NewMergeUndo,
+} from '@/lib/merge-undo';
 import { mergeDocumentsToPdf, needsPdfMerge, PdfEditError } from '@/lib/pdf-edit';
 import {
   blankPageSize,
@@ -55,12 +69,17 @@ type Options = {
   reload: () => Promise<void>;
   /** A change that offers no Undo was made: the viewer's last Undo no longer applies. */
   onEdited: () => void;
-  /** A new document was saved (split, PDF merge). */
+  /** A new document was saved (split, PDF merge), or one was removed again (its Undo). */
   onCreated?: () => void;
+  /** Offers an Undo in the viewer's "…" menu only (lib/last-undo.ts), for a toast whose button does something else. */
+  offerUndo?: (message: string, run: () => void) => void;
 };
 
-export function useScanDocTools({ document, page, editDocument, toast, router, showPage, reload, onEdited, onCreated }: Options) {
+export function useScanDocTools({ document, page, editDocument, toast, router, showPage, reload, onEdited, onCreated, offerUndo }: Options) {
   const [mergeDocs, setMergeDocs] = useState<Document[] | null>(null);
+  // The page on screen when an Undo runs (it may run long after this render).
+  const pageRef = useRef(page);
+  useEffect(() => { pageRef.current = page; }, [page]);
   const busy = useRef(false);
   const mounted = useRef(true);
   useEffect(() => {
@@ -186,6 +205,41 @@ export function useScanDocTools({ document, page, editDocument, toast, router, s
       .catch(() => { if (mounted.current) setMergeDocs([]); });
   }, []);
 
+  /** Takes exactly the pages a merge appended out again (lib/merge-undo.ts), under the page lock. */
+  const undoMerge = useCallback(async (undo: MergeUndo) => {
+    try {
+      const next = await editDocument({ remap: mergeUndoRemap(undo) }, async fresh => removeMergedPages(fresh, undo));
+      reindexAfterMergeUndo(next);
+      // The page on screen was one of the merged ones: show the last that stays.
+      if (mounted.current && pageRef.current >= undo.start) showPage(undo.start - 1);
+      notifySuccess();
+    } catch (err) {
+      notifyError();
+      if (err instanceof MergeUndoError) {
+        Alert.alert('Couldn’t undo the merge', mergeUndoRefusalMessage(err.kind));
+      } else {
+        console.error('Undo merge failed', err);
+        Alert.alert('Couldn’t undo the merge', 'Try again.');
+        reload().catch(() => {});
+      }
+    }
+  }, [editDocument, showPage, reload]);
+
+  /** Undo for a merge that made a new PDF: it goes; both originals were never touched. */
+  const undoPdfMerge = useCallback((undo: NewMergeUndo) => {
+    undoNewMerge(undo)
+      .then(outcome => {
+        onCreated?.();
+        notifySuccess();
+        if (mounted.current) toast.show(outcome === 'trashed' ? 'Merged PDF moved to Recently deleted' : 'Merge undone');
+      })
+      .catch(err => {
+        console.error('Undo merge failed', err);
+        notifyError();
+        Alert.alert('Couldn’t undo the merge', 'Try again, or delete the merged PDF yourself.');
+      });
+  }, [onCreated, toast]);
+
   const handleMerge = useCallback(async (target: Document, source: Document) => {
     if (busy.current) return;
     busy.current = true;
@@ -196,22 +250,27 @@ export function useScanDocTools({ document, page, editDocument, toast, router, s
         onCreated?.();
         notifySuccess();
         if (mounted.current) {
+          // The toast opens the new PDF; its Undo waits in the "…" menu.
+          const undo = newMergeUndo(merged);
+          offerUndo?.('Merged into a new PDF', () => undoPdfMerge(undo));
           toast.show(`Saved “${merged.name}”`, {
             action: { label: 'Open', onPress: () => router.replace({ pathname: '/viewer', params: { id: merged.id } }) },
           });
         }
         return;
       }
-      const updated = await mergeInto(target, source);
-      if (!updated) return;
+      const result = await mergeIntoWithUndo(target, source);
+      if (!result) return;
       onEdited();
       await reload();
       notifySuccess();
-      const added = updated.pages.length - target.pages.length;
-      const count = added > 0 ? added : source.pages.length;
+      const { added, undo } = result;
       if (mounted.current) {
-        showPage(target.pages.length);
-        toast.show(`Added ${count} page${count === 1 ? '' : 's'} from “${source.name}”`);
+        showPage(result.doc.pages.length - added);
+        toast.show(
+          `Added ${added} page${added === 1 ? '' : 's'} from “${source.name}”`,
+          undo ? { action: { label: 'Undo', onPress: () => { undoMerge(undo); } } } : undefined,
+        );
       }
     } catch (err) {
       notifyError();
@@ -227,7 +286,7 @@ export function useScanDocTools({ document, page, editDocument, toast, router, s
     } finally {
       busy.current = false;
     }
-  }, [onCreated, onEdited, reload, router, showPage, toast]);
+  }, [onCreated, onEdited, offerUndo, reload, router, showPage, toast, undoMerge, undoPdfMerge]);
 
   const pageWord = n > 1 ? `page ${at + 1}` : 'page';
   /** Document-level rows for the "…" menu. */

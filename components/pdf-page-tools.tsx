@@ -1,6 +1,7 @@
 // components/pdf-page-tools.tsx
 // Page editing for an imported PDF in the viewer, without converting it to
-// images: Rotate, Blank page, Reorder, Split and Delete in a toolbar under the
+// images: Fill & sign (app/pdf-fill.tsx, its own screen), Rotate, Blank page,
+// Reorder, Split and Delete in a toolbar under the
 // pages (the same toolbar image pages have), the same actions for the page on
 // screen in the "…" sheet, and Merge with another document. Every edit is
 // written into the PDF itself by lib/pdf-edit.ts (text stays selectable) and
@@ -32,7 +33,9 @@ import {
   type PdfPlan,
 } from '@/lib/pdf-edit';
 import { pdfPageThumbnails } from '@/lib/pdf-thumb';
-import { getDocuments } from '@/lib/storage';
+import { canFillPdf, pdfFillHref, subscribePdfRewrites, takePendingRewrite } from '@/lib/pdf-fill';
+import { getDocument, getDocuments } from '@/lib/storage';
+import { newMergeUndo, undoNewMerge } from '@/lib/merge-undo';
 import { notifyError, notifySuccess } from '@/lib/haptics';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
 import { postViewerNotice } from '@/lib/viewer-notice';
@@ -86,6 +89,8 @@ type Options = {
   onLocked: () => void;
   /** A new document was saved (split, merge). */
   onCreated?: () => void;
+  /** Offers an Undo in the viewer's "…" menu only (lib/last-undo.ts), for a toast whose action is Open. */
+  offerUndo?: (message: string, run: () => void) => void;
 };
 
 export function usePdfPageTools({
@@ -99,6 +104,7 @@ export function usePdfPageTools({
   onMissing,
   onLocked,
   onCreated,
+  offerUndo,
 }: Options) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
@@ -146,6 +152,33 @@ export function usePdfPageTools({
     // that is being dismissed goes with it.
     setTimeout(() => { if (mounted.current) Alert.alert(copy.title, copy.body); }, 600);
   }, [docId, showEdited]);
+
+  // A viewer opened by Fill & sign (from Tools) shows the page it changed.
+  useEffect(() => {
+    if (!docId) return;
+    const p = takePendingRewrite(docId);
+    if (p != null) setInitialPage(p);
+  }, [docId]);
+
+  // Fill & sign (its own screen) rewrote this PDF, or its Undo put it back:
+  // show the file that is there now, at the page it changed.
+  useEffect(() => {
+    if (!docId) return;
+    return subscribePdfRewrites((id, showPage) => {
+      if (id !== docId) return;
+      takePendingRewrite(id);
+      getDocument(id)
+        .then(doc => { if (doc && mounted.current) showEdited(doc, showPage); })
+        .catch(() => {});
+    });
+  }, [docId, showEdited]);
+
+  /** Opens Fill & sign at the page on screen. */
+  const openFill = useCallback(() => {
+    if (!docId || busyRef.current) return;
+    router.push(pdfFillHref(docId, at, true));
+  }, [docId, at, router]);
+  const fillAvailable = canFillPdf() && !!pdfUri;
 
   const explain = useCallback((err: unknown, what: string) => {
     const kind = err instanceof PdfEditError ? err.kind : 'failed';
@@ -351,6 +384,22 @@ export function usePdfPageTools({
       onCreated?.();
       notifySuccess();
       if (mounted.current) {
+        // The toast opens the new PDF; its Undo waits in the "…" menu (lib/merge-undo.ts:
+        // the copy goes, the originals were never touched).
+        const undo = newMergeUndo(merged);
+        offerUndo?.('Merged into a new PDF', () => {
+          undoNewMerge(undo)
+            .then(outcome => {
+              onCreated?.();
+              notifySuccess();
+              if (mounted.current) toast.show(outcome === 'trashed' ? 'Merged PDF moved to Recently deleted' : 'Merge undone');
+            })
+            .catch(err => {
+              console.error('Undo merge failed', err);
+              notifyError();
+              Alert.alert('Couldn’t undo the merge', 'Try again, or delete the merged PDF yourself.');
+            });
+        });
         toast.show(`Saved “${merged.name}”`, {
           action: { label: 'Open', onPress: () => router.replace({ pathname: '/viewer', params: { id: merged.id } }) },
         });
@@ -370,11 +419,22 @@ export function usePdfPageTools({
       busyRef.current = false;
       if (mounted.current) setBusy(null);
     }
-  }, [docId, router, toast, explain, onCreated]);
+  }, [docId, router, toast, explain, onCreated, offerUndo]);
 
   // ── What the viewer shows ──────────────────────────────────────────────────
 
   const toolbarItems: ToolbarItem[] = [
+    ...(fillAvailable
+      ? [{
+          key: 'fill',
+          icon: 'signature' as const,
+          label: 'Fill & sign',
+          a11y: 'Fill and sign',
+          hint: 'Fill in the form, add text, a date, check marks or your signature',
+          onPress: openFill,
+          disabled: !enabled || n === 0 || busy !== null,
+        }]
+      : []),
     {
       key: 'rotate',
       icon: 'refresh-outline',
@@ -487,7 +547,12 @@ export function usePdfPageTools({
     </>
   );
 
-  return { available, busy, toolbar, documentRows, pageRows, deleteRow, sheets, viewKey, initialPage };
+  /** The "…" sheet's tool tile. */
+  const fillTool: MoreAction | null = fillAvailable && enabled
+    ? { key: 'fill', icon: 'signature', label: 'Fill & sign', onPress: openFill }
+    : null;
+
+  return { available, busy, toolbar, documentRows, pageRows, deleteRow, sheets, viewKey, initialPage, fillTool };
 }
 
 const styles = StyleSheet.create({

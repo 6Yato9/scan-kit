@@ -21,9 +21,9 @@ import PDFKit
 ///    unencrypted document, the same as unlocking (lib/pdf-unlock.ts).
 ///  - Opens without a password but is encrypted (an owner password with
 ///    permissions, e.g. bank statements): edited IN PLACE when its permissions
-///    allow document assembly, so PDFKit writes it back with the same
-///    encryption and permissions and keeps its form fields, page labels and
-///    named destinations. When they don't allow assembly the edit is refused
+///    allow document assembly, keeping its form fields, page labels and
+///    named destinations; it is written back encrypted with its permissions
+///    (keepProtectionOptions). When they don't allow assembly the edit is refused
 ///    with `restrictedMessage` ("restricted"; ERR_PDF_RESTRICTED from the
 ///    module): PDFKit itself won't rotate or remove pages of such a document,
 ///    and rebuilding it would silently drop the author's restrictions.
@@ -65,6 +65,23 @@ enum PdfEditor {
   /// or inserting pages (and it opened without a password).
   static func isRestricted(_ doc: PDFDocument, unlocked: Bool) -> Bool {
     doc.isEncrypted && !unlocked && !doc.allowsDocumentAssembly
+  }
+
+  /// Write options that keep an encrypted document (one that opened without
+  /// a password: an owner password with permissions) protected. PDFKit's
+  /// plain write(to:) drops the encryption, and with it the author's
+  /// restrictions; this writes the permissions PDFKit read back, under a new
+  /// random owner password (the original can't be known without asking for
+  /// it). PDFKit maps them onto the PDF's permission bits as best it can: the
+  /// file stays encrypted and keeps its printing, copying and page-assembly
+  /// restrictions, but PDFKit can't express every combination exactly (e.g.
+  /// "fill forms but don't comment" comes out as allowing both).
+  static func keepProtectionOptions(_ doc: PDFDocument) -> [PDFDocumentWriteOption: Any] {
+    guard doc.isEncrypted, !doc.isLocked else { return [:] }
+    return [
+      .ownerPasswordOption: UUID().uuidString + UUID().uuidString,
+      .accessPermissionsOption: NSNumber(value: doc.accessPermissions.rawValue),
+    ]
   }
 
   static func normalized(_ degrees: Int) -> Int {
@@ -216,7 +233,9 @@ enum PdfEditor {
     let url = URL(fileURLWithPath: outputPath)
     try? FileManager.default.removeItem(at: url)
     try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-    guard out.write(to: url) else {
+    // In place, an owner-password PDF stays protected (see keepProtectionOptions);
+    // a document rebuilt after unlocking is written without a password.
+    guard out.write(to: url, withOptions: unlocked ? [:] : keepProtectionOptions(doc)) else {
       try? FileManager.default.removeItem(at: url)
       throw fail(8, "Could not write the PDF")
     }

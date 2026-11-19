@@ -42,15 +42,18 @@ jest.mock('../lib/storage', () => ({
   getDocument: jest.fn(async () => mockDoc),
   updateDocumentWith: (id: string, fn: (cur: any) => any) => mockUpdate(id, fn),
 }));
+const mockBakePage = jest.fn(async (..._a: any[]) => true);
 jest.mock('../lib/bake', () => ({
   bakePages: jest.fn(async () => {}),
+  bakePage: (...a: any[]) => mockBakePage(...a),
   runPageEdit: (_id: string, _edit: unknown, fn: () => unknown) => Promise.resolve().then(fn),
 }));
 jest.mock('../lib/save-scan', () => ({ indexDocText: jest.fn(async () => {}) }));
 const mockAutoCrop = jest.fn(async (uri: string) => ({ uri: uri.replace('photo', 'cropped'), detected: true }));
 jest.mock('../lib/document-detect', () => ({ autoCropDocument: (uri: string) => mockAutoCrop(uri) }));
 
-import { addPagesToDocument } from '../lib/add-pages';
+import { addedLooks, addPagesToDocument, finishAddedPages } from '../lib/add-pages';
+import { bakePages } from '../lib/bake';
 
 const page = (i: number) => `file:///docs/scan-kit/d1/page-${i}.jpg`;
 
@@ -118,4 +121,26 @@ test('writes only the page fields, so a rename or text index stored meanwhile su
   const patch = mockUpdate.mock.calls[0][1]({ ...mockDoc, name: 'Invoice', ocrText: 'text' });
   expect(Object.keys(patch).sort()).toEqual(['adjustments', 'filters', 'pages', 'updatedAt']);
   expect(patch.name).toBeUndefined();
+});
+
+
+// ── r13: the look chosen in the camera's review ──────────────────────────────
+
+test('addedLooks: one filter for all, or one per page; Original with no adjustment needs no bake', () => {
+  expect(addedLooks([3, 4], 'bw')).toEqual([{ index: 3, filter: 'bw' }, { index: 4, filter: 'bw' }]);
+  expect(addedLooks([3, 4, 5], ['bw', 'original', 'enhanced'])).toEqual([
+    { index: 3, filter: 'bw' },
+    { index: 5, filter: 'enhanced' },
+  ]);
+  const adj = { brightness: 20, contrast: 0, saturation: 0 };
+  expect(addedLooks([2], ['original'], [adj])).toEqual([{ index: 2, filter: 'original', adjustment: adj }]);
+  expect(addedLooks([2], ['grayscale'], [{ brightness: 0, contrast: 0, saturation: 0 }])).toEqual([{ index: 2, filter: 'grayscale' }]);
+});
+
+test('finishAddedPages bakes each filter group, and adjusted pages with their adjustment', async () => {
+  const adj = { brightness: 20, contrast: 0, saturation: 0 };
+  finishAddedPages(mockDoc, [1, 2, 3], ['bw', 'bw', 'grayscale'], [undefined, undefined, adj]);
+  await new Promise(r => setTimeout(r, 0));
+  expect((bakePages as jest.Mock).mock.calls).toEqual([['d1', [1, 2], 'bw']]);
+  expect(mockBakePage).toHaveBeenCalledWith('d1', 3, 'grayscale', adj);
 });

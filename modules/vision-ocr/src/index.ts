@@ -54,6 +54,52 @@ export type ContactFields = {
   /** file:// image used as the contact photo. */
   imageUri?: string;
 };
+// ── Fill & sign (round 13). Rects are [x, y, width, height] in a page's PDF
+// space (points, origin bottom-left, before the page's rotation).
+export type NativeFillPage = { crop: number[]; media: number[]; rotation: number };
+export type NativeFillField = {
+  /** "page:annotationIndex", as pdfFill expects it back. */
+  id: string;
+  page: number;
+  name: string;
+  kind: 'text' | 'choice' | 'checkbox' | 'radio' | 'signature';
+  rect: number[];
+  readOnly: boolean;
+  /** 0: automatic. */
+  fontSize: number;
+  /** The form's description of the field (/TU), '' when none (newer builds). */
+  label?: string;
+  value?: string;
+  multiline?: boolean;
+  maxLength?: number;
+  comb?: boolean;
+  align?: 'left' | 'center' | 'right';
+  options?: string[];
+  list?: boolean;
+  on?: boolean;
+  onValue?: string;
+};
+export type NativeFillInfo = {
+  pageCount: number;
+  encrypted: boolean;
+  /** The PDF's permissions allow adding text and signatures. */
+  canAnnotate: boolean;
+  /** …and filling its form. */
+  canFillForms: boolean;
+  pages: NativeFillPage[];
+  fields: NativeFillField[];
+};
+export type NativeFieldValue = { id: string; name: string; kind: string; value?: string; on?: boolean };
+export type NativeMark = {
+  page: number;
+  rect: number[];
+  kind: 'text' | 'check' | 'cross' | 'image';
+  text?: string;
+  fontSize?: number;
+  color?: string;
+  /** base64 PNG (a data: URI is fine). */
+  image?: string;
+};
 /** How a system form presented by the module ended. */
 export type PresentOutcome = 'saved' | 'cancelled' | 'denied' | 'unavailable';
 
@@ -150,7 +196,21 @@ type VisionOcrNative = {
   presentNewContact?: (fields: ContactFields) => Promise<PresentOutcome>;
   /** Writes a vCard (.vcf) of the contact; resolves its file:// URI. */
   writeVCard?: (fields: ContactFields, outputUri: string) => Promise<string>;
-  addListener?: <E extends 'onSpeechProgress' | 'onSpeechState'>(
+  // ── Fill & sign an imported PDF in place (round 13, PdfFiller.swift). Call
+  // through lib/pdf-fill.ts, which checks presence.
+  /** Pages, form fields and permissions. Rejects ERR_PDF_LOCKED ("locked") when a password is needed. */
+  pdfFillInfo?: (uri: string) => Promise<NativeFillInfo>;
+  /** One page as an upright JPEG (crop box, rotation applied), long edge maxEdge px. */
+  pdfRenderPage?: (uri: string, index: number, outUri: string, maxEdge: number, hideFields: boolean) => Promise<ImageResult>;
+  /**
+   * Fills form fields and adds marks (PDF annotations with appearance
+   * streams), writes `outputUri` and verifies it before resolving to its page
+   * count. Rejects ERR_PDF_LOCKED, ERR_PDF_RESTRICTED ("restricted"),
+   * ERR_PDF_CHANGED ("changed": the form isn't what pdfFillInfo reported),
+   * ERR_PDF_FILL otherwise.
+   */
+  pdfFill?: (inputUri: string, outputUri: string, fields: NativeFieldValue[], marks: NativeMark[]) => Promise<number>;
+  addListener?:<E extends 'onSpeechProgress' | 'onSpeechState'>(
     event: E,
     listener: (e: E extends 'onSpeechProgress' ? SpeechProgressEvent : SpeechStateEvent) => void,
   ) => { remove: () => void };

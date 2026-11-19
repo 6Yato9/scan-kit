@@ -4,7 +4,9 @@
 // panel (components/page-actions-sheet.tsx), applied before the scan is saved.
 // A choice applies to every page by default; "This page" gives the page on
 // screen a filter of its own. The choice is saved with the pages
-// (lib/review-filter.ts). Always-dark chrome, like the review.
+// (lib/review-filter.ts). A retake starts at the replaced page's look, its
+// adjustments included: the tiles and the page show them with every filter.
+// Always-dark chrome, like the review.
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { ActivityIndicator, Image, LayoutChangeEvent, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { PageFilter } from '@/types/document';
@@ -48,18 +50,21 @@ export function useReviewFilters(): ReviewFilterSnapshot | null {
 export function useFilteredPreviews(pages: CapturedPage[], enabled: boolean): { uris: Map<string, string>; pending: Set<string> } {
   const snap = useReviewFilters();
   const [done, setDone] = useState<Map<string, string>>(new Map());
+  // A retake keeps the page's adjustments: every preview shows them too.
+  const adjustment = snap?.adjustment;
+  const adjTag = adjustment ? `${adjustment.brightness},${adjustment.contrast},${adjustment.saturation},${adjustment.sharpness ?? 0}` : '';
   const want = pages
     .filter(p => p.previewUri)
     .map(p => ({ key: p.key, src: p.previewUri!, filter: filterInSnapshot(snap, p.sourceUri) ?? 'original' }));
-  const wantKey = want.map(w => `${w.key}|${w.src}|${w.filter}`).join(',');
+  const wantKey = `${want.map(w => `${w.key}|${w.src}|${w.filter}`).join(',')}|${adjTag}`;
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;
     (async () => {
       for (const w of want) {
-        const id = `${w.src}|${w.filter}`;
+        const id = `${w.src}|${w.filter}|${adjTag}`;
         try {
-          const uri = await reviewPagePreview(w.src, w.filter);
+          const uri = await reviewPagePreview(w.src, w.filter, adjustment);
           if (cancelled) return;
           setDone(prev => (prev.get(id) === uri ? prev : new Map(prev).set(id, uri)));
         } catch {
@@ -74,9 +79,9 @@ export function useFilteredPreviews(pages: CapturedPage[], enabled: boolean): { 
   const uris = new Map<string, string>();
   const pending = new Set<string>();
   for (const w of want) {
-    const hit = done.get(`${w.src}|${w.filter}`);
+    const hit = done.get(`${w.src}|${w.filter}|${adjTag}`);
     if (hit) uris.set(w.key, hit);
-    else if (enabled && w.filter !== 'original') pending.add(w.key);
+    else if (enabled && (w.filter !== 'original' || adjustment)) pending.add(w.key);
   }
   return { uris, pending };
 }
@@ -102,15 +107,16 @@ export function ReviewFilterTray({
   const current: PageFilter = page ? filterInSnapshot(snap, page.sourceUri) ?? 'original' : 'original';
   const own = !!page && !!snap?.perPage.has(page.sourceUri.split('?')[0]);
 
+  const adjustment = snap?.adjustment;
   useEffect(() => {
     if (!src) return;
     let cancelled = false;
     setTiles(null);
-    reviewTilePreviews(src)
+    reviewTilePreviews(src, adjustment)
       .then(urls => { if (!cancelled) setTiles(urls); })
       .catch(() => { if (!cancelled) setTiles(null); });
     return () => { cancelled = true; };
-  }, [src]);
+  }, [src, adjustment]);
 
   // A page with its own filter opens on "This page".
   useEffect(() => { setOnlyThis(own); }, [page?.key]); // eslint-disable-line react-hooks/exhaustive-deps

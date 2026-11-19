@@ -54,7 +54,12 @@ jest.mock('../lib/save-scan', () => ({
   indexDocText: (id: string, pages: string[]) => mockIndexDocText(id, pages),
 }));
 
-import { combinePageMeta, copyPagesWithOriginals, extractPages, mergeInto, mergeIntoNew, reorderDocumentPages } from '../lib/doc-ops';
+const mockToken = jest.fn((docId: string, start: number, count: number) => ({ docId, start, count, layout: 0, identities: [] as string[] }));
+jest.mock('../lib/merge-undo', () => ({
+  mergeUndoToken: (docId: string, start: number, count: number) => mockToken(docId, start, count),
+}));
+
+import { combinePageMeta, copyPagesWithOriginals, extractPages, mergeInto, mergeIntoNew, mergeIntoWithUndo, reorderDocumentPages } from '../lib/doc-ops';
 import { withDocLock } from '../lib/bake';
 import { Document } from '../types/document';
 
@@ -154,6 +159,34 @@ test('reorderDocumentPages refuses an order built for a different page count', a
   await expect(reorderDocumentPages('r2', [1, 0])).rejects.toThrow('page count changed');
   await expect(reorderDocumentPages('r2', [0, 0, 1])).rejects.toThrow('page count changed');
   expect(mockReorderPages).not.toHaveBeenCalled();
+});
+
+test('mergeIntoWithUndo fingerprints the appended pages under the lock and never writes the source (r13)', async () => {
+  const target = stored(doc('t4', 2, { filters: ['bw', 'bw'] }));
+  const source = stored(doc('s4', 3));
+  mockToken.mockClear();
+  const out = await mergeIntoWithUndo(target, source);
+  expect(out?.added).toBe(3);
+  expect(out?.undo).toMatchObject({ docId: 't4', start: 2, count: 3 });
+  expect(mockToken).toHaveBeenCalledWith('t4', 2, 3);
+  // The source is only read: no patch, no save, its files as they were.
+  expect(mockPatches.map(([id]) => id)).toEqual(['t4']);
+  expect(mockSaved).toHaveLength(0);
+  expect([0, 1, 2].map(i => mockFiles[`${dir('s4')}/page-${i}.jpg`])).toEqual(['s4-0', 's4-1', 's4-2']);
+  // The target's text index is refreshed so search finds the merged words.
+  await Promise.resolve();
+  expect(mockIndexDocText).toHaveBeenCalledWith('t4', out!.doc.pages);
+});
+
+test('mergeIntoWithUndo offers no Undo when the fingerprint can’t be taken, and still merges', async () => {
+  const target = stored(doc('t5', 1));
+  stored(doc('s5', 1));
+  mockToken.mockImplementationOnce(() => { throw new Error('unreadable'); });
+  const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+  const out = await mergeIntoWithUndo(target, doc('s5', 1));
+  warn.mockRestore();
+  expect(out?.doc.pages).toHaveLength(2);
+  expect(out?.undo).toBeNull();
 });
 
 test('mergeIntoNew creates one document with every page in order', async () => {

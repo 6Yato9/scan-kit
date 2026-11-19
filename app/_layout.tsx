@@ -11,6 +11,7 @@ import { ErrorBoundary } from '@/components/error-boundary';
 import { FilterBaker } from '@/components/filter-baker';
 import { BakeIndicator } from '@/components/bake-indicator';
 import { LockCoverScreen, LockGate, selfLockingRoute } from '@/components/lock-gate';
+import { QuickActionsHandler } from '@/components/quick-actions-handler';
 import { bakePage } from '@/lib/bake';
 import { reassertCalls, statusBarStyleFor } from '@/lib/status-bar-style';
 import { subscribeSystemUI } from '@/lib/system-ui';
@@ -214,6 +215,11 @@ function ThemedStack() {
         name="annotate"
         options={{ presentation: 'fullScreenModal', headerShown: false }}
       />
+      {/* Fill & sign an imported PDF in place (app/pdf-fill.tsx). */}
+      <Stack.Screen
+        name="pdf-fill"
+        options={{ presentation: 'fullScreenModal', headerShown: false, gestureEnabled: false }}
+      />
       {/* Scan Kit's document camera and its review (app/camera.tsx, lib/capture-session.ts). */}
       <Stack.Screen
         name="camera"
@@ -243,6 +249,9 @@ function ThemedStack() {
       <Stack.Screen name="tools/business-card" options={{ headerShown: false, presentation: 'card' }} />
     </Stack>
     </LockGate>
+    {/* Home-screen quick actions (lib/quick-actions.ts). After LockGate, so App
+        Lock reads its flag first; it waits for the unlock itself. */}
+    <QuickActionsHandler />
     {/* After the navigator so it draws above the tab screens; clears the
         floating tab bar. Full-screen surfaces (viewer) render their own. */}
     <BakeIndicator placement="bottom" offset={TAB_BAR_CLEARANCE} />

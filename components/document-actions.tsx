@@ -3,6 +3,8 @@
 // everything it leads to (rename, duplicate, merge, move, share/export,
 // delete). Each screen keeps its own document list; this hook updates it.
 // Delete is a soft delete into Recently deleted, with Undo in the toast.
+// Merge offers Undo too (lib/merge-undo.ts): pages merged into a document
+// come out again; a new merged document (with an imported PDF) goes.
 //
 // Rename and move use patchDocument so they only touch the fields they change
 // and never overwrite OCR text indexed in the background meanwhile.
@@ -11,9 +13,18 @@ import { Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Document } from '@/types/document';
 import { patchDocument, restoreDocument, saveFolder, getFolders, trashDocument } from '@/lib/storage';
-import { duplicateDocument, mergeInto } from '@/lib/doc-ops';
+import { duplicateDocument, mergeIntoWithUndo } from '@/lib/doc-ops';
+import {
+  MergeUndoError,
+  mergeUndoRefusalMessage,
+  newMergeUndo,
+  undoMergeInto,
+  undoNewMerge,
+  type MergeUndo,
+  type NewMergeUndo,
+} from '@/lib/merge-undo';
 import { mergeDocumentsToPdf, needsPdfMerge, PdfEditError } from '@/lib/pdf-edit';
-import { notifySuccess } from '@/lib/haptics';
+import { notifyError, notifySuccess } from '@/lib/haptics';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
 import { useToast } from '@/components/toast';
 import { useScan } from '@/contexts/scan-context';
@@ -120,6 +131,42 @@ export function useDocumentActions({
     }
   }, [setDocuments, dropMissing]);
 
+  /** Undo for a merge that made a new document: it goes; the originals were never touched. */
+  const undoNewMergeDoc = useCallback((undo: NewMergeUndo) => {
+    undoNewMerge(undo)
+      .then(outcome => {
+        setDocuments(prev => prev.filter(d => d.id !== undo.docId));
+        bumpLastSaved();
+        notifySuccess();
+        // Changed since the merge: kept in Recently deleted rather than deleted.
+        if (outcome === 'trashed') toast.show('Moved to Recently deleted');
+      })
+      .catch(err => {
+        console.error('Undo merge failed', err);
+        notifyError();
+        Alert.alert("Couldn't undo the merge", 'Try again, or delete the merged document yourself.');
+      });
+  }, [setDocuments, bumpLastSaved, toast]);
+
+  /** Undo for pages merged into an existing document: takes exactly those pages out again. */
+  const undoMergeIntoDoc = useCallback((undo: MergeUndo) => {
+    undoMergeInto(undo)
+      .then(updated => {
+        setDocuments(prev => prev.map(d => (d.id === updated.id ? updated : d)));
+        notifySuccess();
+      })
+      .catch(err => {
+        notifyError();
+        // Refused (the document changed since): nothing was touched.
+        if (err instanceof MergeUndoError) {
+          Alert.alert("Couldn't undo the merge", mergeUndoRefusalMessage(err.kind));
+          return;
+        }
+        console.error('Undo merge failed', err);
+        Alert.alert("Couldn't undo the merge", 'Try again.');
+      });
+  }, [setDocuments]);
+
   const handleMerge = useCallback(async (target: Document, source: Document) => {
     // An imported PDF in the pair: one new PDF, both originals kept (lib/pdf-edit).
     if (needsPdfMerge([target, source])) {
@@ -128,7 +175,8 @@ export function useDocumentActions({
         setDocuments(prev => [merged, ...prev]);
         bumpLastSaved();
         notifySuccess();
-        toast.show(`Saved “${merged.name}”`);
+        const undo = newMergeUndo(merged);
+        toast.show(`Saved “${merged.name}”`, { action: { label: 'Undo', onPress: () => undoNewMergeDoc(undo) } });
       } catch (err) {
         const locked = err instanceof PdfEditError && err.kind === 'locked';
         if (err instanceof PdfEditError && err.kind === 'restricted') {
@@ -145,16 +193,20 @@ export function useDocumentActions({
       return;
     }
     try {
-      const updated = await mergeInto(target, source);
-      if (!updated) { dropMissing(target.id); return; }
+      const result = await mergeIntoWithUndo(target, source);
+      if (!result) { dropMissing(target.id); return; }
+      const { doc: updated, added, undo } = result;
       setDocuments(prev => prev.map(d => (d.id === updated.id ? updated : d)));
       notifySuccess();
-      toast.show(`Added ${source.pages.length} page${source.pages.length === 1 ? '' : 's'} to “${target.name}”`);
+      toast.show(
+        `Added ${added} page${added === 1 ? '' : 's'} to “${target.name}”`,
+        undo ? { action: { label: 'Undo', onPress: () => undoMergeIntoDoc(undo) } } : undefined,
+      );
     } catch (err) {
       console.error('Merge failed', err);
       Alert.alert("Couldn't merge documents", 'There may not be enough free space. Please try again.');
     }
-  }, [setDocuments, dropMissing, toast, bumpLastSaved]);
+  }, [setDocuments, dropMissing, toast, bumpLastSaved, undoNewMergeDoc, undoMergeIntoDoc]);
 
   const handleMove = useCallback(async (doc: Document, folder: string | null) => {
     setMoveTarget(null);

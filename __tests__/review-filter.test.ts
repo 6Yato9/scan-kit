@@ -101,3 +101,69 @@ test('the snapshot is a new object on every change and reads like the session', 
   });
   expect(getReviewFilterSnapshot()).toBeNull();
 });
+
+// ── r13: the review on the viewer's Add pages and Retake ─────────────────────
+
+describe('where the review starts (r13)', () => {
+  const { sharedFilter, addPagesFilter, retakeLook, getReviewFilterSnapshot } = jest.requireActual('../lib/review-filter');
+  const pages = (n: number) => Array.from({ length: n }, (_, i) => `p${i}`);
+
+  test('Add pages: the document’s own filter when every page shares it', () => {
+    expect(addPagesFilter({ pages: pages(3), filters: ['bw', 'bw', 'bw'] }, 'enhanced')).toBe('bw');
+    // No filters recorded: every page is Original, and new pages match it.
+    expect(addPagesFilter({ pages: pages(2) }, 'enhanced')).toBe('original');
+    // A short list reads its missing entries as Original.
+    expect(sharedFilter({ pages: pages(2), filters: ['bw'] })).toBeNull();
+  });
+
+  test('Add pages: Scan settings’ default when the pages differ', () => {
+    expect(addPagesFilter({ pages: pages(3), filters: ['bw', 'enhanced', 'bw'] }, 'noshadow')).toBe('noshadow');
+    expect(addPagesFilter({ pages: [] }, 'noshadow')).toBe('noshadow');
+  });
+
+  test('Retake: the replaced page’s filter and adjustments', () => {
+    const doc = {
+      pages: pages(3),
+      filters: ['bw', 'grayscale', 'enhanced'] as const,
+      adjustments: [
+        { brightness: 0, contrast: 0, saturation: 0 },
+        { brightness: 25, contrast: -10, saturation: 0, sharpness: 30 },
+        { brightness: 0, contrast: 0, saturation: 0 },
+      ],
+    };
+    expect(retakeLook(doc, 1)).toEqual({ filter: 'grayscale', adjustment: { brightness: 25, contrast: -10, saturation: 0, sharpness: 30 } });
+    expect(retakeLook(doc, 0)).toEqual({ filter: 'bw', adjustment: undefined });
+    expect(retakeLook({ pages: pages(1) }, 0)).toEqual({ filter: 'original', adjustment: undefined });
+  });
+
+  test('a retake’s adjustment rides in the session and is applied in every preview', async () => {
+    const adj = { brightness: 25, contrast: 0, saturation: 0 };
+    await withReviewFilters('grayscale', async () => {
+      expect(getReviewFilterSnapshot().adjustment).toEqual(adj);
+      mockEnqueue.mockClear();
+      await reviewTilePreviews('file:///caches/r.jpg', adj);
+      const job = mockEnqueue.mock.calls[0][0];
+      // Every tile is the filter WITH the adjustment (the Original tile too).
+      const { combinedFilterRN } = jest.requireActual('../lib/filters');
+      const order = ['original', 'enhanced', 'noshadow', 'grayscale', 'bw', 'fainttext', 'photo', 'whiteboard', 'inksaver'];
+      expect(job.previews).toEqual(order.map(f => combinedFilterRN(f, adj) ?? []));
+      expect(job.previews[0]).toEqual([{ brightness: 1.25 }]);
+      // The image itself is the plain file (the adjustment only keys the cache).
+      expect(job.src).toBe('file:///caches/r.jpg');
+      // Cached apart from the same photo without it.
+      await reviewTilePreviews('file:///caches/r.jpg');
+      expect(mockEnqueue).toHaveBeenCalledTimes(2);
+      expect(mockEnqueue.mock.calls[1][0].previews[0]).toEqual([]);
+      // Original + an adjustment still needs a render.
+      expect(await reviewPagePreview('file:///caches/r.jpg', 'original', adj)).not.toBe('file:///caches/r.jpg');
+      return null;
+    }, { adjustment: adj });
+  });
+
+  test('a neutral adjustment is no adjustment', async () => {
+    await withReviewFilters('bw', async () => {
+      expect(getReviewFilterSnapshot().adjustment).toBeUndefined();
+      return null;
+    }, { adjustment: { brightness: 0, contrast: 0, saturation: 0 } });
+  });
+});

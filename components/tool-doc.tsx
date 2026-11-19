@@ -49,6 +49,12 @@ export type PickerConvert = {
   onConverted: (doc: Document) => void;
   /** Its conversion was undone from the toast: reload (it is a PDF again). */
   onUndone: (docId: string) => void;
+  /**
+   * Instead of converting: the PDF opens in a tool that works on it as it is
+   * (Sign → Fill & sign). The row says `label`; `onOpen` runs once the sheet
+   * has closed; `note` replaces the "convert it first" line.
+   */
+  open?: { label: string; hint: string; note: string; onOpen: (pdf: Document) => void };
 };
 
 export function useToolDoc(docs: Document[]) {
@@ -265,7 +271,9 @@ export function ToolDocPicker({
         onDismissed={() => {
           const pdf = pendingConvert.current;
           pendingConvert.current = null;
-          if (pdf) askConvert(pdf);
+          if (!pdf) return;
+          if (convertRef.current?.open) convertRef.current.open.onOpen(pdf);
+          else askConvert(pdf);
         }}
       >
         <SheetHeader title="Choose a document" subtitle={pdfs.length ? undefined : note} />
@@ -293,6 +301,8 @@ export function ToolDocPicker({
                   <ConvertRow
                     key={d.id}
                     doc={d}
+                    action={convert?.open?.label}
+                    hint={convert?.open?.hint}
                     onPress={() => {
                       pendingConvert.current = d;
                       setOpen(false);
@@ -301,7 +311,7 @@ export function ToolDocPicker({
                 ))}
               </DocGroup>
               <Text style={[Type.footnote, styles.pdfNote, { color: colors.muted }]}>
-                {`To ${convert?.verb ?? 'edit'} a PDF, convert it to pages first. You can undo it right after.`}
+                {convert?.open?.note ?? `To ${convert?.verb ?? 'edit'} a PDF, convert it to pages first. You can undo it right after.`}
               </Text>
             </>
           ) : null}
@@ -311,15 +321,15 @@ export function ToolDocPicker({
   );
 }
 
-/** An imported PDF in the picker: the row says what tapping it does (Convert). */
-function ConvertRow({ doc, onPress }: { doc: Document; onPress: () => void }) {
+/** An imported PDF in the picker: the row says what tapping it does (Convert, or `action`). */
+function ConvertRow({ doc, onPress, action = 'Convert', hint = 'Converts it to pages' }: { doc: Document; onPress: () => void; action?: string; hint?: string }) {
   const { colors } = useTheme();
   return (
     <Pressable
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel={`${doc.name}, PDF`}
-      accessibilityHint="Converts it to pages"
+      accessibilityHint={hint}
       style={({ pressed }) => [styles.convertRow, pressed && { backgroundColor: colors.separator }]}
     >
       <DocThumb doc={doc} />
@@ -329,7 +339,7 @@ function ConvertRow({ doc, onPress }: { doc: Document; onPress: () => void }) {
         </Text>
         <Text style={[Type.footnote, styles.meta, { color: colors.muted }]}>PDF</Text>
       </View>
-      <Text style={[Type.subhead, styles.convertAction, { color: colors.accent }]}>Convert</Text>
+      <Text style={[Type.subhead, styles.convertAction, { color: colors.accent }]}>{action}</Text>
     </Pressable>
   );
 }

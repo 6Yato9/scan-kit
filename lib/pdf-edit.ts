@@ -1,7 +1,9 @@
 // lib/pdf-edit.ts
 //
 // Page edits on an imported PDF that keep it a PDF: rotate, delete, reorder,
-// insert a blank page, split, and merge with other documents. PDFKit moves the
+// insert a blank page, split, and merge with other documents. Fill & sign
+// (lib/pdf-fill.ts) writes through the same crash-safe swap and Undo
+// (rewriteStoredPdf). PDFKit moves the
 // pages (VisionOcr.pdfEditPages), never redraws them, so the text stays
 // selectable and searchable and nothing is rasterised.
 //
@@ -168,6 +170,8 @@ function classify(err: unknown): PdfEditError {
   // The PDF's own permissions forbid changing its pages (PdfEditor.swift / PdfMerger.swift).
   if (code === 'ERR_PDF_RESTRICTED' || /^restricted$/i.test(msg)) return new PdfEditError('restricted', msg);
   if (code === 'ERR_PDF_LOCKED' || /^locked$|password|encrypt/i.test(msg)) return new PdfEditError('locked', msg);
+  // Fill & sign: the form isn't what it was when the screen read it (PdfFiller.swift).
+  if (code === 'ERR_PDF_CHANGED' || /^changed$/i.test(msg)) return new PdfEditError('changed', msg);
   if (/could not open|no pages/i.test(msg)) return new PdfEditError('unreadable', msg);
   return new PdfEditError('failed', msg);
 }
@@ -225,6 +229,11 @@ function printOf(uri: string): FilePrint {
   try { size = typeof f.size === 'number' ? f.size : null; } catch {}
   try { md5 = typeof f.md5 === 'string' ? f.md5 : null; } catch {}
   return { size, md5 };
+}
+
+/** A file's print (size + MD5), e.g. to check later that it hasn't changed (lib/pdf-fill.ts). */
+export function filePrint(uri: string): FilePrint {
+  return printOf(uri);
 }
 
 /** True when both prints are known and equal on everything both know. */
@@ -356,6 +365,28 @@ export async function editStoredPdf(
   const edit = VisionOcr?.pdfEditPages;
   if (typeof edit !== 'function' || !canEditPdfPages()) throw new PdfEditError('unavailable', 'pdfEditPages missing');
   if (plan.length === 0) throw new PdfEditError('failed', 'empty plan');
+  const { sources, rotations } = planArgs(plan);
+  return rewriteStoredPdf(
+    docId,
+    (target, out) => edit(target, out, sources, rotations, options.password ?? null),
+    plan.length,
+  );
+}
+
+/**
+ * The one way a stored PDF is rewritten in place (page edits here, Fill &
+ * sign in lib/pdf-fill.ts), crash-safe with Undo as the header describes:
+ * `write(target, out)` has native write the new PDF to `out` from the stored
+ * one at `target` (both file paths) and resolve to its page count, which must
+ * be `expectedPages`. Rejects with PdfEditError, leaving the document as it
+ * was (except kind 'partial', see the header).
+ */
+export async function rewriteStoredPdf(
+  docId: string,
+  write: (target: string, out: string) => Promise<number>,
+  expectedPages: number,
+): Promise<PdfEditResult> {
+  if (typeof VisionOcr?.replaceFile !== 'function') throw new PdfEditError('unavailable', 'replaceFile missing');
   return withDocLock(docId, async () => {
     const doc = await getDocument(docId);
     if (!doc) throw new PdfEditError('missing', 'document missing');
@@ -367,14 +398,13 @@ export async function editStoredPdf(
     let keepWork = false;
     try {
       const after = new File(work, 'after.pdf');
-      const { sources, rotations } = planArgs(plan);
       let pageCount: number;
       try {
-        pageCount = await edit(target, after.uri, sources, rotations, options.password ?? null);
+        pageCount = await write(target, after.uri);
       } catch (err) {
         throw classify(err);
       }
-      if (!after.exists || pageCount !== plan.length) throw new PdfEditError('failed', 'edit not verified');
+      if (!after.exists || pageCount !== expectedPages) throw new PdfEditError('failed', 'edit not verified');
       const text = await readText(after.uri);
 
       // The way back (Undo, and after a crash): a copy of the PDF as it is now.

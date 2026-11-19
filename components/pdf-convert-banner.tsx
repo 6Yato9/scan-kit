@@ -82,7 +82,7 @@ export function PdfConvertBanner({
             ? converting.stage === 'saving'
               ? `Saving page ${converting.done} of ${converting.total}`
               : 'Reading the PDF'
-            : 'Turns each page into an image you can crop, sign, filter and mark up. You can undo it straight after.'}
+            : 'Turns each page into an image you can crop, filter and mark up. You can undo it straight after.'}
         </Text>
         {busy ? null : (
           <Pressable

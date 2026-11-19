@@ -3,7 +3,10 @@
 // "Retake page N": replaces one page of a document, in place, with a new
 // capture (or photo), through the same pipeline a new page goes through —
 // auto-crop for library photos, the user's scan quality, then (finishAddedPages)
-// their default filter and a refreshed text index.
+// the look chosen in the camera's review and a refreshed text index. The
+// review starts at the replaced page's own filter and adjustments
+// (lib/review-filter.ts retakeLook), so by default the new page looks like
+// the one it replaces.
 //
 // The old page is stashed first (lib/page-undo), so the viewer can offer Undo,
 // and its `.orig` shadow is removed: the new pixels are unfiltered, so the
@@ -75,8 +78,9 @@ const isDefaultAdj = (a: PageAdjustment) => !a.brightness && !a.contrast && !a.s
 
 /**
  * Replaces page `index` of `docId` with `uri`. The page keeps its position;
- * its filter and adjustments are reset (the caller bakes the default filter
- * afterwards with finishAddedPages). Temp inputs are deleted once stored.
+ * it is stored as Original with no adjustment, and the caller bakes the
+ * chosen look afterwards with finishAddedPages (the bake records it, as for
+ * every new page). Temp inputs are deleted once stored.
  */
 export async function retakePage(
   docId: string,
@@ -165,6 +169,11 @@ function supersedeStaleBake(docId: string, index: number): void {
   bakePage(docId, index, 'original', undefined).catch(err => console.warn('Retake: superseding bake failed', err));
 }
 
+/** A remap that keeps every page where it is but withdraws in-flight bakes for page `index` (lib/bake.ts applyEdit). */
+export function dropBakesFor(index: number): (i: number) => number {
+  return i => (i === index ? -1 : i);
+}
+
 /**
  * Undo for retakePage: puts the stashed page (and its shadow) back at `index`
  * with the filter and adjustments it had. Refuses (RetakeError) when the pages
@@ -173,7 +182,11 @@ function supersedeStaleBake(docId: string, index: number): void {
  * purged with the cache). Nothing is changed then.
  */
 export async function undoRetake(docId: string, index: number, undo: RetakeUndo): Promise<Document> {
-  return runPageEdit(docId, { pages: [index] }, async () => {
+  // The remap marks the page as gone for any bake still running for the NEW
+  // capture (the look chosen for it in the review): the bake is dropped
+  // instead of being redone on the restored page, whose pixels and recorded
+  // look come back exactly as they were. The page itself keeps its index.
+  return runPageEdit(docId, { remap: dropBakesFor(index), pages: [index] }, async () => {
     if (pageLayoutGeneration(docId) !== undo.layout) {
       throw new RetakeError('pages-moved', 'The pages have been moved or deleted since, so the replaced page can’t be put back.');
     }

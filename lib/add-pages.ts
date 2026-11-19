@@ -2,8 +2,9 @@
 //
 // Appends newly scanned or imported pages to an existing document through the
 // same pipeline a new scan goes through: auto-crop for library photos, the
-// user's scan quality, their default filter (baked, then recorded), and a
-// refreshed text index.
+// user's scan quality, the filter chosen in the camera's review (or the
+// default one — lib/review-filter.ts addPagesFilter; baked, then recorded),
+// and a refreshed text index.
 //
 // Each page may be a finished image URI or a photo with its page outline
 // (SourcePageInput, see lib/save-scan.ts and lib/page-source.ts): then the page
@@ -17,7 +18,7 @@ import { Document, PageAdjustment, PageFilter } from '../types/document';
 import { copyPageWithQuality, deleteDisposableTemps, isScannerOutput, moveScannerOutputToCaches } from './files';
 import { PAGE_SHADOW_SUFFIXES } from './page-family';
 import { getDocument, keepSourcesEnabled, updateDocumentWith } from './storage';
-import { bakePages, runPageEdit } from './bake';
+import { bakePage, bakePages, runPageEdit } from './bake';
 import { indexDocText } from './save-scan';
 import { autoCropDocument } from './document-detect';
 import {
@@ -174,11 +175,58 @@ export async function addPagesToDocument(
   return result;
 }
 
-/** Bakes the default filter into the new pages, then refreshes the text index. */
-export function finishAddedPages(doc: Document, added: number[], filter: PageFilter | 'original'): void {
+/**
+ * Bakes the chosen look into the new pages, then refreshes the text index.
+ * `filter` is one filter for every page in `added`, or one per page (the
+ * camera review's choice, in `added`'s order). `adjustments`, when given,
+ * are baked with them, page by page (a retake keeps the replaced page's).
+ * Pages were stored as 'original', so the bake is what records the look
+ * (lib/bake.ts): a page left Original with no adjustment needs no bake.
+ */
+export function finishAddedPages(
+  doc: Document,
+  added: number[],
+  filter: PageFilter | PageFilter[],
+  adjustments?: (PageAdjustment | undefined)[],
+): void {
   (async () => {
-    if (filter !== 'original') await bakePages(doc.id, added, filter);
+    const looks = addedLooks(added, filter, adjustments);
+    const plain = looks.filter(l => !l.adjustment);
+    const adjusted = looks.filter(l => l.adjustment);
+    await Promise.all([
+      // One bakePages call per filter: every page is tracked from the start.
+      ...bakeGroupsFor(plain).map(g => bakePages(doc.id, g.indices, g.filter)),
+      ...adjusted.map(l => bakePage(doc.id, l.index, l.filter, l.adjustment).catch(err => {
+        console.error('Bake failed for page', l.index, err);
+        return false;
+      })),
+    ]);
     const fresh = await getDocument(doc.id);
     if (fresh) await indexDocText(fresh.id, fresh.pages);
   })().catch(err => console.error('finishAddedPages', err));
+}
+
+const isDefaultAdj = (a: PageAdjustment | undefined) => !a || (!a.brightness && !a.contrast && !a.saturation && !a.sharpness);
+
+/** What each added page is baked with: Original pages with no adjustment are left out. Exported for tests. */
+export function addedLooks(
+  added: number[],
+  filter: PageFilter | PageFilter[],
+  adjustments?: (PageAdjustment | undefined)[],
+): { index: number; filter: PageFilter; adjustment?: PageAdjustment }[] {
+  const out: { index: number; filter: PageFilter; adjustment?: PageAdjustment }[] = [];
+  added.forEach((index, k) => {
+    const f = (Array.isArray(filter) ? filter[k] : filter) ?? 'original';
+    const a = adjustments?.[k];
+    const adjustment = isDefaultAdj(a) ? undefined : a;
+    if (f === 'original' && !adjustment) return;
+    out.push(adjustment ? { index, filter: f, adjustment } : { index, filter: f });
+  });
+  return out;
+}
+
+function bakeGroupsFor(looks: { index: number; filter: PageFilter }[]): { filter: PageFilter; indices: number[] }[] {
+  const groups = new Map<PageFilter, number[]>();
+  for (const l of looks) groups.set(l.filter, [...(groups.get(l.filter) ?? []), l.index]);
+  return [...groups.entries()].map(([f, indices]) => ({ filter: f, indices }));
 }

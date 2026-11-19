@@ -186,6 +186,11 @@ test('undo puts the old pixels, shadow, filter and adjustment back', async () =>
   expect(mockFs.get(origUri('d1', 1))).toBe('page1-raw');
   expect(restored.filters).toEqual(['enhanced', 'enhanced', 'bw']);
   expect(restored.adjustments?.[1]).toEqual({ brightness: 20, contrast: 0, saturation: 0 });
+  // A bake still running for the new capture's look is dropped, not redone on
+  // the restored page: the page keeps its index, but its bakes are withdrawn.
+  const edit = mockEdits[mockEdits.length - 1] as { remap: (i: number) => number; pages: number[] };
+  expect([0, 1, 2].map(edit.remap)).toEqual([0, -1, 2]);
+  expect(edit.pages).toEqual([1]);
 });
 
 test('works on a document with no per-page metadata yet', async () => {

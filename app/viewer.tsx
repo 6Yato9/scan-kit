@@ -47,6 +47,7 @@ import {
   withDocLock,
 } from '@/lib/bake';
 import { addPagesToDocument, finishAddedPages } from '@/lib/add-pages';
+import { addPagesFilter, retakeLook, withReviewFilters } from '@/lib/review-filter';
 import { RetakeError, retakePage, undoRetake, type RetakeUndo } from '@/lib/retake-page';
 import { duplicateDocument } from '@/lib/doc-ops';
 import {
@@ -732,12 +733,19 @@ function ViewerContent({
     setAdding(true);
     try {
       const settings = await getScanSettings();
+      // The new pages start at the document's own filter when its pages share
+      // one, so they match; else at Scan settings' (lib/review-filter.ts).
+      const startFilter = addPagesFilter(doc, settings.defaultFilter);
       let uris: ScanPageInput[] = [];
+      let filters: PageFilter[] = [];
       if (source === 'camera') {
         // The camera chosen in Scan settings (lib/tool-scan.ts): Scan Kit's
-        // camera keeps each photo so the new pages can be re-cropped later.
+        // camera keeps each photo so the new pages can be re-cropped later,
+        // and its review offers the filter, as for a new scan.
         // Either way the app lock can't close it from under this call.
-        uris = (await scanPagesWithCamera()) ?? [];
+        const scanned = await withReviewFilters(startFilter, () => scanPagesWithCamera());
+        uris = scanned.pages ?? [];
+        filters = scanned.filters;
       } else {
         const result = await withSystemUI(
           () => ImagePicker.launchImageLibraryAsync({
@@ -749,12 +757,15 @@ function ViewerContent({
           (): ImagePicker.ImagePickerResult => ({ canceled: true, assets: null }),
         );
         // addPagesToDocument finds and straightens the page in each photo.
+        // No review step after the system picker: the photos get the same
+        // starting filter, and the Filters panel changes it afterwards.
         uris = result.canceled ? [] : result.assets.map(a => a.uri);
+        filters = uris.map(() => startFilter);
       }
       if (!uris.length) return;
       const { doc: next, added } = await addPagesToDocument(doc.id, uris, QUALITY_MAP[settings.quality]);
       setDocument(withPendingChoices(next));
-      finishAddedPages(next, added, settings.defaultFilter);
+      finishAddedPages(next, added, filters.length === added.length ? filters : startFilter);
       notifySuccess();
       const first = added[0];
       setCurrentPage(first);
@@ -829,7 +840,12 @@ function ViewerContent({
 
   const retakingRef = useRef(false);
   /** Replaces page `index` with the image (or photo and crop) `uri` and offers Undo. */
-  const applyRetake = useCallback(async (docId: string, index: number, uri: ScanPageInput) => {
+  const applyRetake = useCallback(async (
+    docId: string,
+    index: number,
+    uri: ScanPageInput,
+    look: { filter: PageFilter; adjustment: PageAdjustment | undefined },
+  ) => {
     retakingRef.current = true;
     setRetaking(true);
     try {
@@ -837,8 +853,9 @@ function ViewerContent({
       const settings = await getScanSettings();
       const { doc: next, undo } = await retakePage(docId, index, uri, QUALITY_MAP[settings.quality]);
       setDocument(withPendingChoices(next));
-      // Same finish as a new page: the default filter, then the text index.
-      finishAddedPages(next, [index], settings.defaultFilter);
+      // Same finish as a new page: the chosen look (by default the replaced
+      // page's filter and adjustments), then the text index.
+      finishAddedPages(next, [index], [look.filter], [look.adjustment]);
       notifySuccess();
       toast.show(
         next.pages.length > 1 ? `Page ${index + 1} replaced` : 'Page replaced',
@@ -858,16 +875,28 @@ function ViewerContent({
   const retakeFrom = useCallback(async (source: 'camera' | 'photos', index: number) => {
     const doc = docRef.current;
     if (!doc || retakingRef.current) return;
+    // The new page keeps the replaced page's look by default: its filter and
+    // adjustments (with a pending choice counting as its own). The camera's
+    // review starts there and can change the filter (lib/review-filter.ts).
+    const look = retakeLook(doc, index);
     let uris: ScanPageInput[] | null = null;
     try {
       // Photos are auto-cropped by retakePage, so the picker hands them over as is.
-      uris = source === 'camera'
-        ? await scanPagesWithCamera({
-          maxPages: 1,
-          title: doc.pages.length > 1 ? `Retake page ${index + 1}` : 'Retake page',
-          doneLabel: 'Replace',
-        })
-        : await pickPhotos(false, { autoCrop: false });
+      if (source === 'camera') {
+        const scanned = await withReviewFilters(
+          look.filter,
+          () => scanPagesWithCamera({
+            maxPages: 1,
+            title: doc.pages.length > 1 ? `Retake page ${index + 1}` : 'Retake page',
+            doneLabel: 'Replace',
+          }),
+          { adjustment: look.adjustment },
+        );
+        uris = scanned.pages;
+        if (scanned.filters[0]) look.filter = scanned.filters[0];
+      } else {
+        uris = await pickPhotos(false, { autoCrop: false });
+      }
     } catch (err) {
       if (err instanceof ToolScanError && err.kind === 'unavailable') {
         Alert.alert(
@@ -887,7 +916,7 @@ function ViewerContent({
     // The camera can capture several pages in one go; a retake uses the first.
     const [first, ...extra] = uris;
     deleteTempFiles(extra.map(inputUri));
-    await applyRetake(doc.id, index, first);
+    await applyRetake(doc.id, index, first, look);
   }, [applyRetake]);
 
   const handleRetake = useCallback((at?: number) => {
@@ -1292,6 +1321,8 @@ function ViewerContent({
     onMissing: () => setStatus('missing'),
     onLocked: () => handleUnlockPdf(),
     onCreated: bumpLastSaved,
+    // Merge's toast opens the new PDF; its Undo is offered in the "…" menu.
+    offerUndo: useCallback((message: string, run: () => void) => { lastUndo.offer(message, run); }, [lastUndo]),
   });
 
   // Scanned documents: Merge, Split and Blank page in the "…" menu (components/scan-doc-tools).
@@ -1309,6 +1340,7 @@ function ViewerContent({
     reload,
     onEdited: useCallback(() => lastUndo.drop(), [lastUndo]),
     onCreated: bumpLastSaved,
+    offerUndo: useCallback((message: string, run: () => void) => { lastUndo.offer(message, run); }, [lastUndo]),
   });
 
 
@@ -1384,7 +1416,8 @@ function ViewerContent({
   // delete actions. Image documents only for the tools (they work on pages).
   const pageLabel = pageCount > 1 ? `page ${page + 1}` : 'page';
   const moreTools: MoreAction[] = document.pdfUri
-    ? []
+    ? // Imported PDFs: Fill & sign in place (app/pdf-fill.tsx), no convert needed.
+      (pdfTools.fillTool ? [pdfTools.fillTool] : [])
     : [
         { key: 'sign', icon: 'signature', label: 'Sign', onPress: () => openTool('/tools/sign') },
         { key: 'redact', icon: 'eye-off-outline', label: 'Redact', onPress: () => openTool('/tools/redact') },

@@ -42,6 +42,10 @@ import { FilterBaker } from '@/components/filter-baker';
 import { PageThumb } from '@/components/page-thumb';
 import { reportStampFailure, usePageStamper, useStampFinish } from '@/components/page-stamper';
 import { SignaturePlacer } from '@/components/placement-frame';
+import { signaturePadHtml } from '@/components/signature-pad';
+import { useRouter } from 'expo-router';
+import { navigateWhenUnlocked } from '@/lib/nav-guard';
+import { canFillPdf, pdfFillHref } from '@/lib/pdf-fill';
 import { emptySpotPlacement, lineToPageRect, type PageRect } from '@/lib/placement';
 import { recognizeLines } from '@/lib/ocr';
 import { getImageSize } from '@/lib/image-size';
@@ -77,56 +81,9 @@ const INKS: { value: SignatureInk; label: string; color: string }[] = [
   { value: 'blue', label: 'Blue', color: SIGNATURE_INK.blue },
 ];
 
-// Ink is drawn at device resolution in the theme's text colour on a
-// transparent canvas, so the pad matches light and dark mode. Capture is
-// implicit: a moment after each stroke the canvas is trimmed to the strokes
-// (plus a small margin), recoloured to the document ink and posted back as a
-// PNG, so there is no "Use signature" step.
-function padHtml(ink: string, docInk: string): string {
-  return `<!DOCTYPE html><html><head>
-<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<style>*{margin:0;padding:0;box-sizing:border-box}html,body{background:transparent;overflow:hidden;height:100%}
-canvas{display:block;touch-action:none}</style></head><body><canvas id="c"></canvas>
-<script>
-var canvas = document.getElementById('c');
-var ctx = canvas.getContext('2d');
-var dpr = window.devicePixelRatio || 1;
-var W = window.innerWidth, H = ${PAD_HEIGHT};
-canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
-canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
-ctx.scale(dpr, dpr);
-ctx.strokeStyle = '${ink}'; ctx.fillStyle = '${ink}'; ctx.lineWidth = 2.6; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-var drawing = false, drawn = false, last = null, timer = null;
-function pt(e){ var t = e.touches[0], r = canvas.getBoundingClientRect(); return { x: t.clientX - r.left, y: t.clientY - r.top }; }
-canvas.addEventListener('touchstart', function(e){ e.preventDefault(); clearTimeout(timer); drawing = true; last = pt(e);
-  ctx.beginPath(); ctx.arc(last.x, last.y, ctx.lineWidth / 2, 0, Math.PI * 2); ctx.fill(); drawn = true; }, { passive: false });
-canvas.addEventListener('touchmove', function(e){ e.preventDefault(); if (!drawing) return; var p = pt(e);
-  ctx.beginPath(); ctx.moveTo(last.x, last.y); var mx = (last.x + p.x) / 2, my = (last.y + p.y) / 2;
-  ctx.quadraticCurveTo(last.x, last.y, mx, my); ctx.lineTo(p.x, p.y); ctx.stroke(); last = p; }, { passive: false });
-canvas.addEventListener('touchend', function(){ drawing = false; clearTimeout(timer); timer = setTimeout(exportSignature, 250); });
-function post(m){ window.ReactNativeWebView.postMessage(m); }
-function exportSignature(){
-  if (!drawn) { post('EMPTY'); return; }
-  var w = canvas.width, h = canvas.height, d = ctx.getImageData(0, 0, w, h).data;
-  var minX = w, minY = h, maxX = -1, maxY = -1;
-  for (var y = 0; y < h; y++) for (var x = 0; x < w; x++) if (d[(y * w + x) * 4 + 3] > 8) {
-    if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y; }
-  if (maxX < 0) { post('EMPTY'); return; }
-  var m = Math.round(4 * dpr);
-  minX = Math.max(0, minX - m); minY = Math.max(0, minY - m); maxX = Math.min(w - 1, maxX + m); maxY = Math.min(h - 1, maxY + m);
-  var out = document.createElement('canvas'); out.width = maxX - minX + 1; out.height = maxY - minY + 1;
-  var o = out.getContext('2d');
-  o.drawImage(canvas, minX, minY, out.width, out.height, 0, 0, out.width, out.height);
-  // Whatever colour the pad shows, the page gets dark ink.
-  o.globalCompositeOperation = 'source-in'; o.fillStyle = '${docInk}'; o.fillRect(0, 0, out.width, out.height);
-  post(JSON.stringify({ dataUri: out.toDataURL('image/png'), width: out.width, height: out.height }));
-}
-function clearPad(){ clearTimeout(timer); ctx.save(); ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0,0,canvas.width,canvas.height); ctx.restore(); drawn = false; }
-</script></body></html>`;
-}
-
 export default function SignScreen() {
   const { colors } = useTheme();
+  const router = useRouter();
   const { width: screenW, height: screenH } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const webRef = useRef<WebView>(null);
@@ -204,7 +161,7 @@ export default function SignScreen() {
   };
 
   // The pad draws in the theme's text colour; a theme change reloads it empty.
-  const html = useMemo(() => padHtml(colors.text, Ink.signature), [colors.text]);
+  const html = useMemo(() => signaturePadHtml(colors.text, Ink.signature, PAD_HEIGHT), [colors.text]);
   useEffect(() => {
     // A saved signature survives a theme change; a drawn one is gone with the pad.
     if (!savedPick) setSig(null);
@@ -317,10 +274,19 @@ export default function SignScreen() {
     }
   };
 
-  // Picking an imported PDF converts it to pages (with Undo), then chooses it.
+  // Picking an imported PDF opens it in Fill & sign, which signs it as it is
+  // (text stays text). Builds without it convert it to pages (with Undo).
   const convert: PickerConvert = {
     pdfs,
     verb: 'sign',
+    open: canFillPdf()
+      ? {
+          label: 'Fill & sign',
+          hint: 'Opens it in Fill & sign',
+          note: 'PDFs are signed as they are, in Fill & sign: their text stays text, and you can fill in their forms.',
+          onOpen: pdf => { navigateWhenUnlocked(() => router.replace(pdfFillHref(pdf.id, 'last'))); },
+        }
+      : undefined,
     onConverted: d => {
       reload();
       reloadPdfs();

@@ -14,6 +14,7 @@ import { PAGE_FAMILY_SUFFIXES, PAGE_SHADOW_SUFFIXES } from './page-family';
 import { deleteDocument, getDocument, patchDocument, saveDocument, trashDocument } from './storage';
 import { remapForReorder, runPageEdit, withDocLock } from './bake';
 import { indexDocText } from './save-scan';
+import { mergeUndoToken, type MergeUndo } from './merge-undo';
 
 const DEFAULT_ADJ: PageAdjustment = { brightness: 0, contrast: 0, saturation: 0 };
 
@@ -72,14 +73,36 @@ export async function duplicateDocument(doc: Document): Promise<Document> {
 /**
  * Appends `source`'s pages to `target` (the source is left untouched).
  * Returns the updated target, or null if the target was deleted meanwhile.
+ * See mergeIntoWithUndo.
+ */
+export async function mergeInto(target: Document, source: Document): Promise<Document | null> {
+  return (await mergeIntoWithUndo(target, source))?.doc ?? null;
+}
+
+export type MergeIntoResult = {
+  doc: Document;
+  /** How many pages were appended (the source's count when the merge started). */
+  added: number;
+  /** Undo's fingerprint of the appended pages (lib/merge-undo.ts); null when none can be offered. */
+  undo: MergeUndo | null;
+};
+
+/**
+ * Appends `source`'s pages to `target` (the source is only read, never
+ * written) and returns the updated target with what Undo needs to take the
+ * pages out again; null if the target was deleted meanwhile.
  *
  * Runs under the target's page lock and re-reads BOTH documents there: the
  * caller's copies may be stale (a bake finished, a page was added or deleted
  * since the list was loaded), and appending at a stale page count would
- * overwrite real pages, while stale filters would undo a finished bake.
+ * overwrite real pages, while stale filters would undo a finished bake. The
+ * Undo fingerprint is taken under the same lock, right after the write.
+ *
+ * The text index is refreshed afterwards (in the background, outside the
+ * lock), so search finds the merged pages' words in the target too.
  */
-export async function mergeInto(target: Document, source: Document): Promise<Document | null> {
-  return runPageEdit(target.id, {}, async () => {
+export async function mergeIntoWithUndo(target: Document, source: Document): Promise<MergeIntoResult | null> {
+  const result = await runPageEdit(target.id, {}, async (): Promise<MergeIntoResult | null> => {
     const current = await getDocument(target.id);
     if (!current) return null;
     const from = (await getDocument(source.id)) ?? source;
@@ -102,8 +125,18 @@ export async function mergeInto(target: Document, source: Document): Promise<Doc
       removePageFiles(current.id, start, newPages.length);
       return null;
     }
-    return updated;
+    let undo: MergeUndo | null = null;
+    try {
+      undo = mergeUndoToken(current.id, start, newPages.length);
+    } catch (err) {
+      console.warn('Merge: no undo', err);
+    }
+    return { doc: updated, added: newPages.length, undo };
   });
+  if (result) {
+    indexDocText(result.doc.id, result.doc.pages).catch(err => console.warn('Index merged document failed', err));
+  }
+  return result;
 }
 
 function removePageFiles(docId: string, start: number, count: number): void {
@@ -157,6 +190,8 @@ export async function mergeIntoNew(docs: Document[], name: string): Promise<Docu
     updatedAt: now,
   };
   await saveDocument(newDoc);
+  // Indexed like any new document (see extractPages), so content search finds it.
+  indexDocText(newDoc.id, newDoc.pages).catch(err => console.warn('Index merged document failed', err));
   return newDoc;
 }
 

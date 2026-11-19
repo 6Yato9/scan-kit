@@ -10,7 +10,7 @@
 // mode and the viewer's "Merge with another document".
 import { useState } from 'react';
 import { Alert, StyleSheet, Text } from 'react-native';
-import { useRouter } from 'expo-router';
+import { router as stackRouter, useRouter } from 'expo-router';
 import { useScan } from '@/contexts/scan-context';
 import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';
@@ -20,6 +20,9 @@ import { mergeIntoNew } from '@/lib/doc-ops';
 import { canMergePdfDocuments, mergeDocumentsToPdf, needsPdfMerge, PdfEditError, type MergeProgress } from '@/lib/pdf-edit';
 import { notifyError, notifySuccess } from '@/lib/haptics';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
+import { newMergeUndo, undoNewMerge } from '@/lib/merge-undo';
+import { postViewerNotice } from '@/lib/viewer-notice';
+import { useToast } from '@/components/toast';
 import { Spacing, Type } from '@/lib/theme';
 import type { Document } from '@/types/document';
 
@@ -36,6 +39,7 @@ export default function MergeScreen() {
   const router = useRouter();
   const { colors } = useTheme();
   const { bumpLastSaved } = useScan();
+  const toast = useToast();
   const pdfMerge = canMergePdfDocuments();
   const { docs, loaded } = useToolDocuments(d => isMergeable(d, pdfMerge));
   // Chosen documents, in the order they will appear.
@@ -60,11 +64,32 @@ export default function MergeScreen() {
         : await mergeIntoNew(chosen, name);
       bumpLastSaved();
       notifySuccess();
-      // The viewer shows the message (it covers the app-wide toast host).
-      navigateWhenUnlocked(() => router.replace({
-        pathname: '/viewer',
-        params: { id: merged.id, notice: `Merged ${chosen.length} documents. The originals are kept.` },
-      }));
+      // The viewer shows the message, with Undo (it covers the app-wide toast
+      // host). Undo closes the viewer and removes the merged copy; the
+      // originals were never touched (lib/merge-undo).
+      const undo = newMergeUndo(merged);
+      postViewerNotice({
+        docId: merged.id,
+        message: `Merged ${chosen.length} documents. The originals are kept.`,
+        action: {
+          label: 'Undo',
+          onPress: () => {
+            navigateWhenUnlocked(() => stackRouter.back());
+            undoNewMerge(undo)
+              .then(outcome => {
+                bumpLastSaved();
+                notifySuccess();
+                toast.show(outcome === 'trashed' ? 'Merged document moved to Recently deleted' : 'Merge undone');
+              })
+              .catch(err => {
+                console.error('Undo merge failed', err);
+                notifyError();
+                Alert.alert("Couldn't undo the merge", 'Try again, or delete the merged document yourself.');
+              });
+          },
+        },
+      });
+      navigateWhenUnlocked(() => router.replace({ pathname: '/viewer', params: { id: merged.id } }));
     } catch (err) {
       notifyError();
       if (err instanceof PdfEditError && err.kind === 'locked') {

@@ -389,6 +389,64 @@ public class VisionOcrModule: Module {
         }
       }
     }
+
+    // MARK: Fill & sign an imported PDF in place (PdfFiller.swift, round 13).
+    // Call through lib/pdf-fill.ts, which checks presence.
+
+    /// Pages (crop box, media box, rotation), form fields and permissions.
+    /// Rejects ERR_PDF_LOCKED ("locked") for a PDF that needs a password.
+    AsyncFunction("pdfFillInfo") { (uri: String, promise: Promise) in
+      DispatchQueue.global(qos: .userInitiated).async {
+        func path(_ u: String) -> String { URL(string: u).flatMap { $0.isFileURL ? $0.path : nil } ?? u }
+        do {
+          let info = try autoreleasepool { try PdfFiller.info(path: path(uri)) }
+          promise.resolve(info)
+        } catch {
+          let message = error.localizedDescription
+          promise.reject(message == PdfEditor.lockedMessage ? "ERR_PDF_LOCKED" : "ERR_PDF_FILL", message)
+        }
+      }
+    }
+
+    /// One page as an upright JPEG (crop box, rotation applied), long edge maxEdge px.
+    AsyncFunction("pdfRenderPage") { (uri: String, index: Int, outUri: String, maxEdge: Double, hideFields: Bool, promise: Promise) in
+      DispatchQueue.global(qos: .userInitiated).async {
+        func path(_ u: String) -> String { URL(string: u).flatMap { $0.isFileURL ? $0.path : nil } ?? u }
+        do {
+          let out = try autoreleasepool {
+            try PdfFiller.renderPage(path: path(uri), index: index, outPath: path(outUri),
+                                     maxEdge: CGFloat(maxEdge), hideFields: hideFields)
+          }
+          promise.resolve(out)
+        } catch {
+          let message = error.localizedDescription
+          promise.reject(message == PdfEditor.lockedMessage ? "ERR_PDF_LOCKED" : "ERR_PDF_RENDER", message)
+        }
+      }
+    }
+
+    /// Fills form fields and adds marks, writing `outputUri` and verifying it
+    /// (every addition with its appearance) before resolving to the page count.
+    /// Rejects ERR_PDF_LOCKED, ERR_PDF_RESTRICTED, ERR_PDF_CHANGED (the form
+    /// isn't what pdfFillInfo said), ERR_PDF_FILL otherwise.
+    AsyncFunction("pdfFill") { (inputUri: String, outputUri: String, fields: [[String: Any]], marks: [[String: Any]], promise: Promise) in
+      DispatchQueue.global(qos: .userInitiated).async {
+        func path(_ u: String) -> String { URL(string: u).flatMap { $0.isFileURL ? $0.path : nil } ?? u }
+        do {
+          let n = try autoreleasepool {
+            try PdfFiller.fill(inputPath: path(inputUri), outputPath: path(outputUri), fields: fields, marks: marks)
+          }
+          promise.resolve(n)
+        } catch {
+          let message = error.localizedDescription
+          let code = message == PdfEditor.lockedMessage ? "ERR_PDF_LOCKED"
+            : message == PdfEditor.restrictedMessage ? "ERR_PDF_RESTRICTED"
+            : message == PdfFiller.changedMessage ? "ERR_PDF_CHANGED" : "ERR_PDF_FILL"
+          promise.reject(code, message)
+        }
+      }
+    }
+    // MARK: End of fill & sign.
   }
 
   private static func loadImage(_ uri: String) throws -> UIImage {

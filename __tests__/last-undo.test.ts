@@ -145,3 +145,10 @@ test('the snapshot is stable between changes and follows the offer', () => {
   slot.drop();
   expect(slot.getSnapshot()).toBeNull();
 });
+
+test('merge Undo gets its own menu label (r13)', () => {
+  expect(undoLabelFor('Added 3 pages from “Lease”')).toBe('Undo merge');
+  expect(undoLabelFor('Added 1 page to “Invoice”')).toBe('Undo merge');
+  expect(undoLabelFor('Merged into a new PDF')).toBe('Undo merge');
+  expect(undoLabelFor('Merged 2 documents. The originals are kept.')).toBe('Undo merge');
+});

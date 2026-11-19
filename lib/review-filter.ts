@@ -5,10 +5,17 @@
 // save (contexts/scan-context.tsx) knows the pages handed back by the camera.
 // They meet here, keyed by each capture's photo (CapturedPage.sourceUri,
 // which the camera hands back as SourcePageInput.sourceUri):
-// - The scan that opens the camera arms a session with its default filter
-//   (Scan settings), withReviewFilters(). Only an armed session shows the
-//   picker: tools that save with their own look (Whiteboard, ID card, Book…)
-//   or don't save pages at all (Extract text) never show it.
+// - The scan that opens the camera arms a session with its default filter,
+//   withReviewFilters(). Only an armed session shows the picker: tools that
+//   save with their own look (Whiteboard, ID card, Book…) or don't save pages
+//   at all (Extract text) never show it. Where the default comes from:
+//     - a new scan: Scan settings' default filter;
+//     - the viewer's Add pages: the document's own filter when all its pages
+//       share one, so the new pages match; else Scan settings' (addPagesFilter);
+//     - the viewer's Retake: the replaced page's filter AND adjustments
+//       (retakeLook), so the new capture keeps the page's look. The
+//       adjustments ride along in the session (`adjustment`): the previews
+//       show them, and the save bakes them with the chosen filter.
 // - The review records the user's choice: one filter for every page, and
 //   optionally a page of its own.
 // - The save asks filtersFor(pages): the chosen filter for each page, which
@@ -19,7 +26,7 @@
 // Previews: each filter tile and the big page are the capture's preview image
 // run through the same bake pipeline the viewer uses (lib/bake-queue.ts,
 // combinedFilterRN, buildPreviewHtml), so what you pick is what is saved.
-import type { PageFilter } from '../types/document';
+import type { Document, PageAdjustment, PageFilter } from '../types/document';
 import type { ScanPageInput } from './page-source';
 import { combinedFilterRN } from './filters';
 import { enqueueBake } from './bake-queue';
@@ -27,6 +34,8 @@ import { PREVIEW_FILTERS } from './bake';
 
 type Session = {
   defaultFilter: PageFilter;
+  /** Brightness / contrast / … applied with every filter (a retake keeps the page's); undefined = none. */
+  adjustment?: PageAdjustment;
   /** The filter for every page, once the user picked one. */
   all: PageFilter | null;
   /** Pages given a filter of their own, by photo URI. */
@@ -37,11 +46,18 @@ let session: Session | null = null;
 const listeners = new Set<() => void>();
 
 /** What the review shows: a new object whenever the choice changes (for useSyncExternalStore). */
-export type ReviewFilterSnapshot = { defaultFilter: PageFilter; all: PageFilter | null; perPage: ReadonlyMap<string, PageFilter> };
+export type ReviewFilterSnapshot = {
+  defaultFilter: PageFilter;
+  all: PageFilter | null;
+  perPage: ReadonlyMap<string, PageFilter>;
+  adjustment?: PageAdjustment;
+};
 let snapshot: ReviewFilterSnapshot | null = null;
 
 const emit = () => {
-  snapshot = session ? { defaultFilter: session.defaultFilter, all: session.all, perPage: new Map(session.perPage) } : null;
+  snapshot = session
+    ? { defaultFilter: session.defaultFilter, all: session.all, perPage: new Map(session.perPage), adjustment: session.adjustment }
+    : null;
   for (const l of [...listeners]) { try { l(); } catch {} }
 };
 
@@ -57,18 +73,22 @@ export function filterInSnapshot(snap: ReviewFilterSnapshot | null, uri: string)
 }
 
 const keyOf = (uri: string) => uri.split('?')[0];
+const isDefaultAdj = (a: PageAdjustment | undefined) => !a || (!a.brightness && !a.contrast && !a.saturation && !a.sharpness);
 
 /**
  * Runs `open` (which shows the camera and resolves with its pages) with the
  * review's filter picker on, starting at `defaultFilter`. Resolves with the
  * pages and the filter chosen for each (`defaultFilter` where nothing was
- * chosen).
+ * chosen). `options.adjustment` is shown with every filter in the previews;
+ * the caller saves the pages with it.
  */
 export async function withReviewFilters(
   defaultFilter: PageFilter,
   open: () => Promise<ScanPageInput[] | null>,
+  options: { adjustment?: PageAdjustment } = {},
 ): Promise<{ pages: ScanPageInput[] | null; filters: PageFilter[] }> {
-  const mine: Session = { defaultFilter, all: null, perPage: new Map() };
+  const adjustment = options.adjustment && !isDefaultAdj(options.adjustment) ? { ...options.adjustment } : undefined;
+  const mine: Session = { defaultFilter, adjustment, all: null, perPage: new Map() };
   session = mine;
   emit();
   try {
@@ -138,6 +158,42 @@ export function bakeGroups(filters: PageFilter[]): { filter: PageFilter; indices
   return [...groups.entries()].map(([filter, indices]) => ({ filter, indices }));
 }
 
+// ── Where the review starts ──────────────────────────────────────────────────
+
+/**
+ * The filter every page of `doc` shares, or null when they differ (or there
+ * are none). `filters` absent means every page is Original. Pass the record
+ * the viewer shows (pending bakes overlaid), so a filter still being applied
+ * counts as the page's.
+ */
+export function sharedFilter(doc: Pick<Document, 'pages' | 'filters'>): PageFilter | null {
+  const n = doc.pages.length;
+  if (n === 0) return null;
+  const first = doc.filters?.[0] ?? 'original';
+  for (let i = 1; i < n; i++) if ((doc.filters?.[i] ?? 'original') !== first) return null;
+  return first;
+}
+
+/**
+ * The filter Add pages starts at: the document's own when all its pages share
+ * one (Original included: a document kept as photographed gets matching new
+ * pages), else `fallback` (Scan settings' default filter).
+ */
+export function addPagesFilter(doc: Pick<Document, 'pages' | 'filters'>, fallback: PageFilter): PageFilter {
+  return sharedFilter(doc) ?? fallback;
+}
+
+/**
+ * The look Retake starts at: the replaced page's filter and adjustments, so
+ * the new capture looks like the page it replaces. `adjustment` is undefined
+ * when the page has none.
+ */
+export function retakeLook(doc: Pick<Document, 'pages' | 'filters' | 'adjustments'>, index: number): { filter: PageFilter; adjustment: PageAdjustment | undefined } {
+  const filter = doc.filters?.[index] ?? 'original';
+  const adj = doc.adjustments?.[index];
+  return { filter, adjustment: isDefaultAdj(adj) ? undefined : { ...adj! } };
+}
+
 // ── Previews ─────────────────────────────────────────────────────────────────
 
 /** Not a document: bake jobs need an id and index only to group their work. */
@@ -146,18 +202,22 @@ const tileCache = new Map<string, string[]>();
 const pageCache = new Map<string, string>();
 const PAGE_CACHE_MAX = 24;
 
-/** Filter tiles (one per PREVIEW_FILTERS entry, data URLs) for the preview image `src`. */
-export async function reviewTilePreviews(src: string): Promise<string[]> {
-  const key = keyOf(src);
+const adjKey = (a: PageAdjustment | undefined) =>
+  (isDefaultAdj(a) ? '' : `|${a!.brightness},${a!.contrast},${a!.saturation},${a!.sharpness ?? 0}`);
+
+/** Filter tiles (one per PREVIEW_FILTERS entry, data URLs) for the preview image `src`, each with `adjustment`. */
+export async function reviewTilePreviews(src: string, adjustment?: PageAdjustment): Promise<string[]> {
+  const adj = isDefaultAdj(adjustment) ? undefined : adjustment;
+  const key = `${keyOf(src)}${adjKey(adj)}`;
   const hit = tileCache.get(key);
   if (hit) return hit;
   const reply = await enqueueBake(
     {
       docId: REVIEW_DOC,
       pageIndex: 0,
-      src: key,
+      src: keyOf(src),
       ops: [],
-      previews: PREVIEW_FILTERS.map(f => combinedFilterRN(f, undefined) ?? []),
+      previews: PREVIEW_FILTERS.map(f => combinedFilterRN(f, adj) ?? []),
       previewWidth: 360,
     },
     { priority: 'high' },
@@ -167,11 +227,12 @@ export async function reviewTilePreviews(src: string): Promise<string[]> {
   return urls;
 }
 
-/** The preview image `src` with `filter` applied (a data URL), or `src` itself for Original. */
-export async function reviewPagePreview(src: string, filter: PageFilter): Promise<string> {
-  const ops = combinedFilterRN(filter, undefined);
+/** The preview image `src` with `filter` (and `adjustment`) applied (a data URL), or `src` itself when that changes nothing. */
+export async function reviewPagePreview(src: string, filter: PageFilter, adjustment?: PageAdjustment): Promise<string> {
+  const adj = isDefaultAdj(adjustment) ? undefined : adjustment;
+  const ops = combinedFilterRN(filter, adj);
   if (!ops) return src;
-  const key = `${keyOf(src)}|${filter}`;
+  const key = `${keyOf(src)}|${filter}${adjKey(adj)}`;
   const hit = pageCache.get(key);
   if (hit) return hit;
   const url = await enqueueBake({ docId: REVIEW_DOC, pageIndex: 1, src: keyOf(src), ops }, { priority: 'high' });

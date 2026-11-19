@@ -30,6 +30,7 @@ import {
   SortKey,
 } from '@/lib/storage';
 import { mergeIntoNew } from '@/lib/doc-ops';
+import { newMergeUndo, undoNewMerge } from '@/lib/merge-undo';
 import { canMergePdfDocuments, mergeDocumentsToPdf, needsPdfMerge, PdfEditError } from '@/lib/pdf-edit';
 import { matchesQuery, searchSnippet, sortDocuments } from '@/lib/doc-list';
 import { requestFilesCopySync } from '@/lib/files-copy';
@@ -385,7 +386,26 @@ export default function FilesScreen() {
       setDocuments(prev => [merged, ...prev]);
       exitSelect();
       notifySuccess();
-      toast.show(`Merged ${ordered.length} documents`);
+      // Undo removes the merged copy; the originals were never touched (lib/merge-undo).
+      const undo = newMergeUndo(merged);
+      toast.show(`Merged ${ordered.length} documents`, {
+        action: {
+          label: 'Undo',
+          onPress: () => {
+            undoNewMerge(undo)
+              .then(outcome => {
+                setDocuments(prev => prev.filter(d => d.id !== undo.docId));
+                notifySuccess();
+                // Changed since the merge: kept in Recently deleted rather than deleted.
+                if (outcome === 'trashed') toast.show('Moved to Recently deleted');
+              })
+              .catch(err => {
+                console.error('Undo merge failed', err);
+                Alert.alert("Couldn't undo the merge", 'Try again, or delete the merged document yourself.');
+              });
+          },
+        },
+      });
     } catch (err) {
       if (err instanceof PdfEditError && err.kind === 'locked') {
         const who = ordered.find(d => d.id === err.docId);

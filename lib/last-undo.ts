@@ -1,7 +1,7 @@
 // lib/last-undo.ts
 // "Undo that doesn't vanish": the viewer keeps the latest Undo it offered in a
 // toast (delete page, crop, retake, Sign / Watermark / Timestamp / Redact,
-// PDF rotate / delete / reorder, Apply to all, blank page, convert) as a row
+// PDF rotate / delete / reorder, Apply to all, blank page, convert, merge) as a row
 // in its "…" menu — "Undo delete page 3" — until the next edit or until the
 // viewer closes, instead of only for the few seconds the toast is up.
 //
@@ -58,6 +58,10 @@ export function undoLabelFor(message: string): string {
   if (/^(Marks erased|Cleaned \d+)/i.test(m)) return 'Undo erase marks';
   if (/^Converted to/i.test(m)) return 'Undo convert to pages';
   if (/ applied to (both|all) /i.test(m)) return 'Undo apply to all';
+  // Merge: pages added here from another document, or a new merged document.
+  if (/^Added (\d+ pages?|a page) (from|to) /i.test(m) || /^Merged /i.test(m)) return 'Undo merge';
+  // Fill & sign on an imported PDF ("Signed" alone is the signature, above).
+  if (/^(Filled in|Form filled in)/i.test(m)) return 'Undo fill & sign';
   return 'Undo last change';
 }
 

@@ -24,7 +24,13 @@ export type SavedSignatureEntry = {
 
 export type SavedSignature = SavedSignatureEntry & { uri: string };
 
+/**
+ * Signatures, or initials (Fill & sign, round 13): the same PNG folder, each
+ * with its own index. Every function defaults to signatures, as before.
+ */
+export type SignatureKind = 'signature' | 'initials';
 const INDEX = 'index.json';
+const INDEX_FOR: Record<SignatureKind, string> = { signature: INDEX, initials: 'initials.json' };
 const PNG_PREFIX = 'data:image/png;base64,';
 
 function dir(): Directory {
@@ -76,26 +82,26 @@ export function parseIndex(text: string | null | undefined): SavedSignatureEntry
   }
 }
 
-function readIndex(): SavedSignatureEntry[] {
+function readIndex(kind: SignatureKind = 'signature'): SavedSignatureEntry[] {
   try {
-    const f = new File(dir(), INDEX);
+    const f = new File(dir(), INDEX_FOR[kind]);
     return f.exists ? parseIndex(f.textSync()) : [];
   } catch {
     return [];
   }
 }
 
-function writeIndex(index: SavedSignatureEntry[]): void {
+function writeIndex(index: SavedSignatureEntry[], kind: SignatureKind = 'signature'): void {
   const d = dir();
   d.create({ intermediates: true, idempotent: true });
-  const f = new File(d, INDEX);
+  const f = new File(d, INDEX_FOR[kind]);
   if (!f.exists) f.create();
   f.write(JSON.stringify(index));
 }
 
 /** The saved signatures, newest first. Entries whose PNG is gone (or empty) are skipped. */
-export async function listSavedSignatures(): Promise<SavedSignature[]> {
-  return readIndex()
+export async function listSavedSignatures(kind: SignatureKind = 'signature'): Promise<SavedSignature[]> {
+  return readIndex(kind)
     .map(e => ({ ...e, uri: fileFor(e.id).uri }))
     .filter(e => {
       const f = fileFor(e.id);
@@ -138,16 +144,18 @@ function writePng(id: string, base64: string): void {
  * stored just moves it to the front. Best effort: a signature that couldn't be
  * saved is not worth failing the signing for.
  */
-export async function rememberSignature(sig: Signature, now: number = Date.now()): Promise<void> {
+export async function rememberSignature(sig: Signature, now: number = Date.now(), kind: SignatureKind = 'signature'): Promise<void> {
   if (!sig.dataUri.startsWith(PNG_PREFIX) || !(sig.width > 0) || !(sig.height > 0)) return;
   try {
     const id = signatureId(sig.dataUri);
     const d = dir();
     d.create({ intermediates: true, idempotent: true });
     writePng(id, sig.dataUri.slice(PNG_PREFIX.length));
-    const { index, dropped } = addToIndex(readIndex(), { id, width: sig.width, height: sig.height, savedAt: now });
-    writeIndex(index);
+    const { index, dropped } = addToIndex(readIndex(kind), { id, width: sig.width, height: sig.height, savedAt: now });
+    writeIndex(index, kind);
     for (const e of dropped) {
+      // The same PNG may be listed as the other kind too: kept then.
+      if (usedByOtherKind(e.id, kind)) continue;
       try {
         const f = fileFor(e.id);
         if (f.exists) f.delete();
@@ -158,9 +166,16 @@ export async function rememberSignature(sig: Signature, now: number = Date.now()
   }
 }
 
+/** True when the other kind's index lists `id` (initials for a signature, and back). */
+function usedByOtherKind(id: string, kind: SignatureKind): boolean {
+  const other: SignatureKind = kind === 'signature' ? 'initials' : 'signature';
+  return readIndex(other).some(e => e.id === id);
+}
+
 /** Forgets one saved signature and deletes its file. */
-export async function forgetSignature(id: string): Promise<void> {
-  writeIndex(readIndex().filter(e => e.id !== id));
+export async function forgetSignature(id: string, kind: SignatureKind = 'signature'): Promise<void> {
+  writeIndex(readIndex(kind).filter(e => e.id !== id), kind);
+  if (usedByOtherKind(id, kind)) return;
   try {
     const f = fileFor(id);
     if (f.exists) f.delete();
