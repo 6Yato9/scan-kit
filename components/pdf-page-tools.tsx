@@ -2,7 +2,8 @@
 // Page editing for an imported PDF in the viewer, without converting it to
 // images: Fill & sign (app/pdf-fill.tsx, its own screen), Rotate, Blank page,
 // Reorder, Split and Delete in a toolbar under the
-// pages (the same toolbar image pages have), the same actions for the page on
+// pages (the same toolbar image pages have, with the viewer's Tools button
+// pinned at its end — `pinnedItem`), the same actions for the page on
 // screen in the "…" sheet, and Merge with another document. Every edit is
 // written into the PDF itself by lib/pdf-edit.ts (text stays selectable) and
 // offers Undo in a toast.
@@ -109,6 +110,8 @@ type Options = {
   onCreated?: () => void;
   /** Offers an Undo in the viewer's "…" menu only (lib/last-undo.ts), for a toast whose action is Open. */
   offerUndo?: (message: string, run: () => void) => void;
+  /** Pinned at the end of the toolbar (the viewer's Tools button); shown even when pages can't be edited. */
+  pinnedItem?: ToolbarItem;
 };
 
 export function usePdfPageTools({
@@ -125,6 +128,7 @@ export function usePdfPageTools({
   onLocked,
   onCreated,
   offerUndo,
+  pinnedItem,
 }: Options) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
@@ -545,9 +549,9 @@ export function usePdfPageTools({
     },
   ];
 
-  const toolbar = available ? (
+  const toolbar = available || pinnedItem ? (
     <View style={{ backgroundColor: colors.chromeRaised, paddingBottom: Math.max(insets.bottom, Spacing.sm) }}>
-      <ViewerToolbar items={toolbarItems} />
+      <ViewerToolbar items={available ? toolbarItems : []} pinned={pinnedItem} />
       {/* The toolbar's bottom hairline separates it from the thumbnail strip on
           image pages; here only the home indicator follows, so it is covered. */}
       <View style={[styles.hideRule, { backgroundColor: colors.chromeRaised }]} />
@@ -607,10 +611,26 @@ export function usePdfPageTools({
 
   /** The "…" sheet's tool tile. */
   const fillTool: MoreAction | null = fillAvailable && enabled && !fillBlocked
-    ? { key: 'fill', icon: 'signature', label: fillAccess?.kind === 'form' ? 'Fill in' : 'Fill & sign', onPress: openFill }
+    ? { key: 'fill', tool: 'fill', icon: 'signature', label: fillAccess?.kind === 'form' ? 'Fill in' : 'Fill & sign', onPress: openFill }
     : null;
 
-  return { available, busy, toolbar, documentRows, pageRows, deleteRow, sheets, viewKey, initialPage, fillTool, fillAccess };
+  return {
+    available,
+    busy,
+    toolbar,
+    documentRows,
+    pageRows,
+    deleteRow,
+    sheets,
+    viewKey,
+    initialPage,
+    fillTool,
+    fillAccess,
+    // For the viewer's Tools sheet: the same Merge and Split as the rows above,
+    // offered only when they would run now.
+    merge: available && canMergePdfDocuments() ? openMerge : null,
+    split: ready && n > 1 ? split : null,
+  };
 }
 
 const styles = StyleSheet.create({

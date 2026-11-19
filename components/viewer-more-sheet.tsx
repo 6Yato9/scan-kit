@@ -12,6 +12,7 @@ import { BottomSheet, SheetGroup, SheetHeader, SheetRow } from '@/components/bot
 import { AppIcon, type AppIconName } from '@/components/app-icon';
 import { useTheme } from '@/contexts/theme-context';
 import { Radius, Spacing, Type } from '@/lib/theme';
+import { TOOLS, toolSwatch, type ToolId } from '@/lib/tool-catalog';
 
 /** Tool tiles per row: the scanned-document menu's four (Sign, Redact, Watermark, Timestamp). */
 const TILES_PER_ROW = 4;
@@ -23,6 +24,8 @@ export type MoreAction = {
   label: string;
   detail?: string;
   destructive?: boolean;
+  /** A catalogue tool (lib/tool-catalog.ts): its tile's icon takes the tool's colour, as everywhere else. */
+  tool?: ToolId;
   onPress: () => void;
 };
 
@@ -38,7 +41,7 @@ type Props = {
 };
 
 export function ViewerMoreSheet({ visible, title, subtitle, tools, groups, onClose }: Props) {
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
   const pending = useRef<(() => void) | null>(null);
   const shown = groups.filter(g => g.length > 0);
   const run = (fn: () => void) => {
@@ -71,7 +74,7 @@ export function ViewerMoreSheet({ visible, title, subtitle, tools, groups, onClo
                 accessibilityLabel={t.label}
                 style={({ pressed }) => [styles.tool, { backgroundColor: colors.card }, pressed && { opacity: 0.6 }]}
               >
-                <AppIcon name={t.icon} size={24} color={colors.accent} />
+                <AppIcon name={t.icon} size={24} color={t.tool ? toolSwatch(TOOLS[t.tool].hue, isDark).fg : colors.accent} />
                 <Text
                   style={[Type.caption, styles.toolLabel, { color: colors.text }]}
                   numberOfLines={1}

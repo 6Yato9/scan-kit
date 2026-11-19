@@ -97,7 +97,8 @@ import { HIT, Radius, Spacing, Type } from '@/lib/theme';
 import { ExportSheet } from '@/components/export-sheet';
 import { EditTab, FILTER_LABELS, PageEditPanel } from '@/components/page-actions-sheet';
 import { movedOrder, ThumbnailStrip } from '@/components/thumbnail-strip';
-import { ViewerToolbar } from '@/components/viewer-toolbar';
+import { ViewerToolbar, type ToolbarItem } from '@/components/viewer-toolbar';
+import { ViewerToolsSheet } from '@/components/viewer-tools-sheet';
 import { AppIcon } from '@/components/app-icon';
 import { MoreAction, ViewerMoreSheet } from '@/components/viewer-more-sheet';
 import { ToastProvider, useToast } from '@/components/toast';
@@ -112,6 +113,10 @@ import { PdfConvertBanner, useConvertBannerDismissed } from '@/components/pdf-co
 import { PdfDocumentView } from '@/modules/vision-ocr/src/PdfDocumentView';
 import { usePdfPageTools } from '@/components/pdf-page-tools';
 import { canEditPdfPages, discardPdfEditUndo, holdPdfEditUndo } from '@/lib/pdf-edit';
+import { documentToolSections, TOOLS, toolHrefForDocument, type ToolId } from '@/lib/tool-catalog';
+import { canProtectDocuments } from '@/lib/pdf-protect';
+import { canUnrestrictPdf } from '@/lib/pdf-unrestrict';
+import { canFlattenDocuments } from '@/lib/pdf-flatten';
 import { undoAwareToast, useLastUndo } from '@/lib/last-undo';
 import { useScanDocTools } from '@/components/scan-doc-tools';
 import { BottomSheet, SheetHeader } from '@/components/bottom-sheet';
@@ -185,6 +190,8 @@ function ViewerContent({
   // The inline edit panel (Filters / Adjust); null shows the toolbar instead.
   const [editTab, setEditTab] = useState<EditTab | null>(null);
   const [moreVisible, setMoreVisible] = useState(false);
+  // The Tools sheet (the Tools button pinned at the end of the page toolbar).
+  const [toolsVisible, setToolsVisible] = useState(false);
   const [rotating, setRotating] = useState(false);
   const [reorderVisible, setReorderVisible] = useState(false);
   const [reorderSaving, setReorderSaving] = useState(false);
@@ -1027,6 +1034,22 @@ function ViewerContent({
     router.push({ pathname, params: { docId: doc.id } } as any);
   }, [router, flushAdjust]);
 
+  /**
+   * Opens a Tools-tab tool on this document (lib/tool-catalog.ts): `docId`
+   * preselects it and presents the tool over the viewer, which it returns to
+   * when done (the viewer reloads on focus and shows the tool's notice);
+   * `page` starts a one-page tool (Sign, Redact) on the page on screen. Runs
+   * once a sheet has closed, so through navigateWhenUnlocked like any late
+   * navigation.
+   */
+  const openCatalogTool = useCallback((id: ToolId) => {
+    const doc = docRef.current;
+    if (!doc) return;
+    flushAdjust();
+    const href = toolHrefForDocument(id, doc.id, doc.pdfUri ? undefined : pageRef.current);
+    navigateWhenUnlocked(() => router.push(href));
+  }, [router, flushAdjust]);
+
   const handleDuplicate = useCallback(async () => {
     const doc = docRef.current;
     if (!doc) return;
@@ -1414,6 +1437,17 @@ function ViewerContent({
     }
   }, [handleThumbnailPress, handleRetake, movePage, confirmDeletePage]);
 
+  // Pinned at the end of the page toolbar (scanned and PDF alike): every tool
+  // that applies to this document, in a sheet (components/viewer-tools-sheet).
+  const toolsButton: ToolbarItem = {
+    key: 'tools',
+    icon: 'grid-outline',
+    label: 'Tools',
+    a11y: 'Tools',
+    hint: 'Sign, redact, watermark, merge, split and more for this document',
+    onPress: () => { flushAdjust(); setToolsVisible(true); },
+  };
+
   // Imported PDFs: page edits written into the PDF itself (components/pdf-page-tools).
   const pdfTools = usePdfPageTools({
     document,
@@ -1430,6 +1464,7 @@ function ViewerContent({
     onCreated: bumpLastSaved,
     // Merge's toast opens the new PDF; its Undo is offered in the "…" menu.
     offerUndo: useCallback((message: string, run: () => void) => { lastUndo.offer(message, run); }, [lastUndo]),
+    pinnedItem: toolsButton,
   });
 
   // Scanned documents: Merge, Split and Blank page in the "…" menu (components/scan-doc-tools).
@@ -1452,7 +1487,7 @@ function ViewerContent({
 
   // The Search quick action may close this viewer only while nothing is in
   // progress and no panel or sheet is open (lib/quick-actions.ts).
-  const idle = status !== 'loading' && !editTab && !moreVisible && !rotating && !reorderVisible && !reorderSaving
+  const idle = status !== 'loading' && !editTab && !moreVisible && !toolsVisible && !rotating && !reorderVisible && !reorderSaving
     && !renameVisible && !cropVisible && !adding && !retaking && !moveVisible && ocr === null && !converting
     && !unlocking && !exportVisible;
   useEffect(() => {
@@ -1535,10 +1570,10 @@ function ViewerContent({
     ? // Imported PDFs: Fill & sign in place (app/pdf-fill.tsx), no convert needed.
       (pdfTools.fillTool ? [pdfTools.fillTool] : [])
     : [
-        { key: 'sign', icon: 'signature', label: 'Sign', onPress: () => openTool('/tools/sign') },
-        { key: 'redact', icon: 'eye-off-outline', label: 'Redact', onPress: () => openTool('/tools/redact') },
-        { key: 'watermark', icon: 'watermark', label: 'Watermark', onPress: () => openTool('/tools/watermark') },
-        { key: 'timestamp', icon: 'time-outline', label: 'Timestamp', onPress: () => openTool('/tools/timestamp') },
+        // The same tools, colours and launch (on the page on screen) as the Tools sheet.
+        ...(['sign', 'redact', 'watermark', 'timestamp'] as const).map(id => ({
+          key: id, tool: id, icon: TOOLS[id].icon, label: TOOLS[id].label, onPress: () => openCatalogTool(id),
+        })),
       ];
   // The last change's Undo, kept until the next edit (lib/last-undo.ts).
   const undoRow: MoreAction[] = undoOffer
@@ -1612,6 +1647,54 @@ function ViewerContent({
       tools={moreTools}
       groups={moreGroups}
       onClose={() => setMoreVisible(false)}
+    />
+  );
+
+  // The Tools sheet: what applies to this document (lib/tool-catalog.ts
+  // documentToolSections), each opening on it. Tools-tab tools open as their
+  // own screen over the viewer (openCatalogTool); Merge, Split, Fill & sign,
+  // Extract text and Convert to pages run the viewer's own flows — the same
+  // ones as the toolbar and the "…" menu.
+  const toolSections = documentToolSections(
+    document.pdfUri
+      ? {
+          kind: 'pdf',
+          pageCount: pdfPage?.count ?? 0,
+          passwordProtected: readablePdf.unlocked || pdfError === 'locked',
+          unreadable: !!pdfError,
+          can: {
+            fill: !!pdfTools.fillTool,
+            mergePdf: !!pdfTools.merge,
+            editPdfPages: !!pdfTools.split,
+            protect: canProtectDocuments(),
+            unrestrict: canUnrestrictPdf(),
+            flatten: canFlattenDocuments(),
+            convertPdf: convertAvailable && !converting,
+          },
+        }
+      : { kind: 'scan', pageCount, can: { ocr: ocrAvailable(), protect: canProtectDocuments() } },
+  );
+  const viewerToolActions: Partial<Record<ToolId, () => void>> = {
+    merge: (document.pdfUri ? pdfTools.merge : scanTools.merge) ?? undefined,
+    split: (document.pdfUri ? pdfTools.split : scanTools.split) ?? undefined,
+    fill: pdfTools.fillTool?.onPress,
+    'extract-text': () => { handleOcr(); },
+    'convert-pages': handleConvertPdf,
+  };
+  const toolsSheet = (
+    <ViewerToolsSheet
+      visible={toolsVisible}
+      title="Tools"
+      subtitle={document.name}
+      sections={toolSections}
+      labels={pdfTools.fillTool ? { fill: pdfTools.fillTool.label } : undefined}
+      onClose={() => setToolsVisible(false)}
+      onPick={id => {
+        const run = viewerToolActions[id];
+        // Held while App Lock is up (the sheet has only just closed).
+        if (run) navigateWhenUnlocked(run);
+        else openCatalogTool(id);
+      }}
     />
   );
 
@@ -1738,6 +1821,7 @@ function ViewerContent({
         )}
         {renameSheet}
         {moreSheet}
+        {toolsSheet}
         {moveSheet}
         {pdfTools.sheets}
       </View>
@@ -1874,6 +1958,7 @@ function ViewerContent({
                 busy: ocr?.status === 'running',
               },
             ]}
+            pinned={toolsButton}
           />
           <ThumbnailStrip
             pages={document.pages}
@@ -1896,6 +1981,7 @@ function ViewerContent({
       />
 
       {moreSheet}
+      {toolsSheet}
       {moveSheet}
       {scanTools.sheets}
 

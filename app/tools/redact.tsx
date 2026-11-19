@@ -84,7 +84,7 @@ export default function RedactScreen() {
   const { colors, isDark } = useTheme();
   const { docs, loaded, reload } = useToolDocuments();
   const { pdfs, loaded: pdfsLoaded, reload: reloadPdfs } = useConvertiblePdfs();
-  const { doc, docId, setDocId, fixed, fromViewer } = useToolDoc(docs);
+  const { doc, docId, setDocId, fixed, fromViewer, routePage } = useToolDoc(docs);
   const stamper = usePageStamper();
   const finish = useStampFinish(fromViewer);
 
@@ -106,18 +106,19 @@ export default function RedactScreen() {
     if (loaded && !fixed && !docId && docs.length === 1) setDocId(docs[0].id);
   }, [loaded, fixed, docId, docs, setDocId]);
 
-  // A different document starts clean.
+  // A different document starts clean, on its first page — or, opened from
+  // the viewer's Tools sheet, on the page it was showing.
   const boxesFor = useRef<string | null>(null);
   useEffect(() => {
     if (!doc || boxesFor.current === doc.id) return;
     boxesFor.current = doc.id;
     findAbort.current?.abort();
     setBoxes({});
-    setPageIndex(0);
+    setPageIndex(routePage ?? 0);
     setSelectedId(null);
     setStatus(null);
     finders.current = [];
-  }, [doc]);
+  }, [doc, routePage]);
 
   const pageCount = doc?.pages.length ?? 0;
   const page = Math.min(pageIndex, Math.max(0, pageCount - 1));

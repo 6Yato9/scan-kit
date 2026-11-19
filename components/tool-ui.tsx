@@ -100,6 +100,7 @@ export function ToolScreen({
   right,
   busy = false,
   scrollRef,
+  stickyHeaderIndices,
 }: {
   title: string;
   children: ReactNode;
@@ -117,6 +118,12 @@ export function ToolScreen({
   busy?: boolean;
   /** The body's ScrollView, for a screen that scrolls a section into view (Sign). */
   scrollRef?: React.Ref<ScrollView>;
+  /**
+   * Body children (null ones don't count) that stay pinned to the top once
+   * scrolled to, e.g. Watermark's live preview above its controls. Give such
+   * a child an opaque background.
+   */
+  stickyHeaderIndices?: number[];
 }) {
   const router = useRouter();
   const navigation = useNavigation();
@@ -164,6 +171,7 @@ export function ToolScreen({
       {scroll ? (
         <ScrollView
           ref={scrollRef}
+          stickyHeaderIndices={stickyHeaderIndices}
           style={styles.flex}
           contentContainerStyle={[styles.body, !footer && { paddingBottom: insets.bottom + Spacing.xxl }]}
           scrollEnabled={scrollEnabled}

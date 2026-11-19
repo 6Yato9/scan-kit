@@ -102,7 +102,7 @@ export default function SignScreen() {
   const [placing, setPlacing] = useState(false);
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
 
-  const { doc, docId, setDocId, fixed, fromViewer } = useToolDoc(docs);
+  const { doc, docId, setDocId, fixed, fromViewer, routePage } = useToolDoc(docs);
   const stamper = usePageStamper();
   const finish = useStampFinish(fromViewer);
   // Signatures used before (newest first) and the one picked, if any.
@@ -118,14 +118,15 @@ export default function SignScreen() {
       setPageIndex(docs[0].pages.length - 1);
     }
   }, [loaded, fixed, docId, docs, setDocId]);
-  // Opened on a document: start on its last page, like picking it would.
+  // Opened on a document: start on the page the viewer was showing (its Tools
+  // sheet passes it), else on the last page, like picking it would.
   const startedOn = useRef<string | null>(null);
   useEffect(() => {
     if (fixed && doc && startedOn.current !== doc.id) {
       startedOn.current = doc.id;
-      setPageIndex(doc.pages.length - 1);
+      setPageIndex(routePage ?? doc.pages.length - 1);
     }
-  }, [fixed, doc]);
+  }, [fixed, doc, routePage]);
   const pageUri = doc ? doc.pages[Math.min(pageIndex, doc.pages.length - 1)] : null;
   const aspect = useImageAspect(pageUri);
   const pageText = usePageText(pageUri);

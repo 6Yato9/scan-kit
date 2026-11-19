@@ -317,5 +317,6 @@ export function useScanDocTools({ document, page, editDocument, toast, router, s
     />
   );
 
-  return { documentRows, pageRows, sheets };
+  // For the viewer's Tools sheet: the same Merge and Split as the rows above.
+  return { documentRows, pageRows, sheets, merge: scanned ? openMerge : null, split: scanned && n > 1 ? split : null };
 }

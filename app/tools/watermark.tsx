@@ -2,7 +2,18 @@
 // Stamp a text watermark on every page of the document itself (drawn into the
 // pages, so they stay searchable and re-filterable; the viewer offers Undo —
 // lib/page-stamp.ts), or on a copy with "Save as a copy".
-import { useEffect, useState } from 'react';
+//
+// Type: one Single mark (diagonal, centered or footer) or the text Tiled in a
+// diagonal grid over the whole page. Size (points on an A4-wide page) and
+// Strength (ink opacity) start automatic — exactly the look the tool always
+// had — and become numbers once moved (lib/stamp.ts resolveWatermarkLook).
+// The choices are remembered for next time once a watermark is added
+// (lib/watermark-prefs.ts).
+//
+// The preview stays pinned above the controls while they scroll, so every
+// change shows at once, and it is drawn from the same resolved numbers as the
+// bake (lib/stamp.ts resolveStamp / watermarkTiles), in the same font.
+import { useEffect, useRef, useState } from 'react';
 import { StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';
@@ -12,6 +23,7 @@ import {
   FooterActions,
   NoDocumentsScreen,
   PagePreview,
+  SectionRow,
   Segmented,
   ToolNote,
   ToolProgress,
@@ -22,18 +34,34 @@ import {
 import { ToolDocPicker, useConvertiblePdfs, useToolDoc, type PickerConvert } from '@/components/tool-doc';
 import { FilterBaker } from '@/components/filter-baker';
 import { reportStampFailure, usePageStamper, useStampFinish } from '@/components/page-stamper';
+import { ValueSlider } from '@/components/value-slider';
 import { copyName, stampCopy, stampPages, targetPages } from '@/lib/page-stamp';
 import { notifySuccess } from '@/lib/haptics';
 import {
   STAMP_RGB,
-  WATERMARK_ANGLE,
-  watermarkFontFraction,
-  watermarkOpacity,
+  WATERMARK_SIZE_RANGE,
+  WATERMARK_STRENGTH_RANGE,
+  resolveStamp,
+  resolveWatermarkLook,
+  watermarkTiles,
   type StampColor,
+  type StampSpec,
+  type WatermarkLayout,
   type WatermarkStyle,
 } from '@/lib/stamp';
+import {
+  DEFAULT_WATERMARK_PREFS,
+  WATERMARK_TEXT_MAX,
+  loadWatermarkPrefs,
+  saveWatermarkPrefs,
+  type PerLayout,
+} from '@/lib/watermark-prefs';
 import { Radius, Spacing, Type } from '@/lib/theme';
 
+const LAYOUTS: { value: WatermarkLayout; label: string }[] = [
+  { value: 'single', label: 'Single' },
+  { value: 'tiled', label: 'Tiled' },
+];
 const STYLES: { value: WatermarkStyle; label: string }[] = [
   { value: 'diagonal', label: 'Diagonal' },
   { value: 'center', label: 'Centered' },
@@ -45,16 +73,47 @@ const COLORS: { value: StampColor; label: string }[] = [
   { value: 'blue', label: 'Blue' },
 ];
 
+/** The canvas draws in Helvetica Bold (lib/stamp.ts STAMP_FONT); so does the preview. */
+const PREVIEW_FONT = { fontFamily: 'Helvetica', fontWeight: '700' as const };
+/** Text is measured once at this size; its width scales with the font size. */
+const MEASURE_PT = 100;
+
 export default function WatermarkScreen() {
   const { colors } = useTheme();
   const { width: screenW, height: screenH } = useWindowDimensions();
   const { docs, loaded, reload } = useToolDocuments();
   // Imported PDFs: listed in the picker with Convert, never a dead end.
   const { pdfs, loaded: pdfsLoaded, reload: reloadPdfs } = useConvertiblePdfs();
-  const [text, setText] = useState('CONFIDENTIAL');
-  const [style, setStyle] = useState<WatermarkStyle>('diagonal');
-  const [color, setColor] = useState<StampColor>('gray');
+  const d = DEFAULT_WATERMARK_PREFS;
+  const [text, setText] = useState(d.text);
+  const [layout, setLayout] = useState<WatermarkLayout>(d.layout);
+  const [style, setStyle] = useState<WatermarkStyle>(d.style);
+  const [color, setColor] = useState<StampColor>(d.color);
+  const [size, setSize] = useState<PerLayout>(d.size);
+  const [strength, setStrength] = useState<PerLayout>(d.strength);
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
+
+  // The remembered choices arrive a moment after the screen opens; anything
+  // the user has already changed by then wins.
+  const touched = useRef(false);
+  const touch = () => {
+    touched.current = true;
+  };
+  useEffect(() => {
+    let live = true;
+    loadWatermarkPrefs().then(p => {
+      if (!live || touched.current) return;
+      setText(p.text);
+      setLayout(p.layout);
+      setStyle(p.style);
+      setColor(p.color);
+      setSize(p.size);
+      setStrength(p.strength);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
 
   // Never a default: stamping the wrong document is worse than one more tap.
   const { doc, docId, setDocId, fixed, fromViewer } = useToolDoc(docs);
@@ -67,10 +126,21 @@ export default function WatermarkScreen() {
   const aspect = useImageAspect(doc?.pages[0]);
   const label = text.trim();
 
+  const spec: Extract<StampSpec, { kind: 'watermark' }> = {
+    kind: 'watermark',
+    text: label,
+    style,
+    color,
+    layout,
+    sizePt: size[layout],
+    strength: strength[layout],
+  };
+  const look = resolveWatermarkLook(label, spec);
+
   /** Watermarks every page of the document itself (Undo in the viewer), or of a copy. */
   const apply = async (mode: 'in-place' | 'copy') => {
     if (!doc || !label || progress) return;
-    const spec = { kind: 'watermark' as const, text: label, style, color };
+    saveWatermarkPrefs({ text: label, layout, style, color, size, strength });
     const render = (pageUri: string, origUri: string | null) => stamper.stamp(pageUri, origUri, spec);
     const pages = targetPages(doc.pages.length, 0, true);
     const onProgress = (done: number, total: number) => setProgress({ current: done, total });
@@ -124,17 +194,28 @@ export default function WatermarkScreen() {
     );
   }
 
-  // Small enough that every control down to the colour swatches stays above
-  // the pinned footer: the page's height is capped as well as its width, so a
-  // tall page doesn't push Color under it.
+  // The preview is pinned while the controls scroll under it, so it is kept
+  // to a fifth of the screen's height (and half its width): the controls keep
+  // most of the screen.
   const previewMaxH = Math.round(screenH * 0.2);
   const previewW = Math.min(screenW * 0.5, 220, previewMaxH / aspect);
-  const [r, g, b] = STAMP_RGB[color];
+  const sizeRange = WATERMARK_SIZE_RANGE[layout];
+  // Size and strength are kept per type (a good tile is far smaller than a single mark).
+  const setSizeValue = (v: number | null) => {
+    touch();
+    setSize(prev => ({ ...prev, [layout]: v }));
+  };
+  const setStrengthValue = (v: number | null) => {
+    touch();
+    setStrength(prev => ({ ...prev, [layout]: v }));
+  };
 
   return (
     <ToolScreen
       title="Watermark"
       busy={!!progress}
+      // The preview (third child) stays in view while the options scroll.
+      stickyHeaderIndices={[2]}
       footer={
         <>
           {progress ? (
@@ -160,9 +241,12 @@ export default function WatermarkScreen() {
         </>
       }
     >
-      {/* Presented over the viewer: a baker underneath would never run (see FilterBaker). */}
-      {fromViewer ? <FilterBaker /> : null}
-      {stamper.host}
+      {/* Child 0: off-screen hosts, always one element so the sticky index holds.
+          Presented over the viewer: a baker underneath would never run (see FilterBaker). */}
+      <>
+        {fromViewer ? <FilterBaker /> : null}
+        {stamper.host}
+      </>
       <ToolDocPicker
         docs={docs}
         doc={doc}
@@ -174,32 +258,10 @@ export default function WatermarkScreen() {
       />
 
       {/* Live preview: the first page (a sample page until one is chosen) with
-          the watermark drawn exactly as the PDF will get it. */}
-      <View style={styles.previewWrap}>
+          the watermark drawn exactly as the page will get it. */}
+      <View style={[styles.previewWrap, { backgroundColor: colors.bg }]}>
         <PagePreview uri={doc ? `${doc.pages[0]}?v=${doc.updatedAt}` : null} aspect={aspect} width={previewW}>
-          {({ width }) => {
-            const fontSize = watermarkFontFraction(label, style) * width;
-            const ink = `rgba(${r},${g},${b},${watermarkOpacity(style)})`;
-            const textEl = (
-              <Text style={{ fontSize, fontWeight: '700', color: ink, letterSpacing: fontSize * 0.04 }}>
-                {label}
-              </Text>
-            );
-            return style === 'footer' ? (
-              <View style={[styles.footerStamp, { bottom: width * aspect * 0.03 }]}>{textEl}</View>
-            ) : (
-              <View style={styles.centerStamp}>
-                <View
-                  style={[
-                    { width: width * 2, alignItems: 'center' },
-                    style === 'diagonal' && { transform: [{ rotate: `${WATERMARK_ANGLE}deg` }] },
-                  ]}
-                >
-                  {textEl}
-                </View>
-              </View>
-            );
-          }}
+          {({ width, height }) => <WatermarkLayer spec={spec} width={width} height={height} />}
         </PagePreview>
       </View>
 
@@ -207,33 +269,154 @@ export default function WatermarkScreen() {
       <TextInput
         style={[Type.body, styles.input, { color: colors.text, backgroundColor: colors.card }]}
         value={text}
-        onChangeText={setText}
+        onChangeText={v => {
+          touch();
+          setText(v);
+        }}
         placeholder="For example, CONFIDENTIAL"
         placeholderTextColor={colors.muted}
         autoCapitalize="characters"
         returnKeyType="done"
-        maxLength={40}
+        maxLength={WATERMARK_TEXT_MAX}
         accessibilityLabel="Watermark text"
       />
 
-      <SectionLabel>Style</SectionLabel>
-      <Segmented options={STYLES} value={style} onChange={setStyle} />
+      <SectionLabel>Type</SectionLabel>
+      <Segmented options={LAYOUTS} value={layout} onChange={v => {
+          touch();
+          setLayout(v);
+        }} />
+
+      {layout === 'single' ? (
+        <>
+          <SectionLabel>Style</SectionLabel>
+          <Segmented options={STYLES} value={style} onChange={v => {
+              touch();
+              setStyle(v);
+            }} />
+        </>
+      ) : null}
+
+      <SectionRow label="Size" action={look.autoSize ? undefined : 'Reset'} onAction={() => setSizeValue(null)} />
+      <ValueSlider
+        label="Watermark size"
+        value={Math.min(sizeRange.max, Math.max(sizeRange.min, look.sizePt))}
+        min={sizeRange.min}
+        max={sizeRange.max}
+        step={2}
+        format={v => `${v} pt`}
+        onChange={setSizeValue}
+      />
+
+      <SectionRow label="Strength" action={look.autoStrength ? undefined : 'Reset'} onAction={() => setStrengthValue(null)} />
+      <ValueSlider
+        label="Watermark strength"
+        value={look.strength}
+        min={WATERMARK_STRENGTH_RANGE.min}
+        max={WATERMARK_STRENGTH_RANGE.max}
+        step={5}
+        format={v => `${v}%`}
+        onChange={setStrengthValue}
+      />
 
       <SectionLabel>Color</SectionLabel>
       <ColorSwatches
         options={COLORS.map(c => ({ ...c, color: `rgb(${STAMP_RGB[c.value].join(',')})` }))}
         value={color}
-        onChange={setColor}
+        onChange={v => {
+          touch();
+          setColor(v);
+        }}
       />
 
-      <ToolNote>The watermark becomes part of every page, and you can undo it right after. To keep this document as it is, save a watermarked copy instead.</ToolNote>
+      <ToolNote>Size is in points on an A4-wide page and scales with each page. The watermark becomes part of every page, and you can undo it right after. To keep this document as it is, save a watermarked copy instead.</ToolNote>
     </ToolScreen>
   );
 }
 
+/**
+ * The watermark over a preview page `width` × `height` points, from the same
+ * resolved numbers the canvas bakes with (lib/stamp.ts resolveStamp): font
+ * size as a fraction of the page width, ink, angle and, for Tiled, the repeat
+ * grid (watermarkTiles) laid out with the text's measured width.
+ */
+function WatermarkLayer({ spec, width, height }: { spec: StampSpec; width: number; height: number }) {
+  const r = resolveStamp(spec);
+  // The text's width at MEASURE_PT, for the tile spacing (as the canvas
+  // measures its own); keyed by the text so a stale width is never used.
+  const [measured, setMeasured] = useState<{ text: string; w: number } | null>(null);
+  if (r.kind !== 'watermark' || !r.text) return null;
+  const fontSize = r.fontFrac * width;
+  const textStyle = { ...PREVIEW_FONT, fontSize, color: r.ink, letterSpacing: fontSize * 0.04 };
+  const textEl = (
+    <Text style={textStyle} numberOfLines={1} allowFontScaling={false}>
+      {r.text}
+    </Text>
+  );
+
+  if (r.layout === 'footer') {
+    return <View style={[styles.footerStamp, { bottom: height * 0.03 }]}>{textEl}</View>;
+  }
+  if (r.layout !== 'tiled') {
+    return (
+      <View style={styles.centerStamp}>
+        <View style={[{ width: width * 2, alignItems: 'center' }, r.angle ? { transform: [{ rotate: `${r.angle}deg` }] } : null]}>
+          {textEl}
+        </View>
+      </View>
+    );
+  }
+
+  // Until measured, the width the fit formula assumes (0.62 em a character).
+  const unitW =
+    measured && measured.text === r.text ? measured.w / MEASURE_PT : [...r.text].length * 0.62 * 1.04;
+  const textW = unitW * fontSize;
+  const tiles = watermarkTiles(width, height, fontSize, textW, r.angle, r.gapEm, r.rowEm);
+  const boxW = textW * 2 + fontSize * 2;
+  const boxH = fontSize * 2;
+  return (
+    <View style={styles.clip}>
+      <View style={styles.measure} pointerEvents="none">
+        <Text
+          style={{ ...PREVIEW_FONT, fontSize: MEASURE_PT, letterSpacing: MEASURE_PT * 0.04 }}
+          numberOfLines={1}
+          allowFontScaling={false}
+          onLayout={e => {
+            const w = e.nativeEvent.layout.width;
+            if (w > 0 && (measured?.text !== r.text || Math.abs(measured.w - w) > 0.5)) setMeasured({ text: r.text, w });
+          }}
+        >
+          {r.text}
+        </Text>
+      </View>
+      {tiles.map((t, i) => (
+        <View
+          key={i}
+          style={[
+            styles.tile,
+            { left: t.x - boxW / 2, top: t.y - boxH / 2, width: boxW, height: boxH, transform: [{ rotate: `${r.angle}deg` }] },
+          ]}
+        >
+          {textEl}
+        </View>
+      ))}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
-  previewWrap: { marginTop: Spacing.lg },
+  // Pinned while scrolling: an opaque band the full width of the screen (out
+  // over the body's gutters) so the options pass cleanly under it.
+  previewWrap: {
+    marginHorizontal: -Spacing.gutter,
+    paddingHorizontal: Spacing.gutter,
+    paddingTop: Spacing.lg,
+    paddingBottom: Spacing.xs,
+  },
   input: { borderRadius: Radius.md, paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md },
   centerStamp: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   footerStamp: { position: 'absolute', left: 0, right: 0, alignItems: 'center' },
+  clip: { ...StyleSheet.absoluteFillObject, overflow: 'hidden' },
+  measure: { position: 'absolute', left: 0, top: 0, width: 100_000, flexDirection: 'row', alignItems: 'flex-start', opacity: 0 },
+  tile: { position: 'absolute', alignItems: 'center', justifyContent: 'center' },
 });

@@ -9,7 +9,7 @@
 // tool is in Tools.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AppState, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
-import { useRouter, useFocusEffect, type Href } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Document } from '@/types/document';
@@ -20,7 +20,8 @@ import { HeaderIconButton, LargeTitle } from '@/components/screen-header';
 import { useTheme } from '@/contexts/theme-context';
 import { EmptyState } from '@/components/empty-state';
 import { DocumentTile, DocumentTileSkeleton } from '@/components/document-card';
-import { AppIcon, type AppIconName } from '@/components/app-icon';
+import { ToolTile } from '@/components/tool-tile';
+import { HOME_TOOLS, toolHref } from '@/lib/tool-catalog';
 import { SectionLabel } from '@/components/section-label';
 import { useDocumentActions } from '@/components/document-actions';
 import { useImportDocuments } from '@/components/use-import';
@@ -39,14 +40,6 @@ const SHELF_LIMIT = 8;
 function shelfTileWidth(screenW: number): number {
   return Math.floor((screenW - Spacing.gutter - Spacing.sm * 2) / 2.6);
 }
-
-/** Everyday tools, one tap from Home (every tool is in the Tools tab). */
-const SHORTCUTS: { icon: AppIconName; label: string; href: Href }[] = [
-  { icon: 'signature', label: 'Sign', href: '/tools/sign' },
-  { icon: 'id-card', label: 'ID card', href: '/tools/id-card' },
-  { icon: 'reader-outline', label: 'Extract text', href: '/tools/extract-text' },
-  { icon: 'watermark', label: 'Watermark', href: '/tools/watermark' },
-];
 
 /**
  * Folder card width when folders scroll (three or more): two whole cards and
@@ -213,21 +206,10 @@ export default function HomeScreen() {
         </Pressable>
       </View>
       <View style={[styles.toolCard, { backgroundColor: colors.card }]}>
-        {SHORTCUTS.map(t => (
-          <Pressable
-            key={t.label}
-            style={({ pressed }) => [styles.tool, pressed && { opacity: 0.6 }]}
-            onPress={() => router.push(t.href)}
-            accessibilityRole="button"
-            accessibilityLabel={t.label}
-          >
-            <View style={[styles.toolIcon, { backgroundColor: colors.accentLight }]}>
-              <AppIcon name={t.icon} size={24} color={colors.accent} />
-            </View>
-            <Text style={[styles.toolLabel, { color: colors.text }]} numberOfLines={1} maxFontSizeMultiplier={1.2}>
-              {t.label}
-            </Text>
-          </Pressable>
+        {/* Everyday tools, one tap from Home (every tool is in the Tools tab),
+            in their Tools-tab colours (lib/tool-catalog.ts). */}
+        {HOME_TOOLS.map(id => (
+          <ToolTile key={id} id={id} size="compact" width="flex" onPress={() => router.push(toolHref(id))} />
         ))}
       </View>
     </View>
@@ -318,11 +300,8 @@ const styles = StyleSheet.create({
   shelf: { paddingHorizontal: Spacing.gutter, gap: Spacing.sm, paddingBottom: Spacing.xs },
   // Overflows to the right like the real shelf (clipped by the screen).
   shelfSkeleton: { flexDirection: 'row', gap: Spacing.sm, overflow: 'hidden', marginRight: -Spacing.gutter },
-  // The Tools tab's tile, a size smaller: four in one card.
-  toolCard: { flexDirection: 'row', borderRadius: Radius.lg, paddingVertical: Spacing.md, paddingHorizontal: Spacing.xs },
-  tool: { flex: 1, alignItems: 'center', paddingHorizontal: Spacing.xxs },
-  toolIcon: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', marginBottom: Spacing.sm },
-  toolLabel: { fontSize: 12, lineHeight: 15, textAlign: 'center', fontWeight: '500' },
+  // The Tools tab's tile, a size smaller: four in one card (each tile adds Spacing.sm above and below).
+  toolCard: { flexDirection: 'row', borderRadius: Radius.lg, paddingVertical: Spacing.xs, paddingHorizontal: Spacing.xs },
   quickRow: { flexDirection: 'row', gap: Spacing.sm, marginTop: Spacing.sm },
   quick: {
     flex: 1,

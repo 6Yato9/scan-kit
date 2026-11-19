@@ -255,7 +255,8 @@ function ThemedStack() {
       <Stack.Screen name="tools/watermark" options={toolOptions} />
       <Stack.Screen name="tools/timestamp" options={toolOptions} />
       <Stack.Screen name="tools/sign" options={toolOptions} />
-      <Stack.Screen name="tools/long-image" options={{ headerShown: false, presentation: 'card' }} />
+      {/* toolOptions: the viewer's Tools sheet opens Long image on the document. */}
+      <Stack.Screen name="tools/long-image" options={toolOptions} />
       <Stack.Screen name="tools/book" options={{ headerShown: false, presentation: 'card' }} />
       <Stack.Screen name="tools/whiteboard" options={{ headerShown: false, presentation: 'card' }} />
       <Stack.Screen name="tools/erase-marks" options={toolOptions} />

@@ -44,6 +44,164 @@ export function watermarkOpacity(style: WatermarkStyle): number {
 
 export const WATERMARK_ANGLE = -35;
 
+// ── Watermark type, size and strength ───────────────────────────────────────
+//
+// "Single" is the one watermark across the page the tool always drew (style
+// diagonal / centered / footer). "Tiled" repeats the text in a diagonal brick
+// grid over the whole page, the classic pattern on ID copies and contracts.
+//
+// Size is a number of points ON AN A4-WIDE PAGE (595 pt): the scale people
+// know from a word processor. Like every other stamp it is really a fraction
+// of the page width, so a receipt or a landscape page gets the same look in
+// proportion (WATERMARK_REF_WIDTH_PT). Strength is the ink's opacity in %.
+//
+// Both may be left "automatic" (null / absent): then they are exactly what the
+// tool drew before they existed — the size fits the text across the page, the
+// strength is the style's tuned opacity — so a default watermark is unchanged.
+
+export type WatermarkLayout = 'single' | 'tiled';
+
+/** The page width a watermark size in points refers to: A4 (595 pt). */
+export const WATERMARK_REF_WIDTH_PT = 595;
+
+/**
+ * Size limits in points (on an A4-wide page). Single goes down to footnote
+ * size for the footer style; Tiled starts higher because every halving of the
+ * size quadruples the number of repeats (and the preview's views).
+ */
+export const WATERMARK_SIZE_RANGE: Record<WatermarkLayout, { min: number; max: number }> = {
+  single: { min: 8, max: 144 },
+  tiled: { min: 12, max: 96 },
+};
+
+/** Strength (ink opacity) limits, in percent. */
+export const WATERMARK_STRENGTH_RANGE = { min: 10, max: 100 };
+
+/** Tiled defaults: a modest repeat, lighter than a single mark since it covers the page. */
+export const TILED_DEFAULT_SIZE_PT = 24;
+export const TILED_DEFAULT_STRENGTH = 20;
+
+/**
+ * Tiled spacing, in multiples of the font size, so the pattern scales with
+ * the size: the gap between repeats along a row, and the row pitch. Rows
+ * alternate by half a step (a brick pattern), so no column of text lines up.
+ */
+export const TILE_GAP_EM = 2;
+export const TILE_ROW_EM = 4;
+
+/** What the user chose for the look of a watermark (sizes and strengths null = automatic). */
+export type WatermarkLook = {
+  layout?: WatermarkLayout;
+  style: WatermarkStyle;
+  /** Points on an A4-wide page; null / absent = automatic. */
+  sizePt?: number | null;
+  /** Ink opacity in percent; null / absent = automatic. */
+  strength?: number | null;
+};
+
+const finite = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n);
+
+export function clampWatermarkSize(layout: WatermarkLayout, pt: number): number {
+  const { min, max } = WATERMARK_SIZE_RANGE[layout];
+  return Math.min(max, Math.max(min, Math.round(pt)));
+}
+
+export function clampWatermarkStrength(pct: number): number {
+  return Math.min(WATERMARK_STRENGTH_RANGE.max, Math.max(WATERMARK_STRENGTH_RANGE.min, Math.round(pct)));
+}
+
+/**
+ * The look with every number worked out: the font size as a fraction of the
+ * page width and the ink opacity (0..1) that are drawn, and the same two as
+ * the size in points and the strength in percent that the controls display.
+ * Automatic values are the tool's original ones, unrounded, so the default
+ * watermark is pixel-for-pixel what it was.
+ */
+export function resolveWatermarkLook(text: string, look: WatermarkLook): {
+  layout: WatermarkLayout;
+  fontFrac: number;
+  opacity: number;
+  sizePt: number;
+  strength: number;
+  autoSize: boolean;
+  autoStrength: boolean;
+} {
+  const layout: WatermarkLayout = look.layout === 'tiled' ? 'tiled' : 'single';
+  const autoSize = !finite(look.sizePt);
+  const autoStrength = !finite(look.strength);
+  const fontFrac = autoSize
+    ? layout === 'tiled'
+      ? TILED_DEFAULT_SIZE_PT / WATERMARK_REF_WIDTH_PT
+      : watermarkFontFraction(text, look.style)
+    : clampWatermarkSize(layout, look.sizePt as number) / WATERMARK_REF_WIDTH_PT;
+  const opacity = autoStrength
+    ? layout === 'tiled'
+      ? TILED_DEFAULT_STRENGTH / 100
+      : watermarkOpacity(look.style)
+    : clampWatermarkStrength(look.strength as number) / 100;
+  return {
+    layout,
+    fontFrac,
+    opacity,
+    sizePt: Math.round(fontFrac * WATERMARK_REF_WIDTH_PT),
+    strength: Math.round(opacity * 100),
+    autoSize,
+    autoStrength,
+  };
+}
+
+export type TileCenter = { x: number; y: number };
+
+/**
+ * Centres of the repeats of a tiled watermark on a page `w` × `h` (any unit),
+ * for text `fontSize` tall and `textWidth` wide, every repeat rotated by
+ * `angleDeg` about its own centre. The grid is laid out in the rotated frame
+ * (rows along the text direction, brick-offset by half a step) around the
+ * page centre — one repeat sits exactly in the middle — and only repeats that
+ * can touch the page are returned, in a fixed order.
+ *
+ * The canvas painter carries a line-for-line copy (watermarkTiles in
+ * STAMP_CANVAS_JS; a unit test holds the two equal), so the baked page and the
+ * on-screen preview put every repeat in the same place.
+ */
+export function watermarkTiles(
+  w: number,
+  h: number,
+  fontSize: number,
+  textWidth: number,
+  angleDeg: number,
+  gapEm: number = TILE_GAP_EM,
+  rowEm: number = TILE_ROW_EM,
+): TileCenter[] {
+  const out: TileCenter[] = [];
+  if (!(w > 0 && h > 0 && fontSize > 0 && textWidth > 0)) return out;
+  const colPitch = textWidth + gapEm * fontSize;
+  const rowPitch = rowEm * fontSize;
+  const a = (angleDeg * Math.PI) / 180;
+  const cos = Math.cos(a);
+  const sin = Math.sin(a);
+  const cx = w / 2;
+  const cy = h / 2;
+  // A repeat can touch the page while its centre is within its own half-diagonal.
+  const reach = Math.sqrt(textWidth * textWidth + fontSize * fontSize * 1.44) / 2;
+  const radius = Math.sqrt(w * w + h * h) / 2 + reach;
+  const rows = Math.ceil(radius / rowPitch);
+  const cols = Math.ceil(radius / colPitch) + 1;
+  for (let j = -rows; j <= rows; j++) {
+    const shift = ((j % 2) + 2) % 2 === 1 ? colPitch / 2 : 0;
+    for (let i = -cols; i <= cols; i++) {
+      const u = i * colPitch + shift;
+      const v = j * rowPitch;
+      const x = cx + u * cos - v * sin;
+      const y = cy + u * sin + v * cos;
+      const dx = Math.max(0, Math.abs(x - cx) - cx);
+      const dy = Math.max(0, Math.abs(y - cy) - cy);
+      if (dx * dx + dy * dy <= reach * reach) out.push({ x, y });
+    }
+  }
+  return out;
+}
+
 export function watermarkOverlay(
   text: string,
   style: WatermarkStyle,
@@ -169,7 +327,18 @@ export function signatureOverlay(sig: Signature, p: Placement): string {
 /** What to draw on a page, in page-relative terms. */
 export type StampSpec =
   | { kind: 'signature'; signature: Signature; placement: Placement; ink?: SignatureInk }
-  | { kind: 'watermark'; text: string; style: WatermarkStyle; color: StampColor }
+  | {
+      kind: 'watermark';
+      text: string;
+      style: WatermarkStyle;
+      color: StampColor;
+      /** Absent: 'single' (the one look there was before Tiled). */
+      layout?: WatermarkLayout;
+      /** Points on an A4-wide page; absent / null: automatic (see WatermarkLook). */
+      sizePt?: number | null;
+      /** Ink opacity in percent; absent / null: automatic. */
+      strength?: number | null;
+    }
   | {
       kind: 'timestamp';
       text: string;
@@ -243,10 +412,13 @@ export type ResolvedStamp =
   | {
       kind: 'watermark';
       text: string;
-      layout: 'rotated' | 'center' | 'footer';
+      layout: 'rotated' | 'center' | 'footer' | 'tiled';
       angle: number;
       fontFrac: number;
       ink: string;
+      /** Tiled only: spacing in font sizes (watermarkTiles). */
+      gapEm: number;
+      rowEm: number;
       /** Footer only: the line's bottom edge, as a fraction of the page HEIGHT. */
       bottomFracOfHeight: number;
     }
@@ -286,14 +458,18 @@ export function resolveStamp(spec: StampSpec): ResolvedStamp {
     };
   }
   if (spec.kind === 'watermark') {
-    const [r, g, b] = STAMP_RGB[spec.color];
+    const [r, g, b] = STAMP_RGB[spec.color] ?? STAMP_RGB.gray;
+    const look = resolveWatermarkLook(spec.text, spec);
+    const tiled = look.layout === 'tiled';
     return {
       kind: 'watermark',
       text: spec.text.trim(),
-      layout: spec.style === 'diagonal' ? 'rotated' : spec.style,
-      angle: spec.style === 'diagonal' ? WATERMARK_ANGLE : 0,
-      fontFrac: watermarkFontFraction(spec.text, spec.style),
-      ink: `rgba(${r},${g},${b},${watermarkOpacity(spec.style)})`,
+      layout: tiled ? 'tiled' : spec.style === 'diagonal' ? 'rotated' : spec.style,
+      angle: tiled || spec.style === 'diagonal' ? WATERMARK_ANGLE : 0,
+      fontFrac: look.fontFrac,
+      ink: `rgba(${r},${g},${b},${look.opacity})`,
+      gapEm: TILE_GAP_EM,
+      rowEm: TILE_ROW_EM,
       bottomFracOfHeight: 0.97,
     };
   }
@@ -363,6 +539,33 @@ function redactRect(r, w, h) {
   var x1 = Math.min(w, Math.ceil((r.x + r.w) * w - 1e-6)), y1 = Math.min(h, Math.ceil((r.y + r.h) * h - 1e-6));
   return { x: x0, y: y0, w: Math.max(0, x1 - x0), h: Math.max(0, y1 - y0) };
 }
+// A copy of watermarkTiles in lib/stamp.ts (a unit test holds them equal).
+function watermarkTiles(w, h, fontSize, textWidth, angleDeg, gapEm, rowEm) {
+  var out = [];
+  if (!(w > 0 && h > 0 && fontSize > 0 && textWidth > 0)) return out;
+  var colPitch = textWidth + gapEm * fontSize;
+  var rowPitch = rowEm * fontSize;
+  var a = angleDeg * Math.PI / 180;
+  var cos = Math.cos(a), sin = Math.sin(a);
+  var cx = w / 2, cy = h / 2;
+  var reach = Math.sqrt(textWidth * textWidth + fontSize * fontSize * 1.44) / 2;
+  var radius = Math.sqrt(w * w + h * h) / 2 + reach;
+  var rows = Math.ceil(radius / rowPitch);
+  var cols = Math.ceil(radius / colPitch) + 1;
+  for (var j = -rows; j <= rows; j++) {
+    var shift = ((j % 2) + 2) % 2 === 1 ? colPitch / 2 : 0;
+    for (var i = -cols; i <= cols; i++) {
+      var u = i * colPitch + shift;
+      var v = j * rowPitch;
+      var x = cx + u * cos - v * sin;
+      var y = cy + u * sin + v * cos;
+      var dx = Math.max(0, Math.abs(x - cx) - cx);
+      var dy = Math.max(0, Math.abs(y - cy) - cy);
+      if (dx * dx + dy * dy <= reach * reach) out.push({ x: x, y: y });
+    }
+  }
+  return out;
+}
 function drawStamp(ctx, w, h, s, sig) {
   ctx.save();
   if (s.kind === 'redact') {
@@ -394,6 +597,16 @@ function drawStamp(ctx, w, h, s, sig) {
     if (s.layout === 'footer') {
       var lh = f * 1.15;
       drawSpaced(ctx, chars, (w - tw) / 2, s.bottomFracOfHeight * h - lh / 2, ls);
+    } else if (s.layout === 'tiled') {
+      var tiles = watermarkTiles(w, h, f, tw, s.angle, s.gapEm, s.rowEm);
+      var rad = s.angle * Math.PI / 180;
+      for (var ti = 0; ti < tiles.length; ti++) {
+        ctx.save();
+        ctx.translate(tiles[ti].x, tiles[ti].y);
+        if (rad) ctx.rotate(rad);
+        drawSpaced(ctx, chars, -tw / 2, 0, ls);
+        ctx.restore();
+      }
     } else {
       ctx.translate(w / 2, h / 2);
       if (s.angle) ctx.rotate(s.angle * Math.PI / 180);

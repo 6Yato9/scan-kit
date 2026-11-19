@@ -25,6 +25,7 @@ import {
 } from '@/lib/convert-pdf';
 import { notifyError, notifySuccess } from '@/lib/haptics';
 import { isSessionUnlocked } from '@/lib/pdf-session';
+import { parsePageParam } from '@/lib/tool-catalog';
 import { HIT, Radius, Spacing, Type } from '@/lib/theme';
 import type { Document } from '@/types/document';
 
@@ -66,7 +67,7 @@ export type PickerConvert = {
 };
 
 export function useToolDoc(docs: Document[]) {
-  const params = useLocalSearchParams<{ docId?: string }>();
+  const params = useLocalSearchParams<{ docId?: string; page?: string }>();
   const routeDocId = typeof params.docId === 'string' && params.docId ? params.docId : null;
   const [docId, setDocId] = useState<string | null>(routeDocId);
   const doc = docs.find(d => d.id === docId) ?? null;
@@ -81,6 +82,12 @@ export function useToolDoc(docs: Document[]) {
     fixed,
     /** Opened from the viewer: finishing should go back to it, not open another. */
     fromViewer: !!routeDocId,
+    /**
+     * The page on screen in the viewer that opened this tool (its Tools sheet
+     * passes it), for the route's document only; null otherwise. Tools that
+     * work on one page (Sign, Redact) start there.
+     */
+    routePage: fixed && doc && doc.id === routeDocId ? parsePageParam(params.page, doc.pages.length) : null,
   };
 }
 
