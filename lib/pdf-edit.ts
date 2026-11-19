@@ -69,6 +69,7 @@ import { deleteJsonSync, privateStateDir, readJsonSync, writeJsonSync } from './
 import { bumpPdfTextGeneration, joinPdfPageTexts } from './pdf-text';
 import { invalidatePdfThumbs } from './pdf-thumb';
 import { generatePdf } from './pdf';
+import { everyPageNamed } from './page-ranges';
 import { ocrAvailable } from './ocr';
 import {
   adoptSessionCopy,
@@ -733,6 +734,10 @@ export async function splitStoredPdfParts(
     }
     const work = newWorkDir(docId);
     const created: string[] = [];
+    // One clock reading for every part, as a scanned split does
+    // (lib/doc-ops.ts): reading it per part, after each part's slow PDFKit
+    // copy, made later parts newer and listed part (1) last in "Date added".
+    const base = Date.now();
     try {
       const docs: Document[] = [];
       for (let k = 0; k < planned.length; k++) {
@@ -748,7 +753,7 @@ export async function splitStoredPdfParts(
         const id = Crypto.randomUUID();
         created.push(id);
         // The first part sorts as the newest in "Date added", the rest in order after it.
-        const now = Date.now() + (planned.length - 1 - k);
+        const now = base + (planned.length - 1 - k);
         const pdfUri = copyPdfToStorage(out.uri, id);
         const part: Document = {
           id,
@@ -763,7 +768,7 @@ export async function splitStoredPdfParts(
         await saveDocument(part);
         docs.push(part);
       }
-      return docs;
+      return { docs, complete: everyPageNamed(planned.map(pl => pl.map(st => st.source)), count) };
     } catch (err) {
       // Nothing half-made stays: the parts saved so far go again.
       for (const id of created) {
@@ -776,14 +781,17 @@ export async function splitStoredPdfParts(
     }
   });
   let originalTrashed = false;
-  if (options.trashOriginal) {
+  // Never trash an original holding pages no part has (By ranges with pages
+  // left out): they would be left only in Recently deleted. The screen says
+  // so first; this keeps it true whoever calls.
+  if (options.trashOriginal && made.complete) {
     try {
       originalTrashed = await trashDocument(docId);
     } catch (err) {
       console.warn('Split: could not move the original to Recently deleted', err);
     }
   }
-  return { parts: made, originalTrashed };
+  return { parts: made.docs, originalTrashed };
 }
 
 // ── Merge ────────────────────────────────────────────────────────────────────

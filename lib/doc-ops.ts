@@ -15,6 +15,7 @@ import { deleteDocument, getDocument, patchDocument, saveDocument, trashDocument
 import { remapForReorder, runPageEdit, withDocLock } from './bake';
 import { indexDocText } from './save-scan';
 import { mergeUndoToken, type MergeUndo } from './merge-undo';
+import { everyPageNamed } from './page-ranges';
 
 const DEFAULT_ADJ: PageAdjustment = { brightness: 0, contrast: 0, saturation: 0 };
 
@@ -324,18 +325,21 @@ export async function splitDocumentParts(
       }
       throw err;
     }
-    return docs;
+    return { docs, complete: everyPageNamed(plan, fresh.pages.length) };
   });
   let originalTrashed = false;
-  if (options.trashOriginal) {
+  // Never trash an original holding pages no part has (By ranges with pages
+  // left out): they would be left only in Recently deleted. The screen says
+  // so first; this keeps it true whoever calls.
+  if (options.trashOriginal && made.complete) {
     try {
       originalTrashed = await trashDocument(sourceId);
     } catch (err) {
       console.warn('Split: could not move the original to Recently deleted', err);
     }
   }
-  for (const d of made) {
+  for (const d of made.docs) {
     indexDocText(d.id, d.pages).catch(err => console.warn('Index split part failed', err));
   }
-  return { parts: made, originalTrashed };
+  return { parts: made.docs, originalTrashed };
 }

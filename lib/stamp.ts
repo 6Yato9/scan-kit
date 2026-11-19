@@ -453,6 +453,13 @@ export type StampSpec =
        * 1 = right / bottom; lib/placement.ts). Absent: the corner's.
        */
       anchor?: { x: number; y: number };
+      /**
+       * The text's width in font sizes, measured in the stamp's font and
+       * weight (components/timestamp-preview.tsx TimestampMeasure). Present:
+       * the size shrinks to fit across the page (fitTimestampFont) — the
+       * same number for the preview and the saved page. Absent: as drawn.
+       */
+      textEm?: number;
     } & TimestampLookSpec)
   | {
       kind: 'redact';
@@ -570,7 +577,10 @@ export type ResolvedStamp =
       /** 0..1 between the inset edges, see StampSpec. */
       ax: number;
       ay: number;
+      /** The size drawn at: the chosen one, shrunk to fit the page's width when it wouldn't (fitTimestampFont). */
       fontFrac: number;
+      /** The size chosen, before any fitting. */
+      chosenFontFrac: number;
       insetFrac: number;
       padV: number;
       padH: number;
@@ -658,7 +668,8 @@ export function resolveStamp(spec: StampSpec): ResolvedStamp {
     corner: spec.corner,
     ax: unit(spec.anchor?.x, h === 'right' ? 1 : 0),
     ay: unit(spec.anchor?.y, v === 'bottom' ? 1 : 0),
-    fontFrac: look.fontFrac,
+    fontFrac: fitTimestampFont(look.fontFrac, spec.textEm),
+    chosenFontFrac: look.fontFrac,
     insetFrac: CORNER_INSET,
     padV: TIMESTAMP_PAD.v,
     padH: TIMESTAMP_PAD.h,
@@ -673,6 +684,30 @@ export function resolveStamp(spec: StampSpec): ResolvedStamp {
 
 /** The timestamp box's padding and corner radius, in font sizes (the preview uses the same). */
 export const TIMESTAMP_PAD = { v: 0.35, h: 0.6, radius: 0.3 };
+
+/**
+ * The box may fill this share of the width between the inset edges: the hair
+ * left over absorbs sub-pixel differences between the preview's and WebKit's
+ * text measuring (both Core Text, both Helvetica).
+ */
+export const TIMESTAMP_FIT_SLACK = 0.99;
+
+/**
+ * Shrink to fit — the ONE rule both the preview and the saved page use
+ * (resolveStamp feeds both): a timestamp whose box (the text, `textEm` font
+ * sizes wide, plus its side padding) would run past the page's inset edges is
+ * drawn smaller, just enough to fit; one that fits is drawn as chosen. The
+ * text itself is never cut or ellipsised — shrinking always fits it — so the
+ * preview and the page show the same text at the same size. Depends only on
+ * fractions of the page width, so it is the same on portrait and landscape
+ * pages, at any resolution. `textEm` missing or not positive: no fitting.
+ * Pure.
+ */
+export function fitTimestampFont(fontFrac: number, textEm: number | null | undefined, insetFrac = CORNER_INSET, padH = TIMESTAMP_PAD.h): number {
+  if (typeof textEm !== 'number' || !Number.isFinite(textEm) || textEm <= 0) return fontFrac;
+  const room = Math.max(0, 1 - 2 * insetFrac) * TIMESTAMP_FIT_SLACK;
+  return Math.min(fontFrac, room / (textEm + 2 * padH));
+}
 
 function hexToRgbOrGray(hex: string): [number, number, number] {
   const n = parseInt(hex.slice(1), 16);

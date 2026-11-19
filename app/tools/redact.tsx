@@ -131,7 +131,7 @@ export default function RedactScreen() {
     };
   }, []);
   const fill = inkHex(look.color, look.customColor, TOOL_INKS.redact, 'black');
-  const colorName = look.color === 'custom' ? 'your custom color' : inkLabel(look.color).toLowerCase();
+  const colorName = look.color === 'custom' ? 'your custom color' : `solid ${inkLabel(look.color).toLowerCase()}`;
   // What was searched for, to check after redacting that none of it is still readable.
   const finders = useRef<Finder[]>([]);
   const findAbort = useRef<AbortController | null>(null);
@@ -255,9 +255,9 @@ export default function RedactScreen() {
    * After a redaction: anything searched for still readable under a box? Then
    * the box was too small — say so and box it again, wider, for another pass.
    */
-  const checkLeftovers = async (target: Document, indices: number[]): Promise<boolean> => {
+  const checkLeftovers = async (target: Document, indices: number[], labelled: boolean): Promise<boolean> => {
     const applied = new Map(indices.map(i => [i, rects(boxes[i])] as const));
-    const left = await findLeftovers(target.pages, applied, finders.current);
+    const left = await findLeftovers(target.pages, applied, finders.current, labelled);
     if (left.size === 0) return false;
     const next: PageBoxes = {};
     for (const [i, list] of left) next[i] = addProposals([], list.map(r => grow(r, 0.25)), 'search').boxes;
@@ -290,7 +290,7 @@ export default function RedactScreen() {
       if (mode === 'copy') {
         const copy = await stampCopy(doc, copyName(doc.name, 'redacted'), pages, render, onProgress, stamper.signal, { redact: true });
         reload();
-        if (await checkLeftovers(copy, pages)) {
+        if (await checkLeftovers(copy, pages, style.label)) {
           setDocId(copy.id);
           boxesFor.current = copy.id;
           return;
@@ -306,7 +306,7 @@ export default function RedactScreen() {
         // The PDF this was converted from still holds the text: it goes.
         discardConvertStashes(doc.id);
         reload();
-        if (await checkLeftovers(after, pages)) {
+        if (await checkLeftovers(after, pages, style.label)) {
           // Still being redacted: the Undo copy (unredacted pixels) isn't kept around.
           discardStampUndo(undo);
           return;
@@ -332,7 +332,7 @@ export default function RedactScreen() {
     const where = targets.length > 1 ? `${targets.length} pages` : doc.pages.length > 1 ? `page ${targets[0] + 1}` : 'the page';
     Alert.alert(
       `Redact ${where}?`,
-      `The boxes are burned into the page in solid ${colorName}${look.label ? ', with “REDACTED” across them' : ''}, and the text under them is removed from the document. You can undo it only until the confirmation at the bottom of the screen goes away.`,
+      `The boxes are burned into the page in ${colorName}${look.label ? ', with “REDACTED” across them' : ''}, and the text under them is removed from the document. You can undo it only until the confirmation at the bottom of the screen goes away.`,
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Save as a copy', onPress: () => { void apply('copy'); } },

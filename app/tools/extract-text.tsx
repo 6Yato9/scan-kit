@@ -6,7 +6,7 @@
 // as on the page (the default, as before) or joined into paragraphs — chosen
 // before reading under More options, or switched on the result — and Share
 // as plain text (as before) or as a .txt file.
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { Alert, StyleSheet, View } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Clipboard from 'expo-clipboard';
@@ -30,6 +30,7 @@ import {
   type TextShareAs,
 } from '@/lib/text-format';
 import { readToolPrefs, TOOL_PREF_KEYS, writeToolPrefs } from '@/lib/tool-prefs';
+import { useRememberedPrefs } from '@/components/use-remembered-prefs';
 import { notifyError, notifySuccess, tapLight } from '@/lib/haptics';
 import { ocrAvailable, recognizeLines } from '@/lib/ocr';
 import { alertScanError, deleteTempFiles, pickPhotos, scanWithCamera } from '@/lib/tool-scan';
@@ -45,6 +46,9 @@ const SHARE_OPTIONS: { value: TextShareAs; label: string }[] = [
   { value: 'file', label: '.txt file' },
 ];
 
+const loadExtractPrefs = () => readToolPrefs(TOOL_PREF_KEYS.extractText, parseExtractTextPrefs);
+const saveExtractPrefs = (p: ExtractTextPrefs) => writeToolPrefs(TOOL_PREF_KEYS.extractText, p);
+
 export default function ExtractTextScreen() {
   const { colors } = useTheme();
   const { show } = useToast();
@@ -56,27 +60,12 @@ export default function ExtractTextScreen() {
   const [editing, setEditing] = useState(false);
   const busyRef = useRef(false);
   const available = ocrAvailable();
-  const [prefs, setPrefsState] = useState<ExtractTextPrefs>(DEFAULT_EXTRACT_TEXT);
-  const prefsRef = useRef(prefs);
+  // Remembered; a choice made before it loads wins (components/use-remembered-prefs.ts).
+  const [prefs, setPrefs, latestPrefs] = useRememberedPrefs<ExtractTextPrefs>(DEFAULT_EXTRACT_TEXT, loadExtractPrefs, saveExtractPrefs);
   const [moreOpen, setMoreOpen] = useState(false);
   // The text as recognized, before any formatting or edit, and the text it was formatted to.
   const rawRef = useRef({ plain: '', paragraphs: '' });
   const formattedRef = useRef('');
-  useEffect(() => {
-    let live = true;
-    readToolPrefs(TOOL_PREF_KEYS.extractText, parseExtractTextPrefs).then(p => {
-      if (!live) return;
-      prefsRef.current = p;
-      setPrefsState(p);
-    });
-    return () => { live = false; };
-  }, []);
-  const setPrefs = (patch: Partial<ExtractTextPrefs>) => {
-    const next = { ...prefsRef.current, ...patch };
-    prefsRef.current = next;
-    setPrefsState(next);
-    writeToolPrefs(TOOL_PREF_KEYS.extractText, next).catch(() => {});
-  };
   /** On the result: the line breaks switched, from the recognized text (asks before dropping edits). */
   const switchLineBreaks = (v: LineBreaks) => {
     const apply = () => {
@@ -134,7 +123,7 @@ export default function ExtractTextScreen() {
       if (!uris?.length) return;
       temp = uris;
       rawRef.current = await recognize(uris);
-      const result = formatted(prefsRef.current.lineBreaks);
+      const result = formatted(latestPrefs().lineBreaks);
       formattedRef.current = result;
       setText(result);
       setFound(!!result);

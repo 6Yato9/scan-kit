@@ -8,7 +8,7 @@
 // marker colours kept (the Whiteboard filter, the default as before), or
 // grayscale / black and white for printing and copying. Any page's filter can
 // still be changed later in the viewer.
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useScan } from '@/contexts/scan-context';
@@ -17,6 +17,7 @@ import { Segmented, ToolIntro, ToolNote, ToolScreen } from '@/components/tool-ui
 import { MoreOptions } from '@/components/more-options';
 import { SectionLabel } from '@/components/section-label';
 import { oneOf, readToolPrefs, TOOL_PREF_KEYS, writeToolPrefs } from '@/lib/tool-prefs';
+import { useRememberedPrefs } from '@/components/use-remembered-prefs';
 import type { PageFilter } from '@/types/document';
 
 import { alertScanError, deleteTempFiles, pickPhotos, scanPagesWithCamera } from '@/lib/tool-scan';
@@ -32,28 +33,20 @@ const LOOK_OPTIONS: { value: BoardLook; label: string }[] = [
   { value: 'bw', label: 'Black & white' },
 ];
 
+const DEFAULT_BOARD_PREFS: { look: BoardLook } = { look: 'color' };
+const loadBoardPrefs = () =>
+  readToolPrefs(TOOL_PREF_KEYS.whiteboard, o => ({ look: oneOf<BoardLook>(['color', 'gray', 'bw'], o.look, 'color') }));
+const saveBoardPrefs = (p: { look: BoardLook }) => writeToolPrefs(TOOL_PREF_KEYS.whiteboard, { look: p.look });
+
 export default function WhiteboardScreen() {
   const { saveAndOpen } = useScan();
   const router = useRouter();
   const [busy, setBusy] = useState<'camera' | 'photos' | null>(null);
   const busyRef = useRef(false);
-  const [look, setLookState] = useState<BoardLook>('color');
-  const lookRef = useRef(look);
+  // Remembered; a choice made before it loads wins (components/use-remembered-prefs.ts).
+  const [{ look }, setPrefs, latestPrefs] = useRememberedPrefs(DEFAULT_BOARD_PREFS, loadBoardPrefs, saveBoardPrefs);
   const [moreOpen, setMoreOpen] = useState(false);
-  useEffect(() => {
-    let live = true;
-    readToolPrefs(TOOL_PREF_KEYS.whiteboard, o => oneOf<BoardLook>(['color', 'gray', 'bw'], o.look, 'color')).then(l => {
-      if (!live) return;
-      lookRef.current = l;
-      setLookState(l);
-    });
-    return () => { live = false; };
-  }, []);
-  const setLook = (l: BoardLook) => {
-    lookRef.current = l;
-    setLookState(l);
-    writeToolPrefs(TOOL_PREF_KEYS.whiteboard, { look: l }).catch(() => {});
-  };
+  const setLook = (l: BoardLook) => setPrefs({ look: l });
 
   const run = async (source: 'camera' | 'photos') => {
     if (busyRef.current) return;
@@ -72,7 +65,7 @@ export default function WhiteboardScreen() {
       }
       if (!pages?.length) return;
       if (source === 'photos') picked = pages as string[];
-      const id = await saveAndOpen({ pages, defaultFilter: LOOK_FILTER[lookRef.current] });
+      const id = await saveAndOpen({ pages, defaultFilter: LOOK_FILTER[latestPrefs().look] });
       if (id) noteNewDocument(id);
       if (id) navigateWhenUnlocked(() => router.replace({ pathname: '/viewer', params: { id } }));
     } finally {

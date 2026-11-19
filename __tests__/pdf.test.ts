@@ -333,9 +333,9 @@ test('estimatePdfBytes scales stored bytes by the downscale area and adds per-pa
   expect(estimatePdfBytes([page, page], 'standard')).toBeGreaterThan(standard * 1.9);
 });
 
-test('roundUpEstimate rounds up to two significant figures, never down', () => {
-  const KB = 1024;
-  const MB = KB * 1024;
+test('roundUpEstimate rounds up to two significant figures, never down, in decimal units', () => {
+  const KB = 1000;
+  const MB = 1_000_000;
   expect(roundUpEstimate(126 * KB + 300)).toBe(130 * KB);
   expect(roundUpEstimate(139 * KB)).toBe(140 * KB);
   expect(roundUpEstimate(140 * KB)).toBe(140 * KB);

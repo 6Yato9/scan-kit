@@ -103,7 +103,7 @@ describe('custom image size and size targets', () => {
   });
 
   test('the target picks the largest size whose shown estimate fits', () => {
-    const MB = 1024 * 1024;
+    const MB = 1_000_000; // decimal, as iOS shows sizes
     const edge = maxEdgeForTarget(pages, 1 * MB)!;
     expect(edge % 50).toBe(0);
     expect(edge).toBeGreaterThanOrEqual(MIN_CUSTOM_EDGE);
@@ -111,6 +111,6 @@ describe('custom image size and size targets', () => {
     expect(roundUpEstimate(estimatePdfBytes(pages, 'standard', false, edge + 50))).toBeGreaterThan(MB);
     // Generous target: the largest custom size. Impossible target: null.
     expect(maxEdgeForTarget(pages, 100 * MB)).toBe(MAX_CUSTOM_EDGE);
-    expect(maxEdgeForTarget(pages, 10 * 1024)).toBeNull();
+    expect(maxEdgeForTarget(pages, 10 * 1000)).toBeNull();
   });
 });

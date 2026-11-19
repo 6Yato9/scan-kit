@@ -476,6 +476,34 @@ describe('splitStoredPdfParts (round 16)', () => {
     expect(workDirs()).toEqual([]);
   });
 
+  test('part (1) sorts first in "Date added" (newest), as a scanned split does, however slow each copy is', async () => {
+    // Each PDFKit copy takes a while: the clock moves on between parts.
+    let clock = 1_000_000;
+    const spy = jest.spyOn(Date, 'now').mockImplementation(() => clock);
+    const copy = mockNative.pdfEditPages.getMockImplementation();
+    mockNative.pdfEditPages.mockImplementation(async (...a: any[]) => {
+      clock += 250;
+      return copy ? copy(...a) : a[2].length;
+    });
+    try {
+      const r = await splitStoredPdfParts('d1', n => partPlans([[0], [1], [2, 3]], n));
+      const byDateAdded = [...r.parts].sort((a, b) => b.createdAt - a.createdAt).map(d => d.name);
+      expect(byDateAdded).toEqual(['Lease (1)', 'Lease (2)', 'Lease (3)']);
+    } finally {
+      spy.mockRestore();
+      if (copy) mockNative.pdfEditPages.mockImplementation(copy);
+    }
+  });
+
+  test('the original is never trashed while some of its pages are in no part (data safety)', async () => {
+    const r = await splitStoredPdfParts('d1', n => partPlans([[0], [2]], n), { trashOriginal: true });
+    expect(r.originalTrashed).toBe(false);
+    expect(mockTrash).not.toHaveBeenCalled();
+    const r2 = await splitStoredPdfParts('d1', n => partPlans([[0, 1], [2, 3]], n), { trashOriginal: true });
+    expect(r2.originalTrashed).toBe(true);
+    expect(mockTrash).toHaveBeenCalledWith('d1');
+  });
+
   test('a part outside the PDF is refused before anything is written', async () => {
     expect(() => partPlans([[0], [9]], 4)).toThrow(RangeError);
     await expect(splitStoredPdfParts('d1', n => (n === 99 ? partPlans([[0]], n) : []))).rejects.toMatchObject({ kind: 'changed' });

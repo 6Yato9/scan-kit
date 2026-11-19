@@ -90,7 +90,46 @@ export type SplitMode = 'at' | 'every' | 'ranges';
 const SPLIT_MODES: readonly SplitMode[] = ['at', 'every', 'ranges'];
 export type SplitPrefs = { mode: SplitMode; every: number };
 
+/**
+ * "Every N pages" starts at two pages per document: one per page is a choice
+ * to make on purpose (it can mean a document for every page of a long scan).
+ */
+export const DEFAULT_SPLIT_EVERY = 2;
+export const DEFAULT_SPLIT_PREFS: SplitPrefs = { mode: 'at', every: DEFAULT_SPLIT_EVERY };
+
+/** More parts than this and Split asks first (each part is a document of its own, with copies of its pages). */
+export const SPLIT_CONFIRM_OVER = 10;
+
 /** Remembered split choices; anything unknown is the classic split in two. Pure. */
 export function parseSplitPrefs(o: Record<string, unknown>): SplitPrefs {
-  return { mode: oneOf(SPLIT_MODES, o.mode, 'at'), every: numberIn(o.every, 1, 500, 1) };
+  return { mode: oneOf(SPLIT_MODES, o.mode, 'at'), every: numberIn(o.every, 1, 500, DEFAULT_SPLIT_EVERY) };
+}
+
+/** The pages (0-based, in order) of a `count`-page document that none of `parts` names. Pure. */
+export function omittedPages(parts: readonly (readonly number[])[], count: number): number[] {
+  const used = new Set(parts.flat());
+  return Array.from({ length: count }, (_, i) => i).filter(i => !used.has(i));
+}
+
+/** True when `parts` between them name every page of a `count`-page document. Pure. */
+export function everyPageNamed(parts: readonly (readonly number[])[], count: number): boolean {
+  return omittedPages(parts, count).length === 0;
+}
+
+/**
+ * Why the original can't go to Recently deleted, or null when it can: pages no
+ * part names would then exist only in the deleted original (By ranges).
+ * "Pages 4, 6 aren’t in any range, so the original is kept." Pure.
+ */
+export function keepOriginalReason(omitted: readonly number[]): string | null {
+  if (omitted.length === 0) return null;
+  const label = rangeLabel([...omitted]);
+  return omitted.length === 1
+    ? `Page ${label} isn’t in any range, so the original is kept.`
+    : `Pages ${label} aren’t in any range, so the original is kept.`;
+}
+
+/** "two new documents" (the classic split's words), "1 new document", "3 new documents". Pure. */
+export function newDocumentsLabel(n: number): string {
+  return n === 2 ? 'two new documents' : n === 1 ? '1 new document' : `${n} new documents`;
 }

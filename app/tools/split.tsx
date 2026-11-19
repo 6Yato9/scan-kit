@@ -17,7 +17,7 @@
 //   left out aren't copied), parsed by lib/page-ranges.ts.
 // Parts are "<name> (1)", "<name> (2)", … (lib/doc-ops splitDocumentParts,
 // lib/pdf-edit splitStoredPdfParts) and the first part opens.
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/contexts/theme-context';
@@ -27,8 +27,21 @@ import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
 import { NoDocumentsScreen, OptionList, Segmented, ToolNote, ToolScreen, isSinglePageDoc, useToolDocuments } from '@/components/tool-ui';
 import { ValueSlider } from '@/components/value-slider';
-import { chunkPages, describeParts, parsePageRanges, parseSplitPrefs, type SplitMode, type SplitPrefs } from '@/lib/page-ranges';
+import {
+  chunkPages,
+  DEFAULT_SPLIT_PREFS,
+  describeParts,
+  keepOriginalReason,
+  newDocumentsLabel,
+  omittedPages,
+  parsePageRanges,
+  parseSplitPrefs,
+  SPLIT_CONFIRM_OVER,
+  type SplitMode,
+  type SplitPrefs,
+} from '@/lib/page-ranges';
 import { readToolPrefs, TOOL_PREF_KEYS, writeToolPrefs } from '@/lib/tool-prefs';
+import { useRememberedPrefs } from '@/components/use-remembered-prefs';
 import { ToolDocPicker, useToolDoc } from '@/components/tool-doc';
 import { FilterBaker } from '@/components/filter-baker';
 import { splitDocumentParts, splitRanges } from '@/lib/doc-ops';
@@ -42,10 +55,29 @@ import type { Document } from '@/types/document';
 
 type Keep = 'keep' | 'trash';
 
-const KEEP_OPTIONS: { value: Keep; label: string; detail: string }[] = [
-  { value: 'keep', label: 'Keep the original', detail: 'You get two new documents and keep this one.' },
-  { value: 'trash', label: 'Move the original to Recently deleted', detail: 'You can restore it there for 30 days.' },
-];
+/**
+ * Keep or trash the original. The details say how many documents the split
+ * makes; when pages are left out of every range, trashing is offered greyed
+ * out with the reason (those pages would exist only in the deleted original).
+ */
+function keepOptions(parts: number | null, keptBecause: string | null): { value: Keep; label: string; detail: string; disabled?: boolean }[] {
+  return [
+    {
+      value: 'keep',
+      label: 'Keep the original',
+      detail: parts ? `You get ${newDocumentsLabel(parts)} and keep this one.` : 'You get the new documents and keep this one.',
+    },
+    {
+      value: 'trash',
+      label: 'Move the original to Recently deleted',
+      detail: keptBecause ?? 'You can restore it there for 30 days.',
+      disabled: !!keptBecause,
+    },
+  ];
+}
+
+const loadSplitPrefs = () => readToolPrefs(TOOL_PREF_KEYS.split, parseSplitPrefs);
+const saveSplitPrefs = (p: SplitPrefs) => writeToolPrefs(TOOL_PREF_KEYS.split, p);
 
 const range = (a: number, b: number) => (a === b ? `page ${a}` : `pages ${a}–${b}`);
 /** "two documents" (the classic split's words), "1 document", "6 documents". */
@@ -68,23 +100,7 @@ export default function SplitScreen() {
   const { doc, setDocId, fixed, fromViewer } = useToolDoc(docs);
   const [after, setAfter] = useState<number | null>(null);
   const [keep, setKeep] = useState<Keep>('keep');
-  const [prefs, setPrefsState] = useState<SplitPrefs>({ mode: 'at', every: 1 });
-  const prefsRef = useRef(prefs);
-  const setPrefs = (patch: Partial<SplitPrefs>) => {
-    const next = { ...prefsRef.current, ...patch };
-    prefsRef.current = next;
-    setPrefsState(next);
-    writeToolPrefs(TOOL_PREF_KEYS.split, next).catch(() => {});
-  };
-  useEffect(() => {
-    let live = true;
-    readToolPrefs(TOOL_PREF_KEYS.split, parseSplitPrefs).then(p => {
-      if (!live) return;
-      prefsRef.current = p;
-      setPrefsState(p);
-    });
-    return () => { live = false; };
-  }, []);
+  const [prefs, setPrefs] = useRememberedPrefs(DEFAULT_SPLIT_PREFS, loadSplitPrefs, saveSplitPrefs);
   // "By ranges": what was typed, for this document only.
   const [rangeText, setRangeText] = useState('');
   const [saving, setSaving] = useState(false);
@@ -133,6 +149,10 @@ export default function SplitScreen() {
   const cutAfter = new Set(mode === 'ranges' || !parts ? [] : parts.slice(0, -1).map(p => p[p.length - 1]));
   // By ranges: pages no range names are dimmed (they aren't copied).
   const used = mode === 'ranges' && parts ? new Set(parts.flat()) : null;
+  // ...and while there are any, the original can't go to Recently deleted:
+  // they would be left only in it, and gone for good after 30 days.
+  const keptBecause = mode === 'ranges' && parts ? keepOriginalReason(omittedPages(parts, count)) : null;
+  const keepChoice: Keep = keptBecause ? 'keep' : keep;
 
   const pick = (d: Document) => {
     setDocId(d.id);
@@ -142,9 +162,27 @@ export default function SplitScreen() {
 
   const split = () => {
     if (!doc || !parts || saving) return;
+    // Many documents at once (Every N pages, or a long list of ranges): asked
+    // first, as each is a document of its own to delete again.
+    if (parts.length > SPLIT_CONFIRM_OVER) {
+      Alert.alert(
+        `Make ${parts.length} documents?`,
+        `“${doc.name}” is split into ${parts.length} new documents, each with a copy of its pages.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: `Make ${parts.length} documents`, isPreferred: true, onPress: () => { confirmPassword(); } },
+        ],
+      );
+      return;
+    }
+    confirmPassword();
+  };
+
+  const confirmPassword = () => {
+    if (!doc || !parts || saving) return;
     // Its parts won't need a password; with the original deleted, nothing
     // protected is left: said before it happens.
-    if (doc.pdfUri && unlockedForSession && keep === 'trash') {
+    if (doc.pdfUri && unlockedForSession && keepChoice === 'trash') {
       Alert.alert(
         'Split without the password?',
         `The new ${parts.length === 1 ? 'document won’t' : 'documents won’t'} need a password, and the protected original moves to Recently deleted.`,
@@ -162,7 +200,7 @@ export default function SplitScreen() {
     if (!doc || !parts || saving) return;
     setSaving(true);
     try {
-      const trashOriginal = keep === 'trash';
+      const trashOriginal = keepChoice === 'trash';
       const plan = parts;
       const result = doc.pdfUri
         ? await splitStoredPdfParts(doc.id, n => (n === count ? partPlans(plan, n) : []), { trashOriginal })
@@ -335,7 +373,7 @@ export default function SplitScreen() {
           ) : null}
 
           <SectionLabel>Original</SectionLabel>
-          <OptionList options={KEEP_OPTIONS} value={keep} onChange={setKeep} />
+          <OptionList options={keepOptions(parts?.length ?? null, keptBecause)} value={keepChoice} onChange={setKeep} />
         </>
       ) : null}
     </ToolScreen>

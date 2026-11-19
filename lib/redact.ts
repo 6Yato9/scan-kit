@@ -330,26 +330,27 @@ export function addProposals(
 
 // ── After redacting ────────────────────────────────────────────────────────
 
+/** The label Redact can print across its boxes (lib/stamp.ts REDACT_LABEL), as text recognition reads it. */
+const LABEL_WORD = 'REDACTED';
+const isWordChar = (c: string | undefined) => !!c && /[\p{L}\p{N}]/u.test(c);
+
 /**
- * Where the "REDACTED" label Redact can print across its boxes (lib/stamp.ts
- * REDACT_LABEL) is read in a line, as [start, end) character indices: any
- * word holding "DACT", or starting "REDAC" (text recognition may drop or
- * misread a letter of it).
+ * Where the printed "REDACTED" label is read in a line, as [start, end)
+ * character indices: the exact word, in any case, standing on its own
+ * (between spaces or punctuation). Nothing else: "redaction@corp.com" or a
+ * number run into the label ("REDACTED555-0100") is real text, not the label.
  */
 export function labelSpans(text: string): { start: number; end: number }[] {
   const chars = Array.from(text);
+  const upper = chars.map(c => c.toUpperCase());
+  const word = Array.from(LABEL_WORD);
   const out: { start: number; end: number }[] = [];
-  let i = 0;
-  while (i < chars.length) {
-    if (/\s/.test(chars[i])) {
-      i += 1;
-      continue;
-    }
-    let j = i;
-    while (j < chars.length && !/\s/.test(chars[j])) j += 1;
-    const word = chars.slice(i, j).join('').toUpperCase();
-    if (word.includes('DACT') || word.includes('REDAC')) out.push({ start: i, end: j });
-    i = j;
+  for (let i = 0; i + word.length <= chars.length; i++) {
+    if (!word.every((c, k) => upper[i + k] === c)) continue;
+    const end = i + word.length;
+    if (isWordChar(chars[i - 1]) || isWordChar(chars[end])) continue;
+    out.push({ start: i, end });
+    i = end - 1;
   }
   return out;
 }
@@ -358,22 +359,24 @@ export function labelSpans(text: string): { start: number; end: number }[] {
  * The matches of `finders` (search terms, patterns) still readable on a
  * redacted page whose centre lies under one of the applied boxes: the box
  * didn't fully cover them. (A match outside every box was left on purpose —
- * the user removed that proposal — and isn't reported.) A match inside the
- * word "REDACTED" is the label printed on a box, not a leftover: searching
- * "red" must not find it again under every labelled box.
+ * the user removed that proposal — and isn't reported.) When the boxes carry
+ * the "REDACTED" label (`labelled`), a match inside that word is the label,
+ * not a leftover: searching "red" must not find it again under every box.
+ * Without the label nothing is excused.
  */
 export function leftoverMatches(
   lines: readonly OcrLine[],
   img: { width: number; height: number } | null,
   finders: readonly Finder[],
   applied: readonly RedactRect[],
+  labelled = false,
 ): RedactRect[] {
   const out: RedactRect[] = [];
   if (!img || !(img.width > 0) || !(img.height > 0)) return out;
   for (const finder of finders) {
     for (const line of lines) {
       if (!line.text || !(line.width > 0) || !(line.height > 0)) continue;
-      const labels = labelSpans(line.text);
+      const labels = labelled ? labelSpans(line.text) : [];
       const hits = finder.kind === 'term' ? findInText(line.text, finder.term) : findPattern(line.text, finder.kind);
       for (const h of hits) {
         if (labels.some(l => h.start >= l.start && h.end <= l.end)) continue;

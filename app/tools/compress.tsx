@@ -33,6 +33,7 @@ import {
 } from '@/lib/compress-pdf';
 import { pageStats } from '@/lib/page-stats';
 import { readToolPrefs, TOOL_PREF_KEYS, writeToolPrefs } from '@/lib/tool-prefs';
+import { useRememberedPrefs } from '@/components/use-remembered-prefs';
 import { Alert, StyleSheet, Text, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTheme } from '@/contexts/theme-context';
@@ -80,6 +81,9 @@ const PRESET_LABELS: Record<CompressPreset, { label: string; detail: string }> =
   large: { label: 'Large', detail: 'Near-original detail' },
 };
 
+const loadCompressPrefs = () => readToolPrefs(TOOL_PREF_KEYS.compress, parseCompressPdfPrefs);
+const saveCompressPrefs = (p: CompressPdfPrefs) => writeToolPrefs(TOOL_PREF_KEYS.compress, p);
+
 type MadePdf = { docId: string; uri: string; dir: string; bytes: number; name: string; target: number | null };
 
 export default function CompressScreen() {
@@ -89,34 +93,18 @@ export default function CompressScreen() {
   const params = useLocalSearchParams<{ mode?: string }>();
   const [mode, setMode] = useState<Mode>(params.mode === 'pdf' ? 'pdf' : 'space');
   const { docs, loaded, reload } = useToolDocuments();
-  const [level, setLevelState] = useState<CompressLevel>('balanced');
-  // Smaller PDF's choices, remembered; `prefsRef` is the latest (two quick taps both stick).
-  const [prefs, setPrefsState] = useState<CompressPdfPrefs>(DEFAULT_COMPRESS_PDF);
-  const prefsRef = useRef(prefs);
   const [moreOpen, setMoreOpen] = useState(false);
-  const [stats, setStats] = useState<{ docId: string; pages: PageStat[] } | null>(null);
-  const setPrefs = (patch: Partial<CompressPdfPrefs>) => {
-    const next = { ...prefsRef.current, ...patch };
-    prefsRef.current = next;
-    setPrefsState(next);
-    writeToolPrefs(TOOL_PREF_KEYS.compress, next).catch(() => {});
-  };
-  const setLevel = (v: CompressLevel) => {
-    setLevelState(v);
-    setPrefs({ level: v });
-  };
-  useEffect(() => {
-    let live = true;
-    readToolPrefs(TOOL_PREF_KEYS.compress, parseCompressPdfPrefs).then(p => {
-      if (!live) return;
-      prefsRef.current = p;
-      setPrefsState(p);
-      setLevelState(p.level);
-      // A remembered choice that lives under More options shows it open.
+  // Smaller PDF's choices and Free up space's level, remembered. A choice
+  // made before they load wins (components/use-remembered-prefs.ts).
+  const [prefs, setPrefs, latestPrefs] = useRememberedPrefs<CompressPdfPrefs>(DEFAULT_COMPRESS_PDF, loadCompressPrefs, saveCompressPrefs, {
+    // A remembered choice that lives under More options shows it open.
+    onLoaded: p => {
       if (p.sizing.kind !== 'preset' || !p.searchable) setMoreOpen(true);
-    });
-    return () => { live = false; };
-  }, []);
+    },
+  });
+  const level: CompressLevel = prefs.level;
+  const setLevel = (v: CompressLevel) => setPrefs({ level: v });
+  const [stats, setStats] = useState<{ docId: string; pages: PageStat[] } | null>(null);
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
   const [result, setResult] = useState<(CompressResult & { docId: string }) | null>(null);
   const [made, setMade] = useState<MadePdf | null>(null);
@@ -197,7 +185,8 @@ export default function CompressScreen() {
     try {
       const settings = await getDocSettings().catch(() => null);
       // Stats read now if the estimate hadn't finished, so "Fit under" is honoured.
-      const opts = pdfOptionsFor(prefs.sizing, docStats ?? (await pageStats(doc.pages)), searchable);
+      const chosenPrefs = latestPrefs();
+      const opts = pdfOptionsFor(chosenPrefs.sizing, docStats ?? (await pageStats(doc.pages)), searchable);
       raw = await generatePdf(doc.pages, {
         pageSize: settings?.pdfPageSize ?? 'Auto',
         quality: opts.quality,
@@ -209,7 +198,7 @@ export default function CompressScreen() {
       const dir = await makeExportDir();
       const uri = await placeExportFile(raw, dir, exportFileName(doc.name, 'pdf'), 'move');
       raw = null;
-      const target = prefs.sizing.kind === 'target' ? prefs.sizing.mb : null;
+      const target = chosenPrefs.sizing.kind === 'target' ? chosenPrefs.sizing.mb : null;
       setMade({ docId: doc.id, uri, dir, bytes: fileSize(uri), name: doc.name, target });
       notifySuccess();
     } catch (err) {
@@ -241,6 +230,17 @@ export default function CompressScreen() {
       />
     );
   }
+
+  // "Fit under": what it will do — never "may not fit" before the sizes are known.
+  const fitGeneric = 'For upload forms and email with a size limit: picks the sharpest pages that keep the PDF under it.';
+  const fitNote =
+    prefs.sizing.kind !== 'target' || !doc
+      ? fitGeneric
+      : !docStats
+        ? 'Working out the sizes…'
+        : chosen.fits
+          ? `Pages at up to ${(chosen.maxEdge ?? 0).toLocaleString('en-US')} pixels${about(prefs.sizing) ? `, ${about(prefs.sizing)}` : ''}. The real size is shown when it’s made.`
+          : `Even the smallest size is ${about(prefs.sizing) ?? 'more'}, so the file may not fit under ${prefs.sizing.mb} MB. Extract fewer pages first.`;
 
   const done = result && result.docId === docId ? result : null;
   const pdf = made && made.docId === docId ? made : null;
@@ -374,11 +374,7 @@ export default function CompressScreen() {
                 }}
               />
               <ToolNote>
-                {prefs.sizing.kind === 'target'
-                  ? chosen.fits
-                    ? `Pages at up to ${(chosen.maxEdge ?? 0).toLocaleString('en-US')} pixels${about(prefs.sizing) ? `, ${about(prefs.sizing)}` : ''}. The real size is shown when it’s made.`
-                    : `Even the smallest size is ${about(prefs.sizing) ?? 'more'}, so the file may not fit under ${prefs.sizing.mb} MB. Extract fewer pages first.`
-                  : 'For upload forms and email with a size limit: picks the sharpest pages that keep the PDF under it.'}
+                {fitNote}
               </ToolNote>
               <SectionLabel>Custom resolution</SectionLabel>
               <ValueSlider

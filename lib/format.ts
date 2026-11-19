@@ -52,3 +52,14 @@ export function formatPageCount(doc: { pages: string[]; pdfUri?: string }): stri
   const n = doc.pages.length;
   return `${n} page${n === 1 ? '' : 's'}`;
 }
+
+/**
+ * A file size in decimal units (1 KB = 1,000 bytes, 1 MB = 1,000,000), as iOS
+ * Files, Mail and Settings show sizes and as upload limits are written:
+ * "150 KB", "2.1 MB".
+ */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 KB';
+  if (bytes < 999_500) return `${Math.max(1, Math.round(bytes / 1000))} KB`;
+  return `${(bytes / 1_000_000).toFixed(1)} MB`;
+}

@@ -172,3 +172,35 @@ function load(src) {
 </script>
 </body></html>`;
 }
+
+/**
+ * The "Page width" choices for these pages and options, each with the width
+ * it really gives (pages are never enlarged, and many or long pages are made
+ * narrower to fit the canvas budget). A choice that would make exactly the
+ * image the choice below it makes is `same` — the screen greys it out rather
+ * than offer a choice that does nothing (e.g. 2,400 px for four A4 pages,
+ * which can be at most about 1,630 px wide). Pure.
+ */
+export function widthChoices(
+  sizes: { width: number; height: number }[],
+  options: Partial<Pick<LongImageOptions, 'gap' | 'margin'>> = {},
+): { value: number; width: number; same: boolean }[] {
+  let below = -1;
+  return WIDTH_CHOICES.map(value => {
+    const width = planLongImage(sizes, { ...options, maxWidth: value }).width;
+    const same = width === below;
+    below = width;
+    return { value, width, same };
+  });
+}
+
+/**
+ * The choice that stands for `maxWidth` on screen: itself, or — when it makes
+ * the same image as a narrower choice — the narrowest choice making that
+ * image. The stored choice is kept (another document may reach it). Pure.
+ */
+export function shownWidthChoice(choices: { value: number; width: number }[], maxWidth: number): number {
+  const mine = choices.find(c => c.value === maxWidth);
+  if (!mine) return maxWidth;
+  return choices.find(c => c.width === mine.width)?.value ?? maxWidth;
+}

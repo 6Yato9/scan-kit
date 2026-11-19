@@ -16,6 +16,7 @@ import { SectionLabel } from '@/components/section-label';
 import { ColorSwatches, NoDocumentsScreen, Segmented, ToolNote, ToolScreen, isImageDoc, isSinglePageDoc, useToolDocuments } from '@/components/tool-ui';
 import { MoreOptions } from '@/components/more-options';
 import { readToolPrefs, TOOL_PREF_KEYS, writeToolPrefs } from '@/lib/tool-prefs';
+import { useRememberedPrefs } from '@/components/use-remembered-prefs';
 import { ToolDocPicker, useToolDoc } from '@/components/tool-doc';
 import {
   BACKGROUND_HEX,
@@ -24,7 +25,9 @@ import {
   JPEG_QUALITY,
   parseLongImageOptions,
   planLongImage,
+  shownWidthChoice,
   WIDTH_CHOICES,
+  widthChoices,
   type LongImageBackground,
   type LongImageOptions,
   type LongImagePlan,
@@ -37,6 +40,11 @@ import { Radius, Spacing } from '@/lib/theme';
 import type { Document } from '@/types/document';
 
 const TIMEOUT_MS = 45_000;
+/** The width choices before a document's page sizes are known: all offered. */
+const DEFAULT_WIDTHS = WIDTH_CHOICES.map(value => ({ value, width: value, same: false }));
+
+const loadLongImagePrefs = () => readToolPrefs(TOOL_PREF_KEYS.longImage, parseLongImageOptions);
+const saveLongImagePrefs = (o: LongImageOptions) => writeToolPrefs(TOOL_PREF_KEYS.longImage, o);
 
 function imageSize(uri: string): Promise<{ width: number; height: number }> {
   return new Promise(resolve => {
@@ -58,7 +66,6 @@ const BACKGROUND_OPTIONS: { value: LongImageBackground; label: string; color: st
   { value: 'grey', label: 'Grey', color: BACKGROUND_HEX.grey },
   { value: 'black', label: 'Black', color: BACKGROUND_HEX.black },
 ];
-const WIDTH_OPTIONS = WIDTH_CHOICES.map(w => ({ value: String(w), label: `${w.toLocaleString('en-US')} px` }));
 const QUALITY_OPTIONS: { value: LongImageQuality; label: string }[] = [
   { value: 'smaller', label: 'Smaller file' },
   { value: 'standard', label: 'Standard' },
@@ -80,25 +87,13 @@ export default function LongImageScreen() {
 
   const { doc, docId, setDocId, fixed } = useToolDoc(docs);
   const working = job !== null;
-  const [opts, setOptsState] = useState<LongImageOptions>(DEFAULT_LONG_IMAGE);
-  const optsRef = useRef(opts);
+  // Remembered; a choice made before they load wins (components/use-remembered-prefs.ts).
+  const [opts, updateOpts, latestOpts] = useRememberedPrefs<LongImageOptions>(DEFAULT_LONG_IMAGE, loadLongImagePrefs, saveLongImagePrefs);
   const [moreOpen, setMoreOpen] = useState(false);
-  useEffect(() => {
-    let live = true;
-    readToolPrefs(TOOL_PREF_KEYS.longImage, parseLongImageOptions).then(o => {
-      if (!live) return;
-      optsRef.current = o;
-      setOptsState(o);
-    });
-    return () => { live = false; };
-  }, []);
   /** A new choice: remembered, and the image made with the old one goes. */
   const setOpts = (patch: Partial<LongImageOptions>) => {
     if (working) return;
-    const next = { ...optsRef.current, ...patch };
-    optsRef.current = next;
-    setOptsState(next);
-    writeToolPrefs(TOOL_PREF_KEYS.longImage, next).catch(() => {});
+    updateOpts(patch);
     deleteQuietly(outputRef.current?.dir);
     setOutput(null);
   };
@@ -107,6 +102,31 @@ export default function LongImageScreen() {
     (opts.background !== DEFAULT_LONG_IMAGE.background ? 1 : 0) +
     (opts.maxWidth !== DEFAULT_LONG_IMAGE.maxWidth ? 1 : 0) +
     (opts.quality !== DEFAULT_LONG_IMAGE.quality ? 1 : 0);
+
+  // The pages' sizes, for the widths this document can really have.
+  const [sizes, setSizes] = useState<{ docId: string; sizes: { width: number; height: number }[] } | null>(null);
+  const sizesKey = doc ? `${doc.id}:${doc.updatedAt}` : null;
+  useEffect(() => {
+    if (!doc) return;
+    let live = true;
+    Promise.all(doc.pages.map(p => imageSize(p.split('?')[0]))).then(s => {
+      if (live) setSizes({ docId: doc.id, sizes: s });
+    });
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sizesKey]);
+  const docSizes = sizes && doc && sizes.docId === doc.id ? sizes.sizes : null;
+  // A width that would make the same image as a narrower one is greyed out.
+  const widths = docSizes ? widthChoices(docSizes, opts) : null;
+  const widthOptions = (widths ?? DEFAULT_WIDTHS).map(c => ({
+    value: String(c.value),
+    label: `${c.value.toLocaleString('en-US')} px`,
+    disabled: c.same,
+  }));
+  const shownWidth = widths ? shownWidthChoice(widths, opts.maxWidth) : opts.maxWidth;
+  const widest = widths ? widths[widths.length - 1].width : null;
+  // The widest choice isn't reached: the note says how wide this document can be.
+  const limited = !!widest && widest < WIDTH_CHOICES[WIDTH_CHOICES.length - 1];
 
   // Remove the rendered file when leaving the screen.
   useEffect(
@@ -134,7 +154,7 @@ export default function LongImageScreen() {
     const srcs = doc.pages.map(p => p.split('?')[0]);
     const sizes: { width: number; height: number }[] = [];
     for (const s of srcs) sizes.push(await imageSize(s));
-    const o = optsRef.current;
+    const o = latestOpts();
     const plan = planLongImage(sizes, o);
     setJob({
       html: buildLongImageHtml(srcs, plan, { background: BACKGROUND_HEX[o.background], quality: JPEG_QUALITY[o.quality] }),
@@ -227,9 +247,11 @@ export default function LongImageScreen() {
           <ColorSwatches options={BACKGROUND_OPTIONS} value={opts.background} onChange={v => setOpts({ background: v })} />
           <ToolNote>The color of the space between and around the pages.</ToolNote>
           <SectionLabel>Page width</SectionLabel>
-          <Segmented options={WIDTH_OPTIONS} value={String(opts.maxWidth)} onChange={v => setOpts({ maxWidth: Number(v) })} />
+          <Segmented options={widthOptions} value={String(shownWidth)} onChange={v => setOpts({ maxWidth: Number(v) })} />
           <ToolNote>
-            The widest the pages can be. Pages are never enlarged, and many pages are made narrower to fit in one image.
+            {limited && widest
+              ? `The widest the pages can be. This document can be at most ${widest.toLocaleString('en-US')} px wide: pages are never enlarged, and many pages are made narrower to fit in one image.`
+              : 'The widest the pages can be. Pages are never enlarged, and many pages are made narrower to fit in one image.'}
           </ToolNote>
           <SectionLabel>Image quality</SectionLabel>
           <Segmented options={QUALITY_OPTIONS} value={opts.quality} onChange={v => setOpts({ quality: v })} />

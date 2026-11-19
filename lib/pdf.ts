@@ -314,15 +314,21 @@ export function fitWithMargin(
   };
 }
 
+/** Decimal size units, as iOS shows file sizes (Files, Mail, Settings): 1 MB = 1,000,000 bytes. */
+export const BYTES_PER_KB = 1000;
+export const BYTES_PER_MB = 1_000_000;
+
 /**
  * Rounds a size estimate up to two significant figures in the unit it is shown
  * in (KB below 1 MB, tenths of a MB above), so "about 150 KB" is never less
  * than the estimate itself: 126 KB → 130 KB, 1.21 MB → 1.3 MB, 9 KB → 9 KB.
+ * Decimal units (1 KB = 1,000 bytes, 1 MB = 1,000,000), as iOS Files and Mail
+ * show sizes and as upload limits are written.
  */
 export function roundUpEstimate(bytes: number): number {
   if (!Number.isFinite(bytes) || bytes <= 0) return 0;
-  const KB = 1024;
-  const MB = KB * 1024;
+  const KB = BYTES_PER_KB;
+  const MB = BYTES_PER_MB;
   if (bytes < MB) {
     const kb = Math.ceil(bytes / KB);
     const step = kb >= 100 ? 10 : 1;

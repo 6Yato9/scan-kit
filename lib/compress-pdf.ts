@@ -10,16 +10,19 @@
 // - presets: Smallest (1000 px), Small (the 'small' preset, 1300 px — what
 //   Compress always made before, so it stays the default), Medium (the
 //   'standard' preset, 1800 px), Large (the 'high' preset, 2400 px);
-// - "Fit under" a size (1, 2, 5, 10 MB — common upload and email limits): the
-//   largest size whose estimate fits (lib/pdf maxEdgeForTarget);
+// - "Fit under" a size (1, 2, 5, 10 MB — common upload and email limits, in
+//   decimal megabytes as iOS shows sizes): the largest size whose estimate
+//   fits (lib/pdf maxEdgeForTarget);
 // - Custom: any size from 800 to 2400 px.
 // The text layer (searchable) can be left out, which makes the file a little
 // smaller and much faster to make.
 import {
+  BYTES_PER_MB,
   estimatePdfBytes,
   MAX_CUSTOM_EDGE,
   maxEdgeForTarget,
   MIN_CUSTOM_EDGE,
+  roundUpEstimate,
   type PageStat,
   type PdfQuality,
 } from './pdf';
@@ -56,7 +59,8 @@ const PRESET_OPTIONS: Record<CompressPreset, { quality: PdfQuality; maxEdge?: nu
   large: { quality: 'high' },
 };
 
-const MB = 1024 * 1024;
+/** Decimal megabytes, as iOS Files and Mail count them and upload limits are written (1 MB = 1,000,000 bytes). */
+const MB = BYTES_PER_MB;
 
 /**
  * What generatePdf is asked for. `fits: false` when a "Fit under" target
@@ -105,3 +109,28 @@ export function parseCompressPdfPrefs(o: Record<string, unknown>): CompressPdfPr
 }
 
 
+
+// ── Export › Smaller PDF ─────────────────────────────────────────────────────
+
+/**
+ * What the export sheet's "Smaller PDF" makes: one step below the PDF row's
+ * own image quality — the 'small' preset, or Smallest's size when the PDF
+ * options already ask for 'small' (it would otherwise be the same file).
+ */
+export function smallerPdfChoice(quality: PdfQuality): { quality: PdfQuality; maxEdge?: number } {
+  return quality === 'small' ? { quality: 'small', maxEdge: SMALLEST_EDGE } : { quality: 'small' };
+}
+
+/**
+ * Whether "Smaller PDF" really is smaller than "PDF" for these pages (by the
+ * size estimate, after the rounding the rows show). Unknown pages (null:
+ * still being measured): true, so the row doesn't flicker away for nothing.
+ * The sheet hides the row when it isn't: never two rows for one file.
+ */
+export function smallerPdfIsSmaller(stats: PageStat[] | null, quality: PdfQuality, searchable: boolean): boolean {
+  if (!stats) return true;
+  const s = smallerPdfChoice(quality);
+  const smaller = roundUpEstimate(estimatePdfBytes(stats, s.quality, searchable, s.maxEdge));
+  const plain = roundUpEstimate(estimatePdfBytes(stats, quality, searchable));
+  return smaller < plain;
+}

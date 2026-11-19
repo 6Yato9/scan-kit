@@ -47,7 +47,7 @@ import { ValueSlider } from '@/components/value-slider';
 import { ColorPalette } from '@/components/color-palette';
 import { MoreOptions } from '@/components/more-options';
 import { ChoiceChips } from '@/components/choice-chips';
-import { TimestampBox, TimestampCloseUp } from '@/components/timestamp-preview';
+import { TimestampBox, TimestampCloseUp, TimestampMeasure } from '@/components/timestamp-preview';
 import { copyName, stampCopy, stampPages, targetPages } from '@/lib/page-stamp';
 import { notifySuccess, selection } from '@/lib/haptics';
 import {
@@ -139,7 +139,22 @@ export default function TimestampScreen() {
   // A finger is moving the date: the screen doesn't scroll.
   const [placing, setPlacing] = useState(false);
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
-  const [now] = useState(() => Date.now());
+  // "Current date": the time shown is the time printed, so it moves on as
+  // the clock does (on the minute; seconds are never printed).
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (p.when !== 'now') return;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = () => {
+      const n = Date.now();
+      setNow(n);
+      timer = setTimeout(tick, 60_000 - (n % 60_000) + 50);
+    };
+    timer = setTimeout(tick, 0);
+    return () => clearTimeout(timer);
+  }, [p.when]);
+  // The text's measured width (font sizes, at its weight), for shrink-to-fit.
+  const [measured, setMeasured] = useState<{ key: string; em: number } | null>(null);
 
   // The remembered choices arrive a moment after the screen opens; anything
   // the user has already changed by then wins. A ref, not state: the React
@@ -189,6 +204,8 @@ export default function TimestampScreen() {
   const textAt = (ts: number) => formatTimestampText(ts, p);
   const sampleTs = p.when === 'scanned' && doc ? doc.createdAt : now;
   const stampText = textAt(sampleTs);
+  const measureKey = `${p.bold ? 'b' : 'r'}|${stampText}`;
+  const textEm = measured?.key === measureKey ? measured.em : null;
   // `corner` is the nearest one, for anything that reads only that.
   const corner = `${p.anchor.y < 0.5 ? 'top' : 'bottom'}-${p.anchor.x < 0.5 ? 'left' : 'right'}` as const;
   const specFor = (text: string): Extract<StampSpec, { kind: 'timestamp' }> => ({
@@ -197,18 +214,24 @@ export default function TimestampScreen() {
     corner,
     anchor: p.anchor,
     ...lookSpec,
+    // Shrinks a stamp too wide for the page (lib/stamp.ts fitTimestampFont),
+    // for the previews and the saved page alike.
+    ...(textEm != null && text === stampText ? { textEm } : {}),
   });
   const resolved = resolveStamp(specFor(stampText));
   const r = resolved.kind === 'timestamp' ? resolved : null;
   const hasText = stampText.trim().length > 0;
+  // Measured (a moment after the text changes): what is printed is what is shown.
+  const ready = hasText && textEm != null;
 
   const pages = doc ? targetPages(doc.pages.length, page, !onlyThisPage) : [];
 
   /** Stamps the pages of the document itself (Undo in the viewer), or of a copy. */
   const apply = async (mode: 'in-place' | 'copy') => {
-    if (!doc || progress || !hasText) return;
+    if (!doc || progress || !ready) return;
     saveTimestampPrefs(p);
-    const spec = specFor(textAt(p.when === 'scanned' ? doc.createdAt : Date.now()));
+    // The text the previews show (the current minute, for "Current date"), at the size they show.
+    const spec = specFor(stampText);
     const render = (pageUri: string, origUri: string | null) => stamper.stamp(pageUri, origUri, spec);
     const onProgress = (done: number, total: number) => setProgress({ current: done, total });
     setProgress({ current: 0, total: pages.length });
@@ -281,7 +304,9 @@ export default function TimestampScreen() {
     selection();
   };
   const sizeAuto = p.sizePt == null;
-  const sizeShown = r ? Math.round(r.fontFrac * WATERMARK_REF_WIDTH_PT) : 10;
+  // The slider shows the size chosen; a stamp too wide for the page is drawn smaller, and says so.
+  const sizeShown = r ? Math.round(r.chosenFontFrac * WATERMARK_REF_WIDTH_PT) : 10;
+  const fittedPt = r && r.fontFrac < r.chosenFontFrac - 1e-9 ? Math.max(1, Math.round(r.fontFrac * WATERMARK_REF_WIDTH_PT)) : null;
   const primaryTitle = doc && onlyThisPage && multiPage ? `Add to page ${page + 1}` : 'Add timestamp';
 
   return (
@@ -302,9 +327,9 @@ export default function TimestampScreen() {
           ) : null}
           <FooterActions
             secondary={
-              <PrimaryButton title="Save as a copy" variant="secondary" onPress={() => apply('copy')} disabled={!doc || !hasText || !!progress} />
+              <PrimaryButton title="Save as a copy" variant="secondary" onPress={() => apply('copy')} disabled={!doc || !ready || !!progress} />
             }
-            primary={<PrimaryButton title={primaryTitle} onPress={() => apply('in-place')} disabled={!doc || !hasText} loading={!!progress} />}
+            primary={<PrimaryButton title={primaryTitle} onPress={() => apply('in-place')} disabled={!doc || !ready} loading={!!progress} />}
           />
         </>
       }
@@ -314,6 +339,9 @@ export default function TimestampScreen() {
       <>
         {fromViewer ? <FilterBaker /> : null}
         {stamper.host}
+        {hasText ? (
+          <TimestampMeasure text={stampText} bold={p.bold} onMeasure={(text, em) => setMeasured({ key: `${p.bold ? 'b' : 'r'}|${text}`, em })} />
+        ) : null}
       </>
       <ToolDocPicker
         docs={docs}
@@ -434,6 +462,9 @@ export default function TimestampScreen() {
         format={v => `${v} pt`}
         onChange={sizePt => set({ sizePt })}
       />
+      {fittedPt != null ? (
+        <ToolNote>{`At ${sizeShown} pt this timestamp is wider than the page, so it’s printed at ${fittedPt} pt to fit.`}</ToolNote>
+      ) : null}
 
       <SectionLabel>Color</SectionLabel>
       <ColorPalette

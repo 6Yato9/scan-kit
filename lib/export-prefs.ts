@@ -57,7 +57,9 @@ export async function setExportPageNumbers(style: PageNumberStyle): Promise<void
 // value under a key of its own; every field is validated on read, so a value
 // from a later version (or a damaged one) falls back field by field to the
 // default, which is exactly how exports looked before these options existed.
-// `paper: null` means "follow Document settings" (the old behaviour).
+// `paper: null` means "Same as Document settings" (the old behaviour, and the
+// default): only a paper other than Document settings' is ever stored, so
+// changing Document settings changes every export that hasn't chosen another.
 
 export type ExportLayout = {
   paper: PageSize | null;
@@ -99,6 +101,41 @@ export function parseExportLayout(raw: string | null | undefined): ExportLayout 
     numberPosition: oneOf(PAGE_NUMBER_POSITIONS, v.numberPosition, d.numberPosition),
     searchable: typeof v.searchable === 'boolean' ? v.searchable : d.searchable,
   };
+}
+
+/**
+ * The paper to store for a choice: null — "Same as Document settings", which
+ * then follows Document settings when it changes — for that choice itself or
+ * for Document settings' own paper. Only a different paper is pinned. Pure.
+ */
+export function paperOverride(choice: PageSize | null, docPaper: PageSize): PageSize | null {
+  return choice === null || choice === docPaper ? null : choice;
+}
+
+/**
+ * `layout` with a stored paper equal to Document settings' read as "Same as
+ * Document settings" (null). Values stored before that choice existed load
+ * this way, so they follow Document settings from now on. Pure.
+ */
+export function followDocPaper(layout: ExportLayout, docPaper: PageSize): ExportLayout {
+  return layout.paper !== null && layout.paper === docPaper ? { ...layout, paper: null } : layout;
+}
+
+/**
+ * The remembered layout read against Document settings' paper (`docPaper`
+ * resolves to it, or null when it can't be read): see followDocPaper. When
+ * that changes the stored value, the new one is stored. Never throws.
+ */
+export async function loadExportLayout(docPaper: () => Promise<PageSize | null>): Promise<ExportLayout> {
+  const stored = await getExportLayout();
+  let paper: PageSize | null = null;
+  try {
+    paper = await docPaper();
+  } catch {}
+  if (!paper) return stored;
+  const next = followDocPaper(stored, paper);
+  if (next !== stored) await setExportLayout(next);
+  return next;
 }
 
 /** True when `l` changes nothing from the defaults (the options row then says "Standard"). */

@@ -179,9 +179,11 @@ export async function readProtectState(doc: Pick<Document, 'pdfUri' | 'pages'>):
 
 /**
  * The PDF Share makes of a scanned document's `pages` (the export sheet's
- * build, and Protect PDF's): Document settings' paper size read fresh, the
- * export page numbers, standard quality unless told otherwise. Resolves to a
- * temporary file the caller deletes. Rejects PdfCancelledError on `signal`.
+ * build, and Protect PDF's): Document settings' paper size read fresh unless
+ * the PDF options chose another, the export page numbers, standard quality
+ * unless told otherwise, and a text layer only when `searchable` and the PDF
+ * options' "Searchable text" are both on. Resolves to a temporary file the
+ * caller deletes. Rejects PdfCancelledError on `signal`.
  */
 export async function buildScanPdf(
   pages: string[],
@@ -199,6 +201,8 @@ export async function buildScanPdf(
     layout?: ExportLayout;
     /** When Document settings can't be read. */
     fallbackPageSize?: PageSize;
+    /** Longest image edge, px, below the quality's own (the export sheet's Smaller PDF). */
+    maxEdge?: number;
     signal?: AbortSignal;
     onProgress?: GeneratePdfOptions['onProgress'];
   },
@@ -210,7 +214,9 @@ export async function buildScanPdf(
   return generatePdf(pages, {
     pageSize: layout.paper ?? settings?.pdfPageSize ?? opts.fallbackPageSize ?? 'A4',
     quality: opts.quality ?? layout.quality,
-    searchable: opts.searchable,
+    // The PDF options' "Searchable text: Off" holds for every PDF made from them (Share, Print, Protect PDF).
+    searchable: opts.searchable && layout.searchable,
+    maxEdge: opts.maxEdge,
     pageNumbers,
     pageNumberPosition: layout.numberPosition,
     orientation: layout.orientation,

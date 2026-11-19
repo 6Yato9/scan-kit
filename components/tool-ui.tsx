@@ -75,11 +75,8 @@ export function useToolDocuments(predicate: (d: Document) => boolean = isImageDo
 }
 
 /** Human file size: "840 KB", "2.4 MB". */
-export function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 KB';
-  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
+/** A file size in decimal units (lib/format.ts), as iOS shows it. */
+export { formatBytes } from '@/lib/format';
 
 export function pageCountLabel(n: number): string {
   return `${n} page${n === 1 ? '' : 's'}`;
@@ -621,7 +618,8 @@ export function OptionList<T extends string | number>({
   value,
   onChange,
 }: {
-  options: { value: T; label: string; detail?: string }[];
+  /** `disabled`: shown dimmed and not choosable (its detail says why). */
+  options: { value: T; label: string; detail?: string; disabled?: boolean }[];
   value: T;
   onChange: (v: T) => void;
 }) {
@@ -634,8 +632,9 @@ export function OptionList<T extends string | number>({
           <Pressable
             key={String(opt.value)}
             onPress={() => onChange(opt.value)}
+            disabled={opt.disabled}
             accessibilityRole="radio"
-            accessibilityState={{ checked: on, selected: on }}
+            accessibilityState={{ checked: on, selected: on, disabled: !!opt.disabled }}
             style={({ pressed }) => [
               styles.option,
               opt.detail ? styles.optionTall : null,
@@ -644,7 +643,7 @@ export function OptionList<T extends string | number>({
             ]}
           >
             <View style={styles.flex}>
-              <Text style={[Type.body, styles.optionLabel, { color: colors.text }]}>{opt.label}</Text>
+              <Text style={[Type.body, styles.optionLabel, { color: opt.disabled ? colors.faint : colors.text }]}>{opt.label}</Text>
               {opt.detail ? (
                 <Text style={[Type.footnote, styles.meta, styles.optionDetail, { color: colors.muted }]}>{opt.detail}</Text>
               ) : null}

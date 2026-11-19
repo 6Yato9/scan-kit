@@ -29,9 +29,10 @@ import { useScan, QUALITY_MAP } from '@/contexts/scan-context';
 import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
-import { FooterActions, Segmented, ToolIntro, ToolNote, ToolProgress, ToolScreen } from '@/components/tool-ui';
+import { FooterActions, OptionList, Segmented, ToolIntro, ToolNote, ToolProgress, ToolScreen } from '@/components/tool-ui';
 import { MoreOptions } from '@/components/more-options';
-import { DEFAULT_EXPORT_LAYOUT, getExportLayout, MARGIN_LABELS, setExportLayout, type ExportLayout } from '@/lib/export-prefs';
+import { DEFAULT_EXPORT_LAYOUT, loadExportLayout, MARGIN_LABELS, paperOverride, setExportLayout, type ExportLayout } from '@/lib/export-prefs';
+import { useRememberedPrefs } from '@/components/use-remembered-prefs';
 import type { PageSize, PdfMargin } from '@/lib/pdf';
 import { useToast } from '@/components/toast';
 import { PageRow } from '@/components/create-pdf/page-row';
@@ -82,12 +83,17 @@ import { Radius, Spacing, Type } from '@/lib/theme';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
-const PAPER_OPTIONS: { value: PageSize; label: string }[] = [
-  { value: 'Auto', label: 'Auto' },
-  { value: 'A4', label: 'A4' },
-  { value: 'Letter', label: 'Letter' },
-  { value: 'Legal', label: 'Legal' },
+/** "Same as Document settings": stored as no paper (null), following Document settings. */
+const SAME_AS_SETTINGS = 'settings';
+type PaperChoice = PageSize | typeof SAME_AS_SETTINGS;
+const PAPER_OPTIONS: { value: PageSize; label: string; detail: string }[] = [
+  { value: 'Auto', label: 'Auto', detail: 'Shaped like each photo or scan' },
+  { value: 'A4', label: 'A4', detail: '210 × 297 mm' },
+  { value: 'Letter', label: 'US Letter', detail: '8.5 × 11 in' },
+  { value: 'Legal', label: 'US Legal', detail: '8.5 × 14 in' },
 ];
+/** The PDF options, with a stored paper equal to Document settings' read as "Same as Document settings". */
+const loadLayout = () => loadExportLayout(() => getDocSettings().then(s => s.pdfPageSize));
 const MARGIN_OPTIONS: { value: PdfMargin; label: string }[] = (['none', 'small', 'normal', 'wide'] as const).map(m => ({
   value: m,
   label: MARGIN_LABELS[m].label,
@@ -168,16 +174,10 @@ export default function CreatePdfScreen() {
   const [building, setBuilding] = useState<CreateProgress | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   // The PDF layout (shared with the export sheet) and Document settings' paper.
-  const [layout, setLayoutState] = useState<ExportLayout>(DEFAULT_EXPORT_LAYOUT);
-  const layoutRef = useRef(layout);
+  // A choice made before the remembered one loads wins (components/use-remembered-prefs.ts).
+  const [layout, updateLayout, latestLayout] = useRememberedPrefs<ExportLayout>(DEFAULT_EXPORT_LAYOUT, loadLayout, setExportLayout);
   const [docPaper, setDocPaper] = useState<PageSize>('Auto');
   const [moreOpen, setMoreOpen] = useState(false);
-  const updateLayout = (patch: Partial<ExportLayout>) => {
-    const next = { ...layoutRef.current, ...patch };
-    layoutRef.current = next;
-    setLayoutState(next);
-    setExportLayout(next).catch(() => {});
-  };
 
   const busy = useRef(false);
   const mounted = useRef(true);
@@ -205,11 +205,6 @@ export default function CreatePdfScreen() {
         setDocPaper(s.pdfPageSize);
       })
       .catch(() => {});
-    getExportLayout().then(l => {
-      if (!mounted.current) return;
-      layoutRef.current = l;
-      setLayoutState(l);
-    });
     return () => {
       mounted.current = false;
       abort.current?.abort();
@@ -370,7 +365,7 @@ export default function CreatePdfScreen() {
       const named = createdName(name, autoTitle ?? autoName(new Date(), (await getDocSettings().catch(() => null))?.namePrefix));
       const { doc, kind } = await buildDocument(list, sources, named.name, named.isDefault, {
         signal: ctl.signal,
-        layout: { paper: layoutRef.current.paper, margin: layoutRef.current.margin },
+        layout: { paper: latestLayout().paper, margin: latestLayout().margin },
         onProgress: p => mounted.current && setBuilding(p),
       });
       bumpLastSaved();
@@ -471,6 +466,14 @@ export default function CreatePdfScreen() {
     </View>
   );
 
+  // "A4, 210 × 297 mm"; "Auto: shaped like each photo or scan".
+  const docPaperOption = PAPER_OPTIONS.find(o => o.value === docPaper);
+  const docPaperDetail = docPaperOption
+    ? docPaper === 'Auto'
+      ? `Auto: ${docPaperOption.detail.toLowerCase()}`
+      : `${docPaperOption.label}, ${docPaperOption.detail}`
+    : '';
+
   const footerNote =
     kind === 'pdf'
       ? 'With a PDF page among them, the result is a new PDF: PDF pages keep their text, and photos and scans are placed on the paper set in More options. The originals are kept.'
@@ -495,7 +498,19 @@ export default function CreatePdfScreen() {
             changed={(layout.paper && layout.paper !== docPaper ? 1 : 0) + (layout.margin !== 'none' ? 1 : 0)}
           >
             <SectionLabel>Paper for photos and scans</SectionLabel>
-            <Segmented options={PAPER_OPTIONS} value={layout.paper ?? docPaper} onChange={v => updateLayout({ paper: v })} />
+            <OptionList
+              options={[
+                {
+                  value: SAME_AS_SETTINGS,
+                  label: 'Same as Document settings',
+                  detail: docPaperDetail,
+                },
+                ...PAPER_OPTIONS.filter(o => o.value !== docPaper).map(o => ({ value: o.value as PaperChoice, label: o.label, detail: o.detail })),
+              ]}
+              value={layout.paper ?? SAME_AS_SETTINGS}
+              // Only a paper other than Document settings' is pinned; "Same as" follows it.
+              onChange={(v: PaperChoice) => updateLayout({ paper: paperOverride(v === SAME_AS_SETTINGS ? null : v, docPaper) })}
+            />
             <SectionLabel>Margins</SectionLabel>
             <Segmented options={MARGIN_OPTIONS} value={layout.margin} onChange={v => updateLayout({ margin: v })} />
             <ToolNote>

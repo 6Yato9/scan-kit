@@ -213,6 +213,18 @@ describe('splitDocumentParts (round 16: every N pages, by ranges)', () => {
     expect(mockDocs.get('src').trashedAt).toBeUndefined();
   });
 
+  test('the original is never trashed while some of its pages are in no part (data safety)', async () => {
+    seed('src', 5);
+    const r = await splitDocumentParts('src', [[0, 1], [3]], { trashOriginal: true });
+    expect(r.originalTrashed).toBe(false);
+    expect(mockTrash).not.toHaveBeenCalled();
+    // Every page in some part: it may go.
+    seed('all', 3);
+    const r2 = await splitDocumentParts('all', [[2], [0, 1]], { trashOriginal: true });
+    expect(r2.originalTrashed).toBe(true);
+    expect(mockTrash).toHaveBeenCalledWith('all');
+  });
+
   test('parts planned from the stored page count; a page outside it is refused, nothing made', async () => {
     seed('src', 4);
     const r = await splitDocumentParts('src', n => [[0, 1], [2, 3]].filter(p => p[0] < n));

@@ -14,7 +14,8 @@ export function SegmentedControl<T extends string>({
   value,
   onChange,
 }: {
-  options: { value: T; label: string; icon?: IconName }[];
+  /** `disabled`: shown faint and not choosable (say why next to the control). */
+  options: { value: T; label: string; icon?: IconName; disabled?: boolean }[];
   value: T;
   onChange: (v: T) => void;
 }) {
@@ -27,10 +28,11 @@ export function SegmentedControl<T extends string>({
           <Pressable
             key={opt.value}
             onPress={() => onChange(opt.value)}
+            disabled={opt.disabled}
             accessibilityRole="radio"
-            accessibilityState={{ checked: on, selected: on }}
+            accessibilityState={{ checked: on, selected: on, disabled: !!opt.disabled }}
             accessibilityLabel={opt.label}
-            style={[styles.item, on && [styles.itemOn, { backgroundColor: colors.segmentOn, shadowColor: colors.shadow }]]}
+            style={[styles.item, on && [styles.itemOn, { backgroundColor: colors.segmentOn, shadowColor: colors.shadow }], opt.disabled && !on && styles.itemDisabled]}
           >
             {opt.icon ? <Ionicons name={opt.icon} size={16} color={on ? colors.text : colors.muted} /> : null}
             <Text
@@ -58,6 +60,8 @@ const styles = StyleSheet.create({
     borderRadius: Radius.sm,
     paddingHorizontal: Spacing.xs,
   },
+  // As a disabled SheetRow (components/bottom-sheet.tsx).
+  itemDisabled: { opacity: 0.4 },
   itemOn: {
     shadowOpacity: 0.12,
     shadowRadius: 3,

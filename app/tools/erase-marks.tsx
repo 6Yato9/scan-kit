@@ -8,7 +8,7 @@
 // white filter Brightness moves the threshold (brighter = fewer dark pixels,
 // so fainter marks go) and Contrast sets how hard edges are (lib/filters.ts);
 // Standard is the +30 / +30 this tool always used.
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Alert, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { PrimaryButton } from '@/components/primary-button';
@@ -27,6 +27,7 @@ import { SectionLabel } from '@/components/section-label';
 
 import { eraseAdjustment, parseEraseStrength, type EraseStrength } from '@/lib/erase-strength';
 import { readToolPrefs, TOOL_PREF_KEYS, writeToolPrefs } from '@/lib/tool-prefs';
+import { useRememberedPrefs } from '@/components/use-remembered-prefs';
 import { FilterBaker } from '@/components/filter-baker';
 import { bakePage, invalidateDocPreviews } from '@/lib/bake';
 import { notifyError, notifySuccess } from '@/lib/haptics';
@@ -54,20 +55,18 @@ async function undoErase(docId: string, before: { filter: PageFilter; adjustment
   postViewerNotice({ docId, message: 'Pages restored' });
 }
 
+type ErasePrefs = { strength: EraseStrength };
+const DEFAULT_ERASE_PREFS: ErasePrefs = { strength: 'standard' };
+const loadErasePrefs = () => readToolPrefs(TOOL_PREF_KEYS.eraseMarks, o => ({ strength: parseEraseStrength(o) }));
+const saveErasePrefs = (p: ErasePrefs) => writeToolPrefs(TOOL_PREF_KEYS.eraseMarks, p);
+
 export default function EraseMarksScreen() {
   const router = useRouter();
   const { docs, loaded } = useToolDocuments();
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
-  const [strength, setStrengthState] = useState<EraseStrength>('standard');
-  useEffect(() => {
-    let live = true;
-    readToolPrefs(TOOL_PREF_KEYS.eraseMarks, parseEraseStrength).then(s => { if (live) setStrengthState(s); });
-    return () => { live = false; };
-  }, []);
-  const setStrength = (s: EraseStrength) => {
-    setStrengthState(s);
-    writeToolPrefs(TOOL_PREF_KEYS.eraseMarks, { strength: s }).catch(() => {});
-  };
+  // Remembered; a choice made before it loads wins (components/use-remembered-prefs.ts).
+  const [{ strength }, setPrefs] = useRememberedPrefs(DEFAULT_ERASE_PREFS, loadErasePrefs, saveErasePrefs);
+  const setStrength = (s: EraseStrength) => setPrefs({ strength: s });
 
   const { doc: selected, setDocId: setSelectedId, fixed, fromViewer } = useToolDoc(docs);
   const running = progress !== null;

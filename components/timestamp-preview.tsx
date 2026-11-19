@@ -8,6 +8,10 @@
 //   formatting reads (on the page preview the text is about 4 pt), with the
 //   stamp where it will be. It is the same geometry scaled up: page width,
 //   inset and anchor (lib/placement.ts anchorToOrigin), nothing re-laid out.
+// - TimestampMeasure: measures the text's width in font sizes, off screen, in
+//   the same font and weight. The tool puts it in the spec (`textEm`), and
+//   lib/stamp.ts resolveStamp shrinks a stamp too wide for the page with it
+//   (fitTimestampFont) — for these previews and the saved page alike.
 import { useState } from 'react';
 import { Image, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -48,6 +52,33 @@ export function TimestampBox({ r, fontSize }: { r: ResolvedTimestamp; fontSize: 
         allowFontScaling={false}
       >
         {r.text}
+      </Text>
+    </View>
+  );
+}
+
+/** The size the text is measured at, off screen (any size works: widths scale with it). */
+const MEASURE_FONT = 40;
+
+/**
+ * Reports `text`'s width in font sizes (`onMeasure(text, em)`), measured off
+ * screen in Helvetica at the stamp's weight, unconstrained by any width.
+ */
+export function TimestampMeasure({ text, bold, onMeasure }: { text: string; bold: boolean; onMeasure: (text: string, em: number) => void }) {
+  return (
+    <View style={styles.measureHost} pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+      <Text
+        // A new text is laid out afresh, so it is always reported.
+        key={`${bold ? 'b' : 'r'}|${text}`}
+        style={{ fontFamily: FAMILY, fontWeight: bold ? '700' : '400', fontSize: MEASURE_FONT, lineHeight: MEASURE_FONT * 1.15 }}
+        numberOfLines={1}
+        allowFontScaling={false}
+        onTextLayout={e => {
+          const width = e.nativeEvent.lines.reduce((m, l) => Math.max(m, l.width), 0);
+          if (width > 0) onMeasure(text, width / MEASURE_FONT);
+        }}
+      >
+        {text}
       </Text>
     </View>
   );
@@ -123,6 +154,8 @@ export function TimestampCloseUp({
 }
 
 const styles = StyleSheet.create({
+  // Far off screen and wide enough that no stamp line ever wraps or is cut.
+  measureHost: { position: 'absolute', left: -20000, top: 0, width: 10000, opacity: 0, alignItems: 'flex-start' },
   window: { borderRadius: Radius.md, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
   tag: {
     position: 'absolute',

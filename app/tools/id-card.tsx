@@ -24,6 +24,7 @@ import { getImageSize } from '@/lib/image-size';
 import { buildIdCardSheetHtml, ID_CARD_SCALES, planIdCardSheet, sheetPaperFor, type IdCardSize, type SheetPaper } from '@/lib/id-card-sheet';
 import { MoreOptions } from '@/components/more-options';
 import { oneOf, readToolPrefs, TOOL_PREF_KEYS, writeToolPrefs } from '@/lib/tool-prefs';
+import { useRememberedPrefs } from '@/components/use-remembered-prefs';
 import { autoName } from '@/lib/auto-name';
 import { notifyError, notifySuccess } from '@/lib/haptics';
 import { alertScanError, cameraTempUri, deleteTempFiles, pickPhotos, renderSourcePage, scanPagesWithCamera } from '@/lib/tool-scan';
@@ -64,6 +65,9 @@ function parseIdCardPrefs(o: Record<string, unknown>): IdCardPrefs {
     size: oneOf<IdCardSize>(['actual', 'large'], o.size, 'actual'),
   };
 }
+const DEFAULT_ID_CARD_PREFS: IdCardPrefs = { paper: null, size: 'actual' };
+const loadIdCardPrefs = () => readToolPrefs(TOOL_PREF_KEYS.idCard, parseIdCardPrefs);
+const saveIdCardPrefs = (p: IdCardPrefs) => writeToolPrefs(TOOL_PREF_KEYS.idCard, p);
 const PAPER_OPTIONS: { value: SheetPaper; label: string }[] = [
   { value: 'A4', label: 'A4' },
   { value: 'Letter', label: 'US Letter' },
@@ -106,26 +110,16 @@ export default function IdCardScreen() {
   const [layout, setLayout] = useState<Layout>('one');
   // Document settings' paper, used unless More options chose one.
   const [docPaper, setDocPaper] = useState<SheetPaper>('A4');
-  const [prefs, setPrefsState] = useState<IdCardPrefs>({ paper: null, size: 'actual' });
-  const prefsRef = useRef(prefs);
+  // Remembered; a choice made before they load wins (components/use-remembered-prefs.ts).
+  const [prefs, setPrefs, latestPrefs] = useRememberedPrefs<IdCardPrefs>(DEFAULT_ID_CARD_PREFS, loadIdCardPrefs, saveIdCardPrefs);
   const [moreOpen, setMoreOpen] = useState(false);
   const paperLabel: SheetPaper = prefs.paper ?? docPaper;
-  const setPrefs = (patch: Partial<IdCardPrefs>) => {
-    const next = { ...prefsRef.current, ...patch };
-    prefsRef.current = next;
-    setPrefsState(next);
-    writeToolPrefs(TOOL_PREF_KEYS.idCard, next).catch(() => {});
-  };
   // The off-screen canvas composing the one-page sheet, while it runs.
   const [compose, setCompose] = useState<{ html: string; key: number } | null>(null);
   const composeWait = useRef<{ resolve: (dataUrl: string) => void; reject: (err: Error) => void } | null>(null);
   const busy = useRef(false);
   useEffect(() => {
     getDocSettings().then(s => setDocPaper(sheetPaperFor(s.pdfPageSize))).catch(() => {});
-    readToolPrefs(TOOL_PREF_KEYS.idCard, parseIdCardPrefs).then(p => {
-      prefsRef.current = p;
-      setPrefsState(p);
-    });
   }, []);
   // Captures not saved when the screen closes are temp files: remove them.
   const shotsRef = useRef<(Shot | null)[]>([]);
@@ -216,7 +210,7 @@ export default function IdCardScreen() {
       const sizes = [];
       for (const src of srcs) sizes.push((await getImageSize(src)) ?? { width: 856, height: 540 });
       const docSettings = await getDocSettings().catch(() => null);
-      const chosen = prefsRef.current;
+      const chosen = latestPrefs();
       const plan = planIdCardSheet(
         sizes,
         chosen.paper ?? sheetPaperFor(docSettings?.pdfPageSize),
@@ -341,7 +335,7 @@ export default function IdCardScreen() {
             changed={(prefs.paper && prefs.paper !== docPaper ? 1 : 0) + (prefs.size !== 'actual' ? 1 : 0)}
           >
             <SectionLabel>Paper</SectionLabel>
-            <Segmented options={PAPER_OPTIONS} value={paperLabel} onChange={v => setPrefs({ paper: v })} />
+            <Segmented options={PAPER_OPTIONS} value={paperLabel} onChange={v => setPrefs({ paper: v === docPaper ? null : v })} />
             <SectionLabel>Card size</SectionLabel>
             <Segmented options={SIZE_OPTIONS} value={prefs.size} onChange={v => setPrefs({ size: v })} />
           </MoreOptions>

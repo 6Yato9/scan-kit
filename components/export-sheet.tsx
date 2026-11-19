@@ -29,15 +29,18 @@ import {
 } from '@/lib/pdf';
 import {
   DEFAULT_EXPORT_LAYOUT,
-  getExportLayout,
   getExportPageNumbers,
   isDefaultLayout,
   layoutSummary,
+  loadExportLayout,
   MARGIN_LABELS,
+  paperOverride,
   setExportLayout,
   setExportPageNumbers,
   type ExportLayout,
 } from '@/lib/export-prefs';
+import { smallerPdfChoice, smallerPdfIsSmaller } from '@/lib/compress-pdf';
+import { useRememberedPrefs } from '@/components/use-remembered-prefs';
 import { AppSwitch } from '@/components/app-switch';
 import { buildScanPdf, protectDocumentPdf } from '@/lib/pdf-protect';
 import { SegmentedControl } from '@/components/segmented-control';
@@ -90,6 +93,12 @@ type BuiltFile = { uri: string; mimeType: string; UTI: string };
 type BuiltImages = { uris: string[] };
 
 class CancelledError extends Error {}
+
+/** The PDF options, with a stored paper equal to Document settings' read as "Same as Document settings". */
+const loadLayout = () => loadExportLayout(() => getDocSettings().then(s => s.pdfPageSize));
+const NUMBERS_OFF: { style: PageNumberStyle } = { style: 'off' };
+const loadPageNumbers = () => getExportPageNumbers().then(style => ({ style }));
+const savePageNumbers = (v: { style: PageNumberStyle }) => setExportPageNumbers(v.style);
 
 const PDF_FILE = { mimeType: 'application/pdf', UTI: 'com.adobe.pdf' };
 
@@ -153,15 +162,23 @@ export function ExportSheet({ visible, document, onClose }: Props) {
   // before the options existed: Document settings' paper, standard quality.
   // The old Document settings "PDF image quality" stays unused here: a stored
   // 'high' would stick with no way to change it from this sheet.
-  const [layout, setLayout] = useState<ExportLayout>(DEFAULT_EXPORT_LAYOUT);
+  // Re-read each time the sheet is shown (Create PDF shares them); a choice
+  // made before they arrive wins (components/use-remembered-prefs.ts).
+  const [layout, updateLayout] = useRememberedPrefs<ExportLayout>(DEFAULT_EXPORT_LAYOUT, loadLayout, setExportLayout, {
+    active: visible,
+  });
   const quality: PdfQuality = layout.quality;
   const paper: PageSize = layout.paper ?? pageSize;
-  const layoutRef = useRef(layout);
   const [optionsMode, setOptionsMode] = useState(false);
   // The shared file's name for this export only ('' = the document's name).
   const [fileName, setFileName] = useState('');
   // Page numbers on exported PDFs (and print): remembered between exports.
-  const [pageNumbers, setPageNumbers] = useState<PageNumberStyle>('off');
+  const [{ style: pageNumbers }, updatePageNumbers] = useRememberedPrefs<{ style: PageNumberStyle }>(
+    NUMBERS_OFF,
+    loadPageNumbers,
+    savePageNumbers,
+    { active: visible },
+  );
   const [bytes, setBytes] = useState<number | null>(null);
   const [stats, setStats] = useState<PageStat[] | null>(null);
   // An imported PDF with form fields or additions can also go out flattened.
@@ -210,8 +227,6 @@ export function ExportSheet({ visible, document, onClose }: Props) {
         setPageSize(s.pdfPageSize);
       })
       .catch(() => {});
-    getExportPageNumbers().then(p => { if (!cancelled) setPageNumbers(p); });
-    getExportLayout().then(l => { if (!cancelled) setLayout(l); });
     setCanFlatten(false);
     setNeedsPassword(false);
     if (document.pdfUri) {
@@ -263,13 +278,14 @@ export function ExportSheet({ visible, document, onClose }: Props) {
     onClose();
   }, [cancelWork, onClose]);
 
-  async function buildPdf(q: PdfQuality, searchable: boolean, signal: AbortSignal, title: string): Promise<string> {
+  async function buildPdf(q: PdfQuality, searchable: boolean, signal: AbortSignal, title: string, maxEdge?: number): Promise<string> {
     setBusy({ title, label: 'Preparing', progress: 0 });
     // The same build as Tools › Protect PDF (lib/pdf-protect.ts): Document
     // settings' paper size read fresh.
     return buildScanPdf(document.pages, {
       fallbackPageSize: pageSize,
       quality: q,
+      maxEdge,
       searchable,
       pageNumbers,
       layout,
@@ -481,9 +497,10 @@ export function ExportSheet({ visible, document, onClose }: Props) {
       } else {
         // Every PDF is searchable when text recognition is available: that is
         // what people expect from a scanner app's PDF.
-        const q: PdfQuality = action === 'small' ? 'small' : quality;
+        // Smaller PDF: a step below the PDF row's quality, never the same file.
+        const choice = action === 'small' ? smallerPdfChoice(quality) : { quality, maxEdge: undefined };
         const title = action === 'small' ? 'Creating smaller PDF' : 'Creating PDF';
-        const raw = await buildPdf(q, canSearchable, signal, title);
+        const raw = await buildPdf(choice.quality, canSearchable, signal, title, choice.maxEdge);
         if (signal.aborted) await deleteQuietly(raw);
         check();
         const uri = await placeExportFile(raw, dir, exportFileName(outName, 'pdf'), 'move');
@@ -528,13 +545,16 @@ export function ExportSheet({ visible, document, onClose }: Props) {
   const sizeLabel = bytes ? formatBytes(bytes) : null;
   const subtitle = [isPdfDoc ? 'PDF' : pagesLabel, sizeLabel].filter(Boolean).join(' · ');
   // Leans high and rounds up (lib/pdf): the file should never be bigger than promised.
-  const estimate = (q: PdfQuality) =>
-    stats ? `about ${formatBytes(roundUpEstimate(estimatePdfBytes(stats, q, canSearchable)))}` : null;
+  const estimate = (q: PdfQuality, maxEdge?: number) =>
+    stats ? `about ${formatBytes(roundUpEstimate(estimatePdfBytes(stats, q, canSearchable, maxEdge)))}` : null;
   // Short enough that the size, the number people check, always fits on the
   // row: "Searchable · about 240 KB".
   const detailLine = (parts: (string | null)[]) => parts.filter(Boolean).join(' · ');
   const pdfDetail = detailLine([canSearchable ? 'Searchable' : pagesLabel, estimate(quality)]);
-  const smallDetail = detailLine(['For email', estimate('small')]);
+  const smaller = smallerPdfChoice(quality);
+  const smallDetail = detailLine(['For email', estimate(smaller.quality, smaller.maxEdge)]);
+  // Offered only while it makes a smaller file than "PDF" (estimates; shown until they're in).
+  const offerSmaller = smallerPdfIsSmaller(stats, quality, canSearchable);
   const protectedDetail = detailLine([
     'Needs a password',
     isPdfDoc ? (sizeLabel ? `about ${sizeLabel}` : null) : estimate(quality),
@@ -551,20 +571,12 @@ export function ExportSheet({ visible, document, onClose }: Props) {
     if (pwReady) run('protected', pw);
   };
   const printDetail = detailLine(['Any AirPrint printer', paper === 'Auto' || isPdfDoc ? null : paperName(paper)]);
-  // From the latest choice (a ref, not the render's `layout`), so two quick
-  // taps before a re-render both stick.
-  layoutRef.current = layout;
-  const updateLayout = (patch: Partial<ExportLayout>) => {
-    const next = { ...layoutRef.current, ...patch };
-    layoutRef.current = next;
-    setLayout(next);
-    setExportLayout(next).catch(() => {});
-  };
   const optionsSummary = layoutSummary(layout, paper, ocrCan);
-  const choosePageNumbers = (p: PageNumberStyle) => {
-    setPageNumbers(p);
-    setExportPageNumbers(p).catch(() => {});
-  };
+  const choosePageNumbers = (p: PageNumberStyle) => updatePageNumbers({ style: p });
+  // Only a paper other than Document settings' is pinned; "Same as Document
+  // settings" (null) follows it when it changes.
+  const choosePaper = (v: PageSize | null) => updateLayout({ paper: paperOverride(v, pageSize) });
+  const paperRows = PAPER_OPTIONS.filter(o => o.value !== pageSize);
   // Each choice reads as what lands on the page: nothing, "1, 2, 3", "1 of 3".
   const pageTotal = Math.max(1, pageCount);
   const pageNumberOptions: { value: PageNumberStyle; label: string }[] = [
@@ -678,12 +690,22 @@ export function ExportSheet({ visible, document, onClose }: Props) {
               <>
                 <SectionLabel style={styles.label}>Paper</SectionLabel>
                 <SheetGroup>
-                  <View style={styles.numbersBody}>
-                    <SegmentedControl options={PAPER_OPTIONS} value={paper} onChange={v => updateLayout({ paper: v })} />
-                    <Text style={[Type.footnote, styles.numbersNote, { color: colors.muted }]} numberOfLines={2}>
-                      {`${PAPER_NOTES[paper]}${layout.paper === null ? ' · From Document settings' : ''}`}
-                    </Text>
-                  </View>
+                  <SheetRow
+                    label="Same as Document settings"
+                    detail={pageSize === 'Auto' ? 'Auto: each page’s paper is shaped like its scan' : PAPER_NOTES[pageSize]}
+                    selected={layout.paper === null}
+                    onPress={() => choosePaper(null)}
+                  />
+                  {paperRows.map((o, i) => (
+                    <SheetRow
+                      key={o.value}
+                      label={paperName(o.value)}
+                      detail={PAPER_SIZES[o.value]}
+                      selected={layout.paper === o.value}
+                      onPress={() => choosePaper(o.value)}
+                      last={i === paperRows.length - 1}
+                    />
+                  ))}
                 </SheetGroup>
                 {paper !== 'Auto' ? (
                   <>
@@ -858,12 +880,14 @@ export function ExportSheet({ visible, document, onClose }: Props) {
                   detail={pdfDetail}
                   onPress={() => run('pdf')}
                 />
-                <SheetRow
-                  icon="contract-outline"
-                  label="Smaller PDF"
-                  detail={smallDetail}
-                  onPress={() => run('small')}
-                />
+                {offerSmaller ? (
+                  <SheetRow
+                    icon="contract-outline"
+                    label="Smaller PDF"
+                    detail={smallDetail}
+                    onPress={() => run('small')}
+                  />
+                ) : null}
                 {canProtect ? (
                   <SheetRow
                     icon="lock-closed-outline"
@@ -964,6 +988,13 @@ const PAPER_NOTES: Record<PageSize, string> = {
   A4: 'A4, 210 × 297 mm',
   Letter: 'US Letter, 8.5 × 11 in',
   Legal: 'US Legal, 8.5 × 14 in',
+};
+/** A paper row's detail (its name is the row's label). */
+const PAPER_SIZES: Record<PageSize, string> = {
+  Auto: 'Each page’s paper is shaped like its scan',
+  A4: '210 × 297 mm',
+  Letter: '8.5 × 11 in',
+  Legal: '8.5 × 14 in',
 };
 const ORIENTATION_OPTIONS: { value: PdfOrientation; label: string }[] = [
   { value: 'auto', label: 'Auto' },

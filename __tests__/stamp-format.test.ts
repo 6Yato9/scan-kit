@@ -40,7 +40,11 @@ import {
   SIGNATURE_INK,
   STAMP_CANVAS_JS,
   STAMP_RGB,
+  CORNER_INSET,
   TIMESTAMP_FONT_FRACTION,
+  TIMESTAMP_PAD,
+  TIMESTAMP_SIZE_RANGE,
+  fitTimestampFont,
   WATERMARK_REF_WIDTH_PT,
   redactFill,
   redactLabelSize,
@@ -313,6 +317,87 @@ describe('timestamp look', () => {
   });
 });
 
+describe('timestamp shrink-to-fit: the saved page fits the text exactly as the preview does', () => {
+  // Text widths in font sizes, as Helvetica runs (about 0.55 em a character):
+  // the canvas measures at its font size, the preview at its own.
+  const EM_PER_CHAR = 0.55;
+  const emOf = (t: string) => Array.from(t).length * EM_PER_CHAR;
+  function measuringCtx(): Ctx {
+    const ctx = recordingCtx();
+    ctx.measureText = (t: string) => {
+      const px = parseFloat(/([\d.]+)px/.exec(String(ctx.font))![1]);
+      return { width: emOf(t) * px };
+    };
+    return ctx;
+  }
+  const longLabels = [
+    'Received Nov 19, 2026 at 9:55 PM',
+    // The longest custom word, with the "Written out" date and the time.
+    `${'Checked and countersigned'.slice(0, 24)} 19 November 2026, 21:55`,
+  ];
+  const pages = [
+    { name: 'portrait', w: 1240, h: 1754 },
+    { name: 'landscape', w: 1754, h: 1240 },
+  ];
+
+  for (const text of longLabels) {
+    for (const page of pages) {
+      for (const anchor of [{ x: 0, y: 0 }, { x: 1, y: 1 }, { x: 0.5, y: 0.5 }]) {
+        test(`"${text}" at the largest size on a ${page.name} page (anchor ${anchor.x},${anchor.y}) stays inside the page`, () => {
+          const spec = { kind: 'timestamp' as const, text, corner: 'bottom-right' as const, anchor, sizePt: TIMESTAMP_SIZE_RANGE.max, textEm: emOf(text) };
+          const r = resolveStamp(spec);
+          if (r.kind !== 'timestamp') throw new Error('kind');
+          // Too wide at 48 pt: drawn smaller, never cut.
+          expect(r.fontFrac).toBeLessThan(r.chosenFontFrac);
+          expect(r.chosenFontFrac).toBeCloseTo(TIMESTAMP_SIZE_RANGE.max / WATERMARK_REF_WIDTH_PT);
+          // The saved page: the canvas box lies between the inset edges.
+          const ctx = measuringCtx();
+          drawStamp(ctx, page.w, page.h, r, null);
+          const [call] = named(ctx, 'fillText');
+          expect(call[2]).toBe(text);
+          const f = r.fontFrac * page.w;
+          const inset = CORNER_INSET * page.w;
+          const left = (call[3] as number) - TIMESTAMP_PAD.h * f;
+          const right = (call[3] as number) + emOf(text) * f + TIMESTAMP_PAD.h * f;
+          expect(left).toBeGreaterThanOrEqual(inset - 1e-6);
+          expect(right).toBeLessThanOrEqual(page.w - inset + 1e-6);
+          // Nearly the whole width: shrunk just enough, not more.
+          expect(right - left).toBeGreaterThan(0.97 * (page.w - 2 * inset));
+          // The preview: the same resolved size at its own scale — the same box, as fractions of the width.
+          for (const previewW of [220, 340]) {
+            const boxW = r.fontFrac * previewW * (emOf(text) + 2 * TIMESTAMP_PAD.h);
+            expect(boxW / previewW).toBeCloseTo((right - left) / page.w, 6);
+            expect(boxW).toBeLessThanOrEqual(previewW * (1 - 2 * CORNER_INSET) + 1e-6);
+          }
+        });
+      }
+    }
+  }
+
+  test('one rule, by fractions: the same size on any page shape or resolution', () => {
+    const text = longLabels[0];
+    const fitted = fitTimestampFont(TIMESTAMP_SIZE_RANGE.max / WATERMARK_REF_WIDTH_PT, emOf(text));
+    for (const page of pages) {
+      const r = resolveStamp({ kind: 'timestamp', text, corner: 'bottom-right', sizePt: 48, textEm: emOf(text) });
+      expect(r.kind === 'timestamp' && r.fontFrac).toBe(fitted);
+      expect(page.w).toBeGreaterThan(0);
+    }
+  });
+
+  test('a stamp that fits is drawn exactly as chosen; without a measurement nothing changes', () => {
+    const short = 'Nov 7, 2026';
+    const r = resolveStamp({ kind: 'timestamp', text: short, corner: 'bottom-right', sizePt: 48, textEm: emOf(short) });
+    expect(r.kind === 'timestamp' && r.fontFrac).toBe(r.kind === 'timestamp' && r.chosenFontFrac);
+    // The default stamp is unchanged, measured or not.
+    const base = { kind: 'timestamp' as const, text: 'Nov 7, 2026, 2:05 PM', corner: 'bottom-right' as const };
+    const measured = resolveStamp({ ...base, textEm: emOf(base.text) });
+    expect(measured).toEqual(resolveStamp(base));
+    expect(measured.kind === 'timestamp' && measured.fontFrac).toBe(TIMESTAMP_FONT_FRACTION);
+    // Junk measurements are ignored.
+    for (const bad of [0, -3, NaN, Infinity, undefined, null]) expect(fitTimestampFont(0.05, bad as number)).toBe(0.05);
+  });
+});
+
 describe('timestamp prefs', () => {
   test('nothing stored, or something unreadable, gives the defaults', () => {
     for (const raw of [null, '', 'not json', '[1]', '"x"', '{}']) expect(parseTimestampPrefs(raw)).toEqual(DEFAULT_TIMESTAMP_PREFS);
@@ -485,18 +570,33 @@ describe('redaction colour and label', () => {
     expect(r).toMatchObject({ label: { text: 'REDACTED', ink: '#ffffff' } });
   });
 
-  test('the label read back after redacting is not a leftover', () => {
+  test('the label read back after redacting is not a leftover — only the exact word, only when printed', () => {
     expect(labelSpans('Name REDACTED here')).toEqual([{ start: 5, end: 13 }]);
-    expect(labelSpans('REDACTE')).toEqual([{ start: 0, end: 7 }]);
+    expect(labelSpans('redacted.')).toEqual([{ start: 0, end: 8 }]);
+    // Not the label: a misread or partial word, or text run into it.
+    expect(labelSpans('REDACTE')).toEqual([]);
+    expect(labelSpans('redaction@corp.com')).toEqual([]);
+    expect(labelSpans('REDACTED555-0100')).toEqual([]);
+    expect(labelSpans('UNREDACTED')).toEqual([]);
     expect(labelSpans('nothing')).toEqual([]);
     const img = { width: 1000, height: 1000 };
     const applied = [{ x: 0, y: 0, w: 1, h: 0.2 }];
     const labelLine = { text: 'REDACTED', left: 100, top: 50, width: 300, height: 40 };
-    // Searching "red" or "act" finds them inside the printed label: ignored.
-    expect(leftoverMatches([labelLine], img, [{ kind: 'term', term: 'red' }, { kind: 'term', term: 'act' }], applied)).toEqual([]);
+    const red = [{ kind: 'term' as const, term: 'red' }, { kind: 'term' as const, term: 'act' }];
+    // Searching "red" or "act" finds them inside the printed label: ignored when the label was printed…
+    expect(leftoverMatches([labelLine], img, red, applied, true)).toEqual([]);
+    // …and reported when it wasn't (the word is then real text on the page).
+    expect(leftoverMatches([labelLine], img, red, applied, false)).toHaveLength(2);
+    expect(leftoverMatches([labelLine], img, red, applied)).toHaveLength(2);
     // A real leftover beside the label is still caught.
     const leaked = { text: 'REDACTED Fred', left: 100, top: 50, width: 400, height: 40 };
-    expect(leftoverMatches([leaked], img, [{ kind: 'term', term: 'red' }], applied)).toHaveLength(1);
+    expect(leftoverMatches([leaked], img, [{ kind: 'term', term: 'red' }], applied, true)).toHaveLength(1);
+    // A partly covered email holding "DACT" is a leftover, label or not.
+    const email = { text: 'redaction@corp.com', left: 100, top: 50, width: 400, height: 40 };
+    expect(leftoverMatches([email], img, [{ kind: 'email' }], applied, true)).toHaveLength(1);
+    // A phone number OCR ran into the label is still found.
+    const phone = { text: 'REDACTED555-0100', left: 100, top: 50, width: 400, height: 40 };
+    expect(leftoverMatches([phone], img, [{ kind: 'term', term: '555-0100' }], applied, true)).toHaveLength(1);
   });
 
   test('prefs: defaults, field by field, round trip', async () => {

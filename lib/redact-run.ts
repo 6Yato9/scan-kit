@@ -53,6 +53,8 @@ export async function findLeftovers(
   pages: readonly string[],
   applied: ReadonlyMap<number, readonly RedactRect[]>,
   finders: readonly Finder[],
+  /** The boxes were drawn with the "REDACTED" label (lib/redact.ts leftoverMatches). */
+  labelled = false,
 ): Promise<Map<number, RedactRect[]>> {
   const left = new Map<number, RedactRect[]>();
   if (!finders.length || !ocrAvailable()) return left;
@@ -61,7 +63,7 @@ export async function findLeftovers(
     if (!uri) continue;
     try {
       const { lines, size } = await readPage(uri);
-      const found = leftoverMatches(lines, size, finders, boxes);
+      const found = leftoverMatches(lines, size, finders, boxes, labelled);
       if (found.length) left.set(index, found);
     } catch {
       // Unreadable now: nothing to report.

@@ -8,7 +8,7 @@
 // Round 16: reading order (remembered in lib/tool-prefs.ts). Left to right
 // (the default, as before) keeps each spread's left page first; right to left
 // (Arabic, Hebrew, Persian and Urdu books, manga) puts its right page first.
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { Alert, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useScan } from '@/contexts/scan-context';
@@ -18,6 +18,7 @@ import { MoreOptions } from '@/components/more-options';
 import { SectionLabel } from '@/components/section-label';
 import { orderSpread, parseBookPrefs, type ReadingOrder } from '@/lib/book-split';
 import { readToolPrefs, TOOL_PREF_KEYS, writeToolPrefs } from '@/lib/tool-prefs';
+import { useRememberedPrefs } from '@/components/use-remembered-prefs';
 import { splitSpreads } from '@/lib/book-split';
 import { notifyError } from '@/lib/haptics';
 import { alertScanError, deleteTempFiles, pickPhotos, scanPagesWithCamera } from '@/lib/tool-scan';
@@ -27,28 +28,19 @@ import { splitSpread, toSourceInput } from '@/lib/capture-session';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
 import { noteNewDocument } from '@/lib/new-doc-note';
 
+const DEFAULT_BOOK_PREFS: { order: ReadingOrder } = { order: 'ltr' };
+const loadBookPrefs = () => readToolPrefs(TOOL_PREF_KEYS.book, parseBookPrefs);
+const saveBookPrefs = (p: { order: ReadingOrder }) => writeToolPrefs(TOOL_PREF_KEYS.book, { order: p.order });
+
 export default function BookScreen() {
   const { saveAndOpen } = useScan();
   const router = useRouter();
   const [busy, setBusy] = useState<'camera' | 'photos' | null>(null);
   const busyRef = useRef(false);
-  const [order, setOrderState] = useState<ReadingOrder>('ltr');
-  const orderRef = useRef(order);
+  // Remembered; a choice made before it loads wins (components/use-remembered-prefs.ts).
+  const [{ order }, setPrefs, latestPrefs] = useRememberedPrefs(DEFAULT_BOOK_PREFS, loadBookPrefs, saveBookPrefs);
   const [moreOpen, setMoreOpen] = useState(false);
-  useEffect(() => {
-    let live = true;
-    readToolPrefs(TOOL_PREF_KEYS.book, parseBookPrefs).then(p => {
-      if (!live) return;
-      orderRef.current = p.order;
-      setOrderState(p.order);
-    });
-    return () => { live = false; };
-  }, []);
-  const setOrder = (o: ReadingOrder) => {
-    orderRef.current = o;
-    setOrderState(o);
-    writeToolPrefs(TOOL_PREF_KEYS.book, { order: o }).catch(() => {});
-  };
+  const setOrder = (o: ReadingOrder) => setPrefs({ order: o });
 
   const run = async (source: 'camera' | 'photos') => {
     if (busyRef.current) return;
@@ -77,10 +69,10 @@ export default function BookScreen() {
             // A photo and its reviewed crop: split the crop, keep the photo.
             const size = await getImageSize(shot.sourceUri);
             const halves = size ? splitSpread(geometryOfInput(shot), size.width, size.height) : [geometryOfInput(shot)];
-            pages.push(...orderSpread(halves.map(g => toSourceInput(shot.sourceUri, g)), orderRef.current));
+            pages.push(...orderSpread(halves.map(g => toSourceInput(shot.sourceUri, g)), latestPrefs().order));
           } else {
             const split = await splitSpreads([shot]);
-            pages.push(...orderSpread(split.pages, orderRef.current));
+            pages.push(...orderSpread(split.pages, latestPrefs().order));
             temps = temps.concat(split.temps);
           }
         }

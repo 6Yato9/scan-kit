@@ -14,8 +14,14 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
 }));
 import {
   chunkPages,
+  DEFAULT_SPLIT_EVERY,
+  DEFAULT_SPLIT_PREFS,
   describeParts,
+  keepOriginalReason,
+  newDocumentsLabel,
   oddEvenPages,
+  omittedPages,
+  SPLIT_CONFIRM_OVER,
   pagesInRanges,
   parsePageRanges,
   parseSplitPrefs,
@@ -31,12 +37,13 @@ import {
   targetVerdict,
 } from '../lib/compress-pdf';
 import { estimatePdfBytes, MIN_CUSTOM_EDGE, roundUpEstimate } from '../lib/pdf';
-import { DEFAULT_LONG_IMAGE, MAX_OUTPUT_WIDTH, parseLongImageOptions, planLongImage, CANVAS_PIXEL_BUDGET, buildLongImageHtml } from '../lib/long-image';
+import { DEFAULT_LONG_IMAGE, MAX_OUTPUT_WIDTH, parseLongImageOptions, planLongImage, CANVAS_PIXEL_BUDGET, buildLongImageHtml, shownWidthChoice, widthChoices } from '../lib/long-image';
 import { formatRecognized, joinParagraphs, paragraphText, parseExtractTextPrefs, textFileName } from '../lib/text-format';
 import { eraseAdjustment, parseEraseStrength } from '../lib/erase-strength';
 import { orderSpread, parseBookPrefs } from '../lib/book-split';
 import { cardWidthMm, ID_CARD_SCALES, maxCardScale, planIdCardSheet } from '../lib/id-card-sheet';
 import { jsonObject, numberIn, readToolPrefs, writeToolPrefs } from '../lib/tool-prefs';
+import { formatBytes } from '../lib/format';
 
 describe('page ranges', () => {
   test('numbers, ranges, open ends and dashes', () => {
@@ -66,10 +73,34 @@ describe('page ranges', () => {
     expect(describeParts(chunkPages(16, 2))).toBe('8 documents: pages 1–2, 3–4, 5–6, 7–8, 9–10, 11–12, and 2 more');
   });
 
-  test('split prefs default to the classic split in two', () => {
-    expect(parseSplitPrefs({})).toEqual({ mode: 'at', every: 1 });
+  test('split prefs default to the classic split in two; Every N starts at 2, never 1', () => {
+    expect(parseSplitPrefs({})).toEqual({ mode: 'at', every: 2 });
+    expect(parseSplitPrefs({})).toEqual(DEFAULT_SPLIT_PREFS);
+    expect(DEFAULT_SPLIT_EVERY).toBe(2);
     expect(parseSplitPrefs({ mode: 'every', every: 3.4 })).toEqual({ mode: 'every', every: 3 });
+    // A number still chosen on purpose stays (one page per document, asked first when many).
+    expect(parseSplitPrefs({ mode: 'every', every: 1 })).toEqual({ mode: 'every', every: 1 });
     expect(parseSplitPrefs({ mode: 'odd', every: -2 })).toEqual({ mode: 'at', every: 1 });
+    expect(parseSplitPrefs({ mode: 'every', every: 'x' })).toEqual({ mode: 'every', every: 2 });
+    // Asked first above ten documents: a 150-page scan at the default makes 75.
+    expect(chunkPages(150, DEFAULT_SPLIT_EVERY)).toHaveLength(75);
+    expect(chunkPages(150, DEFAULT_SPLIT_EVERY).length > SPLIT_CONFIRM_OVER).toBe(true);
+    expect(chunkPages(20, DEFAULT_SPLIT_EVERY).length > SPLIT_CONFIRM_OVER).toBe(false);
+  });
+
+  test('By ranges: pages left out keep the original, and the copy counts the documents', () => {
+    const parts = (parsePageRanges('1-3, 5', 6) as { ok: true; ranges: number[][] }).ranges;
+    expect(omittedPages(parts, 6)).toEqual([3, 5]);
+    expect(keepOriginalReason(omittedPages(parts, 6))).toBe('Pages 4, 6 aren’t in any range, so the original is kept.');
+    expect(keepOriginalReason([3, 4, 5, 6])).toBe('Pages 4–7 aren’t in any range, so the original is kept.');
+    expect(keepOriginalReason([0])).toBe('Page 1 isn’t in any range, so the original is kept.');
+    // Every page named (even twice, or out of order): the original may go.
+    const all = (parsePageRanges('4-6, 1-3, 2', 6) as { ok: true; ranges: number[][] }).ranges;
+    expect(omittedPages(all, 6)).toEqual([]);
+    expect(keepOriginalReason([])).toBeNull();
+    expect(newDocumentsLabel(2)).toBe('two new documents');
+    expect(newDocumentsLabel(3)).toBe('3 new documents');
+    expect(newDocumentsLabel(1)).toBe('1 new document');
   });
 });
 
@@ -89,7 +120,7 @@ describe('Compress › Smaller PDF sizes', () => {
   });
 
   test('a target picks a size that fits, or says it may not', () => {
-    const MB = 1024 * 1024;
+    const MB = 1_000_000; // decimal, as iOS shows sizes
     const o = pdfOptionsFor({ kind: 'target', mb: 1 }, pages, false);
     expect(o.fits).toBe(true);
     expect(roundUpEstimate(estimatePdfBytes(pages, 'standard', false, o.maxEdge))).toBeLessThanOrEqual(MB);
@@ -97,6 +128,22 @@ describe('Compress › Smaller PDF sizes', () => {
     expect(pdfOptionsFor({ kind: 'target', mb: 1 }, many, false)).toEqual({ quality: 'standard', maxEdge: MIN_CUSTOM_EDGE, fits: false });
     expect(targetVerdict(900_000, 1)).toEqual({ ok: true, text: 'Under the 1 MB limit' });
     expect(targetVerdict(1.2 * MB, 1).ok).toBe(false);
+  });
+
+  test('"Fit under" counts decimal megabytes, as iOS Files and Mail and upload limits do', () => {
+    // 2,060,000 bytes shows as 2.1 MB in Files: over a 2 MB limit, never "under" it.
+    expect(targetVerdict(2_060_000, 2).ok).toBe(false);
+    expect(targetVerdict(2_000_000, 2).ok).toBe(true);
+    expect(targetVerdict(1_999_999, 2).ok).toBe(true);
+    // The size labels use the same units.
+    expect(formatBytes(2_060_000)).toBe('2.1 MB');
+    expect(formatBytes(1_000_000)).toBe('1.0 MB');
+    expect(formatBytes(999_400)).toBe('999 KB');
+    expect(formatBytes(150_000)).toBe('150 KB');
+    expect(roundUpEstimate(1_950_001)).toBeCloseTo(2_000_000);
+    // A target is met by the estimate in the same units.
+    const o = pdfOptionsFor({ kind: 'target', mb: 2 }, pages, false);
+    expect(roundUpEstimate(estimatePdfBytes(pages, 'standard', false, o.maxEdge))).toBeLessThanOrEqual(2_000_000);
   });
 
   test('remembered choices are validated', () => {
@@ -139,6 +186,45 @@ describe('Long image options', () => {
     expect(planLongImage([{ width: 3000, height: 4000 }], { maxWidth: 1080 }).width).toBe(1080);
     expect(planLongImage([{ width: 3000, height: 4000 }], { maxWidth: 2400 }).width).toBe(2400);
     expect(planLongImage([{ width: 3000, height: 4000 }]).width).toBe(MAX_OUTPUT_WIDTH);
+  });
+
+  test('a width that makes the same image as a narrower one is greyed out; 2,400 px is reachable when it differs', () => {
+    const a4 = { width: 2480, height: 3508 };
+    // One A4 page: every choice gives its own width.
+    expect(widthChoices([a4]).map(c => [c.value, c.width, c.same])).toEqual([
+      [1080, 1080, false],
+      [1600, 1600, false],
+      [2400, 2400, false],
+    ]);
+    // Two landscape pages: 2,400 px is reachable.
+    const land = { width: 3508, height: 2480 };
+    expect(widthChoices([land, land])[2]).toEqual({ value: 2400, width: 2400, same: false });
+    // Two A4 pages: about 2,300 px at most — still wider than 1,600, so offered.
+    const two = widthChoices([a4, a4]);
+    expect(two[2].same).toBe(false);
+    expect(two[2].width).toBeLessThan(2400);
+    expect(two[2].width).toBeGreaterThan(1600);
+    // Four A4 pages: at most about 1,630 px, so 2,400 still gives a little more than 1,600.
+    const fourA4 = widthChoices([a4, a4, a4, a4]);
+    expect(fourA4[2].same).toBe(false);
+    expect(fourA4[2].width).toBeLessThan(1700);
+    // Five A4 pages: 1,600 and 2,400 make the same image — 2,400 is greyed out.
+    const four = widthChoices([a4, a4, a4, a4, a4]);
+    expect(four[1].width).toBe(four[2].width);
+    expect(four[2].same).toBe(true);
+    expect(four[1].same).toBe(false);
+    // Narrow scans (1,500 px): never enlarged, so 2,400 is the same as 1,600.
+    const narrow = widthChoices([{ width: 1500, height: 2000 }, { width: 1500, height: 2000 }]);
+    expect(narrow.map(c => c.width)).toEqual([1080, 1500, 1500]);
+    expect(narrow.map(c => c.same)).toEqual([false, false, true]);
+    // A stored 2,400 shows as the choice making that same image.
+    expect(shownWidthChoice(four, 2400)).toBe(1600);
+    expect(shownWidthChoice(two, 2400)).toBe(2400);
+    expect(shownWidthChoice(four, 1080)).toBe(1080);
+    // Long documents: everything collapses onto the narrowest that fits.
+    const many = widthChoices(Array.from({ length: 40 }, () => a4));
+    expect(many.every(c => c.width === many[0].width)).toBe(true);
+    expect(shownWidthChoice(many, 2400)).toBe(1080);
   });
 
   test('a stored value is validated; the look is escaped into the page', () => {

@@ -33,13 +33,14 @@ function dirSize(dir: Directory): number {
   return total;
 }
 
+/** Decimal units (1 MB = 1,000,000 bytes), as iOS Settings › iPhone Storage counts. */
 function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} bytes`;
+  if (bytes < 1000) return `${bytes} bytes`;
   const units = ['KB', 'MB', 'GB', 'TB'];
-  let value = bytes / 1024;
+  let value = bytes / 1000;
   let i = 0;
-  while (value >= 1024 && i < units.length - 1) {
-    value /= 1024;
+  while (value >= 1000 && i < units.length - 1) {
+    value /= 1000;
     i++;
   }
   return `${value.toFixed(value < 10 ? 1 : 0)} ${units[i]}`;
