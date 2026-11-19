@@ -205,7 +205,8 @@ describe('saving as a new document', () => {
 describe('replacing in place', () => {
   test('goes through rewriteStoredPdf with the page count it read', async () => {
     const result = await unrestrictStoredPdf('d1');
-    expect(mockRewrite).toHaveBeenCalledWith('d1', expect.any(Function), 3);
+    // The stored, encrypted PDF is opened with the password; the session copy isn't used.
+    expect(mockRewrite).toHaveBeenCalledWith('d1', expect.any(Function), 3, { removesPassword: true });
     expect(mockFs.get(PDF)).toBe('clear(v1)');
     expect(result.undo).toEqual({ docId: 'd1' });
   });

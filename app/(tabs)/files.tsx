@@ -39,6 +39,7 @@ import {
   undoNewMerge,
 } from '@/lib/merge-undo';
 import { canMergePdfDocuments, mergeDocumentsToPdf, needsPdfMerge, PdfEditError } from '@/lib/pdf-edit';
+import { LOCKED_MERGE_BODY, withNoPasswordNote } from '@/lib/pdf-session';
 import { matchesQuery, searchSnippet, sortDocuments } from '@/lib/doc-list';
 import { requestFilesCopySync } from '@/lib/files-copy';
 import { useScan } from '@/contexts/scan-context';
@@ -396,7 +397,7 @@ export default function FilesScreen() {
       notifySuccess();
       // Undo removes the merged copy; the originals were never touched (lib/merge-undo).
       const undo = newMergeUndo(merged);
-      toast.show(mergedNewMessage(ordered.length), {
+      toast.show(withNoPasswordNote(mergedNewMessage(ordered.length), ordered.map(d => d.id)), {
         action: {
           label: 'Undo',
           onPress: () => {
@@ -418,7 +419,7 @@ export default function FilesScreen() {
     } catch (err) {
       if (err instanceof PdfEditError && err.kind === 'locked') {
         const who = ordered.find(d => d.id === err.docId);
-        Alert.alert(`“${who?.name ?? 'A PDF'}” is password protected`, 'Open it and enter its password, then merge again.');
+        Alert.alert(`“${who?.name ?? 'A PDF'}” is password protected`, LOCKED_MERGE_BODY);
         return;
       }
       if (err instanceof PdfEditError && err.kind === 'restricted') {

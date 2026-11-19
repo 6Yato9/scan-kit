@@ -20,8 +20,19 @@ import { ensureStorageLayout } from '@/lib/storage-layout';
 import { clearLegacyOcrCache } from '@/lib/ocr-cache';
 import { recoverInterruptedStamps } from '@/lib/page-stamp';
 import { recoverInterruptedPdfEdits } from '@/lib/pdf-edit';
+import { installPdfSessionWatch } from '@/lib/pdf-session';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
-import { documentFileRefsForCleanup, documentIdsForCleanup, getOnboarded, getOnboardedSync, pendingBakeMigrations, withDocumentFileRefs } from '@/lib/storage';
+import {
+  documentFileRefsForCleanup,
+  documentIdsForCleanup,
+  getAppLockEnabled,
+  getOnboarded,
+  getOnboardedSync,
+  pendingBakeMigrations,
+  subscribeAppLock,
+  subscribeDocumentsRemoved,
+  withDocumentFileRefs,
+} from '@/lib/storage';
 
 // The app's files moved out of Documents (which the Files app shows) into
 // Library/Application Support. The move runs once, synchronously, before the
@@ -271,6 +282,10 @@ export default function RootLayout() {
     const stampsRecovered = recoverInterruptedStamps().catch(() => 0);
     // Likewise a PDF page edit (lib/pdf-edit.ts): its search text is re-read.
     recoverInterruptedPdfEdits().catch(() => 0);
+    // Protected PDFs unlocked for the session lock again when it ends
+    // (background with App Lock on, a long absence without), and copies an
+    // earlier process left behind are removed (lib/pdf-session.ts).
+    const stopPdfSessions = installPdfSessionWatch({ getAppLockEnabled, subscribeAppLock, subscribeDocumentsRemoved });
     // Fire-and-forget startup sweep of orphaned doc dirs and interrupted-
     // operation temp files. Delayed slightly so it never competes with render.
     // documentIdsForCleanup returns null when the list can't be trusted (doc
@@ -302,7 +317,10 @@ export default function RootLayout() {
       ));
     })().catch(() => {});
 
-    return () => clearTimeout(t);
+    return () => {
+      clearTimeout(t);
+      stopPdfSessions();
+    };
   }, []);
 
   return (

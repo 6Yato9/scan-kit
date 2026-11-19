@@ -489,6 +489,26 @@ public class VisionOcrModule: Module {
     /// { pageCount, encrypted, locked, passwordAccepted, permissions } of a
     /// PDF, opened with `password` when it needs one. Rejects ERR_PDF_INFO
     /// when it can't be opened.
+    // ── Round 14: keep a protected PDF's protection through an in-place
+    // edit (lib/pdf-edit.ts rewriteStoredPdf). The open password as it was, a
+    // separate owner password (random when `ownerPassword` is null) and the
+    // author's permission bits; verified before it resolves.
+    AsyncFunction("protectPdfKeeping") { (inputUri: String, outputUri: String, userPassword: String, ownerPassword: String?, permissions: Int, promise: Promise) in
+      DispatchQueue.global(qos: .userInitiated).async {
+        func path(_ u: String) -> String { URL(string: u).flatMap { $0.isFileURL ? $0.path : nil } ?? u }
+        do {
+          try autoreleasepool {
+            try PdfProtector.protectKeeping(
+              inputPath: path(inputUri), outputPath: path(outputUri),
+              userPassword: userPassword, ownerPassword: ownerPassword, permissions: UInt(max(0, permissions)))
+          }
+          promise.resolve(URL(fileURLWithPath: path(outputUri)).absoluteString)
+        } catch {
+          promise.reject("ERR_PDF_PROTECT", error.localizedDescription)
+        }
+      }
+    }
+
     AsyncFunction("pdfPermissions") { (uri: String, password: String?, promise: Promise) in
       DispatchQueue.global(qos: .userInitiated).async {
         func path(_ u: String) -> String { URL(string: u).flatMap { $0.isFileURL ? $0.path : nil } ?? u }

@@ -38,6 +38,7 @@ import {
   type NewMergeUndo,
 } from '@/lib/merge-undo';
 import { mergeDocumentsToPdf, needsPdfMerge, PdfEditError } from '@/lib/pdf-edit';
+import { LOCKED_MERGE_BODY, withNoPasswordNote } from '@/lib/pdf-session';
 import {
   BlankPageUndoRefused,
   blankPageSize,
@@ -260,7 +261,7 @@ export function useScanDocTools({ document, page, editDocument, toast, router, s
           // The toast opens the new PDF; its Undo waits in the "…" menu.
           const undo = newMergeUndo(merged);
           offerUndo?.(mergedNewMessage(2), () => undoPdfMerge(undo));
-          toast.show(mergedNewMessage(2), {
+          toast.show(withNoPasswordNote(mergedNewMessage(2), [target.id, source.id]), {
             action: { label: 'Open', onPress: () => router.replace({ pathname: '/viewer', params: { id: merged.id } }) },
           });
         }
@@ -283,7 +284,7 @@ export function useScanDocTools({ document, page, editDocument, toast, router, s
       notifyError();
       if (err instanceof PdfEditError && err.kind === 'locked') {
         const who = [target, source].find(d => d.id === err.docId);
-        Alert.alert(`“${who?.name ?? 'This PDF'}” is password protected`, 'Open it and enter its password, then merge again.');
+        Alert.alert(`“${who?.name ?? 'This PDF'}” is password protected`, LOCKED_MERGE_BODY);
       } else if (err instanceof PdfEditError && err.kind === 'restricted') {
         Alert.alert('This PDF can’t be merged', 'Its author doesn’t allow changes to its pages.');
       } else {

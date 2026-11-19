@@ -38,6 +38,22 @@
 // document never interleave; the record write goes through the documents lock
 // (updateDocumentWith) and only if the record still points at the same PDF.
 //
+// A password-protected PDF unlocked for this session (lib/pdf-session.ts)
+// stays protected, exactly: native writes the change from the decrypted
+// session copy into a plaintext file in Caches/pdf-session (never this work
+// folder: Application Support is in backups, and a 'partial' or a crash would
+// leave it here), which is encrypted again into after.pdf keeping the open
+// password, a separate owner password and the author's permission bits
+// (VisionOcr.protectPdfKeeping, verified), and THAT is swapped in. before.pdf
+// is the encrypted original, so Undo is byte-identical. The plaintext becomes
+// the new session copy. A PDF opened with its owner password, or (in a build
+// without protectPdfKeeping) one with restrictions, is refused instead of
+// being written back weaker.
+// What the PDF's permissions allow is checked against the ones read with the
+// password at unlock time (the decrypted copy allows everything), and no
+// search text is stored for it. A protected PDF that isn't unlocked is read
+// as stored, and native refuses it ('locked'), as before.
+//
 // Undo: the token keeps before.pdf and a fingerprint (size + MD5) of what the
 // edit wrote. Undo puts before.pdf back the same atomic way, only if the stored
 // PDF is still exactly what the edit wrote. One Undo per document: a newer edit
@@ -54,6 +70,16 @@ import { bumpPdfTextGeneration, joinPdfPageTexts } from './pdf-text';
 import { invalidatePdfThumbs } from './pdf-thumb';
 import { generatePdf } from './pdf';
 import { ocrAvailable } from './ocr';
+import {
+  adoptSessionCopy,
+  newSessionWorkFile,
+  noteStoredPdfReplaced,
+  PdfSessionError,
+  readablePdfUri,
+  sessionWriteSource,
+  type KeepProtection,
+  type PdfPermission,
+} from './pdf-session';
 
 // ── Plans (pure) ─────────────────────────────────────────────────────────────
 
@@ -165,6 +191,12 @@ export class PdfEditError extends Error {
 
 function classify(err: unknown): PdfEditError {
   if (err instanceof PdfEditError) return err;
+  if (err instanceof PdfSessionError) {
+    const kind: PdfEditErrorKind =
+      err.kind === 'restricted' || err.kind === 'missing' || err.kind === 'unavailable' ? err.kind
+        : err.kind === 'failed' ? 'failed' : 'locked';
+    return new PdfEditError(kind, err.message);
+  }
   const msg = err instanceof Error ? err.message : String(err ?? '');
   const code = (err as { code?: string } | null)?.code ?? '';
   // The PDF's own permissions forbid changing its pages (PdfEditor.swift / PdfMerger.swift).
@@ -282,6 +314,7 @@ async function swapIn(docId: string, target: string, src: File, work: Directory,
   // From here the stored PDF is the new one, whatever happens next.
   bumpPdfTextGeneration(docId);
   invalidatePdfThumbs(docId);
+  noteStoredPdfReplaced(docId);
   let ok: boolean;
   try {
     ok = await updateDocumentWith(docId, latest =>
@@ -370,21 +403,88 @@ export async function editStoredPdf(
     docId,
     (target, out) => edit(target, out, sources, rotations, options.password ?? null),
     plan.length,
+    { needs: ['assemblePages'] },
   );
+}
+
+/** How an in-place rewrite treats a PDF unlocked for this session (see the header). */
+export type RewriteOptions = {
+  /** What the PDF's permissions must allow (page edits: assemblePages; Fill & sign: comment / fillForms). */
+  needs?: readonly PdfPermission[];
+  /**
+   * The writer reads the stored, encrypted PDF itself (it is given the
+   * password) and writes a copy with no password: Unlock PDF in place. The
+   * session copy isn't used and the result isn't encrypted again.
+   */
+  removesPassword?: boolean;
+};
+
+/**
+ * How the plaintext of a protected PDF's edit is encrypted again (pure):
+ * 'keep' (protectPdfKeeping: open password, separate owner password, the
+ * author's bits), 'same' (protectPdf, user = owner = password: exactly what
+ * the file had, or nothing to lose when it restricts nothing), or 'refuse'
+ * (it would weaken the protection).
+ */
+export function reprotectPlan(
+  keep: KeepProtection,
+  restricted: boolean,
+  canKeep: boolean,
+): { how: 'keep'; owner: 'random' | 'same'; bits: number } | { how: 'same' } | { how: 'refuse'; why: 'owner-password' | 'keep-unavailable' } {
+  if (keep.mode === 'owner-only') return { how: 'refuse', why: 'owner-password' };
+  if (canKeep && keep.bits >= 0) return { how: 'keep', owner: keep.mode === 'same' ? 'same' : 'random', bits: keep.bits };
+  if (keep.mode === 'same' || !restricted) return { how: 'same' };
+  return { how: 'refuse', why: 'keep-unavailable' };
+}
+
+/** Encrypts `plain` into `out` as `plan` says and checks every page is there. */
+async function reprotect(
+  plain: string,
+  out: string,
+  password: string,
+  plan: { how: 'keep'; owner: 'random' | 'same'; bits: number } | { how: 'same' },
+  expectedPages: number,
+): Promise<void> {
+  const protect = VisionOcr?.protectPdf;
+  const keep = VisionOcr?.protectPdfKeeping;
+  const info = VisionOcr?.pdfInfo;
+  try {
+    if (plan.how === 'keep' && typeof keep === 'function') {
+      await keep(plain, out, password, plan.owner === 'same' ? password : null, plan.bits);
+    } else {
+      if (typeof protect !== 'function') throw new PdfEditError('unavailable', 'protectPdf missing');
+      // Native, not lib/pdf protectPdf: the password is the PDF's own, whatever its length.
+      await protect(plain, out, password);
+    }
+  } catch (err) {
+    if (err instanceof PdfEditError) throw err;
+    throw new PdfEditError('failed', err instanceof Error ? err.message : 'protect failed');
+  }
+  if (!new File(out).exists) throw new PdfEditError('failed', 'protect wrote nothing');
+  if (typeof info === 'function') {
+    const check = await info(out, password).catch(() => null);
+    const locked = await info(out, null).then(i => i.locked, () => true);
+    if (!check || check.locked || check.pageCount !== expectedPages || !locked) {
+      throw new PdfEditError('failed', 'protection not verified');
+    }
+  }
 }
 
 /**
  * The one way a stored PDF is rewritten in place (page edits here, Fill &
- * sign in lib/pdf-fill.ts), crash-safe with Undo as the header describes:
- * `write(target, out)` has native write the new PDF to `out` from the stored
- * one at `target` (both file paths) and resolve to its page count, which must
- * be `expectedPages`. Rejects with PdfEditError, leaving the document as it
- * was (except kind 'partial', see the header).
+ * sign in lib/pdf-fill.ts, Flatten, Protect and Unlock PDF in place),
+ * crash-safe with Undo as the header describes: `write(source, out)` has
+ * native write the new PDF to `out` from the PDF at `source` (both file
+ * paths: the stored file, or for a PDF unlocked this session its decrypted
+ * copy) and resolve to its page count, which must be `expectedPages`.
+ * Rejects with PdfEditError, leaving the document as it was (except kind
+ * 'partial', see the header).
  */
 export async function rewriteStoredPdf(
   docId: string,
-  write: (target: string, out: string) => Promise<number>,
+  write: (source: string, out: string) => Promise<number>,
   expectedPages: number,
+  options: RewriteOptions = {},
 ): Promise<PdfEditResult> {
   if (typeof VisionOcr?.replaceFile !== 'function') throw new PdfEditError('unavailable', 'replaceFile missing');
   return withDocLock(docId, async () => {
@@ -393,19 +493,38 @@ export async function rewriteStoredPdf(
     if (!doc.pdfUri || doc.pages.length > 0) throw new PdfEditError('changed', 'not a PDF document');
     const target = clean(doc.pdfUri);
     if (!new File(target).exists) throw new PdfEditError('unreadable', 'stored PDF missing');
-
-    const work = newWorkDir(docId);
-    let keepWork = false;
-    try {
-      const after = new File(work, 'after.pdf');
-      let pageCount: number;
+    // Unlocked for this session: written from the decrypted copy, encrypted again (see the header).
+    let session: Awaited<ReturnType<typeof sessionWriteSource>> = null;
+    if (!options.removesPassword) {
       try {
-        pageCount = await write(target, after.uri);
+        session = await sessionWriteSource(docId, target, options.needs);
       } catch (err) {
         throw classify(err);
       }
-      if (!after.exists || pageCount !== expectedPages) throw new PdfEditError('failed', 'edit not verified');
-      const text = await readText(after.uri);
+    }
+    const plan = session ? reprotectPlan(session.keep, session.restricted, typeof VisionOcr?.protectPdfKeeping === 'function') : null;
+    if (session && plan?.how === 'refuse') {
+      session.done();
+      throw new PdfEditError('restricted', plan.why);
+    }
+
+    const work = newWorkDir(docId);
+    // The plaintext result lives in Caches/pdf-session (see the header).
+    const plainWork = session ? newSessionWorkFile(docId) : null;
+    let keepWork = false;
+    try {
+      const after = new File(work, 'after.pdf');
+      const plain = plainWork?.file ?? null;
+      let pageCount: number;
+      try {
+        pageCount = await write(session ? session.uri : target, (plain ?? after).uri);
+      } catch (err) {
+        throw classify(err);
+      }
+      if (!(plain ?? after).exists || pageCount !== expectedPages) throw new PdfEditError('failed', 'edit not verified');
+      if (plain && session && plan && plan.how !== 'refuse') await reprotect(plain.uri, after.uri, session.password, plan, expectedPages);
+      // A protected PDF's text is what its password protects: never stored.
+      const text = session ? null : await readText(after.uri);
 
       // The way back (Undo, and after a crash): a copy of the PDF as it is now.
       let before: File | null = new File(work, 'before.pdf');
@@ -423,6 +542,8 @@ export async function rewriteStoredPdf(
         ocrText: text ? text : undefined,
       });
       if (!ok) throw new PdfEditError('missing', 'document missing');
+      // The decrypted form of what is now stored: the next session copy.
+      if (plain) adoptSessionCopy(docId, plain.uri, target, written);
       const next = await getDocument(docId);
       if (!next) throw new PdfEditError('missing', 'document missing');
       let undo: PdfEditUndo | null = null;
@@ -439,6 +560,9 @@ export async function rewriteStoredPdf(
       throw err;
     } finally {
       if (!keepWork) deleteQuietly(work);
+      // Whatever happened, no plaintext stays except as the adopted session copy.
+      plainWork?.release();
+      session?.done();
     }
   });
 }
@@ -556,7 +680,14 @@ export async function splitStoredPdf(
     const doc = await getDocument(docId);
     if (!doc) throw new PdfEditError('missing', 'document missing');
     if (!doc.pdfUri || doc.pages.length > 0) throw new PdfEditError('changed', 'not a PDF document');
-    const source = clean(doc.pdfUri);
+    // Unlocked this session: the parts come from the decrypted copy (and
+    // need no password, which the screens say before splitting).
+    let source: string;
+    try {
+      source = clean(await readablePdfUri(doc, { needs: ['assemblePages'] }));
+    } catch (err) {
+      throw classify(err);
+    }
     let count: number;
     try {
       const i = await info(source, options.password ?? null);
@@ -661,8 +792,15 @@ export async function mergeDocumentsToPdf(
     for (let k = 0; k < docs.length; k++) {
       const doc = (await getDocument(docs[k].id)) ?? docs[k];
       if (doc.pdfUri) {
-        const uri = clean(doc.pdfUri);
-        if (!new File(uri).exists) throw new PdfEditError('unreadable', 'stored PDF missing', doc.id);
+        if (!new File(clean(doc.pdfUri)).exists) throw new PdfEditError('unreadable', 'stored PDF missing', doc.id);
+        // A PDF unlocked this session joins from its decrypted copy (lib/pdf-session.ts).
+        let uri: string;
+        try {
+          uri = clean(await readablePdfUri(doc, { needs: ['assemblePages'] }));
+        } catch (err) {
+          const e = classify(err);
+          throw new PdfEditError(e.kind, e.message, doc.id);
+        }
         if (typeof info === 'function') {
           let i: { pageCount: number; locked: boolean };
           try {

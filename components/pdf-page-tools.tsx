@@ -10,6 +10,11 @@
 // The viewer owns the PDF view; this hook tells it when to reload the file
 // (`viewKey`) and which page to open at (`initialPage`), so an edit never
 // throws the reader back to page 1.
+//
+// A password-protected PDF unlocked for this session (lib/pdf-session.ts) is
+// read from its decrypted copy (`readableUri`, from the viewer); its edits
+// stay protected (lib/pdf-edit.ts rewriteStoredPdf). Splitting it says first
+// that the new documents won't need a password.
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ActionSheetIOS, ActivityIndicator, Alert, Platform, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -47,6 +52,7 @@ import {
 import { notifyError, notifySuccess } from '@/lib/haptics';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
 import { postViewerNotice } from '@/lib/viewer-notice';
+import { LOCKED_MERGE_BODY, protectedEditRefusal, withNoPasswordNote } from '@/lib/pdf-session';
 import { useTheme } from '@/contexts/theme-context';
 import { Radius, Spacing, Type } from '@/lib/theme';
 import { ViewerToolbar, type ToolbarItem } from '@/components/viewer-toolbar';
@@ -82,6 +88,10 @@ const BUSY_LABEL: Record<Busy, string> = {
 type Options = {
   /** Null while the viewer is loading. */
   document: Document | null;
+  /** The file to read the PDF's content from (lib/pdf-session useReadablePdfUri); null while it is being made. */
+  readableUri: string | null;
+  /** The PDF is password protected and unlocked for this session. */
+  unlockedForSession: boolean;
   /** The page on screen (zero-based) and the page count, from the PDF view; null until it has loaded. */
   page: number;
   pageCount: number | null;
@@ -103,6 +113,8 @@ type Options = {
 
 export function usePdfPageTools({
   document,
+  readableUri,
+  unlockedForSession,
   page,
   pageCount,
   enabled,
@@ -138,8 +150,9 @@ export function usePdfPageTools({
   }, []);
 
   const docId = document?.id ?? '';
-  const pdfUri = document?.pdfUri;
-  const available = canEditPdfPages() && !!pdfUri;
+  // What the tools read: the session copy of a protected PDF, else the stored file.
+  const pdfUri = document?.pdfUri ? readableUri : null;
+  const available = canEditPdfPages() && !!document?.pdfUri;
   const n = pageCount ?? 0;
   const ready = available && enabled && n > 0 && busy === null;
   const at = Math.max(0, Math.min(page, n - 1));
@@ -201,7 +214,18 @@ export function usePdfPageTools({
       return;
     }
     notifyError();
-    if (kind === 'locked') {
+    const refusal = protectedEditRefusal(err);
+    if (refusal) {
+      // A protected PDF unlocked this session that can't be written back as
+      // protected (lib/pdf-session.ts): opened with its owner password.
+      const ownerPassword = err instanceof Error && err.message === 'owner-password';
+      Alert.alert(refusal.title, refusal.body, ownerPassword
+        ? [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Unlock PDF', onPress: () => router.push({ pathname: '/tools/unrestrict', params: { docId } } as never) },
+          ]
+        : undefined);
+    } else if (kind === 'locked') {
       onLocked();
     } else if (kind === 'restricted') {
       Alert.alert('This PDF can’t be changed', 'Its author doesn’t allow changes to its pages. You can still view, share and print it.');
@@ -215,7 +239,7 @@ export function usePdfPageTools({
       console.error(`PDF edit (${what}) failed`, err);
       Alert.alert(`Couldn’t ${what}`, 'Your PDF is unchanged. Check that there’s free space, then try again.');
     }
-  }, [onMissing, onLocked]);
+  }, [onMissing, onLocked, router, docId]);
 
   const handleUndo = useCallback(async (undo: PdfEditUndo, showPage: number) => {
     if (busyRef.current) return;
@@ -346,10 +370,10 @@ export function usePdfPageTools({
       if (originalTrashed) {
         // The original is in Recently deleted: carry on in the first part.
         // The new viewer shows it (this one, and its toasts, are going away).
-        postViewerNotice({ docId: first.id, message: 'Split into two documents. The original is in Recently deleted.' });
+        postViewerNotice({ docId: first.id, message: withNoPasswordNote('Split into two documents. The original is in Recently deleted.', [docId]) });
         navigateWhenUnlocked(() => router.replace({ pathname: '/viewer', params: { id: first.id } }));
       } else if (mounted.current) {
-        toast.show('Split into two documents', {
+        toast.show(withNoPasswordNote('Split into two documents', [docId]), {
           action: { label: 'Open', onPress: () => router.replace({ pathname: '/viewer', params: { id: first.id } }) },
         });
       }
@@ -368,7 +392,9 @@ export function usePdfPageTools({
     const first = after + 1;
     const range = (a: number, b: number) => (a === b ? `Page ${a}` : `Pages ${a}–${b}`);
     const title = `Split after page ${first}`;
-    const message = `${range(1, first)} and ${range(first + 1, n).toLowerCase()} become two new documents.`;
+    const message = `${range(1, first)} and ${range(first + 1, n).toLowerCase()} become two new documents.${
+      unlockedForSession ? ' They won’t need a password.' : ''
+    }`;
     const keep = 'Split and keep the original';
     const remove = 'Split and delete the original';
     if (Platform.OS === 'ios') {
@@ -393,7 +419,7 @@ export function usePdfPageTools({
         { text: 'Cancel', style: 'cancel' },
       ]);
     }
-  }, [ready, n, at, doSplit]);
+  }, [ready, n, at, doSplit, unlockedForSession]);
 
   // ── Merge ──────────────────────────────────────────────────────────────────
 
@@ -428,7 +454,7 @@ export function usePdfPageTools({
               Alert.alert(MERGE_UNDO_FAILED_TITLE, newMergeUndoFailedMessage(true));
             });
         });
-        toast.show(mergedNewMessage(2), {
+        toast.show(withNoPasswordNote(mergedNewMessage(2), [target.id, source.id]), {
           action: { label: 'Open', onPress: () => router.replace({ pathname: '/viewer', params: { id: merged.id } }) },
         });
       }
@@ -438,7 +464,7 @@ export function usePdfPageTools({
         notifyError();
         Alert.alert(
           `“${source.name}” is password protected`,
-          'Open it and enter its password, then merge again.',
+          LOCKED_MERGE_BODY,
         );
       } else {
         explain(err, 'merge the documents');

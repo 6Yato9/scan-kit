@@ -13,6 +13,10 @@
 // - A PDF with nothing to remove (not encrypted, or every permission granted
 //   and no password): the screen says so and offers nothing.
 //
+// A PDF unlocked for this session (lib/pdf-session.ts) uses the session
+// password when none is given, so the user isn't asked again. Removing the
+// password in place ends that session: there is nothing left to unlock.
+//
 // The result is either a NEW document "<name> (unrestricted)" in the same
 // folder (the default; the original is kept) or the stored PDF replaced in
 // place through lib/pdf-edit's crash-safe swap, with Undo. Either way the
@@ -26,6 +30,7 @@ import { withDocLock } from './bake';
 import { copyPdfToStorage, deleteDocumentFiles } from './files';
 import { PdfEditError, rewriteStoredPdf, type PdfEditResult } from './pdf-edit';
 import { joinPdfPageTexts } from './pdf-text';
+import { forgetSession, sessionPassword } from './pdf-session';
 import { deleteDocument, getDocument, saveDocument } from './storage';
 
 // ── What a PDF restricts (pure) ──────────────────────────────────────────────
@@ -212,6 +217,7 @@ function deleteQuietly(file: File | null): void {
  * created then.
  */
 export async function saveUnrestrictedCopy(docId: string, password?: string | null): Promise<Document> {
+  password = password ?? sessionPassword(docId);
   const unrestrict = VisionOcr?.unrestrictPdf;
   if (typeof unrestrict !== 'function') throw new PdfUnrestrictError('unavailable', 'unrestrictPdf missing');
   return withDocLock(docId, async () => {
@@ -263,6 +269,7 @@ export async function saveUnrestrictedCopy(docId: string, password?: string | nu
  * (except 'partial', see lib/pdf-edit).
  */
 export async function unrestrictStoredPdf(docId: string, password?: string | null): Promise<PdfEditResult> {
+  password = password ?? sessionPassword(docId);
   const unrestrict = VisionOcr?.unrestrictPdf;
   const read = VisionOcr?.pdfPermissions;
   if (typeof unrestrict !== 'function' || typeof read !== 'function') {
@@ -279,13 +286,18 @@ export async function unrestrictStoredPdf(docId: string, password?: string | nul
   } catch (err) {
     throw classify(err);
   }
+  let result: PdfEditResult;
   try {
-    return await rewriteStoredPdf(
+    result = await rewriteStoredPdf(
       docId,
       async (target, out) => (await unrestrict(target, out, password ?? null)).pageCount,
       expected,
+      // The stored, encrypted PDF is opened with the password; the result has none.
+      { removesPassword: true },
     );
   } catch (err) {
     throw classify(err);
   }
+  forgetSession(docId);
+  return result;
 }

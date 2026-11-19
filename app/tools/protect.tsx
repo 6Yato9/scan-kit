@@ -395,8 +395,8 @@ export default function ProtectScreen() {
             )}
             <ToolNote>
               {state?.kind === 'pdf' && state.signed
-                ? 'Its digital signature won’t be valid in the protected PDF. Share it from the viewer and it goes out protected. Entering the password in Scan Kit unlocks Scan Kit’s copy.'
-                : 'Share it from the viewer and it goes out protected. Entering the password in Scan Kit unlocks Scan Kit’s copy.'}
+                ? 'Its digital signature won’t be valid in the protected PDF. It stays protected in Scan Kit too: you’ll enter the password to open it, and it goes out protected when you share it.'
+                : 'It stays protected in Scan Kit too: you’ll enter the password to open it, and it goes out protected when you share it.'}
             </ToolNote>
           </>
         )

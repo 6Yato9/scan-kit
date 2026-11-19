@@ -151,6 +151,8 @@ import {
   PdfEditError,
   recoverInterruptedPdfEdits,
   reorderPlan,
+  reprotectPlan,
+  rewriteStoredPdf,
   resetPdfEditForTests,
   holdPdfEditUndo,
   UNDO_TTL_MS,
@@ -162,6 +164,7 @@ import {
   undoPdfEdit,
 } from '../lib/pdf-edit';
 import { indexPdfText, resetPdfTextForTests } from '../lib/pdf-text';
+import { protectedEditRefusal, readablePdfUri, resetPdfSessionsForTests, unlockForSession } from '../lib/pdf-session';
 
 const PDF = 'file:///support/scan-kit/d1/document.pdf';
 const workDirs = () => [...mockFs.keys()].filter(f => /^file:\/\/\/support\/pdf-edit\/[^/]+$/.test(f));
@@ -540,5 +543,217 @@ describe('holdPdfEditUndo', () => {
     holdPdfEditUndo('d1');
     mockFs.set(PDF, 'changed elsewhere');
     await expect(undoPdfEdit(undo!)).rejects.toMatchObject({ kind: 'changed' });
+  });
+});
+
+// ── A protected PDF unlocked for the session (lib/pdf-session.ts) ────────────
+
+describe('a password-protected PDF unlocked for the session', () => {
+  // "enc(<password>:<plain>)" is an encrypted PDF; unlockPdf / protectPdf
+  // translate between the two forms.
+  const ENC = /^enc\(([^:]+):(.*)\)$/;
+  const ALL = { printLow: true, printHigh: true, changeContent: true, assemblePages: true, copy: true, accessibility: true, comment: true, fillForms: true };
+  let perms: Record<string, boolean>;
+
+  beforeEach(async () => {
+    resetPdfSessionsForTests();
+    perms = { ...ALL };
+    mockFs.set(PDF, 'enc(pw1:v1)');
+    mockDocs.set('d1', { id: 'd1', name: 'Lease', pages: [], pdfUri: PDF, createdAt: 1, updatedAt: 1 });
+    mockNative.unlockPdf = jest.fn(async (inp: string, out: string, pw: string) => {
+      const m = ENC.exec(mockFs.get(inp) ?? '');
+      if (!m || m[1] !== pw) throw new Error('wrong-password');
+      mockFs.set(out, m[2]);
+      return out;
+    });
+    mockNative.protectPdf = jest.fn(async (inp: string, out: string, pw: string) => {
+      mockFs.set(out, `enc(${pw}:${mockFs.get(inp)})`);
+      return out;
+    });
+    mockNative.pdfPermissions = jest.fn(async () => ({ pageCount: 4, encrypted: true, locked: false, passwordAccepted: true, permissions: perms }));
+    mockNative.pdfInfo.mockImplementation(async (uri: string, password?: string | null) => {
+      const m = ENC.exec(mockFs.get(uri) ?? '');
+      // A merge of this PDF (4 pages) and a one-page scan has 5.
+      return { pageCount: /^merge\(/.test(mockFs.get(uri) ?? '') ? 5 : 4, locked: !!m && password !== m[1], encrypted: !!m };
+    });
+    await unlockForSession({ id: 'd1', pdfUri: PDF }, 'pw1');
+  });
+
+  afterAll(() => {
+    delete mockNative.unlockPdf;
+    delete mockNative.protectPdf;
+    delete mockNative.pdfPermissions;
+    resetPdfSessionsForTests();
+  });
+
+  test('an edit is written from the session copy and encrypted again with the session password', async () => {
+    const { doc, undo } = await editStoredPdf('d1', rotatePlan(4, 0, 90));
+    const [input, plain] = mockNative.pdfEditPages.mock.calls[0];
+    expect(input).toMatch(/\/pdf-session\//);
+    // The plaintext result is in Caches/pdf-session, never in Application Support (backups).
+    expect(plain).toMatch(/^file:\/\/\/caches\/pdf-session\/.+\/work-d1-.+\.pdf$/);
+    expect(mockNative.protectPdf).toHaveBeenCalledWith(plain, expect.stringMatching(/after\.pdf$/), 'pw1');
+    // The stored PDF is still protected, with the same password.
+    expect(mockFs.get(PDF)).toBe('enc(pw1:edit(v1|0,1,2,3|90,0,0,0))');
+    // Its text is what the password protects: never stored.
+    expect(doc.ocrText).toBeUndefined();
+    expect(mockNative.pdfPageTexts).not.toHaveBeenCalled();
+    // The plaintext became the new session copy: no second decryption.
+    mockNative.unlockPdf.mockClear();
+    const copy = await readablePdfUri(doc);
+    expect(mockFs.get(copy)).toBe('edit(v1|0,1,2,3|90,0,0,0)');
+    expect(mockNative.unlockPdf).not.toHaveBeenCalled();
+    expect([...mockFs.keys()].some(f => /\/work-d1-/.test(f))).toBe(false);
+    // Undo puts the encrypted original back, byte for byte; the copy follows it.
+    await undoPdfEdit(undo!);
+    expect(mockFs.get(PDF)).toBe('enc(pw1:v1)');
+    expect(mockFs.get(await readablePdfUri({ id: 'd1', pdfUri: PDF }))).toBe('v1');
+  });
+
+  test('refused as restricted when the permissions read with its password forbid page changes', async () => {
+    resetPdfSessionsForTests();
+    perms = { ...ALL, assemblePages: false };
+    await unlockForSession({ id: 'd1', pdfUri: PDF }, 'pw1');
+    await expect(editStoredPdf('d1', rotatePlan(4, 0, 90))).rejects.toMatchObject({ kind: 'restricted' });
+    expect(mockNative.pdfEditPages).not.toHaveBeenCalled();
+    expect(mockFs.get(PDF)).toBe('enc(pw1:v1)');
+    // Merging takes its pages too: refused the same way.
+    await expect(mergeDocumentsToPdf([mockDocs.get('d1'), { id: 'x', name: 'X', pages: ['p.jpg'], createdAt: 1, updatedAt: 1 }], 'M'))
+      .rejects.toMatchObject({ kind: 'restricted', docId: 'd1' });
+  });
+
+  test('never written from a stale copy: the stored bytes are checked before every write', async () => {
+    // Replaced behind the session's back (same size, same mtime, no generation bump).
+    mockFs.set(PDF, 'enc(pw1:v2)');
+    await editStoredPdf('d1', rotatePlan(4, 1, 90));
+    expect(mockFs.get(PDF)).toBe('enc(pw1:edit(v2|0,1,2,3|0,90,0,0))');
+  });
+
+  test('not unlocked: native reads the stored file and refuses it, as before', async () => {
+    resetPdfSessionsForTests();
+    mockNative.pdfEditPages.mockRejectedValueOnce(Object.assign(new Error('locked'), { code: 'ERR_PDF_LOCKED' }));
+    await expect(editStoredPdf('d1', rotatePlan(4, 0, 90))).rejects.toMatchObject({ kind: 'locked' });
+    expect(mockNative.pdfEditPages.mock.calls[0][0]).toBe(PDF);
+    expect(mockNative.protectPdf).not.toHaveBeenCalled();
+    expect(mockFs.get(PDF)).toBe('enc(pw1:v1)');
+  });
+
+  test('Unlock PDF in place reads the stored file itself and is not encrypted again', async () => {
+    const write = jest.fn(async (source: string, out: string) => {
+      mockFs.set(out, `clear(${mockFs.get(source)})`);
+      return 4;
+    });
+    await rewriteStoredPdf('d1', write, 4, { removesPassword: true });
+    expect(write).toHaveBeenCalledWith(PDF, expect.stringMatching(/after\.pdf$/));
+    expect(mockNative.protectPdf).not.toHaveBeenCalled();
+    expect(mockFs.get(PDF)).toBe('clear(enc(pw1:v1))');
+  });
+
+  test('split and merge read the session copy; their results need no password', async () => {
+    const { first } = await splitStoredPdf('d1', 1);
+    expect(mockFs.get(first.pdfUri!)).toBe('edit(v1|0,1|0,0)');
+    const merged = await mergeDocumentsToPdf([mockDocs.get('d1'), { id: 'x', name: 'X', pages: ['p.jpg'], createdAt: 1, updatedAt: 1 }], 'M');
+    expect(mockFs.get(merged.pdfUri!)).toBe('merge(v1+scan(1))');
+    expect(mockFs.get(PDF)).toBe('enc(pw1:v1)');
+  });
+});
+
+describe('keeping the protection exactly (round 14 critic fixes)', () => {
+  const ENC = /^enc\(([^:]+):(.*)\)$/;
+  const ALL = { printLow: true, printHigh: true, changeContent: true, assemblePages: true, copy: true, accessibility: true, comment: true, fillForms: true };
+  let info: any;
+
+  beforeEach(async () => {
+    resetPdfSessionsForTests();
+    mockFs.set(PDF, 'enc(pw1:v1)');
+    mockDocs.set('d1', { id: 'd1', name: 'Lease', pages: [], pdfUri: PDF, createdAt: 1, updatedAt: 1 });
+    mockNative.unlockPdf = jest.fn(async (inp: string, out: string, pw: string) => {
+      const m = ENC.exec(mockFs.get(inp) ?? '');
+      if (!m || m[1] !== pw) throw new Error('wrong-password');
+      mockFs.set(out, m[2]);
+      return out;
+    });
+    mockNative.protectPdf = jest.fn(async (inp: string, out: string, pw: string) => { mockFs.set(out, `enc(${pw}:${mockFs.get(inp)})`); return out; });
+    mockNative.protectPdfKeeping = jest.fn(async (inp: string, out: string, pw: string, owner: string | null, bits: number) => {
+      mockFs.set(out, `enc(${pw}:${mockFs.get(inp)})`);
+      void owner; void bits;
+      return out;
+    });
+    info = { pageCount: 4, encrypted: true, locked: false, passwordAccepted: true, ownerUnlocked: false, userPassword: true, permissionBits: 129, permissions: { ...ALL, printHigh: false, assemblePages: false, copy: false, comment: false } };
+    mockNative.pdfPermissions = jest.fn(async () => info);
+    mockNative.pdfInfo.mockImplementation(async (uri: string, password?: string | null) => {
+      const m = ENC.exec(mockFs.get(uri) ?? '');
+      return { pageCount: 4, locked: !!m && password !== m[1], encrypted: !!m };
+    });
+  });
+
+  afterAll(() => {
+    delete mockNative.unlockPdf;
+    delete mockNative.protectPdf;
+    delete mockNative.protectPdfKeeping;
+    delete mockNative.pdfPermissions;
+    resetPdfSessionsForTests();
+  });
+
+  const fill = () => rewriteStoredPdf('d1', async (src, out) => { mockFs.set(out, `filled(${mockFs.get(src)})`); return 4; }, 4, { needs: ['fillForms'] });
+
+  test('reprotectPlan: keep exactly when it can; never weaken', () => {
+    expect(reprotectPlan({ mode: 'user', bits: 129 }, true, true)).toEqual({ how: 'keep', owner: 'random', bits: 129 });
+    expect(reprotectPlan({ mode: 'same', bits: 255 }, false, true)).toEqual({ how: 'keep', owner: 'same', bits: 255 });
+    expect(reprotectPlan({ mode: 'owner-only' }, false, true)).toEqual({ how: 'refuse', why: 'owner-password' });
+    // A build without protectPdfKeeping: user = owner = password only when that loses nothing.
+    expect(reprotectPlan({ mode: 'same', bits: 0 }, true, false)).toEqual({ how: 'same' });
+    expect(reprotectPlan({ mode: 'user', bits: 255 }, false, false)).toEqual({ how: 'same' });
+    expect(reprotectPlan({ mode: 'user', bits: 129 }, true, false)).toEqual({ how: 'refuse', why: 'keep-unavailable' });
+  });
+
+  test('opened with the open password: written back with it, a random owner password and the author\'s bits', async () => {
+    await unlockForSession({ id: 'd1', pdfUri: PDF }, 'pw1');
+    await fill();
+    expect(mockNative.protectPdfKeeping).toHaveBeenCalledWith(expect.stringMatching(/pdf-session/), expect.stringMatching(/after\.pdf$/), 'pw1', null, 129);
+    expect(mockNative.protectPdf).not.toHaveBeenCalled();
+    expect(mockFs.get(PDF)).toBe('enc(pw1:filled(v1))');
+  });
+
+  test('user = owner (Scan Kit\'s own Protect PDF): the same password stays the owner password', async () => {
+    info = { ...info, ownerUnlocked: true, userPassword: true, permissionBits: 255, permissions: ALL };
+    await unlockForSession({ id: 'd1', pdfUri: PDF }, 'pw1');
+    await fill();
+    expect(mockNative.protectPdfKeeping).toHaveBeenCalledWith(expect.any(String), expect.any(String), 'pw1', 'pw1', 255);
+  });
+
+  test('opened with the OWNER password: in-place edits are refused, pointing to Unlock PDF', async () => {
+    info = { ...info, ownerUnlocked: true, userPassword: false, permissions: ALL };
+    await unlockForSession({ id: 'd1', pdfUri: PDF }, 'pw1');
+    const err = await fill().catch(e => e);
+    expect(err).toMatchObject({ kind: 'restricted', message: 'owner-password' });
+    expect(protectedEditRefusal(err)?.body).toMatch(/Unlock PDF/);
+    expect(mockFs.get(PDF)).toBe('enc(pw1:v1)');
+    // Unknown (the check couldn't read the file) counts as the owner password.
+    resetPdfSessionsForTests();
+    info = { ...info, userPassword: null };
+    await unlockForSession({ id: 'd1', pdfUri: PDF }, 'pw1');
+    await expect(fill()).rejects.toMatchObject({ message: 'owner-password' });
+  });
+
+  test('a build without protectPdfKeeping refuses a restricted PDF rather than weaken it', async () => {
+    const keep = mockNative.protectPdfKeeping;
+    delete mockNative.protectPdfKeeping;
+    try {
+      await unlockForSession({ id: 'd1', pdfUri: PDF }, 'pw1');
+      await expect(fill()).rejects.toMatchObject({ kind: 'restricted', message: 'keep-unavailable' });
+      expect(mockNative.protectPdf).not.toHaveBeenCalled();
+      expect(mockFs.get(PDF)).toBe('enc(pw1:v1)');
+    } finally {
+      mockNative.protectPdfKeeping = keep;
+    }
+  });
+
+  test('a write that fails after the plaintext was made leaves no plaintext anywhere', async () => {
+    await unlockForSession({ id: 'd1', pdfUri: PDF }, 'pw1');
+    mockNative.protectPdfKeeping.mockRejectedValueOnce(new Error('Protection could not be verified'));
+    await expect(fill()).rejects.toMatchObject({ kind: 'failed' });
+    expect([...mockFs.entries()].filter(([f, v]) => /filled\(v1\)/.test(v) && !/^enc/.test(v)).map(([f]) => f)).toEqual([]);
+    expect(mockFs.get(PDF)).toBe('enc(pw1:v1)');
   });
 });

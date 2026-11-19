@@ -73,7 +73,7 @@ enum PdfUnrestrict {
     }
     let none = ["printLow", "printHigh", "changeContent", "assemblePages", "copy", "accessibility", "comment", "fillForms"]
       .reduce(into: [String: Bool]()) { $0[$1] = false }
-    return [
+    var result: [String: Any] = [
       "pageCount": doc.pageCount,
       "encrypted": doc.isEncrypted,
       "locked": locked,
@@ -81,6 +81,25 @@ enum PdfUnrestrict {
       // An unencrypted PDF has no restrictions: PDFKit reports every bit set.
       "permissions": locked ? none : permissions(doc),
     ]
+    // Round 14 (lib/pdf-session.ts keeps a protected PDF protected through
+    // edits): which password opened it, and the author's exact permission
+    // bits to write back (PdfProtector.protectKeeping).
+    if accepted, let pw = password {
+      let owner = doc.permissionsStatus == .owner
+      let standard = PdfPasswordCheck.standard(path: path)
+      result["ownerUnlocked"] = owner
+      // Owner status also comes with user = owner (Scan Kit's own Protect PDF):
+      // whether the password is ALSO the open password.
+      if !owner {
+        result["userPassword"] = true
+      } else if let s = standard, let isUser = PdfPasswordCheck.check(s, password: pw) {
+        result["userPassword"] = isUser
+      } else {
+        result["userPassword"] = NSNull() // unknown: treated as the owner password only
+      }
+      result["permissionBits"] = Int(standard.map { PdfPasswordCheck.permissionBits($0) } ?? doc.accessPermissions.rawValue)
+    }
+    return result
   }
 
   // MARK: Writing the unrestricted copy

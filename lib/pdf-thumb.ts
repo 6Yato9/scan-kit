@@ -14,10 +14,17 @@
 // review #3). Every edit, Undo, conversion or redaction calls
 // invalidatePdfThumbs, which also deletes the renders (they show the pages:
 // r12 code review #2) and tells the cards showing them to look again.
+//
+// A password-protected PDF never gets a card thumbnail, even while it is
+// unlocked for the session (lib/pdf-session.ts): cards render the stored,
+// encrypted file, which fails, so the icon stays. The page thumbnails Reorder,
+// Split and Create PDF need of a session copy go into the copy's scratch
+// folder, deleted with it, never into Caches/pdf-thumbs.
 import { useEffect, useState } from 'react';
 import { Directory, File, Paths } from 'expo-file-system';
 import { VisionOcr } from '../modules/vision-ocr/src';
 import { PDF_THUMB_DIR, removePdfThumbFiles } from './files';
+import { isSessionPath, sessionScratchDir } from './pdf-session';
 
 /** Long edge of the thumbnail: sharp in a three-column grid on a 3x screen. */
 const THUMB_EDGE = 360;
@@ -110,6 +117,8 @@ async function render(docId: string, key: string, pdfUri: string): Promise<strin
 
 /** The thumbnail for a PDF document, rendering it (one at a time) if needed. */
 export function pdfThumbnail(docId: string, pdfUri: string): Promise<string | null> {
+  // Never a picture of a protected PDF's page that outlives its session (see the header).
+  if (isSessionPath(pdfUri)) return Promise.resolve(null);
   const key = keyFor(docId, pdfUri);
   if (!key) return Promise.resolve(null);
   const remembered = knownUri(key);
@@ -177,6 +186,9 @@ export async function pdfPageThumbnails(docId: string, pdfUri: string): Promise<
   if (typeof renderPages !== 'function') throw new Error('renderPdfPages missing');
   const key = keyFor(docId, pdfUri);
   if (!key) throw new Error('PDF missing');
+  // A session copy (unique per version of the stored bytes): beside it.
+  const scratch = sessionScratchDir(pdfUri);
+  if (scratch) return renderPageSet(renderPages, pdfUri, new Directory(scratch, 'pages'));
   const dir = new Directory(thumbDir(), `pages-${key}`);
   const done = new File(dir, 'done');
   if (dir.exists && done.exists) {
@@ -191,6 +203,24 @@ export async function pdfPageThumbnails(docId: string, pdfUri: string): Promise<
     if (item instanceof Directory && item.name.startsWith(`pages-${docId}-`)) {
       try { item.delete(); } catch {}
     }
+  }
+  return renderPageSet(renderPages, pdfUri, dir);
+}
+
+/** Renders every page of `pdfUri` into `dir` (marked done), or reuses a finished set there. */
+async function renderPageSet(
+  renderPages: (inputUri: string, outputDirUri: string, maxEdge: number) => Promise<string[]>,
+  pdfUri: string,
+  dir: Directory,
+): Promise<string[]> {
+  const done = new File(dir, 'done');
+  if (dir.exists && done.exists) {
+    const pages = dir
+      .list()
+      .filter((f): f is File => f instanceof File && /^pdfpage-\d+\.jpg$/.test(f.name))
+      .sort((a, b) => parseInt(a.name.slice(8), 10) - parseInt(b.name.slice(8), 10))
+      .map(f => f.uri);
+    if (pages.length > 0) return pages;
   }
   dir.create({ intermediates: true, idempotent: true });
   try {

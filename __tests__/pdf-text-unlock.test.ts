@@ -1,6 +1,6 @@
-// Imported PDFs: their own text goes into the search index (lib/pdf-text.ts),
-// and a locked PDF is replaced by an unlocked copy only once the password
-// worked (lib/pdf-unlock.ts). Also the viewer-notice hand-off and the stamp
+// Imported PDFs: their own text goes into the search index (lib/pdf-text.ts;
+// unlocking a protected PDF for the session is tested in pdf-session.test.ts).
+// Also the viewer-notice hand-off and the stamp
 // geometry the in-place canvas uses (lib/stamp.ts).
 
 const mockFs = new Map<string, string>();
@@ -44,7 +44,6 @@ jest.mock('../lib/bake', () => ({ withDocLock: (_id: string, fn: () => unknown) 
 jest.mock('../lib/pdf', () => ({ escapeHtml: (s: string) => s.replace(/</g, '&lt;') }));
 
 import { indexPdfText, joinPdfPageTexts, needsPdfText, PDF_TEXT_MAX_CHARS, resetPdfTextForTests } from '../lib/pdf-text';
-import { PdfUnlockError, unlockErrorKind, unlockStoredPdf } from '../lib/pdf-unlock';
 import { postViewerNotice, resetViewerNoticesForTests, subscribeViewerNotices, takeViewerNotice } from '../lib/viewer-notice';
 import { buildStampHtml, resolveStamp, scriptJson, stampIsDrawable } from '../lib/stamp';
 
@@ -103,47 +102,6 @@ describe('PDF text index', () => {
     expect(needsPdfText(mockDoc)).toBe(true);
     expect(needsPdfText({ ...mockDoc, ocrText: 'x' })).toBe(false);
     expect(needsPdfText({ ...mockDoc, pdfUri: undefined, pages: ['a'] })).toBe(false);
-  });
-});
-
-describe('unlocking a PDF', () => {
-  test('a wrong password leaves the stored PDF exactly as it was', async () => {
-    mockNative.unlockPdf = jest.fn(async () => { throw new Error('wrong-password'); });
-    await expect(unlockStoredPdf('p1', 'nope')).rejects.toMatchObject({ kind: 'wrong-password' });
-    expect(mockFs.get(PDF)).toBe('LOCKED');
-    expect([...mockFs.keys()]).toEqual([PDF]);
-  });
-
-  test('the right password swaps the unlocked copy in and drops the protected one', async () => {
-    mockNative.unlockPdf = jest.fn(async (_in: string, out: string) => { mockFs.set(out, 'UNLOCKED'); return out; });
-    mockNative.pdfPageTexts = jest.fn(async () => ['Hello']);
-    await unlockStoredPdf('p1', 'secret');
-    expect(mockFs.get(PDF)).toBe('UNLOCKED');
-    expect([...mockFs.keys()]).toEqual([PDF]);
-    expect(mockDoc.updatedAt).toBeGreaterThan(1);
-  });
-
-  test('keeps the protected PDF if the document changed meanwhile', async () => {
-    mockNative.unlockPdf = jest.fn(async (_in: string, out: string) => {
-      mockFs.set(out, 'UNLOCKED');
-      mockDoc = { ...mockDoc, pdfUri: undefined, pages: ['x'] };
-      return out;
-    });
-    await expect(unlockStoredPdf('p1', 'secret')).rejects.toBeInstanceOf(PdfUnlockError);
-    expect(mockFs.get(PDF)).toBe('LOCKED');
-    expect([...mockFs.keys()]).toEqual([PDF]);
-  });
-
-  test('an empty password is a wrong one; native messages map to kinds', async () => {
-    mockNative.unlockPdf = jest.fn();
-    await expect(unlockStoredPdf('p1', '')).rejects.toMatchObject({ kind: 'wrong-password' });
-    expect(mockNative.unlockPdf).not.toHaveBeenCalled();
-    expect(unlockErrorKind(new Error('wrong-password'))).toBe('wrong-password');
-    expect(unlockErrorKind(new Error('write failed'))).toBe('failed');
-  });
-
-  test('without the native function it says so', async () => {
-    await expect(unlockStoredPdf('p1', 'x')).rejects.toMatchObject({ kind: 'unavailable' });
   });
 });
 

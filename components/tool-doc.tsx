@@ -24,6 +24,7 @@ import {
   type ConvertProgress,
 } from '@/lib/convert-pdf';
 import { notifyError, notifySuccess } from '@/lib/haptics';
+import { isSessionUnlocked } from '@/lib/pdf-session';
 import { HIT, Radius, Spacing, Type } from '@/lib/theme';
 import type { Document } from '@/types/document';
 
@@ -185,7 +186,10 @@ export function ToolDocPicker({
   const askConvert = (pdf: Document) => {
     Alert.alert(
       `Convert “${pdf.name}” to pages?`,
-      `To ${convert?.verb ?? 'edit'} a PDF, its pages are turned into images you can also crop, filter and mark up. You can undo it right after.`,
+      `To ${convert?.verb ?? 'edit'} a PDF, its pages are turned into images you can also crop, filter and mark up.${
+        // A protected PDF unlocked this session (lib/pdf-session.ts): its pages won't be.
+        isSessionUnlocked(pdf.id) ? ' The pages won’t need a password.' : ''
+      } You can undo it right after.`,
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Convert', isPreferred: true, onPress: () => { void runConvert(pdf); } },

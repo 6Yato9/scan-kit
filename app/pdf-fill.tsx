@@ -44,8 +44,19 @@ import { postViewerNotice } from '@/lib/viewer-notice';
 import { notifyError, notifySuccess, selection, tapLight } from '@/lib/haptics';
 import { formatStamp, SIGNATURE_INK, type Signature } from '@/lib/stamp';
 import { rememberSignature, type SignatureKind } from '@/lib/saved-signatures';
-import { discardPdfEditUndo, holdPdfEditUndo, PdfEditError } from '@/lib/pdf-edit';
+import { discardPdfEditUndo, filePrint, holdPdfEditUndo, PdfEditError, samePrint, type FilePrint } from '@/lib/pdf-edit';
 import { noteFilledPdf } from '@/lib/fill-access';
+import {
+  isSessionPath,
+  isSessionUnlocked,
+  PdfSessionError,
+  PROTECTED_EDIT_REFUSALS,
+  protectedEditRefusal,
+  readablePdfUri,
+  sessionEditBlock,
+  subscribePdfSessions,
+  unlockForSession,
+} from '@/lib/pdf-session';
 import { fittedView, revealRect, type PageView } from '@/lib/placement';
 import {
   coveredField,
@@ -90,7 +101,7 @@ import { HIT, Radius, Spacing, Type } from '@/lib/theme';
 import type { Document } from '@/types/document';
 import type { NativeFillField } from '@/modules/vision-ocr/src';
 
-type Status = 'loading' | 'ready' | 'missing' | 'locked' | 'restricted' | 'xfa' | 'unreadable' | 'unavailable';
+type Status = 'loading' | 'ready' | 'missing' | 'locked' | 'restricted' | 'xfa' | 'unreadable' | 'unavailable' | 'owner-password';
 type Armed = { kind: FillMarkKind; signature?: Signature };
 type Editing = { type: 'mark'; id: string } | { type: 'field'; id: string };
 type Snapshot = { marks: FillMark[]; edits: FieldEdits };
@@ -133,6 +144,15 @@ export default function PdfFillScreen() {
 
   const [status, setStatus] = useState<Status>('loading');
   const [doc, setDoc] = useState<Document | null>(null);
+  /** The file Fill & sign reads: the stored PDF, or the session copy of a protected one (lib/pdf-session.ts). */
+  const [source, setSource] = useState<string | null>(null);
+  // The session of a protected PDF ended while filling it in (App Lock, a long
+  // absence): the page is covered until its password is entered again; what
+  // was filled in and added stays (lib/pdf-session.ts).
+  const [relocked, setRelocked] = useState(false);
+  const [resuming, setResuming] = useState(false);
+  /** The stored PDF's bytes when the screen opened it: resuming refuses if they changed. */
+  const storedPrintRef = useRef<FilePrint | null>(null);
   const [session, setSession] = useState<FillSession | null>(null);
   const [pageIndex, setPageIndex] = useState(() => (params.page === 'last' ? Number.MAX_SAFE_INTEGER : Math.max(0, Number(params.page) || 0)));
   const [preview, setPreview] = useState<{ uri: string; page: number } | null>(null);
@@ -209,7 +229,18 @@ export default function PdfFillScreen() {
       }
       setDoc(d);
       try {
-        const s = await openFillSession(d.pdfUri);
+        // A protected PDF unlocked this session is read (and saved, still
+        // protected) through its decrypted copy (lib/pdf-session.ts).
+        const src = await readablePdfUri(d).catch(() => d.pdfUri as string);
+        if (!live) return;
+        // Opened with its owner password: it can't be saved back protected.
+        if (isSessionPath(src) && sessionEditBlock(d.id)) {
+          setStatus('owner-password');
+          return;
+        }
+        storedPrintRef.current = filePrint(d.pdfUri);
+        setSource(src);
+        const s = await openFillSession(src);
         if (!live) return;
         if (!s.info.canAnnotate && !s.info.canFillForms) {
           setStatus('restricted');
@@ -233,6 +264,75 @@ export default function PdfFillScreen() {
     })();
     return () => { live = false; };
   }, [docId]);
+
+  // The session ended (App Lock, a long absence) while filling in a protected
+  // PDF: its copy is going away, so the page is covered and the password asked
+  // for again. Fields and marks stay in memory.
+  useEffect(() => {
+    if (!source || !isSessionPath(source)) return;
+    return subscribePdfSessions(id => {
+      if (id !== docId || isSessionUnlocked(docId)) return;
+      setPreview(null);
+      setRelocked(true);
+    });
+  }, [source, docId]);
+
+  /** Enter the password again: the same work continues on a new session copy. */
+  const resume = (again = false) => {
+    const d = doc;
+    if (!d?.pdfUri || resumingRef.current) return;
+    Alert.prompt(
+      again ? 'Enter the password again' : 'Enter the PDF’s password',
+      `“${d.name}” is protected. What you filled in is kept.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Unlock',
+          isPreferred: true,
+          onPress: (value?: string) => {
+            resumingRef.current = true;
+            setResuming(true);
+            (async () => {
+              try {
+                await unlockForSession(d, value ?? '');
+                const fresh = await getDocument(d.id);
+                if (!fresh?.pdfUri || !storedPrintRef.current || !samePrint(filePrint(fresh.pdfUri), storedPrintRef.current)) {
+                  Alert.alert('The PDF changed', 'It was changed while you were away. Close Fill & sign and open it again.');
+                  return;
+                }
+                const src = await readablePdfUri(fresh);
+                const s2 = await openFillSession(src);
+                const before = session?.info;
+                const same = !!before && s2.info.pageCount === before.pageCount
+                  && s2.info.fields.map(f => f.id).join() === before.fields.map(f => f.id).join();
+                if (!same) {
+                  Alert.alert('The PDF changed', 'It was changed while you were away. Close Fill & sign and open it again.');
+                  return;
+                }
+                setSource(src);
+                setSession(s2);
+                setRelocked(false);
+              } catch (err) {
+                if (err instanceof PdfSessionError && err.kind === 'wrong-password') {
+                  Alert.alert('That password isn’t right', 'Check it and try again. Passwords are case-sensitive.', [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Try again', onPress: () => resume(true) },
+                  ]);
+                } else {
+                  Alert.alert('Couldn’t open the PDF', 'Try again.');
+                }
+              } finally {
+                resumingRef.current = false;
+                setResuming(false);
+              }
+            })();
+          },
+        },
+      ],
+      'secure-text',
+    );
+  };
+  const resumingRef = useRef(false);
 
   const info = session?.info ?? null;
   const pageCount = info?.pageCount ?? 0;
@@ -272,16 +372,16 @@ export default function PdfFillScreen() {
   const previewPx = fit ? Math.min(MAX_PREVIEW_PX, Math.round(Math.max(fit.w, fit.h) * zoom * PixelRatio.get())) : 0;
   const renderKey = fit ? `${pageIndex}-${Math.round(previewPx / 300)}` : null;
   useEffect(() => {
-    if (status !== 'ready' || !doc?.pdfUri || !fit || !info) return;
+    if (status !== 'ready' || !source || !fit || !info) return;
     let live = true;
     setRenderFailed(false);
     const hideFields = info.canFillForms && info.fields.some(f => f.page === pageIndex);
-    renderFillPage(doc.pdfUri, pageIndex, previewPx, hideFields)
+    renderFillPage(source, pageIndex, previewPx, hideFields)
       .then(r => { if (live) setPreview({ uri: r.uri, page: pageIndex }); })
       .catch(() => { if (live) setRenderFailed(true); });
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, doc?.pdfUri, renderKey]);
+  }, [status, source, renderKey]);
 
   // ── Keyboard: the edit bar sits on it, the page lifts so the edited box shows ─
 
@@ -703,7 +803,7 @@ export default function PdfFillScreen() {
   };
 
   const save = async () => {
-    if (savingRef.current || !doc?.pdfUri || !session || !info) return;
+    if (savingRef.current || relocked || !doc?.pdfUri || !source || !session || !info) return;
     savingRef.current = true;
     if (editing) finishEditing();
     const kept = current.current.marks.filter(m => !isEmptyMark(m));
@@ -726,7 +826,7 @@ export default function PdfFillScreen() {
     const showPage = firstChangedPage(kept, changes, info.fields, pageIndex);
     const message = fillMessage(kept, changes.length);
     try {
-      const { undo: undoEdit } = await fillStoredPdf(doc.id, doc.pdfUri, session, kept, current.current.edits, showPage);
+      const { undo: undoEdit } = await fillStoredPdf(doc.id, source, session, kept, current.current.edits, showPage);
       // Signatures and initials used are remembered for next time, like Sign.
       for (const m of kept) {
         const used = m.signature ? usedSignatures.current.get(m.signature.dataUri) : null;
@@ -773,6 +873,9 @@ export default function PdfFillScreen() {
       const kind = err instanceof PdfEditError ? err.kind : 'failed';
       if (kind === 'partial') {
         Alert.alert('Your PDF was changed', 'Scan Kit couldn’t finish saving the change, so it can’t be undone. It’s finished the next time Scan Kit opens. Check that there’s free space.');
+      } else if (protectedEditRefusal(err)) {
+        const r = protectedEditRefusal(err)!;
+        Alert.alert(r.title, r.body);
       } else if (kind === 'restricted') {
         Alert.alert('This PDF can’t be changed', 'Its author doesn’t allow filling it in or adding to it. You can still view, share and print it.');
       } else if (kind === 'changed') {
@@ -789,6 +892,33 @@ export default function PdfFillScreen() {
   };
 
   // ── Render ─────────────────────────────────────────────────────────────────
+
+  if (status === 'ready' && relocked && doc) {
+    // Covered until the password is entered again; the work is kept underneath.
+    return (
+      <View style={[styles.container, { backgroundColor: colors.chrome }]}>
+        <ScreenHeader
+          dark
+          title="Fill & sign"
+          maxTitleScale={HEADER_TEXT_SCALE}
+          left={<HeaderTextButton title="Cancel" color={colors.chromeText} onPress={close} maxFontSizeMultiplier={HEADER_TEXT_SCALE} />}
+        />
+        <View style={styles.centered}>
+          <EmptyState
+            chrome
+            placement="center"
+            icon="lock-closed-outline"
+            title="Enter the password to continue"
+            subtitle="Scan Kit doesn’t save the password, so it’s needed again after you leave Scan Kit. What you filled in is kept."
+            actionLabel="Enter password"
+            actionIcon="key-outline"
+            actionLoading={resuming}
+            onAction={() => resume()}
+          />
+        </View>
+      </View>
+    );
+  }
 
   if (status !== 'ready' || !info || !doc) {
     const empty: Record<Exclude<Status, 'ready' | 'loading'>, { icon: AppIconName; title: string; subtitle: string }> = {
@@ -808,6 +938,7 @@ export default function PdfFillScreen() {
         title: 'This form needs Adobe Acrobat',
         subtitle: 'It’s an XFA form, made for Adobe Acrobat Reader. You can still share and print it.',
       },
+      'owner-password': { icon: 'lock-open-outline', title: PROTECTED_EDIT_REFUSALS['owner-password'].title, subtitle: PROTECTED_EDIT_REFUSALS['owner-password'].body },
       unreadable: { icon: 'document-text-outline', title: 'Couldn’t open this PDF', subtitle: 'The file may be damaged. You can still share it, or try importing it again.' },
       unavailable: { icon: 'document-text-outline', title: 'Fill & sign isn’t available', subtitle: 'This version of Scan Kit can’t fill in PDFs. Update Scan Kit, then try again.' },
     };
@@ -830,7 +961,13 @@ export default function PdfFillScreen() {
               icon={e.icon}
               title={e.title}
               subtitle={e.subtitle}
-              {...(openPdf
+              {...(status === 'owner-password' && doc
+                ? {
+                    actionLabel: 'Unlock PDF',
+                    actionIcon: 'lock-open-outline' as const,
+                    onAction: () => router.replace({ pathname: '/tools/unrestrict', params: { docId: doc.id } } as never),
+                  }
+                : openPdf
                 ? {
                     actionLabel: 'Open PDF',
                     actionIcon: status === 'locked' ? ('key-outline' as const) : ('document-text-outline' as const),

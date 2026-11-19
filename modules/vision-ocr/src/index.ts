@@ -150,6 +150,12 @@ export type NativePdfPermissionsInfo = {
   passwordAccepted: boolean;
   /** All false while locked. */
   permissions: NativePdfPermissions;
+  /** Round 14 builds, when `password` opened it: PDFKit's owner status (also reported when user = owner). */
+  ownerUnlocked?: boolean;
+  /** Round 14: `password` is the open (user) password; null when that couldn't be read. */
+  userPassword?: boolean | null;
+  /** Round 14: the author's exact permissions as PDFAccessPermissions bits (for protectPdfKeeping). */
+  permissionBits?: number;
 };
 /** How a system form presented by the module ended. */
 export type PresentOutcome = 'saved' | 'cancelled' | 'denied' | 'unavailable';
@@ -160,6 +166,14 @@ type VisionOcrNative = {
   detectDocument?: (uri: string, quality: number) => Promise<DetectResult>;
   /** Present only in dev clients built after PDF protection was added. */
   protectPdf?: (inputUri: string, outputUri: string, password: string) => Promise<string>;
+  /**
+   * Round 14 (optional): encrypts a plain PDF keeping a protection as it was:
+   * open password `userPassword`, owner password `ownerPassword` (random when
+   * null), `permissions` as PDFAccessPermissions bits. Verified (locked,
+   * opens with the password, same pages; with a random owner, opened as a
+   * user with no permission widened) before it resolves.
+   */
+  protectPdfKeeping?: (inputUri: string, outputUri: string, userPassword: string, ownerPassword: string | null, permissions: number) => Promise<string>;
   /** Present only in dev clients built after PDF page rendering was added. */
   renderPdfPages?: (inputUri: string, outputDirUri: string, maxEdge: number) => Promise<string[]>;
   /** Present only in dev clients built after PDF merging was added. */

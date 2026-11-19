@@ -71,7 +71,7 @@ import {
 } from '@/lib/convert-pdf';
 import { indexDocText } from '@/lib/save-scan';
 import { indexPdfText, needsPdfText, pdfFileGeneration } from '@/lib/pdf-text';
-import { PdfUnlockError, pdfUnlockAvailable, unlockStoredPdf } from '@/lib/pdf-unlock';
+import { canUnlockForSession, PdfSessionError, readablePdfUri, unlockForSession, useReadablePdfUri } from '@/lib/pdf-session';
 import { subscribeViewerNotices, takeViewerNotice } from '@/lib/viewer-notice';
 import { takeNewDocumentNote, uncroppedMessage } from '@/lib/new-doc-note';
 import { alertScanError, deleteTempFiles, pickPhotos, scanPagesWithCamera, ToolScanError } from '@/lib/tool-scan';
@@ -215,6 +215,16 @@ function ViewerContent({
     setSeenFileGen(pdfFileGen);
     setPdfError(null);
   }
+  // What the PDF view shows: the stored file, or for a password-protected PDF
+  // unlocked this session its decrypted working copy (lib/pdf-session.ts; the
+  // stored file stays encrypted). Null while that copy is being made. When the
+  // session ends the stored file is shown again, which asks for the password.
+  const readablePdf = useReadablePdfUri(document);
+  const [seenReadable, setSeenReadable] = useState(readablePdf.uri);
+  if (seenReadable !== readablePdf.uri) {
+    setSeenReadable(readablePdf.uri);
+    setPdfError(null);
+  }
   const [unlocking, setUnlocking] = useState(false);
   const [bannerDismissed, dismissBanner] = useConvertBannerDismissed(id);
   const ocrIndexingRef = useRef(false);
@@ -252,6 +262,8 @@ function ViewerContent({
 
   const docRef = useRef<Document | null>(null);
   docRef.current = document;
+  const readableUnlockedRef = useRef(false);
+  readableUnlockedRef.current = readablePdf.unlocked;
   const pageRef = useRef(0);
   pageRef.current = currentPage;
 
@@ -1122,8 +1134,14 @@ function ViewerContent({
     if (!doc?.pdfUri || printingPdfRef.current) return;
     printingPdfRef.current = true;
     try {
-      await printFile(doc.pdfUri); // cancel resolves quietly
+      // A protected PDF prints from its session copy when it is unlocked
+      // (lib/pdf-session.ts), if its author allows printing.
+      await printFile(await readablePdfUri(doc, { needs: ['printLow'] })); // cancel resolves quietly
     } catch (err) {
+      if (err instanceof PdfSessionError && err.kind === 'restricted') {
+        Alert.alert('This PDF can’t be printed', 'Its author doesn’t allow printing it.');
+        return;
+      }
       Alert.alert('Couldn’t print', err instanceof ShareError ? err.message : 'Try again.');
     } finally {
       printingPdfRef.current = false;
@@ -1170,7 +1188,11 @@ function ViewerContent({
   // ── Locked PDFs ────────────────────────────────────────────────────────────
 
   const unlockingRef = useRef(false);
-  /** Asks for the PDF's password; the unlocked copy replaces the stored PDF (lib/pdf-unlock). */
+  /**
+   * Asks for the PDF's password and unlocks it for this session only
+   * (lib/pdf-session.ts): the PDF view then shows a decrypted working copy;
+   * the stored PDF stays protected and the password isn't kept.
+   */
   const handleUnlockPdf = useCallback((retry = false) => {
     const doc = docRef.current;
     if (!doc?.pdfUri || unlockingRef.current) return;
@@ -1179,16 +1201,15 @@ function ViewerContent({
       unlockingRef.current = true;
       setUnlocking(true);
       try {
-        await unlockStoredPdf(doc.id, password);
+        await unlockForSession(doc, password);
         setPdfError(null);
         setConvertRefused(false);
         setPdfPage(null);
         setPdfReload(n => n + 1);
-        await reload();
         notifySuccess();
         toast.show('PDF unlocked');
       } catch (err) {
-        const kind = err instanceof PdfUnlockError ? err.kind : 'failed';
+        const kind = err instanceof PdfSessionError ? err.kind : 'failed';
         notifyError();
         if (kind === 'wrong-password') {
           Alert.alert('That password isn’t right', 'Check it and try again. Passwords are case-sensitive.', [
@@ -1199,7 +1220,7 @@ function ViewerContent({
           reload().catch(() => {});
         } else {
           console.error('Unlock PDF failed', err);
-          Alert.alert('Couldn’t unlock the PDF', 'Your PDF is unchanged. Check that there’s free space, then try again.');
+          Alert.alert('Couldn’t open the PDF', 'Your PDF is unchanged. Check that there’s free space, then try again.');
         }
       } finally {
         unlockingRef.current = false;
@@ -1208,7 +1229,7 @@ function ViewerContent({
     };
     Alert.prompt(
       retry ? 'Enter the password again' : 'Enter the PDF’s password',
-      `“${doc.name}” is protected. Scan Kit keeps an unlocked copy, so you only need the password once.`,
+      `“${doc.name}” is protected. Scan Kit doesn’t save the password: you’ll need it again after you leave Scan Kit.`,
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Unlock', isPreferred: true, onPress: (value?: string) => { unlockWith(value ?? ''); } },
@@ -1217,7 +1238,7 @@ function ViewerContent({
     );
   }, [reload, toast]);
 
-  const handleConvertPdf = useCallback(async () => {
+  const runConvertPdf = useCallback(async () => {
     const doc = docRef.current;
     if (!doc?.pdfUri || convertingRef.current) return;
     convertingRef.current = true;
@@ -1251,8 +1272,8 @@ function ViewerContent({
       if (kind === 'locked' || kind === 'unreadable') setConvertRefused(true);
       else console.error('Convert to pages failed', err);
       if (kind === 'locked') {
-        if (pdfUnlockAvailable() && Platform.OS === 'ios') {
-          Alert.alert('This PDF is password protected', 'Enter its password to unlock it, then convert it.', [
+        if (canUnlockForSession() && Platform.OS === 'ios') {
+          Alert.alert('This PDF is password protected', 'Enter its password to open it, then convert it.', [
             { text: 'Cancel', style: 'cancel' },
             { text: 'Enter password', onPress: () => handleUnlockPdf() },
           ]);
@@ -1272,6 +1293,27 @@ function ViewerContent({
       setConverting(null);
     }
   }, [withPendingChoices, bumpLastSaved, toast, handleUndoConvert, handleUnlockPdf]);
+
+  /**
+   * Convert to pages. A protected PDF unlocked this session would become
+   * pages anyone who can open Scan Kit can see: asked first.
+   */
+  const handleConvertPdf = useCallback(() => {
+    const doc = docRef.current;
+    if (!doc?.pdfUri || convertingRef.current) return;
+    if (!readableUnlockedRef.current) {
+      runConvertPdf();
+      return;
+    }
+    Alert.alert(
+      'Convert to pages without the password?',
+      'The pages won’t need a password: anyone who can open Scan Kit can see them. You can undo right after.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Convert', isPreferred: true, onPress: () => { runConvertPdf(); } },
+      ],
+    );
+  }, [runConvertPdf]);
 
   const annotateNavRef = useRef(false);
   const handleAnnotate = useCallback(() => {
@@ -1375,6 +1417,8 @@ function ViewerContent({
   // Imported PDFs: page edits written into the PDF itself (components/pdf-page-tools).
   const pdfTools = usePdfPageTools({
     document,
+    readableUri: readablePdf.uri,
+    unlockedForSession: readablePdf.unlocked,
     page: pdfPage?.page ?? 0,
     pageCount: pdfPage?.count ?? null,
     enabled: !pdfError && !converting,
@@ -1502,7 +1546,12 @@ function ViewerContent({
     : [];
   const convertAvailable = !!document.pdfUri && canConvertPdf();
   // Alert.prompt (the password field) is iOS-only.
-  const canUnlock = Platform.OS === 'ios' && pdfUnlockAvailable();
+  const canUnlock = Platform.OS === 'ios' && canUnlockForSession();
+  // A protected PDF (open this session, or asking for its password): remove
+  // the password for good in Tools › Unlock PDF, which uses the session's.
+  const removePasswordRow: MoreAction[] = document.pdfUri && (readablePdf.unlocked || pdfError === 'locked')
+    ? [{ key: 'remove-password', icon: 'lock-open-outline', label: 'Remove password', onPress: () => openTool('/tools/unrestrict') }]
+    : [];
   const moreGroups: MoreAction[][] = document.pdfUri
     ? [
         undoRow,
@@ -1515,6 +1564,7 @@ function ViewerContent({
           { key: 'move', icon: 'folder-outline', label: 'Move to folder', detail: document.folder, onPress: openMove },
           { key: 'duplicate', icon: 'duplicate-outline', label: 'Duplicate', onPress: handleDuplicate },
           { key: 'print', icon: 'print-outline', label: 'Print', onPress: handlePrintPdf },
+          ...removePasswordRow,
         ],
         pdfTools.pageRows,
         [
@@ -1612,7 +1662,7 @@ function ViewerContent({
           <PdfConvertBanner
             converting={converting}
             docId={document.id}
-            pdfUri={document.pdfUri}
+            pdfUri={readablePdf.uri}
             onConvert={handleConvertPdf}
             onDismiss={() => {
               dismissBanner();
@@ -1631,7 +1681,7 @@ function ViewerContent({
               subtitle={
                 pdfError === 'locked'
                   ? canUnlock
-                    ? 'Enter its password to open it. Scan Kit then keeps an unlocked copy, so you won’t need the password again.'
+                    ? 'Enter its password to open it. Scan Kit doesn’t save the password: you’ll need it again after you leave Scan Kit.'
                     : 'Scan Kit can’t show a locked PDF. You can still share it, or remove the password in the app it came from and import it again.'
                   : 'The file may be damaged. You can still share it, or try importing it again.'
               }
@@ -1640,12 +1690,17 @@ function ViewerContent({
                 : {})}
             />
           </View>
+        ) : PdfDocumentView && !readablePdf.uri ? (
+          // The session copy of a protected PDF is being made (after an edit).
+          <View style={styles.pdfEmpty}>
+            <ActivityIndicator color={colors.chromeText} accessibilityLabel="Opening the PDF" />
+          </View>
         ) : PdfDocumentView ? (
           <>
             <PdfDocumentView
-              key={`${pdfReload}-${pdfTools.viewKey}-${pdfFileGen}`}
+              key={`${pdfReload}-${pdfTools.viewKey}-${pdfFileGen}-${readablePdf.uri}`}
               initialPage={pdfTools.initialPage}
-              source={document.pdfUri.split('?')[0]}
+              source={(readablePdf.uri ?? document.pdfUri).split('?')[0]}
               backgroundHex={colors.chrome}
               style={styles.pdfView}
               accessibilityLabel={pdfPage ? `PDF, page ${pdfPage.page + 1} of ${pdfPage.count}` : 'PDF'}

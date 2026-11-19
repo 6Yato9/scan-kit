@@ -29,6 +29,7 @@ import {
 } from '../modules/vision-ocr/src';
 import { PdfEditError, rewriteStoredPdf, undoPdfEdit, type FilePrint, type PdfEditResult, type PdfEditUndo, filePrint, samePrint } from './pdf-edit';
 import { SIGNATURE_INK, type Signature, type SignatureInk } from './stamp';
+import { sessionPermissionsForPath, sessionScratchDir } from './pdf-session';
 
 // ── Geometry (pure) ──────────────────────────────────────────────────────────
 
@@ -371,12 +372,25 @@ export function shouldOfferFlatten(info: NativePdfInfo | null | undefined): bool
   return true;
 }
 
-/** Reads what the Share sheet needs to decide (null when it can't be read). */
+/**
+ * Reads what the Share sheet needs to decide (null when it can't be read).
+ * For a session copy of a protected PDF (lib/pdf-session.ts), which allows
+ * everything itself, the permissions read with its password apply.
+ */
 export async function pdfShareInfo(pdfUri: string): Promise<NativePdfInfo | null> {
   const read = VisionOcr?.pdfInfo;
   if (typeof read !== 'function') return null;
   try {
-    return await read(clean(pdfUri), null);
+    const info = await read(clean(pdfUri), null);
+    const perms = sessionPermissionsForPath(pdfUri);
+    if (!info || !perms) return info;
+    return {
+      ...info,
+      encrypted: true,
+      restricted: !!info.restricted || !perms.assemblePages,
+      canAnnotate: (info.canAnnotate ?? true) && perms.comment,
+      canFillForms: (info.canFillForms ?? true) && perms.fillForms,
+    };
   } catch {
     return null;
   }
@@ -494,6 +508,12 @@ export async function openFillSession(pdfUri: string): Promise<FillSession> {
     throw classifyNative(err);
   }
   if (!info || !(info.pageCount > 0) || !Array.isArray(info.pages)) throw new PdfEditError('unreadable', 'no pages');
+  // A session copy of a protected PDF allows everything itself: what its
+  // author allows was read with the password (lib/pdf-session.ts).
+  const perms = sessionPermissionsForPath(uri);
+  if (perms) {
+    info = { ...info, encrypted: true, canAnnotate: info.canAnnotate && perms.comment, canFillForms: info.canFillForms && perms.fillForms };
+  }
   return { info: { ...info, fields: Array.isArray(info.fields) ? info.fields : [] }, print: filePrint(uri) };
 }
 
@@ -512,7 +532,8 @@ function previewDir(): Directory {
 export async function renderFillPage(pdfUri: string, index: number, maxEdge: number, hideFields: boolean): Promise<{ uri: string; width: number; height: number }> {
   const render = VisionOcr?.pdfRenderPage;
   if (typeof render !== 'function') throw new PdfEditError('unavailable', 'pdfRenderPage missing');
-  const dir = previewDir();
+  // Pages of a protected PDF go beside its session copy, deleted with it.
+  const dir = sessionScratchDir(pdfUri) ?? previewDir();
   dir.create({ intermediates: true, idempotent: true });
   previewSeq += 1;
   const out = new File(dir, `page-${Date.now().toString(36)}-${previewSeq}-${index}.jpg`);
@@ -561,7 +582,9 @@ function emitRewrite(docId: string, page: number): void {
 
 /**
  * Writes the form values and additions into document `docId`'s PDF in place
- * (lib/pdf-edit.ts rewriteStoredPdf: atomic, journaled, with Undo). Refuses
+ * (lib/pdf-edit.ts rewriteStoredPdf: atomic, journaled, with Undo). `pdfUri`
+ * is the file the screen read (lib/pdf-session readablePdfUri: the stored PDF,
+ * or the session copy of a protected one, which stays protected). Refuses
  * with PdfEditError 'changed' when the PDF is no longer what the screen read,
  * and with 'failed' when there is nothing to save.
  */
@@ -580,13 +603,14 @@ export async function fillStoredPdf(
   if (nativeMarks.length === 0 && fields.length === 0) throw new PdfEditError('failed', 'nothing to save');
   const result = await rewriteStoredPdf(
     docId,
-    async (target, out) => {
-      if (target !== clean(pdfUri) || !samePrint(filePrint(target), session.print)) {
+    async (source, out) => {
+      if (source !== clean(pdfUri) || !samePrint(filePrint(source), session.print)) {
         throw new PdfEditError('changed', 'PDF changed since it was opened');
       }
-      return fill(target, out, fields, nativeMarks);
+      return fill(source, out, fields, nativeMarks);
     },
     session.info.pageCount,
+    { needs: [...(nativeMarks.length ? (['comment'] as const) : []), ...(fields.length ? (['fillForms'] as const) : [])] },
   );
   emitRewrite(docId, showPage);
   return result;

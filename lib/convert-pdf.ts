@@ -17,6 +17,11 @@
 // and leaves the document as it was. After the switch the PDF is moved to a
 // stash in Caches (not deleted) so the conversion can be undone; the startup
 // sweep removes stashes nobody used (lib/files.ts TEMP_DIRS).
+//
+// A password-protected PDF unlocked for this session (lib/pdf-session.ts) is
+// rendered from its decrypted copy: its pages then need no password, which
+// the screens say before converting. The stashed original (Undo) is the
+// stored, still encrypted file.
 import { Directory, File, Paths } from 'expo-file-system';
 import { docDir } from './storage-layout';
 import { VisionOcr } from '../modules/vision-ocr/src';
@@ -29,6 +34,7 @@ import { finishAddedPages } from './add-pages';
 import { indexDocText } from './save-scan';
 import { MAX_PAGE_EDGE } from './image-size';
 import { invalidatePdfThumbs } from './pdf-thumb';
+import { forgetSession, readablePdfUri } from './pdf-session';
 
 /** Caches folder for render output and Undo stashes; cleared by the startup sweep. */
 export const CONVERT_DIR = 'pdf-convert';
@@ -114,7 +120,12 @@ export async function convertPdfToPages(docId: string, options: ConvertOptions =
   const doc = await getDocument(docId);
   if (!doc) throw new PdfConvertError('missing', 'document missing');
   if (!doc.pdfUri) throw new PdfConvertError('failed', 'not a PDF document');
-  const pdfUri = clean(doc.pdfUri);
+  let pdfUri: string;
+  try {
+    pdfUri = clean(await readablePdfUri(doc));
+  } catch (err) {
+    throw classify(err);
+  }
 
   const stamp = Date.now();
   const tempDir = new Directory(Paths.cache, CONVERT_DIR, `${docId}-${stamp}`);
@@ -189,6 +200,9 @@ export async function convertPdfToPages(docId: string, options: ConvertOptions =
     // Renders of the PDF's pages in Caches go with it (a converted page may
     // be redacted next: no unredacted picture of it may stay behind).
     invalidatePdfThumbs(docId);
+    // No longer a PDF: its session (a protected one unlocked) ends, and its
+    // decrypted copy goes. An Undo asks for the password again.
+    forgetSession(docId);
 
     finishAddedPages(result.doc, result.doc.pages.map((_, i) => i), filter);
     return { doc: result.doc, pageCount: result.doc.pages.length, undo };

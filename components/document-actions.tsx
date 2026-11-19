@@ -29,6 +29,7 @@ import {
   type NewMergeUndo,
 } from '@/lib/merge-undo';
 import { mergeDocumentsToPdf, needsPdfMerge, PdfEditError } from '@/lib/pdf-edit';
+import { LOCKED_MERGE_BODY, withNoPasswordNote } from '@/lib/pdf-session';
 import { notifyError, notifySuccess } from '@/lib/haptics';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
 import { useToast } from '@/components/toast';
@@ -182,7 +183,7 @@ export function useDocumentActions({
         bumpLastSaved();
         notifySuccess();
         const undo = newMergeUndo(merged);
-        toast.show(mergedNewMessage(2), { action: { label: 'Undo', onPress: () => undoNewMergeDoc(undo, true) } });
+        toast.show(withNoPasswordNote(mergedNewMessage(2), [target.id, source.id]), { action: { label: 'Undo', onPress: () => undoNewMergeDoc(undo, true) } });
       } catch (err) {
         const locked = err instanceof PdfEditError && err.kind === 'locked';
         if (err instanceof PdfEditError && err.kind === 'restricted') {
@@ -193,7 +194,7 @@ export function useDocumentActions({
         const who = locked ? [target, source].find(d => d.id === (err as PdfEditError).docId) : null;
         Alert.alert(
           locked ? `“${who?.name ?? 'This PDF'}” is password protected` : 'Couldn’t merge the documents',
-          locked ? 'Open it and enter its password, then merge again.' : 'There may not be enough free space. Try again.',
+          locked ? LOCKED_MERGE_BODY : 'There may not be enough free space. Try again.',
         );
       }
       return;

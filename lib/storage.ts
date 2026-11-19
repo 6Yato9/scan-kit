@@ -382,6 +382,30 @@ export function subscribeDocumentChanges(listener: (id: string) => void): () => 
   };
 }
 
+// Documents moved to Recently deleted or deleted for good (lib/pdf-session.ts
+// forgets a PDF unlocked for the session). Separate from the change
+// notifications above, whose listeners re-read the record.
+const docRemovedListeners = new Set<(ids: string[]) => void>();
+
+/** Subscribe to documents being trashed or deleted. Returns an unsubscribe fn. */
+export function subscribeDocumentsRemoved(listener: (ids: string[]) => void): () => void {
+  docRemovedListeners.add(listener);
+  return () => {
+    docRemovedListeners.delete(listener);
+  };
+}
+
+function notifyDocumentsRemoved(ids: string[]): void {
+  if (!ids.length) return;
+  for (const l of docRemovedListeners) {
+    try {
+      l(ids);
+    } catch {
+      // never affects the write
+    }
+  }
+}
+
 function notifyDocumentChanged(id: string): void {
   for (const l of docChangeListeners) {
     try {
@@ -581,6 +605,7 @@ export function trashDocuments(ids: string[]): Promise<number> {
       }
     }
     if (changed.length) await AsyncStorage.multiSet(changed);
+    notifyDocumentsRemoved(changed.map(([key]) => key.slice(DOC_PREFIX.length)));
     return changed.length;
   });
 }
@@ -646,6 +671,7 @@ async function removeRecordsUnlocked(ids: string[]): Promise<void> {
   const index = await readIndex();
   await writeIndex(index.filter(x => !set.has(x)));
   await unmarkPendingUnlocked(ids);
+  notifyDocumentsRemoved(ids);
 }
 
 function deleteFilesQuietly(ids: string[]): void {

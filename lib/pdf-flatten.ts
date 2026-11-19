@@ -23,6 +23,7 @@ import { copyPdfToStorage, deleteDocumentFiles } from './files';
 import { PdfEditError, rewriteStoredPdf, type PdfEditResult } from './pdf-edit';
 import { canFlattenPdf, flattenPdfCopy, pdfShareInfo, shouldOfferFlatten } from './pdf-fill';
 import { joinPdfPageTexts } from './pdf-text';
+import { PdfSessionError, readablePdfUri } from './pdf-session';
 import { deleteDocument, getDocument, saveDocument } from './storage';
 import { copyName } from './copy-undo';
 
@@ -79,6 +80,7 @@ export class PdfFlattenError extends Error {
 function classify(err: unknown): PdfFlattenError {
   if (err instanceof PdfFlattenError) return err;
   if (err instanceof PdfEditError) return new PdfFlattenError(err.kind, err.message);
+  if (err instanceof PdfSessionError) return new PdfFlattenError(err.kind === 'wrong-password' ? 'locked' : err.kind, err.message);
   return new PdfFlattenError('failed', err instanceof Error ? err.message : String(err ?? ''));
 }
 
@@ -91,10 +93,15 @@ export function canFlattenDocuments(): boolean {
 
 const clean = (uri: string) => uri.split('?')[0];
 
-/** Reads `doc`'s state. Rejects with PdfFlattenError ('unreadable'). */
-export async function readFlattenState(doc: Pick<Document, 'pdfUri'>): Promise<FlattenState> {
+/**
+ * Reads `doc`'s state (from its session copy when it is a protected PDF
+ * unlocked this session, lib/pdf-session.ts). Rejects with PdfFlattenError
+ * ('unreadable').
+ */
+export async function readFlattenState(doc: Pick<Document, 'id' | 'pdfUri'>): Promise<FlattenState> {
   if (!doc.pdfUri) throw new PdfFlattenError('changed', 'not a PDF document');
-  const info = await pdfShareInfo(doc.pdfUri);
+  const uri = await readablePdfUri(doc).catch(() => doc.pdfUri as string);
+  const info = await pdfShareInfo(uri);
   if (!info) throw new PdfFlattenError('unreadable', 'pdfInfo failed');
   return flattenStateOf(info);
 }
@@ -146,7 +153,9 @@ export async function saveFlattenedCopy(docId: string): Promise<Document> {
     const out = workFile();
     let id: string | null = null;
     try {
-      await flattenPdfCopy(doc.pdfUri, out.uri);
+      // Unlocked this session: the flattened copy is made from the decrypted
+      // one and needs no password (a new document; the original stays protected).
+      await flattenPdfCopy(await readablePdfUri(doc), out.uri);
       if (!out.exists) throw new PdfFlattenError('failed', 'no output');
       const text = await readText(out.uri);
       id = Crypto.randomUUID();
@@ -189,7 +198,7 @@ export async function flattenStoredPdf(docId: string): Promise<PdfEditResult> {
   if (!doc.pdfUri || doc.pages.length > 0) throw new PdfFlattenError('changed', 'not a PDF document');
   try {
     const { pageCount } = await readyState(doc);
-    return await rewriteStoredPdf(docId, (target, out) => flatten(target, out), pageCount);
+    return await rewriteStoredPdf(docId, (source, out) => flatten(source, out), pageCount, { needs: ['comment', 'fillForms'] });
   } catch (err) {
     throw classify(err);
   }

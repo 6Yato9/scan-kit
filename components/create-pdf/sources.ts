@@ -11,8 +11,9 @@
 //   its password and an unlocked copy is used (VisionOcr.unlockPdf); one whose
 //   permissions don't allow taking its pages is refused with a clear message.
 // - A protected PDF document in Scan Kit is unlocked the way the viewer does
-//   it (lib/pdf-unlock: the password is asked once and an unlocked copy
-//   replaces the stored one), then its pages can be chosen.
+//   it, for this session only (lib/pdf-session.ts: the stored PDF stays
+//   protected); its pages are taken from the session's decrypted copy, and
+//   the new PDF doesn't need a password.
 import { Alert } from 'react-native';
 import { File } from 'expo-file-system';
 import { VisionOcr } from '@/modules/vision-ocr/src';
@@ -22,7 +23,7 @@ import { fileIdentity } from '@/lib/ocr-cache';
 import { deleteDisposableTemps } from '@/lib/files';
 import { filePrint } from '@/lib/pdf-edit';
 import { pdfPageThumbnails } from '@/lib/pdf-thumb';
-import { PdfUnlockError, pdfUnlockAvailable, unlockStoredPdf } from '@/lib/pdf-unlock';
+import { canUnlockForSession, isSessionUnlocked, PdfSessionError, readablePdfUri, unlockForSession } from '@/lib/pdf-session';
 import { getDocument } from '@/lib/storage';
 import { canRenderPdfThumbs, createTempDir, deleteQuietly } from '@/lib/create-pdf-build';
 import { type ImageItem, type ImageOrigin, type PdfItem, type PdfSource, type ScanItem } from '@/lib/create-pdf';
@@ -143,7 +144,7 @@ export async function stageFilesPdf(uri: string, name: string): Promise<{ source
   }
   if (info?.locked) {
     const unlock = VisionOcr?.unlockPdf;
-    if (typeof unlock !== 'function' || !pdfUnlockAvailable()) fail('unavailable');
+    if (typeof unlock !== 'function' || !canUnlockForSession()) fail('unavailable');
     const out = new File(dir, 'unlocked.pdf');
     let retry = false;
     for (;;) {
@@ -185,58 +186,71 @@ export function pdfItems(source: PdfSource, indices: number[], thumbs: string[])
 // ── Documents in Scan Kit ────────────────────────────────────────────────────
 
 /**
- * Gets a PDF document ready to take pages from: unlocked (asking for the
- * password, like the viewer) and allowed. Returns the fresh record, its page
- * count and page thumbnails. Throws SourceError.
+ * Gets a PDF document ready to take pages from: unlocked for this session
+ * (asking for the password, like the viewer) and allowed. Returns the fresh
+ * record, its page count, page thumbnails and the file to read (the session
+ * copy of a protected PDF). Throws SourceError.
  */
-export async function readyStoredPdf(doc: Document): Promise<{ doc: Document; pageCount: number; thumbs: string[] }> {
-  let fresh = (await getDocument(doc.id)) ?? doc;
+export async function readyStoredPdf(doc: Document): Promise<{ doc: Document; pageCount: number; thumbs: string[]; uri: string }> {
+  const fresh = (await getDocument(doc.id)) ?? doc;
   if (!fresh.pdfUri) throw new SourceError('unreadable', doc.name);
+  const readable = async (): Promise<string> => {
+    try {
+      return clean(await readablePdfUri(fresh, { needs: ['assemblePages'] }));
+    } catch (err) {
+      throw new SourceError(err instanceof PdfSessionError && err.kind === 'restricted' ? 'restricted' : 'unreadable', doc.name);
+    }
+  };
+  let uri = await readable();
   let info: Info | null;
   try {
-    info = await pdfInfo(fresh.pdfUri);
+    info = await pdfInfo(uri);
   } catch {
     throw new SourceError('unreadable', doc.name);
   }
-  if (info?.locked) {
-    if (!pdfUnlockAvailable()) throw new SourceError('unavailable', doc.name);
+  if (info?.locked && !isSessionUnlocked(fresh.id)) {
+    if (!canUnlockForSession()) throw new SourceError('unavailable', doc.name);
     let retry = false;
     for (;;) {
       const pw = await askPassword(doc.name, retry);
       if (pw == null) throw new SourceError('cancelled', doc.name);
       try {
-        await unlockStoredPdf(doc.id, pw);
+        await unlockForSession(fresh, pw);
         break;
       } catch (err) {
-        if (err instanceof PdfUnlockError && err.kind === 'wrong-password') {
+        if (err instanceof PdfSessionError && err.kind === 'wrong-password') {
           retry = true;
           continue;
         }
         throw new SourceError('unreadable', doc.name);
       }
     }
-    fresh = (await getDocument(doc.id)) ?? fresh;
-    if (!fresh.pdfUri) throw new SourceError('unreadable', doc.name);
-    info = await pdfInfo(fresh.pdfUri).catch(() => null);
+    uri = await readable();
+    info = await pdfInfo(uri).catch(() => null);
   }
   if (info?.restricted) throw new SourceError('restricted', doc.name);
   if (info?.locked) throw new SourceError('unreadable', doc.name);
   let thumbs: string[] = [];
   if (canRenderPdfThumbs()) {
     try {
-      thumbs = await pdfPageThumbnails(fresh.id, fresh.pdfUri);
+      thumbs = await pdfPageThumbnails(fresh.id, uri);
     } catch (err) {
       console.warn('Create PDF: page thumbnails failed', err);
     }
   }
   const pageCount = info?.pageCount ?? thumbs.length;
   if (pageCount < 1) throw new SourceError('unreadable', doc.name);
-  return { doc: fresh, pageCount, thumbs };
+  return { doc: fresh, pageCount, thumbs, uri };
 }
 
-/** A Scan Kit PDF document as a source (with the print the build checks). */
-export function storedPdfSource(doc: Document, pageCount: number): PdfSource {
-  return { id: newKey('doc'), docId: doc.id, uri: clean(doc.pdfUri as string), name: doc.name, pageCount, print: filePrint(doc.pdfUri as string) };
+/**
+ * A Scan Kit PDF document as a source (with the print the build checks).
+ * `uri`: the file its pages come from when it isn't the stored one (the
+ * session copy of a protected PDF, readyStoredPdf).
+ */
+export function storedPdfSource(doc: Document, pageCount: number, uri?: string): PdfSource {
+  const from = clean(uri ?? (doc.pdfUri as string));
+  return { id: newKey('doc'), docId: doc.id, uri: from, name: doc.name, pageCount, print: filePrint(from) };
 }
 
 /** Items for pages `indices` of a scanned document. */

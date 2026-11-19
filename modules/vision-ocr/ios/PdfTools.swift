@@ -36,8 +36,9 @@ enum PdfTools {
     return out
   }
 
-  /// Writes an unencrypted copy of a password-protected PDF (the viewer's
-  /// "Enter password", Create PDF's locked sources: VisionOcr.unlockPdf).
+  /// Writes an unencrypted copy of a password-protected PDF (the session's
+  /// working copy, lib/pdf-session.ts; Create PDF's locked Files sources:
+  /// VisionOcr.unlockPdf). The stored PDF itself is never replaced by it.
   /// Throws "wrong-password" when the password doesn't unlock it.
   ///
   /// Round 13b: this used to rebuild the pages into a fresh PDFDocument,
@@ -71,8 +72,8 @@ enum PdfTools {
       }
       throw NSError(domain: "PdfTools", code: 4, userInfo: [NSLocalizedDescriptionKey: "Could not write the unlocked PDF"])
     }
-    // The caller deletes the protected original after this returns, so the
-    // copy must be complete: opens without a password AND every page present
+    // Callers read every page from this copy (the session's working copy,
+    // Create PDF's source), so it must be complete: opens without a password AND every page present
     // (PdfUnrestrict verified more; this is the promise callers rely on).
     guard let check = PDFDocument(url: url), !check.isLocked, check.pageCount == doc.pageCount else {
       try? FileManager.default.removeItem(at: url)

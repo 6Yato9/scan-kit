@@ -5,6 +5,10 @@
 // scan's recognised text and search finds the PDF by its words. A PDF that is
 // only pictures of pages has no text: nothing is stored, and Convert to pages
 // (which runs text recognition on the pages) is how it becomes searchable.
+//
+// Always the STORED file, never a session copy (lib/pdf-session.ts): a
+// password-protected PDF reads as "locked" here even while it is unlocked for
+// the session, so its text is never written into the record.
 import { VisionOcr } from '../modules/vision-ocr/src';
 import { withDocLock } from './bake';
 import { getDocument, updateDocumentWith } from './storage';

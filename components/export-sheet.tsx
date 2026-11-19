@@ -58,6 +58,7 @@ import { zipFiles } from '@/lib/zip-stream';
 import { notifySuccess } from '@/lib/haptics';
 import { canFlattenPdf, flattenPdfCopy, pdfShareInfo, shouldOfferFlatten } from '@/lib/pdf-fill';
 import { PdfEditError } from '@/lib/pdf-edit';
+import { PdfSessionError, readablePdfUri } from '@/lib/pdf-session';
 import { Radius, Spacing, Type } from '@/lib/theme';
 
 type Props = {
@@ -161,6 +162,8 @@ export function ExportSheet({ visible, document, onClose }: Props) {
   const [bytes, setBytes] = useState<number | null>(null);
   const [stats, setStats] = useState<PageStat[] | null>(null);
   // An imported PDF with form fields or additions can also go out flattened.
+  // An imported PDF that needs a password to open (it is shared as it is).
+  const [needsPassword, setNeedsPassword] = useState(false);
   const [canFlatten, setCanFlatten] = useState(false);
   // "Password-protected PDF" asks for the password inside the sheet (an Alert
   // can't be presented over it). The password lives only in this state and is
@@ -204,8 +207,18 @@ export function ExportSheet({ visible, document, onClose }: Props) {
       .catch(() => {});
     getExportPageNumbers().then(p => { if (!cancelled) setPageNumbers(p); });
     setCanFlatten(false);
-    if (document.pdfUri && canFlattenPdf()) {
-      pdfShareInfo(document.pdfUri).then(i => { if (!cancelled) setCanFlatten(shouldOfferFlatten(i)); });
+    setNeedsPassword(false);
+    if (document.pdfUri) {
+      // The original is shared as stored: a protected PDF stays protected
+      // (lib/pdf-session.ts never decrypts the stored file), so the row says so.
+      pdfShareInfo(document.pdfUri).then(i => { if (!cancelled) setNeedsPassword(!!i?.locked); });
+      if (canFlattenPdf()) {
+        // Unlocked this session: offered from its decrypted copy (a new file, no password).
+        readablePdfUri(document)
+          .catch(() => document.pdfUri as string)
+          .then(pdfShareInfo)
+          .then(i => { if (!cancelled) setCanFlatten(shouldOfferFlatten(i)); });
+      }
     }
     return () => {
       cancelled = true;
@@ -383,7 +396,18 @@ export function ExportSheet({ visible, document, onClose }: Props) {
       if (action === 'print') {
         let uri: string;
         if (isPdfDoc) {
-          uri = document.pdfUri!;
+          // A protected PDF prints from its session copy when it is unlocked,
+          // if its author allows printing (lib/pdf-session.ts).
+          try {
+            uri = await readablePdfUri(document, { needs: ['printLow'] });
+          } catch (err) {
+            if (err instanceof PdfSessionError && err.kind === 'restricted') {
+              setBusy(null);
+              Alert.alert('This PDF can’t be printed', 'Its author doesn’t allow printing it.');
+              return;
+            }
+            throw err;
+          }
         } else {
           const raw = await buildPdf('high', false, signal, 'Preparing to print');
           if (signal.aborted) await deleteQuietly(raw);
@@ -420,7 +444,9 @@ export function ExportSheet({ visible, document, onClose }: Props) {
         // temp file is deleted straight away; only the protected one is shared.
         const title = 'Creating protected PDF';
         const out = `${dir}${encodeURIComponent(exportFileName(document.name, 'pdf'))}`;
-        const uri = await protectDocumentPdf(document, out, password ?? '', {
+        // A protected PDF unlocked this session: from its decrypted copy, with the new password.
+        const source = isPdfDoc ? { pdfUri: await readablePdfUri(document) } : document;
+        const uri = await protectDocumentPdf(source, out, password ?? '', {
           signal,
           build: () => buildPdf(quality, canSearchable, signal, title),
           beforeProtect: () => setBusy({ title, label: 'Adding the password', progress: 0.95 }),
@@ -433,7 +459,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
         // A copy with the form values and signatures drawn into the pages; the stored PDF is untouched.
         setBusy({ title: 'Flattening PDF', label: 'Flattening PDF', progress: 0.5 });
         const out = `${dir}${encodeURIComponent(exportFileName(document.name, 'pdf'))}`;
-        const uri = await flattenPdfCopy(document.pdfUri!, out);
+        const uri = await flattenPdfCopy(await readablePdfUri(document), out);
         file = { uri, ...PDF_FILE };
       } else if (isPdfDoc) {
         setBusy({ title: 'Preparing PDF', label: 'Preparing PDF', progress: 0.5 });
@@ -639,7 +665,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
                 <SheetRow
                   icon="document-text-outline"
                   label="PDF"
-                  detail={detailLine(['Original file', sizeLabel])}
+                  detail={detailLine([needsPassword ? 'Needs its password' : 'Original file', sizeLabel])}
                   onPress={() => run('pdf')}
                   last={!canFlatten && !canProtect && !docText}
                 />

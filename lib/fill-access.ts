@@ -7,6 +7,10 @@
 // info the Fill & sign screen opens with (lib/pdf-fill.ts openFillSession),
 // cached per file.
 //
+// `pdfUri` is the file to read: for a password-protected PDF unlocked this
+// session, its decrypted copy (lib/pdf-session.ts readablePdfUri), whose
+// author's permissions lib/pdf-fill openFillSession applies.
+//
 // Also remembers which PDFs were filled in here, so the viewer stops pushing
 // "Convert to pages" (which would turn the filled form and its signatures
 // into part of a picture) as the main thing to do with them.
@@ -16,6 +20,7 @@ import { File } from 'expo-file-system';
 import type { NativeFillInfo } from '../modules/vision-ocr/src';
 import { PdfEditError } from './pdf-edit';
 import { canFillPdf, openFillSession } from './pdf-fill';
+import { readablePdfUri, sessionSnapshot } from './pdf-session';
 
 /**
  * - full: fields (if any) and additions
@@ -94,10 +99,15 @@ export function useFillAccess(pdfUri: string | null | undefined, version = 0): F
 /** Access for several PDFs at once (Tools › Sign's list), by document id. */
 export function useFillAccessMap(docs: { id: string; pdfUri?: string | null }[]): Record<string, FillAccess> {
   const [map, setMap] = useState<Record<string, FillAccess>>({});
-  const key = docs.map(d => `${d.id}:${d.pdfUri ?? ''}`).join(',');
+  const key = docs.map(d => `${d.id}:${d.pdfUri ?? ''}:${sessionSnapshot(d.id)}`).join(',');
   useEffect(() => {
     let live = true;
-    Promise.all(docs.map(d => (d.pdfUri ? readFillAccess(d.pdfUri).then(a => [d.id, a] as const) : null)))
+    const read = (d: { id: string; pdfUri?: string | null }) =>
+      readablePdfUri(d)
+        .catch(() => d.pdfUri as string)
+        .then(readFillAccess)
+        .then(a => [d.id, a] as const);
+    Promise.all(docs.map(d => (d.pdfUri ? read(d) : null)))
       .then(rows => {
         if (!live) return;
         const next: Record<string, FillAccess> = {};

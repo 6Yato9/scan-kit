@@ -34,6 +34,7 @@ import { openNewCopy } from '@/lib/copy-undo';
 import { postViewerNotice } from '@/lib/viewer-notice';
 import { notifyError, notifySuccess } from '@/lib/haptics';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
+import { protectedEditRefusal, withNoPasswordNote } from '@/lib/pdf-session';
 import type { Document } from '@/types/document';
 
 type Output = 'copy' | 'replace';
@@ -92,6 +93,10 @@ export default function FlattenScreen() {
     } else if (kind === 'locked') {
       reload();
       Alert.alert('This PDF needs its password', 'Open it in the viewer and enter its password, then flatten it.');
+    } else if (protectedEditRefusal(err)) {
+      // A protected PDF unlocked this session that can't be written back as protected (lib/pdf-session.ts).
+      const r = protectedEditRefusal(err)!;
+      Alert.alert(r.title, r.body);
     } else if (kind === 'restricted') {
       Alert.alert('This PDF can’t be flattened', 'Its author doesn’t allow changing it. Unlock PDF can remove that restriction if you’re allowed to.');
     } else if (kind === 'unreadable') {
@@ -116,7 +121,7 @@ export default function FlattenScreen() {
         notifySuccess();
         openNewCopy({
           copy,
-          message: 'PDF flattened. The original is kept.',
+          message: withNoPasswordNote('PDF flattened. The original is kept.', [target.id]),
           what: 'flattened',
           sourceId: target.id,
           fromViewer,

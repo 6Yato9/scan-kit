@@ -67,6 +67,7 @@ import { withSystemUI } from '@/lib/system-ui';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
 import { newMergeUndo, undoNewMerge } from '@/lib/merge-undo';
 import { postViewerNotice } from '@/lib/viewer-notice';
+import { withNoPasswordNote } from '@/lib/pdf-session';
 import { notifyError, notifySuccess } from '@/lib/haptics';
 import { Radius, Spacing, Type } from '@/lib/theme';
 
@@ -292,7 +293,7 @@ export default function CreatePdfScreen() {
   const addPicked = useCallback((picked: PickedPages) => {
     setPickerOpen(false);
     if (picked.pdf) {
-      const source = storedPdfSource(picked.doc, picked.pdf.pageCount);
+      const source = storedPdfSource(picked.doc, picked.pdf.pageCount, picked.pdf.uri);
       setSources(prev => [...prev, source]);
       setItems(prev => [...prev, ...pdfItems(source, picked.indices, picked.pdf!.thumbs)]);
     } else {
@@ -340,7 +341,7 @@ export default function CreatePdfScreen() {
       const undo = newMergeUndo(doc);
       postViewerNotice({
         docId: doc.id,
-        message: createdMessage(kind, list.length),
+        message: withNoPasswordNote(createdMessage(kind, list.length), sources.map(src => src.docId)),
         action: {
           label: 'Undo',
           onPress: () => {

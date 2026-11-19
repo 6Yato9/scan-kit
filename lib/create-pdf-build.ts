@@ -28,6 +28,7 @@ import type { PageGeometry } from './quad';
 import { fileIdentity } from './ocr-cache';
 import { filePrint, samePrint } from './pdf-edit';
 import { joinPdfPageTexts } from './pdf-text';
+import { isSessionPath, isSessionUnlocked, readablePdfUri } from './pdf-session';
 import { generatePdf, PdfCancelledError } from './pdf';
 import { ocrAvailable } from './ocr';
 import { getDocSettings, getDocument, saveDocument } from './storage';
@@ -295,11 +296,19 @@ type PdfNative = {
   pdfInfo?: (uri: string, password?: string | null) => Promise<{ pageCount: number; locked: boolean; restricted?: boolean }>;
 };
 
-/** Checks a PDF source can be read as it was when its pages were chosen. */
+/**
+ * Checks a PDF source can be read as it was when its pages were chosen. A
+ * protected document's pages come from its session copy (lib/pdf-session.ts):
+ * it must still be the live copy of the stored bytes, and the session must
+ * not have ended meanwhile ('locked': open it and enter the password again).
+ */
 async function checkSource(src: PdfSource, info: PdfNative['pdfInfo']): Promise<void> {
   if (src.docId) {
     const fresh = await getDocument(src.docId);
-    if (!fresh || fresh.trashedAt || !fresh.pdfUri || clean(fresh.pdfUri) !== clean(src.uri)) {
+    if (!fresh || fresh.trashedAt || !fresh.pdfUri) throw new CreatePdfError('changed', 'document changed', src.name);
+    if (isSessionPath(src.uri) && !isSessionUnlocked(src.docId)) throw new CreatePdfError('locked', 'locked', src.name);
+    const readable = await readablePdfUri(fresh).catch(() => fresh.pdfUri as string);
+    if (clean(readable) !== clean(src.uri)) {
       throw new CreatePdfError('changed', 'document changed', src.name);
     }
     if (src.print && !samePrint(filePrint(src.uri), src.print)) throw new CreatePdfError('changed', 'PDF changed', src.name);

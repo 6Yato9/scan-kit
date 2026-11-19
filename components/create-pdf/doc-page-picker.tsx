@@ -28,11 +28,14 @@ import { readyStoredPdf, SourceError } from './sources';
 export type PickedPages = {
   doc: Document;
   indices: number[];
-  /** For a PDF: its page count and page thumbnails. */
-  pdf?: { pageCount: number; thumbs: string[] };
+  /**
+   * For a PDF: its page count, page thumbnails and the file to take the pages
+   * from (the session copy of a protected PDF unlocked this session).
+   */
+  pdf?: { pageCount: number; thumbs: string[]; uri?: string };
 };
 
-type Chosen = { doc: Document; count: number; thumbs: string[]; pdf: boolean };
+type Chosen = { doc: Document; count: number; thumbs: string[]; pdf: boolean; uri?: string };
 
 /** What the picker offers: scanned documents with pages, and PDFs when this build can combine them. */
 export function pickableDocument(d: Document, pdfs = canCreateFromPdfs()): boolean {
@@ -107,7 +110,7 @@ export function DocPagePicker({
     setOpening(doc.id);
     try {
       const ready = await readyStoredPdf(doc);
-      setChosen({ doc: ready.doc, count: ready.pageCount, thumbs: ready.thumbs, pdf: true });
+      setChosen({ doc: ready.doc, count: ready.pageCount, thumbs: ready.thumbs, pdf: true, uri: ready.uri });
       setSelected(new Set(Array.from({ length: ready.pageCount }, (_, i) => i)));
     } catch (err) {
       const msg = err instanceof SourceError ? sourceRefusalMessage(err) : { title: `Couldn’t open “${doc.name}”`, body: 'Try again.' };
@@ -131,7 +134,7 @@ export function DocPagePicker({
     onAdd({
       doc: chosen.doc,
       indices: chosenIndices(selected, chosen.count),
-      ...(chosen.pdf ? { pdf: { pageCount: chosen.count, thumbs: chosen.thumbs } } : {}),
+      ...(chosen.pdf ? { pdf: { pageCount: chosen.count, thumbs: chosen.thumbs, uri: chosen.uri } } : {}),
     });
   };
 

@@ -20,6 +20,7 @@ import { ToolDocPicker, useToolDoc } from '@/components/tool-doc';
 import { FilterBaker } from '@/components/filter-baker';
 import { splitDocument, splitRanges } from '@/lib/doc-ops';
 import { canEditPdfPages, PdfEditError, splitStoredPdf } from '@/lib/pdf-edit';
+import { useReadablePdfUri, withNoPasswordNote } from '@/lib/pdf-session';
 import { pdfPageThumbnails } from '@/lib/pdf-thumb';
 import { notifyError, notifySuccess } from '@/lib/haptics';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
@@ -51,7 +52,8 @@ export default function SplitScreen() {
   const [pdfThumbs, setPdfThumbs] = useState<{ docId: string; uris: string[] } | null>(null);
   const [pdfFailed, setPdfFailed] = useState(false);
 
-  const pdfUri = doc?.pdfUri ?? null;
+  // A protected PDF unlocked this session shows its pages from its decrypted copy (lib/pdf-session.ts).
+  const { uri: pdfUri, unlocked: unlockedForSession } = useReadablePdfUri(doc?.pdfUri ? doc : null);
   const docId = doc?.id ?? null;
   useEffect(() => {
     if (!docId || !pdfUri) return;
@@ -79,7 +81,25 @@ export default function SplitScreen() {
     setAfter(null);
   };
 
-  const split = async () => {
+  const split = () => {
+    if (!doc || !parts || saving) return;
+    // Its parts won't need a password; with the original deleted, nothing
+    // protected is left: said before it happens.
+    if (doc.pdfUri && unlockedForSession && keep === 'trash') {
+      Alert.alert(
+        'Split without the password?',
+        'The two new documents won’t need a password, and the protected original moves to Recently deleted.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Split', isPreferred: true, onPress: () => { runSplit(); } },
+        ],
+      );
+      return;
+    }
+    runSplit();
+  };
+
+  const runSplit = async () => {
     if (!doc || !parts || saving) return;
     setSaving(true);
     try {
@@ -89,9 +109,12 @@ export default function SplitScreen() {
         : await splitDocument(doc.id, at, { trashOriginal, expectedCount: count });
       bumpLastSaved();
       notifySuccess();
-      const notice = result.originalTrashed
-        ? 'Split into two documents. The original is in Recently deleted.'
-        : 'Split into two documents. The original is kept.';
+      const notice = withNoPasswordNote(
+        result.originalTrashed
+          ? 'Split into two documents. The original is in Recently deleted.'
+          : 'Split into two documents. The original is kept.',
+        [doc.id],
+      );
       // The first part opens; the viewer says what happened.
       navigateWhenUnlocked(() => router.replace({ pathname: '/viewer', params: { id: result.first.id, notice } }));
     } catch (err) {

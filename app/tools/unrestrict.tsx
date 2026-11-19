@@ -6,6 +6,8 @@
 // remove is said to be so and offers nothing. The result is a new document
 // "<name> (unrestricted)" by default, the original kept (opened with Undo,
 // lib/copy-undo.ts); or the original replaced in place, with Undo in the viewer.
+// A PDF opened in Scan Kit this session (lib/pdf-session.ts; the viewer's
+// "Remove password" leads here) uses that session's password, not asked again.
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -34,6 +36,7 @@ import { openNewCopy } from '@/lib/copy-undo';
 import { useToast } from '@/components/toast';
 import { notifyError, notifySuccess } from '@/lib/haptics';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
+import { sessionPassword, useSessionUnlocked } from '@/lib/pdf-session';
 import { Radius, Spacing, Type } from '@/lib/theme';
 import type { Document } from '@/types/document';
 import type { IoniconName } from '@/components/app-icon';
@@ -81,6 +84,7 @@ export default function UnrestrictScreen() {
   useEffect(() => () => { mounted.current = false; }, []);
 
   const docKey = doc ? keyOf(doc) : null;
+  const unlockedForSession = useSessionUnlocked(doc?.id);
   useEffect(() => {
     if (!doc || !docKey || !available) return;
     let cancelled = false;
@@ -201,7 +205,11 @@ export default function UnrestrictScreen() {
 
   const start = () => {
     if (!doc || !state || workingRef.current) return;
-    if (state.kind === 'password') askPassword(doc);
+    // Opened in Scan Kit this session (lib/pdf-session.ts): its password is
+    // already known, so it isn't asked again.
+    const known = state.kind === 'password' ? sessionPassword(doc.id) : null;
+    if (known) run(doc, known, true);
+    else if (state.kind === 'password') askPassword(doc);
     else if (state.kind === 'restricted') run(doc, null, false);
   };
 
@@ -238,7 +246,9 @@ export default function UnrestrictScreen() {
     );
   }
 
-  const buttonTitle = state?.kind === 'password' ? 'Unlock with password' : 'Remove restrictions';
+  const buttonTitle = state?.kind === 'password'
+    ? unlockedForSession ? 'Remove password' : 'Unlock with password'
+    : 'Remove restrictions';
 
   return (
     <ToolScreen
@@ -287,7 +297,11 @@ export default function UnrestrictScreen() {
             <StatusCard
               icon="lock-closed-outline"
               title="Needs a password to open"
-              detail="Enter it once. The unlocked PDF opens without one, and anything else it restricts is removed too."
+              detail={
+                unlockedForSession
+                  ? 'You entered its password in Scan Kit. The unlocked PDF opens without one, and anything else it restricts is removed too.'
+                  : 'Enter it once. The unlocked PDF opens without one, and anything else it restricts is removed too.'
+              }
             />
           ) : (
             <RestrictionList restrictions={current.state.restrictions} />

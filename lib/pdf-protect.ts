@@ -16,8 +16,9 @@
 // Scan Kit never keeps the password: it is passed to native once and
 // dropped. A forgotten password can't be recovered — the screen says so.
 // A protected PDF has no recognised text in the search index (its text is
-// what the password protects); the viewer's "Enter password" puts it back
-// once it is opened.
+// what the password protects), and it stays that way: the viewer's "Enter
+// password" opens it for the session only (lib/pdf-session.ts), and the stored
+// file stays encrypted through every later edit.
 import * as Crypto from 'expo-crypto';
 import { Directory, File, Paths } from 'expo-file-system';
 import { VisionOcr } from '../modules/vision-ocr/src';

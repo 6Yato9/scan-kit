@@ -17,8 +17,11 @@ import PDFKit
 /// of 90, either sign).
 ///
 /// Protected PDFs:
-///  - Opened with its password (the user unlocked it): rebuilt into a fresh,
-///    unencrypted document, the same as unlocking (lib/pdf-unlock.ts).
+///  - Opened with its password: rebuilt into a fresh, unencrypted document.
+///    The app no longer passes a password here: a PDF unlocked for the
+///    session is edited from its decrypted copy and encrypted again in JS
+///    (lib/pdf-session.ts, lib/pdf-edit.ts rewriteStoredPdf), so the stored
+///    PDF stays protected.
 ///  - Opens without a password but is encrypted (an owner password with
 ///    permissions, e.g. bank statements): edited IN PLACE when its permissions
 ///    allow document assembly, keeping its form fields, page labels and
@@ -224,8 +227,7 @@ enum PdfEditor {
     let out: PDFDocument
     if unlocked {
       // Opened with its password: rebuilt into a fresh document so no
-      // encryption dictionary carries over (the same as unlocking,
-      // lib/pdf-unlock.ts), with metadata and bookmarks. Writing it in place
+      // encryption dictionary carries over, with metadata and bookmarks. Writing it in place
       // would keep it locked with a password Scan Kit doesn't store.
       out = PDFDocument()
       for page in targets { out.insert(page, at: out.pageCount) }

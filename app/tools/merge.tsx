@@ -23,6 +23,7 @@ import { SectionLabel } from '@/components/section-label';
 import { DocGroup, DocRow, NoDocumentsScreen, ToolNote, ToolProgress, ToolScreen, useToolDocuments } from '@/components/tool-ui';
 import { mergeIntoNew } from '@/lib/doc-ops';
 import { canMergePdfDocuments, mergeDocumentsToPdf, needsPdfMerge, PdfEditError, type MergeProgress } from '@/lib/pdf-edit';
+import { LOCKED_MERGE_BODY, withNoPasswordNote } from '@/lib/pdf-session';
 import { notifyError, notifySuccess } from '@/lib/haptics';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
 import {
@@ -93,7 +94,7 @@ export default function MergeScreen() {
       const picked = chosen.map(d => d.id).join(',');
       postViewerNotice({
         docId: merged.id,
-        message: mergedNewMessage(chosen.length),
+        message: withNoPasswordNote(mergedNewMessage(chosen.length), chosen.map(d => d.id)),
         action: {
           label: 'Undo',
           onPress: () => {
@@ -121,7 +122,7 @@ export default function MergeScreen() {
       notifyError();
       if (err instanceof PdfEditError && err.kind === 'locked') {
         const who = chosen.find(d => d.id === err.docId);
-        Alert.alert(`“${who?.name ?? 'A PDF'}” is password protected`, 'Open it and enter its password, then merge again.');
+        Alert.alert(`“${who?.name ?? 'A PDF'}” is password protected`, LOCKED_MERGE_BODY);
       } else if (err instanceof PdfEditError && err.kind === 'restricted') {
         Alert.alert('A PDF can’t be merged', 'One of these PDFs doesn’t allow changes to its pages. Leave it out and merge the others.');
       } else {

@@ -950,6 +950,9 @@ const TEMP_DIRS = [
   'scanner-src',
   // Create PDF: staged Files PDFs, their thumbnails and build work folders (lib/create-pdf-build.ts).
   'create-pdf',
+  // Decrypted working copies of password-protected PDFs unlocked for a session
+  // (lib/pdf-session.ts, which also clears earlier processes' on first use).
+  'pdf-session',
 ];
 /** Open-in staging files older builds wrote straight into the Caches root. */
 const LEGACY_STAGED = /^(?:incoming|attempt)-\d+-/;
