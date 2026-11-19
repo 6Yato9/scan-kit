@@ -6,7 +6,6 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
-  Image,
   Platform,
   Pressable,
   StyleSheet,
@@ -15,6 +14,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { ZoomablePage } from '@/components/zoomable-page';
 import { Ionicons } from '@expo/vector-icons';
 import { WebView } from 'react-native-webview';
 import * as Clipboard from 'expo-clipboard';
@@ -186,6 +186,8 @@ function ViewerContent({
   // 'loading' until the first read; 'missing' when the document is gone.
   const [status, setStatus] = useState<'loading' | 'ready' | 'missing'>('loading');
   const [currentPage, setCurrentPage] = useState(0);
+  /** The pager's height, for the zoomable pages' box. */
+  const [pagerHeight, setPagerHeight] = useState(0);
   const [exportVisible, setExportVisible] = useState(false);
   // The inline edit panel (Filters / Adjust); null shows the toolbar instead.
   const [editTab, setEditTab] = useState<EditTab | null>(null);
@@ -1858,7 +1860,7 @@ function ViewerContent({
         }
       />
 
-      <View style={styles.pager}>
+      <View style={styles.pager} onLayout={e => setPagerHeight(Math.round(e.nativeEvent.layout.height))}>
         <FlatList
           ref={flatListRef}
           data={document.pages}
@@ -1866,6 +1868,8 @@ function ViewerContent({
           horizontal
           pagingEnabled
           showsHorizontalScrollIndicator={false}
+          // Pages re-render when the current page (zoom reset) or the pager's size changes.
+          extraData={`${page}:${pagerHeight}:${document.updatedAt}`}
           // A notice's page (see applyJump), once the content is wide enough to show it.
           onContentSizeChange={w => {
             if (jumpTo.current != null && w >= (jumpTo.current + 1) * screenWidth - 1) applyJump();
@@ -1882,11 +1886,16 @@ function ViewerContent({
           getItemLayout={(_, index) => ({ length: screenWidth, offset: screenWidth * index, index })}
           renderItem={({ item, index }) => (
             <View style={[styles.page, { width: screenWidth }]}>
-              {/* updatedAt busts RN's image cache after an in-place rewrite of the file. */}
-              <Image
-                source={{ uri: `${item}?v=${document.updatedAt}` }}
-                style={[styles.pageImage, { width: screenWidth - Spacing.xxxl }]}
-                resizeMode="contain"
+              {/* Pinch / double-tap to zoom (components/zoomable-page). A page
+                  off screen goes back to fit (resetKey). updatedAt busts RN's
+                  image cache after an in-place rewrite of the file (cacheKey). */}
+              <ZoomablePage
+                uri={item.split('?')[0]}
+                cacheKey={`${item}:${document.updatedAt}`}
+                width={screenWidth}
+                height={Math.max(0, pagerHeight - Spacing.sm * 2)}
+                inset={Spacing.lg}
+                resetKey={index === page ? 'shown' : `away-${page}`}
                 accessibilityLabel={`Page ${index + 1} of ${pageCount}`}
               />
             </View>
@@ -2071,10 +2080,8 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.sm,
   },
-  pageImage: { flex: 1 },
   counterRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: Spacing.sm, paddingBottom: Spacing.sm },
   // Counter pill height (footnote line + padding) plus the row's padding.
   counterRowFixed: { minHeight: 22 + Spacing.sm },
