@@ -1,6 +1,7 @@
 // Round 12: acting on recognized text — data detection fallback, chips,
 // calendar drafts, read-aloud sentences and business card parsing.
 import {
+  checkDetections,
   detectDataFallback,
   detectionLabel,
   eventFromDate,
@@ -232,5 +233,63 @@ describe('splitName and document names', () => {
   it('names the saved scan after the person', () => {
     expect(businessCardDocName('Sarah Mitchell', 'Business card 18 Nov')).toBe('Business card – Sarah Mitchell');
     expect(businessCardDocName(null, 'Business card 18 Nov')).toBe('Business card 18 Nov');
+  });
+});
+
+describe('checkDetections (dates the text really names)', () => {
+  // The lease letter: NSDataDetector reads "before 30 November 2026" as a span
+  // from now (18 November) to the 30th — the chip showed today's date.
+  const text =
+    'Your current lease expires on\n31 December 2026. Please sign and return the enclosed form\nbefore 30 November 2026.';
+  const now = new Date(2026, 10, 18, 12).getTime();
+  const at = (s: string) => text.indexOf(s);
+  const lease: DetectedData = {
+    type: 'date', text: '31 December 2026', value: '31 December 2026',
+    range: [at('31 December'), 16], date: new Date(2026, 11, 31, 12).getTime(), hasTime: false, duration: 0,
+  };
+  const before: DetectedData = {
+    type: 'date', text: 'before 30 November 2026', value: 'before 30 November 2026',
+    range: [at('before 30'), 23], date: now, hasTime: false, duration: 12 * 24 * 3600,
+  };
+
+  it('keeps a date whose day is written in its words', () => {
+    expect(checkDetections([lease], text)).toEqual([lease]);
+  });
+
+  it('uses the end of a "before …" span, never today', () => {
+    const [d] = checkDetections([before], text);
+    expect(new Date(d.date!).getDate()).toBe(30);
+    expect(new Date(d.date!).getMonth()).toBe(10);
+    expect(d.duration).toBe(0);
+    expect(detectionLabel(d)).toBe('30 November 2026');
+  });
+
+  it('drops a date the words do not name (a bare time or weekday read as a day near today)', () => {
+    const t = 'Office hours: Monday at 9:15.';
+    const d: DetectedData = {
+      type: 'date', text: 'Monday at 9:15', value: 'Monday at 9:15', range: [t.indexOf('Monday'), 14],
+      date: new Date(2026, 10, 23, 9, 15).getTime(), hasTime: true,
+    };
+    expect(checkDetections([d], t)).toEqual([]);
+  });
+
+  it('accepts numeric and ordinal days', () => {
+    const t = 'Due 12/03/2026, or the 1st of April.';
+    const numeric: DetectedData = {
+      type: 'date', text: '12/03/2026', value: '12/03/2026', range: [t.indexOf('12/'), 10],
+      date: new Date(2026, 2, 12, 12).getTime(), hasTime: false,
+    };
+    const ordinal: DetectedData = {
+      type: 'date', text: '1st of April', value: '1st of April', range: [t.indexOf('1st'), 12],
+      date: new Date(2027, 3, 1, 12).getTime(), hasTime: false,
+    };
+    expect(checkDetections([numeric, ordinal], t)).toHaveLength(2);
+  });
+
+  it('moves a stale range onto the words, and drops words that are not in the text', () => {
+    const phone: DetectedData = { type: 'phone', text: '555-0148', value: '555-0148', range: [0, 8] };
+    const t = 'Call 555-0148 today.';
+    expect(checkDetections([phone], t)[0].range).toEqual([5, 8]);
+    expect(checkDetections([{ ...phone, text: '555-9999', value: '555-9999' }], t)).toEqual([]);
   });
 });

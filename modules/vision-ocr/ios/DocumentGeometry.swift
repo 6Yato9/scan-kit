@@ -98,8 +98,8 @@ enum DocumentGeometry {
   // MARK: - Detection
 
   /// Page outline in an upright bitmap, or nil when not confident.
-  static func detect(_ image: CGImage, minArea: CGFloat = 0.15) -> [CGPoint]? {
-    detect(handler: VNImageRequestHandler(cgImage: image, options: [:]), minArea: minArea)
+  static func detect(_ image: CGImage, minArea: CGFloat = 0.15, inset: CGFloat = detectionInset) -> [CGPoint]? {
+    detect(handler: VNImageRequestHandler(cgImage: image, options: [:]), minArea: minArea, inset: inset)
   }
 
   /// Runs document segmentation and rectangle detection and keeps the largest
@@ -109,10 +109,12 @@ enum DocumentGeometry {
   /// rectangle detection finds the whole sheet. The page is the dominant
   /// object in a photo of a page, so larger wins.
   ///
-  /// The corners are returned exactly where the detector put them, ON the
-  /// paper edge: no inward safety inset (an inset is what cut page corners).
+  /// The corners are then pulled in by `inset` (default `detectionInset`, a
+  /// fraction of the page's size, not a fixed margin: a fixed inset is what
+  /// used to cut page corners) so no sliver of background stays on the page.
   static func detect(handler: VNImageRequestHandler, minArea: CGFloat = 0.15,
-                     maxArea: CGFloat = 0.985, useRectangles: Bool = true) -> [CGPoint]? {
+                     maxArea: CGFloat = 0.985, useRectangles: Bool = true,
+                     inset: CGFloat = detectionInset) -> [CGPoint]? {
     var segmented: [CGPoint]?
     var rectangles: [[CGPoint]] = []
 
@@ -157,11 +159,13 @@ enum DocumentGeometry {
     // corners are the more precise ones (within ~0.3% of the true corner on
     // test photos; segmentation is a low-resolution mask, up to ~0.7%). When
     // both found the same sheet, take the rectangle's corners.
+    let best: [CGPoint]?
     if let seg = seg, let match = rects.first(where: { maxCornerDistance($0, seg) < 0.03 }) {
-      return match
+      best = match
+    } else {
+      best = (rects + (seg.map { [$0] } ?? [])).max(by: { area($0) < area($1) })
     }
-    let all = rects + (seg.map { [$0] } ?? [])
-    return all.max(by: { area($0) < area($1) })
+    return best.map { self.inset($0, by: inset) }
   }
 
   static func maxCornerDistance(_ a: [CGPoint], _ b: [CGPoint]) -> CGFloat {
@@ -218,6 +222,24 @@ enum DocumentGeometry {
     return pts
   }
 
+  /// Detected outlines are pulled in by this fraction of the page's width
+  /// and height on every side. Vision puts the corners on the paper edge or
+  /// up to a few pixels beyond it, which left a thin line of table along the
+  /// page; 0.5% of an A4 page is about 1 mm, far inside any printed margin.
+  /// Only automatic outlines get it: corners a user placed are used as they
+  /// are, and since the photo is kept the crop can still be widened.
+  static let detectionInset: CGFloat = 0.005
+
+  /// `quad` shrunk by `fraction` of the page's own width and height on each
+  /// side, in the page's perspective (the edges stay straight and parallel to
+  /// the originals as the page sees them).
+  static func inset(_ quad: [CGPoint], by fraction: CGFloat) -> [CGPoint] {
+    guard fraction > 0, let map = Homography(unitSquareTo: quad) else { return quad }
+    let lo = fraction, hi = 1 - fraction
+    let pts = [map.apply(lo, lo), map.apply(hi, lo), map.apply(hi, hi), map.apply(lo, hi)]
+    return isConvexClockwise(pts) ? pts : quad
+  }
+
   static func flatten(_ q: [CGPoint]) -> [Double] {
     q.flatMap { [Double($0.x), Double($0.y)] }
   }
@@ -236,15 +258,47 @@ enum DocumentGeometry {
   }
 
   /// Bakes EXIF orientation into the pixels and caps the long edge.
+  /// A JPEG that is already upright, within the cap and not wastefully large
+  /// (a camera capture, see DocumentCameraView.saveCapture) is copied byte
+  /// for byte: no decode, no second generation of JPEG loss.
   static func normalize(srcPath: String, outPath: String, maxEdge: Int, quality: Double) throws -> (Int, Int) {
     try autoreleasepool {
       let src = try source(path: srcPath)
+      if let size = reusableJPEGSize(src, path: srcPath, maxEdge: maxEdge) {
+        let out = URL(fileURLWithPath: outPath)
+        try? FileManager.default.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? FileManager.default.removeItem(at: out)
+        do {
+          try FileManager.default.copyItem(at: URL(fileURLWithPath: srcPath), to: out)
+          return size
+        } catch {
+          // Fall through to a re-encode.
+        }
+      }
       guard let cg = upright(source: src, maxPixel: max(1, maxEdge)) else {
         throw Failure(code: "ERR_IMAGE_READ", message: "Could not decode image")
       }
       try writeJPEG(cg, to: outPath, quality: quality)
       return (cg.width, cg.height)
     }
+  }
+
+  /// Pixel size of `src` when it can stand in for its own normalised copy:
+  /// a baseline JPEG with no rotation to apply, long edge within `maxEdge`,
+  /// at most ~0.6 bytes per pixel (q 0.9-ish for a page photo; a q 1.0 file
+  /// is re-encoded smaller instead).
+  static func reusableJPEGSize(_ src: CGImageSource, path: String, maxEdge: Int) -> (Int, Int)? {
+    guard let type = CGImageSourceGetType(src) as String?, type == "public.jpeg",
+          CGImageSourceGetCount(src) == 1,
+          let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
+          let w = (props[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
+          let h = (props[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
+          w > 0, h > 0, max(w, h) <= maxEdge else { return nil }
+    let orientation = (props[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1
+    guard orientation == 1,
+          let bytes = (try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? NSNumber,
+          bytes.doubleValue <= Double(w * h) * 0.6 else { return nil }
+    return (w, h)
   }
 
   /// Perspective-corrects `quad` of the upright source into an upright JPEG
@@ -329,5 +383,34 @@ enum DocumentGeometry {
       try writeJPEG(rendered, to: outPath, quality: quality)
       return (rendered.width, rendered.height)
     }
+  }
+}
+
+/// The projective map of the unit square onto a quad (corners TL, TR, BR, BL):
+/// where the point (u, v) of the flattened page lies in the frame. Same maths
+/// as lib/capture-session.ts quadPoint.
+struct Homography {
+  private let a, b, c, d, e, f, g, h: CGFloat
+
+  init?(unitSquareTo q: [CGPoint]) {
+    guard q.count == 4 else { return nil }
+    let (x0, y0, x1, y1, x2, y2, x3, y3) = (q[0].x, q[0].y, q[1].x, q[1].y, q[2].x, q[2].y, q[3].x, q[3].y)
+    let dx1 = x1 - x2, dx2 = x3 - x2, dx3 = x0 - x1 + x2 - x3
+    let dy1 = y1 - y2, dy2 = y3 - y2, dy3 = y0 - y1 + y2 - y3
+    var g: CGFloat = 0, h: CGFloat = 0
+    let den = dx1 * dy2 - dx2 * dy1
+    if abs(dx3) > 1e-12 || abs(dy3) > 1e-12 {
+      guard abs(den) > 1e-12 else { return nil }
+      g = (dx3 * dy2 - dx2 * dy3) / den
+      h = (dx1 * dy3 - dx3 * dy1) / den
+    }
+    a = x1 - x0 + g * x1; b = x3 - x0 + h * x3; c = x0
+    d = y1 - y0 + g * y1; e = y3 - y0 + h * y3; f = y0
+    self.g = g; self.h = h
+  }
+
+  func apply(_ u: CGFloat, _ v: CGFloat) -> CGPoint {
+    let w = g * u + h * v + 1
+    return CGPoint(x: (a * u + b * v + c) / w, y: (d * u + e * v + f) / w)
   }
 }

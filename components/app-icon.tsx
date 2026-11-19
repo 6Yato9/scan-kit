@@ -16,6 +16,13 @@
 //   name; SF Symbols' page with a stamp says "mark every page".
 // - 'id-card' (ID card): Ionicons' id-card-outline is an upright badge; ID
 //   cards are landscape, as SF Symbols' person.text.rectangle is.
+// - 'eraser' and 'highlighter' (Mark up tools): Ionicons has no eraser (its
+//   backspace-outline is the keyboard's delete key) and only a paintbrush for
+//   a highlighter; SF Symbols draws both objects.
+// - 'pen' (Mark up's pen tool): the pencil at the regular weight of the
+//   eraser and highlighter beside it (Ionicons' pencil is heavier).
+// - 'split' (Split a PDF): one frame divided in two; the scissors already
+//   mean Extract pages.
 // The pencil is a solid stroke rather than an outline, so it is drawn at the
 // light weight to sit with the outline icons around it.
 // Android and web fall back to the nearest Ionicon.
@@ -24,7 +31,17 @@ import { Ionicons } from '@expo/vector-icons';
 import { SymbolView, type SFSymbol, type SymbolWeight } from 'expo-symbols';
 
 export type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
-type SymbolGlyph = 'signature' | 'rename' | 'long-image' | 'id-card' | 'watermark' | 'rotate-left';
+type SymbolGlyph =
+  | 'signature'
+  | 'rename'
+  | 'long-image'
+  | 'id-card'
+  | 'watermark'
+  | 'rotate-left'
+  | 'eraser'
+  | 'highlighter'
+  | 'pen'
+  | 'split';
 export type AppIconName = IoniconName | SymbolGlyph;
 
 const SYMBOLS: Record<
@@ -43,6 +60,12 @@ const SYMBOLS: Record<
   'id-card': { symbol: 'person.text.rectangle', fallback: 'id-card-outline', scale: 1.1 },
   // Counterclockwise rotation (PDF pages): Ionicons' circular arrows only turn clockwise.
   'rotate-left': { symbol: 'rotate.left', fallback: 'refresh-outline', scale: 1 },
+  // Mark up tools: the objects themselves.
+  eraser: { symbol: 'eraser', fallback: 'backspace-outline', scale: 1 },
+  highlighter: { symbol: 'highlighter', fallback: 'brush-outline', scale: 1 },
+  pen: { symbol: 'pencil', fallback: 'pencil-outline', scale: 1 },
+  // A document split in two (Split, PDF pages).
+  split: { symbol: 'rectangle.split.1x2', fallback: 'documents-outline', scale: 0.95 },
 };
 
 export function isSymbolGlyph(name: AppIconName): name is SymbolGlyph {

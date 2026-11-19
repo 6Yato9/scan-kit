@@ -8,6 +8,16 @@
 //   bounds (never a guessed inner rectangle); a perspective crop of it is still
 //   possible, and — with "Keep original photos" on — the image it was cropped
 //   from is kept, so that crop can be widened back later.
+// - A page edited since its photo was taken (Sign, Markup, Watermark,
+//   Timestamp: its kept photo no longer matches it) shows itself, and a
+//   "This page / Original photo" switch: the original photo can be cropped
+//   again, with a warning that this removes the edits (lib/page-source.ts
+//   originalTargetFor). A redacted page never offers it: Redact deletes the
+//   photo.
+//
+// Outside the crop the photo is dimmed: the bright photo is drawn again,
+// clipped to the outline by four nested half-plane clips (lib/quad.ts
+// edgeClips) — no SVG library needed.
 //
 // Four corner handles move independently (a magnifier shows the area under the
 // finger while one is dragged, so the corner can be put exactly on the paper's
@@ -37,10 +47,11 @@ import { useTheme } from '@/contexts/theme-context';
 import { HeaderTextButton, ScreenHeader } from '@/components/screen-header';
 import { FilterBaker } from '@/components/filter-baker';
 import { useAppLocked } from '@/components/lock-gate';
-import { HIT, Spacing, Type } from '@/lib/theme';
-import { canDetectQuad, cropTargetFor, detectQuad, type CropTarget } from '@/lib/page-source';
+import { HIT, Radius, Spacing, Type } from '@/lib/theme';
+import { canDetectQuad, cropTargetFor, detectQuad, originalTargetFor, type CropTarget } from '@/lib/page-source';
 import {
   FULL_QUAD,
+  edgeClips,
   edgeMidpoint,
   fitRect,
   isConvexQuad,
@@ -55,6 +66,7 @@ import {
   viewToScreen,
   type Fit,
   type PageGeometry,
+  type EdgeClip,
   type Point,
   type Quad,
   type Rotation,
@@ -87,11 +99,19 @@ const CORNER_LABELS = ['Top-left corner', 'Top-right corner', 'Bottom-right corn
 const EDGE_LABELS = ['Top edge', 'Right edge', 'Bottom edge', 'Left edge'];
 
 type Drag = { kind: 'corner' | 'edge'; index: number } | null;
+type Mode = 'page' | 'original';
+
+const ORIGINAL_WARNING =
+  'Starting from the original photo removes anything added to this page since, such as a signature, markup, watermark or timestamp. The filter stays.';
 
 export function CropModal({ visible, docId, pageIndex, target: givenTarget, cacheBust, onCancel, onDone }: Props) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
-  const [target, setTarget] = useState<CropTarget | null>(null);
+  const [pageTarget, setPageTarget] = useState<CropTarget | null>(null);
+  // The page's original photo, when it was edited since (null: not offered).
+  const [originalTarget, setOriginalTarget] = useState<CropTarget | null>(null);
+  const [mode, setMode] = useState<Mode>('page');
+  const target = mode === 'original' && originalTarget ? originalTarget : pageTarget;
   const [imgSize, setImgSize] = useState<{ w: number; h: number } | null>(null);
   const [box, setBox] = useState<{ w: number; h: number } | null>(null);
   const [geometry, setGeometry] = useState<PageGeometry | null>(null);
@@ -113,7 +133,9 @@ export function CropModal({ visible, docId, pageIndex, target: givenTarget, cach
   // What to show, read when the editor opens.
   useEffect(() => {
     if (!visible) {
-      setTarget(null);
+      setPageTarget(null);
+      setOriginalTarget(null);
+      setMode('page');
       setImgSize(null);
       setGeometry(null);
       setDrag(null);
@@ -123,7 +145,9 @@ export function CropModal({ visible, docId, pageIndex, target: givenTarget, cach
     }
     try {
       const t = givenTarget ?? cropTargetFor(docId ?? '', pageIndex ?? 0);
-      setTarget(t);
+      setPageTarget(t);
+      setOriginalTarget(!givenTarget && !t.hasSource ? originalTargetFor(docId ?? '', pageIndex ?? 0) : null);
+      setMode('page');
       setGeometry({ quad: [...t.geometry.quad], rotation: t.geometry.rotation });
     } catch (err) {
       console.error('Crop: target', err);
@@ -193,6 +217,18 @@ export function CropModal({ visible, docId, pageIndex, target: givenTarget, cach
     setGeometry(g => (g ? { quad: quadViewToSource(q, g.rotation), rotation: g.rotation } : g));
   }, []);
 
+  /** Switches between cropping the page as it is and its original photo. */
+  const handleMode = (next: Mode) => {
+    if (next === mode || busy) return;
+    const t = next === 'original' ? originalTarget : pageTarget;
+    if (!t) return;
+    setMode(next);
+    setImgSize(null); // the other image: measured again before anything is drawn
+    setDrag(null);
+    setMessage(null);
+    setGeometry({ quad: [...t.geometry.quad], rotation: t.geometry.rotation });
+  };
+
   const handleFull = () => {
     setMessage(null);
     setView([...FULL_QUAD]);
@@ -224,8 +260,10 @@ export function CropModal({ visible, docId, pageIndex, target: givenTarget, cach
   async function handleDone() {
     if (!target || !geometry || !valid || busy) return;
     // Nothing changed (or a page without a source left whole): nothing to do.
-    const unchanged = sameGeometry(geometry, target.geometry)
-      || (!target.hasSource && geometry.rotation === 0 && isFullQuad(geometry.quad));
+    // Starting again from the original photo is a change even with the same
+    // corners: it removes the edits made since.
+    const unchanged = !target.original && (sameGeometry(geometry, target.geometry)
+      || (!target.hasSource && geometry.rotation === 0 && isFullQuad(geometry.quad)));
     if (unchanged) {
       onCancel();
       return;
@@ -250,10 +288,14 @@ export function CropModal({ visible, docId, pageIndex, target: givenTarget, cach
     return p;
   })();
 
+  const fromOriginal = !!target?.original;
+  const crossed = !valid && !!viewQuad;
   const hint = message?.text
-    ?? (!valid && viewQuad ? 'The corners cross over. Move them so the outline has four sides.'
-      : target?.hasSource ? 'Drag the corners or edges. The whole original is shown, so you can widen the crop.'
-        : 'Drag the corners or edges to fit the page.');
+    ?? (crossed ? 'The corners cross over. Move them so the outline has four sides.'
+      : fromOriginal ? ORIGINAL_WARNING
+        : target?.hasSource ? 'Drag a corner or edge. The whole photo is shown, so you can widen the crop.'
+          : 'Drag a corner or edge to adjust.');
+  const hintColor = message?.error || crossed ? colors.danger : fromOriginal && !message ? colors.chromeWarning : colors.chromeMuted;
 
   const autoAvailable = canDetectQuad();
   const actions: { key: string; icon: ComponentProps<typeof Ionicons>['name']; label: string; a11y: string; onPress: () => void; flip?: boolean; disabled?: boolean; busy?: boolean }[] = [
@@ -288,18 +330,30 @@ export function CropModal({ visible, docId, pageIndex, target: givenTarget, cach
           }
         />
 
+        {originalTarget && (
+          <ModeSwitch
+            mode={mode}
+            onChange={handleMode}
+            disabled={!!busy}
+            colors={{ track: colors.chromeRaised, on: colors.chromeBorder, text: colors.chromeText, muted: colors.chromeMuted }}
+          />
+        )}
+
         <View style={styles.cropArea} onLayout={e => setBox({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}>
           {fit && displayUri && imgSize && (
             <View pointerEvents="none" style={[styles.abs, { left: fit.offX, top: fit.offY, width: fit.dispW, height: fit.dispH }]}>
               <TurnedImage uri={displayUri} width={fit.dispW} height={fit.dispH} rotation={rotation} />
             </View>
           )}
+          {fit && displayUri && imgSize && box && screenPts && (
+            <OutsideDim uri={displayUri} fit={fit} rotation={rotation} pts={screenPts} box={box} scrim={colors.chromeScrim} />
+          )}
           {!fit && !message?.error && <ActivityIndicator style={StyleSheet.absoluteFill} color={colors.chromeMuted} />}
 
           {screenPts && (
             <>
               {screenPts.map((a, i) => (
-                <Segment key={`s${i}`} a={a} b={screenPts[(i + 1) % 4]} color={lineColor} />
+                <Segment key={`s${i}`} a={a} b={screenPts[(i + 1) % 4]} color={lineColor} halo={colors.chromeHalo} />
               ))}
               {[0, 1, 2, 3].map(i => {
                 const a = screenPts[i], b = screenPts[(i + 1) % 4];
@@ -338,7 +392,7 @@ export function CropModal({ visible, docId, pageIndex, target: givenTarget, cach
                     <View
                       style={[
                         styles.ring,
-                        { borderColor: lineColor, backgroundColor: active ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.25)' },
+                        { borderColor: lineColor, backgroundColor: active ? colors.chromeHandleActive : colors.chromeHandleFill },
                       ]}
                     />
                   </View>
@@ -357,17 +411,20 @@ export function CropModal({ visible, docId, pageIndex, target: givenTarget, cach
               box={box}
               accent={lineColor}
               ringColor={colors.chromeText}
+              halo={colors.chromeHalo}
               background={colors.chrome}
             />
           )}
         </View>
 
-        <Text
-          style={[Type.footnote, styles.hint, { color: message?.error || (!valid && viewQuad) ? colors.danger : colors.chromeMuted }]}
-          accessibilityLiveRegion="polite"
-        >
-          {hint}
-        </Text>
+        <View style={styles.hintRow}>
+          {fromOriginal && !message && !crossed && (
+            <Ionicons name="alert-circle-outline" size={16} color={hintColor} style={styles.hintIcon} />
+          )}
+          <Text style={[Type.footnote, styles.hint, { color: hintColor }]} accessibilityLiveRegion="polite">
+            {hint}
+          </Text>
+        </View>
 
         <View style={[styles.actions, { backgroundColor: colors.chromeRaised, borderTopColor: colors.chromeBorder, paddingBottom: insets.bottom + Spacing.xs }]}>
           {actions.map(a => (
@@ -420,7 +477,7 @@ function TurnedImage({ uri, width, height, rotation }: { uri: string; width: num
 }
 
 /** A straight line between two screen points, with a dark halo so it reads on any photo. */
-function Segment({ a, b, color }: { a: Point; b: Point; color: string }) {
+function Segment({ a, b, color, halo }: { a: Point; b: Point; color: string; halo: string }) {
   const len = Math.hypot(b.x - a.x, b.y - a.y);
   const angle = Math.atan2(b.y - a.y, b.x - a.x);
   const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
@@ -429,10 +486,94 @@ function Segment({ a, b, color }: { a: Point; b: Point; color: string }) {
       pointerEvents="none"
       style={[
         styles.segment,
-        { left: mid.x - len / 2, top: mid.y - 2, width: len, transform: [{ rotate: `${angle}rad` }] },
+        { left: mid.x - len / 2, top: mid.y - 2, width: len, backgroundColor: halo, transform: [{ rotate: `${angle}rad` }] },
       ]}
     >
       <View style={[styles.segmentLine, { backgroundColor: color }]} />
+    </View>
+  );
+}
+
+/**
+ * Dims the photo outside the outline `pts`: a scrim over the whole photo, then
+ * the bright photo again, clipped to the outline by four nested half-plane
+ * clips (lib/quad.ts edgeClips). Each clip is a big square turned to lie along
+ * one edge with overflow hidden; the view inside it turns back, so the next
+ * clip and finally the photo are placed in the crop area's own coordinates.
+ */
+function OutsideDim({
+  uri, fit, rotation, pts, box, scrim,
+}: {
+  uri: string; fit: Fit; rotation: Rotation; pts: Point[]; box: { w: number; h: number }; scrim: string;
+}) {
+  const clips = edgeClips(pts, box.w, box.h);
+  const nest = (rest: EdgeClip[]): React.ReactNode => {
+    if (rest.length === 0) {
+      return (
+        <View style={[styles.abs, { left: fit.offX, top: fit.offY, width: fit.dispW, height: fit.dispH }]}>
+          <TurnedImage uri={uri} width={fit.dispW} height={fit.dispH} rotation={rotation} />
+        </View>
+      );
+    }
+    const [c, ...more] = rest;
+    return (
+      <View
+        collapsable={false}
+        style={[styles.clip, { left: c.left, top: c.top, width: c.size, height: c.size, transform: [{ rotate: `${c.angle}rad` }] }]}
+      >
+        <View
+          collapsable={false}
+          style={[styles.abs, { left: c.inner.left, top: c.inner.top, width: box.w, height: box.h, transform: [{ rotate: `${-c.angle}rad` }] }]}
+        >
+          {nest(more)}
+        </View>
+      </View>
+    );
+  };
+  return (
+    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+      <View style={[styles.abs, { left: fit.offX, top: fit.offY, width: fit.dispW, height: fit.dispH, backgroundColor: scrim }]} />
+      {clips && nest(clips)}
+    </View>
+  );
+}
+
+/** "This page / Original photo", drawn for the always-dark chrome. */
+function ModeSwitch({
+  mode, onChange, disabled, colors,
+}: {
+  mode: Mode; onChange: (m: Mode) => void; disabled: boolean;
+  colors: { track: string; on: string; text: string; muted: string };
+}) {
+  const options: { value: Mode; label: string; hint: string }[] = [
+    { value: 'page', label: 'This page', hint: 'Crops the page as it is now' },
+    { value: 'original', label: 'Original photo', hint: 'Crops the photo you scanned again. Anything added to the page since is removed.' },
+  ];
+  return (
+    <View style={[styles.modeTrack, { backgroundColor: colors.track }]} accessibilityRole="radiogroup">
+      {options.map(o => {
+        const on = o.value === mode;
+        return (
+          <Pressable
+            key={o.value}
+            onPress={() => onChange(o.value)}
+            disabled={disabled}
+            accessibilityRole="radio"
+            accessibilityState={{ checked: on, selected: on, disabled }}
+            accessibilityLabel={o.label}
+            accessibilityHint={o.hint}
+            style={[styles.modeItem, on && { backgroundColor: colors.on }]}
+          >
+            <Text
+              style={[Type.subhead, { color: on ? colors.text : colors.muted, fontWeight: on ? '600' : '500' }]}
+              numberOfLines={1}
+              maxFontSizeMultiplier={1.3}
+            >
+              {o.label}
+            </Text>
+          </Pressable>
+        );
+      })}
     </View>
   );
 }
@@ -442,10 +583,10 @@ function Segment({ a, b, color }: { a: Point; b: Point; color: string }) {
  * corner away from the finger, with crosshairs on the exact spot.
  */
 function Loupe({
-  uri, fit, rotation, point, quadScreen, box, accent, ringColor, background,
+  uri, fit, rotation, point, quadScreen, box, accent, ringColor, halo, background,
 }: {
   uri: string; fit: Fit; rotation: Rotation; point: Point; quadScreen: Point[]; box: { w: number; h: number };
-  accent: string; ringColor: string; background: string;
+  accent: string; ringColor: string; halo: string; background: string;
 }) {
   const p = viewToScreen(point, fit);
   // Opposite side from the finger, so it is never under it.
@@ -464,8 +605,11 @@ function Loupe({
         <TurnedImage uri={uri} width={zw} height={zh} rotation={rotation} />
       </View>
       {pts.map((a, i) => (
-        <Segment key={i} a={a} b={pts[(i + 1) % 4]} color={accent} />
+        <Segment key={i} a={a} b={pts[(i + 1) % 4]} color={accent} halo={halo} />
       ))}
+      {/* Two-tone, so the crosshair reads on white paper and on a dark table. */}
+      <View style={[styles.crossHaloH, { backgroundColor: halo }]} />
+      <View style={[styles.crossHaloV, { backgroundColor: halo }]} />
       <View style={[styles.crossH, { backgroundColor: ringColor }]} />
       <View style={[styles.crossV, { backgroundColor: ringColor }]} />
     </View>
@@ -476,12 +620,13 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   busy: { minWidth: 60 },
   abs: { position: 'absolute' },
+  clip: { position: 'absolute', overflow: 'hidden' },
   // Handles at the image edge reach past it; nothing here clips.
   cropArea: { flex: 1, marginHorizontal: Spacing.xxl, marginVertical: Spacing.xl, position: 'relative' },
   handle: { position: 'absolute', width: HIT, height: HIT, alignItems: 'center', justifyContent: 'center' },
   ring: { width: HANDLE_RING, height: HANDLE_RING, borderRadius: HANDLE_RING / 2, borderWidth: 3 },
   edgeGrip: { width: 26, height: 6, borderRadius: 3 },
-  segment: { position: 'absolute', height: 4, justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.28)', borderRadius: 2 },
+  segment: { position: 'absolute', height: 4, justifyContent: 'center', borderRadius: 2 },
   segmentLine: { height: 2 },
   loupe: {
     position: 'absolute',
@@ -491,9 +636,36 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     overflow: 'hidden',
   },
-  crossH: { position: 'absolute', left: LOUPE / 2 - 9, top: LOUPE / 2 - 0.75, width: 18, height: 1.5 },
-  crossV: { position: 'absolute', left: LOUPE / 2 - 0.75, top: LOUPE / 2 - 9, width: 1.5, height: 18 },
-  hint: { textAlign: 'center', paddingHorizontal: Spacing.gutter, paddingBottom: Spacing.sm, minHeight: 36 },
+  crossH: { position: 'absolute', left: LOUPE / 2 - 10, top: LOUPE / 2 - 0.75, width: 20, height: 1.5 },
+  crossV: { position: 'absolute', left: LOUPE / 2 - 0.75, top: LOUPE / 2 - 10, width: 1.5, height: 20 },
+  crossHaloH: { position: 'absolute', left: LOUPE / 2 - 11.5, top: LOUPE / 2 - 2.25, width: 23, height: 4.5, borderRadius: 2.25 },
+  crossHaloV: { position: 'absolute', left: LOUPE / 2 - 2.25, top: LOUPE / 2 - 11.5, width: 4.5, height: 23, borderRadius: 2.25 },
+  hintRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'flex-start',
+    gap: 6,
+    paddingHorizontal: Spacing.gutter,
+    paddingBottom: Spacing.sm,
+    minHeight: 36,
+  },
+  hintIcon: { marginTop: 1 },
+  hint: { textAlign: 'center', flexShrink: 1 },
+  modeTrack: {
+    flexDirection: 'row',
+    marginHorizontal: Spacing.gutter,
+    marginTop: Spacing.sm,
+    padding: 3,
+    borderRadius: Radius.sm + 2,
+  },
+  modeItem: {
+    flex: 1,
+    minHeight: HIT - 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: Radius.sm,
+    paddingHorizontal: Spacing.xs,
+  },
   actions: {
     flexDirection: 'row',
     paddingHorizontal: Spacing.xs,

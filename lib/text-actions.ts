@@ -47,7 +47,69 @@ export async function detectData(text: string): Promise<DetectedData[]> {
   } catch {
     found = detectDataFallback(text);
   }
-  return tidyDetections(found);
+  return tidyDetections(checkDetections(found, text));
+}
+
+/** Words that make NSDataDetector report a span from NOW to the date ("before 30 November"). */
+const RANGE_LEAD = /^\s*(?:before|until|till|til|by|no later than|up to|through|avant|jusqu['’]au|bis|vor|hasta|antes del?|entro|prima del?|tot|voor)\b[\s,]*/i;
+
+/**
+ * Keeps only what is really in `text`. A detection's range must point at its
+ * own words (a stale range is moved to where the words are, or dropped). A
+ * date must be one the text actually names: NSDataDetector reads "before 30
+ * November 2026" as a span starting TODAY, and a bare time or weekday as a day
+ * near today — a chip for today's date on a letter that never mentions it
+ * would add a wrong event to the calendar. So a date is kept only when the
+ * day of the month it gives is written in its words; for a span that ends on
+ * the named day ("before…", "until…") the end is used.
+ */
+export function checkDetections(found: DetectedData[], text: string): DetectedData[] {
+  const out: DetectedData[] = [];
+  for (const d of found) {
+    if (!d || typeof d.text !== 'string' || !d.text) continue;
+    let range = d.range;
+    const valid =
+      Array.isArray(range) &&
+      range[0] >= 0 &&
+      range[0] + range[1] <= text.length &&
+      text.slice(range[0], range[0] + range[1]) === d.text;
+    if (!valid) {
+      const at = text.indexOf(d.text);
+      if (at < 0) continue;
+      range = [at, d.text.length];
+    }
+    const placed = range === d.range ? d : { ...d, range };
+    if (placed.type !== 'date') {
+      out.push(placed);
+      continue;
+    }
+    const date = checkedDate(placed);
+    if (date) out.push(date);
+  }
+  return out;
+}
+
+/** Day-of-month numbers written in `words` ("30", "30th", "1er", "03" in 12/03/2026). */
+function writtenDays(words: string): Set<number> {
+  const days = new Set<number>();
+  for (const m of words.matchAll(/(?<!\d)(\d{1,2})(?:st|nd|rd|th|er|e|\.)?(?!\d)/gi)) {
+    const n = Number(m[1]);
+    if (n >= 1 && n <= 31) days.add(n);
+  }
+  return days;
+}
+
+/** The date if its words name its day; the end of a span when the words name that instead; else null. */
+function checkedDate(d: DetectedData): DetectedData | null {
+  if (typeof d.date !== 'number' || !Number.isFinite(d.date)) return null;
+  const days = writtenDays(d.text);
+  const names = (ms: number) => days.has(new Date(ms).getDate());
+  const span = (d.duration ?? 0) > 0 ? d.date + (d.duration as number) * 1000 : null;
+  const endFirst = RANGE_LEAD.test(d.text);
+  if (span !== null && endFirst && names(span)) return { ...d, date: span, duration: 0 };
+  if (names(d.date)) return d;
+  if (span !== null && names(span)) return { ...d, date: span, duration: 0 };
+  return null;
 }
 
 /** Drops duplicates (same kind and value) and caps the list, keeping reading order. */
@@ -130,7 +192,9 @@ export function detectionLabel(d: DetectedData, max = 32): string {
       s = d.value;
       break;
     case 'date':
-      s = typeof d.date === 'number' ? formatDetectedDate(d.date, !!d.hasTime) : d.text;
+      // The date as written on the page ("30 November 2026"), without a
+      // leading "before" / "until".
+      s = d.text.replace(RANGE_LEAD, '') || d.text;
       break;
     default:
       s = d.text;

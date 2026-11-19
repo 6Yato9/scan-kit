@@ -8,12 +8,31 @@ jest.mock('../lib/bake', () => ({
   subscribeBakeChanges: (fn: (id: string) => void) => { mockListeners.add(fn); return () => mockListeners.delete(fn); },
 }));
 let mockLayout = 0;
-jest.mock('../lib/files', () => ({ pageLayoutGeneration: () => mockLayout }));
+const mockRestore = jest.fn((_src: string, id: string, i: number) => `file:///docs/${id}/page-${i}.jpg`);
+jest.mock('../lib/files', () => ({
+  pageLayoutGeneration: () => mockLayout,
+  restorePageWithShadow: (src: string, id: string, i: number) => mockRestore(src, id, i),
+}));
+const mockExisting = new Set<string>();
+jest.mock('expo-file-system', () => ({
+  File: class {
+    uri: string;
+    constructor(dir: any, name?: string) { this.uri = name ? `${typeof dir === 'string' ? dir : dir.uri}/${name}` : String(dir); }
+    get exists() { return mockExisting.has(this.uri); }
+  },
+}));
 const mockTarget = jest.fn();
 const mockRecrop = jest.fn(async (id: string, i: number) => `file:///docs/${id}/page-${i}.jpg`);
+let mockStash: { dir: string; written: { bytes: number; md5: string | null } } | null = null;
+let mockUnfiltered: { bytes: number; md5: string | null } | null = null;
+const mockDiscard = jest.fn();
 jest.mock('../lib/page-source', () => ({
   cropTargetFor: (...a: unknown[]) => mockTarget(...a),
   recropPage: (id: string, i: number) => mockRecrop(id, i),
+  takeCropStash: () => { const s = mockStash; mockStash = null; return s; },
+  discardCropStash: (s: unknown) => mockDiscard(s),
+  unfilteredStamp: () => mockUnfiltered,
+  sameStamp: (a: any, b: any) => !!a && !!b && a.bytes === b.bytes && a.md5 === b.md5,
 }));
 
 import { cropUndoFor, CropUndoError, rebakeAfterCrop, recropPatch, undoTargetFor } from '../lib/recrop';
@@ -26,6 +45,9 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockPending = new Map();
   mockLayout = 0;
+  mockStash = null;
+  mockUnfiltered = null;
+  mockExisting.clear();
 });
 
 test('recropPatch replaces only the cropped page\'s URI', async () => {
@@ -82,5 +104,40 @@ describe('Undo', () => {
     expect(() => undoTargetFor(u)).toThrow(CropUndoError);
     mockLayout = 1;
     expect(() => undoTargetFor(u)).toThrow(/moved or deleted/);
+  });
+});
+
+describe('Undo of a crop that replaced an edited page (starting again from the original photo)', () => {
+  const written = { bytes: 5, md5: 'm' };
+  const stash = { dir: 'file:///cache/page-source/undo-d-1', written };
+  const after = { quad: [0, 0, 1, 0, 1, 0.5, 0, 0.5], rotation: 0 as const };
+
+  test('uses the copy of the page the crop kept, even with the same corners', () => {
+    mockStash = stash;
+    const u = cropUndoFor('d', 0, target(true, after.quad), after, false)!;
+    expect(u.stash).toBe(stash);
+  });
+
+  test('puts that copy back (not a re-crop) while the page is what the crop wrote', async () => {
+    mockStash = stash;
+    const u = cropUndoFor('d', 1, target(true), after, true)!;
+    mockExisting.add(`${stash.dir}/page-0.jpg`);
+    mockUnfiltered = written;
+    const t = undoTargetFor(u);
+    const patch = await recropPatch(doc() as any, 1, t, u.geometry, true);
+    expect(mockRestore).toHaveBeenCalledWith(`${stash.dir}/page-0.jpg`, 'd', 1);
+    expect(mockRecrop).not.toHaveBeenCalled();
+    expect(patch.pages).toEqual(['p0', 'file:///docs/d/page-1.jpg']);
+    expect(mockDiscard).toHaveBeenCalledWith(stash);
+  });
+
+  test('refused when the page changed since, or the copy is gone', async () => {
+    mockStash = stash;
+    const u = cropUndoFor('d', 0, target(true), after, true)!;
+    expect(() => undoTargetFor(u)).toThrow(/no longer available/);
+    mockExisting.add(`${stash.dir}/page-0.jpg`);
+    mockUnfiltered = { bytes: 9, md5: 'other' };
+    await expect(recropPatch(doc() as any, 0, undoTargetFor(u), u.geometry, true)).rejects.toThrow(CropUndoError);
+    expect(mockRestore).not.toHaveBeenCalled();
   });
 });

@@ -11,6 +11,10 @@
 // drag does (resize a corner, move a box, or draw a new one), so there are no
 // competing recognisers; the box maths is lib/redact.ts (unit-tested). The
 // screen around it doesn't scroll, so a drag on the page is always a drag.
+//
+// Two fingers zoom (up to MAX_ZOOM) and move the zoomed page, so a box can be
+// drawn exactly round a line of small print. Boxes are kept in page points
+// (the page at its fitted size); only what is drawn is scaled.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Image, Pressable, StyleSheet, View, type AccessibilityActionEvent } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -41,6 +45,22 @@ const REMOVE = 26;
 const REMOVE_HIT = 44;
 /** How see-through boxes are on the preview (burned in fully opaque). */
 const BOX_OPACITY = 0.78;
+const MAX_ZOOM = 4;
+
+/** The zoomed page: scale k, the page's top-left at (x, y) in the frame. */
+type View2 = { k: number; x: number; y: number };
+const FIT: View2 = { k: 1, x: 0, y: 0 };
+
+/** Keeps the zoomed page covering the frame (never pulled inside it). */
+function clampView(v: View2, width: number, height: number): View2 {
+  const k = Math.min(MAX_ZOOM, Math.max(1, v.k));
+  if (k <= 1.0001) return FIT;
+  return {
+    k,
+    x: Math.min(0, Math.max(width - width * k, v.x)),
+    y: Math.min(0, Math.max(height - height * k, v.y)),
+  };
+}
 
 type Mode =
   | { kind: 'none' }
@@ -72,15 +92,31 @@ export function RedactEditor({
   const bounds = useMemo(() => ({ width, height }), [width, height]);
   // While a finger is down, the box being changed lives here (points).
   const [live, setLive] = useState<{ id: string; box: Box } | null>(null);
-  const latest = useRef({ boxes, selectedId, bounds, onChange, onSelect });
-  latest.current = { boxes, selectedId, bounds, onChange, onSelect };
+  const [view, setView] = useState<View2>(FIT);
+  const latest = useRef({ boxes, selectedId, bounds, onChange, onSelect, view });
+  latest.current = { boxes, selectedId, bounds, onChange, onSelect, view };
 
-  // A page switch or a resize mid-gesture: drop the half-made box.
-  useEffect(() => { setLive(null); }, [uri, width, height]);
+  // A page switch or a resize mid-gesture: drop the half-made box, and the zoom.
+  useEffect(() => {
+    setLive(null);
+    setView(FIT);
+  }, [uri, width, height]);
 
   const gesture = useMemo(() => {
     // Shared between the gesture callbacks by reference (see placement-frame).
-    const g: { mode: Mode; moved: boolean; box: Box | null } = { mode: { kind: 'none' }, moved: false, box: null };
+    const g: {
+      mode: Mode;
+      moved: boolean;
+      box: Box | null;
+      /** A second finger came down during this drag: it was a zoom, not a box. */
+      pinched: boolean;
+      pinch: { from: View2; fx: number; fy: number } | null;
+    } = { mode: { kind: 'none' }, moved: false, box: null, pinched: false, pinch: null };
+    /** A point in the frame -> page points. */
+    const toPage = (fx: number, fy: number) => {
+      const v = latest.current.view;
+      return { x: (fx - v.x) / v.k, y: (fy - v.y) / v.k };
+    };
     const show = (id: string, box: Box) => {
       g.box = box;
       setLive({ id, box });
@@ -91,32 +127,39 @@ export function RedactEditor({
       .runOnJS(true)
       .minDistance(3)
       .onBegin(e => {
-        const { boxes: bs, selectedId: sel } = latest.current;
+        const { boxes: bs, selectedId: sel, view: v } = latest.current;
         const pts = points();
+        const p = toPage(e.x, e.y);
         g.moved = false;
         g.box = null;
+        g.pinched = false;
         // A corner of the selected box first, then any box, else a new one.
+        // Reaches are in screen points, so they shrink on the page as it zooms.
         const si = sel ? bs.findIndex(b => b.id === sel) : -1;
         if (si >= 0) {
-          const h = cornerAt(pts[si], e.x, e.y, HANDLE_REACH);
+          const h = cornerAt(pts[si], p.x, p.y, HANDLE_REACH / v.k);
           if (h) {
             g.mode = { kind: 'resize', id: bs[si].id, handle: h, from: pts[si] };
             return;
           }
         }
-        const hit = boxAt(pts, e.x, e.y, BODY_SLOP);
-        g.mode = hit >= 0 ? { kind: 'move', id: bs[hit].id, from: pts[hit] } : { kind: 'draw', x: e.x, y: e.y };
+        const hit = boxAt(pts, p.x, p.y, BODY_SLOP / v.k);
+        g.mode = hit >= 0 ? { kind: 'move', id: bs[hit].id, from: pts[hit] } : { kind: 'draw', x: p.x, y: p.y };
       })
       .onUpdate(e => {
+        if (g.pinched) return;
         const m = g.mode;
         const bd = latest.current.bounds;
+        const k = latest.current.view.k;
+        const dx = e.translationX / k;
+        const dy = e.translationY / k;
         g.moved = true;
         if (m.kind === 'draw') {
-          show('new', boxFromPoints(m.x, m.y, m.x + e.translationX, m.y + e.translationY, bd));
+          show('new', boxFromPoints(m.x, m.y, m.x + dx, m.y + dy, bd));
         } else if (m.kind === 'move') {
-          show(m.id, moveBox(m.from, e.translationX, e.translationY, bd));
+          show(m.id, moveBox(m.from, dx, dy, bd));
         } else if (m.kind === 'resize') {
-          show(m.id, resizeFreeBox(m.from, m.handle, e.translationX, e.translationY, bd));
+          show(m.id, resizeFreeBox(m.from, m.handle, dx, dy, bd));
         }
       })
       .onFinalize(() => {
@@ -125,7 +168,7 @@ export function RedactEditor({
         g.mode = { kind: 'none' };
         g.box = null;
         setLive(null);
-        if (!g.moved || !box) return;
+        if (g.pinched || !g.moved || !box) return;
         const { boxes: bs, bounds: bd, onChange: change, onSelect: select } = latest.current;
         if (m.kind === 'draw') {
           // A short stroke is a slip, not a box.
@@ -144,7 +187,8 @@ export function RedactEditor({
       .runOnJS(true)
       .onEnd((e, success) => {
         if (!success) return;
-        const hit = boxAt(points(), e.x, e.y, BODY_SLOP);
+        const p = toPage(e.x, e.y);
+        const hit = boxAt(points(), p.x, p.y, BODY_SLOP / latest.current.view.k);
         const { boxes: bs, selectedId: sel, onSelect: select } = latest.current;
         const id = hit >= 0 ? bs[hit].id : null;
         if (id !== sel) {
@@ -153,11 +197,40 @@ export function RedactEditor({
         }
       });
 
-    return Gesture.Race(pan, tap);
+    // Two fingers: zoom around them, and move the zoomed page as they move.
+    const pinch = Gesture.Pinch()
+      .runOnJS(true)
+      .onStart(e => {
+        g.pinched = true;
+        g.box = null;
+        setLive(null);
+        g.pinch = { from: latest.current.view, fx: e.focalX, fy: e.focalY };
+      })
+      .onUpdate(e => {
+        const start = g.pinch;
+        if (!start) return;
+        const { width: w, height: h } = latest.current.bounds;
+        const k = Math.min(MAX_ZOOM, Math.max(1, start.from.k * e.scale));
+        const px = (start.fx - start.from.x) / start.from.k;
+        const py = (start.fy - start.from.y) / start.from.k;
+        setView(clampView({ k, x: e.focalX - px * k, y: e.focalY - py * k }, w, h));
+      })
+      .onFinalize(() => {
+        g.pinch = null;
+      });
+
+    return Gesture.Simultaneous(pinch, Gesture.Race(pan, tap));
   }, [latest]);
 
-  const shown = boxes.map(b => ({ id: b.id, source: b.source, box: live && live.id === b.id ? live.box : toPoints(b, bounds) }));
-  const drawing = live && live.id === 'new' ? live.box : null;
+  /** A box in page points -> where it is drawn in the (zoomed) frame. */
+  const onScreen = (b: Box): Box => ({ x: b.x * view.k + view.x, y: b.y * view.k + view.y, w: b.w * view.k, h: b.h * view.k });
+
+  const shown = boxes.map(b => ({
+    id: b.id,
+    source: b.source,
+    box: onScreen(live && live.id === b.id ? live.box : toPoints(b, bounds)),
+  }));
+  const drawing = live && live.id === 'new' ? onScreen(live.box) : null;
   const sel = shown.find(b => b.id === selectedId) ?? null;
 
   const remove = (id: string) => {
@@ -202,8 +275,13 @@ export function RedactEditor({
 
   return (
     <View style={[styles.frame, { backgroundColor: colors.input }]}>
-      <View style={{ width, height }}>
-        <Image source={{ uri }} style={{ width, height }} resizeMode="stretch" accessibilityIgnoresInvertColors />
+      <View style={[styles.clip, { width, height }]}>
+        <Image
+          source={{ uri }}
+          style={{ position: 'absolute', left: view.x, top: view.y, width: width * view.k, height: height * view.k }}
+          resizeMode="stretch"
+          accessibilityIgnoresInvertColors
+        />
         <View style={[StyleSheet.absoluteFill, styles.edge, { borderColor: colors.thumbBorder }]} pointerEvents="none" />
         <GestureDetector gesture={gesture}>
           <View
@@ -305,6 +383,7 @@ export function RedactEditor({
 const styles = StyleSheet.create({
   frame: { alignSelf: 'center', padding: Spacing.sm, borderRadius: Radius.md },
   edge: { borderWidth: StyleSheet.hairlineWidth },
+  clip: { overflow: 'hidden' },
   box: { position: 'absolute' },
   outline: { borderWidth: 2 },
   dot: {

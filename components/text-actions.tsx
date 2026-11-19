@@ -3,12 +3,19 @@
 // under the text in the viewer's Recognized text sheet and the Extract text
 // tool:
 //   - Read aloud (system voices, in the text's language) with the sentence
-//     being read shown above the chips, its current word highlighted;
+//     being read shown, its current word highlighted;
 //   - one chip per phone number, email, link, address and date found in the
 //     text (NSDataDetector), each offering its action and Copy;
 //   - one chip per QR code or barcode on the page image (Vision).
 // Everything runs on the device. Nothing is shown when there is nothing to do.
-import { useCallback, useEffect, useRef, useState } from 'react';
+//
+// RecognizedTextPanel is the viewer's whole Recognized text body: the text,
+// Read aloud as a control beside Edit (not a chip: chips are data found in
+// the text), the chips and the sheet's footer. While the text is edited the
+// chips and the footer step aside for the keyboard; while it is read aloud
+// the player takes the place of the chips and the footer, at their height,
+// so nothing jumps.
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   AccessibilityInfo,
   ActionSheetIOS,
@@ -29,6 +36,7 @@ import { useTheme } from '@/contexts/theme-context';
 import { notifyError, notifySuccess, tapLight } from '@/lib/haptics';
 import { HIT, Radius, Spacing, Type } from '@/lib/theme';
 import { hasReadableText, sentenceAt, useReadAloud } from '@/lib/read-aloud';
+import { RecognizedText } from '@/components/recognized-text';
 import {
   addDateToCalendar,
   barcodeTypeLabel,
@@ -77,6 +85,11 @@ type Props = {
   bleed?: number;
   /** The page image, to look for QR codes and barcodes on it. */
   imageUri?: string | null;
+  /**
+   * Offer Read aloud as the first chip, with the player above the chips
+   * (default). RecognizedTextPanel turns it off and offers it beside Edit.
+   */
+  readAloud?: boolean;
   style?: StyleProp<ViewStyle>;
 };
 
@@ -97,7 +110,7 @@ function chooseAction(title: string, message: string | undefined, actions: { lab
   ]);
 }
 
-export function TextActions({ text, imageUri, centered = false, bleed = 0, style }: Props) {
+export function TextActions({ text, imageUri, centered = false, bleed = 0, readAloud = true, style }: Props) {
   const { colors } = useTheme();
   const reader = useReadAloud(text);
   const [found, setFound] = useState<DetectedData[]>([]);
@@ -260,8 +273,8 @@ export function TextActions({ text, imageUri, centered = false, bleed = 0, style
     [copy],
   );
 
-  const readable = reader.available && hasReadableText(text);
-  const reading = reader.state !== 'idle';
+  const readable = readAloud && reader.available && hasReadableText(text);
+  const reading = readAloud && reader.state !== 'idle';
   if (!readable && !found.length && !codes.length) return null;
 
   const chip = (key: string, icon: IconName, label: string, a11y: string, onPress: () => void) => {
@@ -323,35 +336,70 @@ export function TextActions({ text, imageUri, centered = false, bleed = 0, style
 /** A wrapped sentence on one line. */
 const flat = (t: string) => t.replace(/\s*\n\s*/g, ' ');
 
-/** The sentence being read, its current word highlighted, with pause / resume and stop. */
-function ReadAlong({ reader }: { reader: ReturnType<typeof useReadAloud> }) {
+const READ_LINE = 20;
+
+/**
+ * The sentence being read, its current word highlighted, with pause / resume
+ * (and stop, unless `height` is given). With `height` it is laid out to fill
+ * exactly that height (RecognizedTextPanel puts it in the place of the chips
+ * and the footer): as many lines as fit, and on a single line the words just
+ * before the current one are skipped so it stays in view.
+ */
+function ReadAlong({ reader, height }: { reader: ReturnType<typeof useReadAloud>; height?: number }) {
   const { colors } = useTheme();
   // Where the sentence shown stays between words (no range is reported for spaces).
   const lastWord = useRef(0);
   const source = reader.spoken;
   if (reader.word) lastWord.current = reader.word[0];
   const at = lastWord.current;
-  const [s, e] = sentenceAt(source, at);
-  let word = reader.word && reader.word[0] >= s && reader.word[1] <= e ? reader.word : null;
+  const [s0, e] = sentenceAt(source, at);
+  let word = reader.word && reader.word[0] >= s0 && reader.word[1] <= e ? reader.word : null;
   if (word) {
     // Highlight the word, not the comma or full stop after it.
     let end = word[1];
     while (end > word[0] + 1 && /[\s,.;:!?…)"'»]/.test(source[end - 1])) end--;
     word = [word[0], end];
   }
+  const fitted = height !== undefined;
+  const lines = fitted ? Math.max(1, Math.min(4, Math.floor((height - Spacing.sm * 2) / READ_LINE))) : 3;
+  // One line: start a few words before the current one, so it is never cut off.
+  let s = s0;
+  let lead = '';
+  if (lines === 1 && word && word[0] - s0 > 24) {
+    const from = source.lastIndexOf(' ', word[0] - 16);
+    if (from > s0) {
+      s = from + 1;
+      lead = '…';
+    }
+  }
   const sentence = flat(source.slice(s, e));
   const paused = reader.state === 'paused';
   const starting = reader.state === 'starting';
 
   return (
-    <View style={[styles.readAlong, { backgroundColor: colors.accentLight }]}>
+    <View
+      style={[
+        styles.readAlong,
+        { backgroundColor: colors.accentLight },
+        fitted && { height, paddingVertical: 0 },
+      ]}
+    >
       <View style={styles.readText}>
-        <Text style={[Type.caption, styles.readLabel, { color: colors.accent }]}>
-          {paused ? 'Paused' : starting ? 'Starting…' : 'Reading aloud'}
-        </Text>
-        <Text style={[Type.callout, styles.readSentence, { color: colors.text }]} numberOfLines={3} accessibilityLiveRegion="polite">
-          {word ? (
+        {fitted ? null : (
+          <Text style={[Type.caption, styles.readLabel, { color: colors.accent }]}>
+            {paused ? 'Paused' : starting ? 'Starting…' : 'Reading aloud'}
+          </Text>
+        )}
+        <Text
+          style={[Type.callout, styles.readSentence, { color: colors.text }, fitted ? { minHeight: 0 } : null]}
+          numberOfLines={lines}
+          accessibilityLiveRegion="polite"
+        >
+          {starting && fitted ? (
+            <Text style={{ color: colors.muted }}>Starting…</Text>
+          ) : word ? (
             <>
+              {lead}
               {flat(source.slice(s, word[0]))}
               <Text style={[styles.word, { backgroundColor: colors.accent, color: colors.onAccent }]}>
                 {flat(source.slice(word[0], word[1]))}
@@ -377,19 +425,103 @@ function ReadAlong({ reader }: { reader: ReturnType<typeof useReadAloud> }) {
       >
         <Ionicons name={paused ? 'play' : 'pause'} size={22} color={colors.accent} />
       </Pressable>
-      <Pressable
-        onPress={() => {
-          tapLight();
-          reader.stop();
-        }}
-        hitSlop={4}
-        accessibilityRole="button"
-        accessibilityLabel="Stop reading"
-        style={({ pressed }) => [styles.readBtn, pressed && styles.pressed]}
-      >
-        <Ionicons name="stop" size={20} color={colors.accent} />
-      </Pressable>
+      {fitted ? null : (
+        <Pressable
+          onPress={() => {
+            tapLight();
+            reader.stop();
+          }}
+          hitSlop={4}
+          accessibilityRole="button"
+          accessibilityLabel="Stop reading"
+          style={({ pressed }) => [styles.readBtn, pressed && styles.pressed]}
+        >
+          <Ionicons name="stop" size={20} color={colors.accent} />
+        </Pressable>
+      )}
     </View>
+  );
+}
+
+/**
+ * The viewer's Recognized text body (see the header): the selectable,
+ * editable text with Read aloud beside Edit, then the chips and `footer`
+ * (Copy all / Share). Editing hides the chips and the footer so the text gets
+ * the room above the keyboard; reading aloud lays the player over them.
+ */
+export function RecognizedTextPanel({
+  value,
+  onChangeText,
+  onSave,
+  keyboardReserve,
+  imageUri,
+  bleed = 0,
+  footer,
+}: {
+  value: string;
+  onChangeText: (text: string) => void;
+  onSave?: (text: string) => Promise<boolean>;
+  /** Height the sheet's other rows need above the keyboard while editing (header, Edit row, padding). */
+  keyboardReserve: number;
+  imageUri?: string | null;
+  bleed?: number;
+  footer?: ReactNode;
+}) {
+  const { colors } = useTheme();
+  const [editing, setEditing] = useState(false);
+  const reader = useReadAloud(value);
+  const readable = reader.available && hasReadableText(value);
+  const reading = reader.state !== 'idle';
+  // The chips + footer zone's height, which the player takes over exactly.
+  const [zoneH, setZoneH] = useState(0);
+
+  const readButton = readable ? (
+    <Pressable
+      onPress={() => {
+        tapLight();
+        if (reading) reader.stop();
+        else reader.start();
+      }}
+      hitSlop={4}
+      accessibilityRole="button"
+      accessibilityLabel={reading ? 'Stop reading' : 'Read aloud'}
+      style={({ pressed }) => [styles.textBtn, pressed && { opacity: 0.5 }]}
+    >
+      <Ionicons name={reading ? 'stop-circle-outline' : 'volume-high-outline'} size={18} color={colors.accent} />
+      <Text style={[Type.subhead, { color: colors.accent, fontWeight: '500' }]}>{reading ? 'Stop' : 'Read aloud'}</Text>
+    </Pressable>
+  ) : null;
+
+  return (
+    <>
+      <RecognizedText
+        value={value}
+        onChangeText={onChangeText}
+        onSave={onSave}
+        onEditingChange={setEditing}
+        keyboardReserve={keyboardReserve}
+        accessory={readButton}
+      />
+      {/* Kept mounted while editing (hidden), so detections and codes found
+          on the page aren't looked for again afterwards. */}
+      <View style={editing ? styles.hidden : null}>
+        <View
+          onLayout={e => setZoneH(Math.round(e.nativeEvent.layout.height))}
+          style={reading ? styles.covered : null}
+          importantForAccessibility={reading ? 'no-hide-descendants' : 'auto'}
+          accessibilityElementsHidden={reading}
+          pointerEvents={reading ? 'none' : 'auto'}
+        >
+          <TextActions text={value} imageUri={imageUri} bleed={bleed} readAloud={false} />
+          {footer}
+        </View>
+        {reading && zoneH > 0 ? (
+          <View style={[styles.player, { height: zoneH }]}>
+            <ReadAlong reader={reader} height={zoneH} />
+          </View>
+        ) : null}
+      </View>
+    </>
   );
 }
 
@@ -424,4 +556,14 @@ const styles = StyleSheet.create({
   readSentence: { lineHeight: 20, minHeight: 60 },
   word: { borderRadius: 3 },
   readBtn: { width: HIT, height: HIT, alignItems: 'center', justifyContent: 'center' },
+  textBtn: {
+    minHeight: HIT,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.xs,
+    paddingHorizontal: Spacing.xs,
+  },
+  hidden: { display: 'none' },
+  covered: { opacity: 0 },
+  player: { position: 'absolute', left: 0, right: 0, top: 0, justifyContent: 'center' },
 });

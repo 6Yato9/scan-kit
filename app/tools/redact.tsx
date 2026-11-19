@@ -340,7 +340,7 @@ export default function RedactScreen() {
     ? 'Choose a document, then draw boxes over what to hide.'
     : finding
       ? `Reading page ${Math.min(finding.done + 1, finding.total)} of ${finding.total}…`
-      : status ?? (sel ? 'Drag the box or its corners to adjust it.' : 'Drag on the page to draw a box, or find text to redact.');
+      : status ?? (sel ? 'Drag the box or its corners to adjust it. Pinch to zoom in.' : 'Drag on the page to draw a box. Pinch to zoom in.');
 
   const progressLabel = !progress
     ? ''

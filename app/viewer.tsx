@@ -1,6 +1,6 @@
 // app/viewer.tsx
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActionSheetIOS,
   ActivityIndicator,
@@ -99,13 +99,14 @@ import { BakeIndicator } from '@/components/bake-indicator';
 import { PdfConvertBanner, useConvertBannerDismissed } from '@/components/pdf-convert-banner';
 import { PdfDocumentView } from '@/modules/vision-ocr/src/PdfDocumentView';
 import { usePdfPageTools } from '@/components/pdf-page-tools';
-import { canEditPdfPages } from '@/lib/pdf-edit';
+import { canEditPdfPages, discardPdfEditUndo, holdPdfEditUndo } from '@/lib/pdf-edit';
+import { undoAwareToast, useLastUndo } from '@/lib/last-undo';
+import { useScanDocTools } from '@/components/scan-doc-tools';
 import { BottomSheet, SheetHeader } from '@/components/bottom-sheet';
 import { PrimaryButton } from '@/components/primary-button';
 import { HeaderIconButton, ScreenHeader } from '@/components/screen-header';
 import { LockScreen, useAppLocked } from '@/components/lock-gate';
-import { RecognizedText } from '@/components/recognized-text';
-import { TEXT_ACTIONS_HEIGHT, TextActions } from '@/components/text-actions';
+import { RecognizedTextPanel, TextActions } from '@/components/text-actions';
 import { saveRecognizedText } from '@/lib/recognized-text';
 
 /** Room the Recognized text sheet needs besides its text box while typing (header, actions, padding). */
@@ -199,7 +200,19 @@ function ViewerContent({
   const flatListRef = useRef<FlatList>(null);
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const toast = useToast();
+  // Undo offered in a toast also stays in the "…" menu until the next edit or
+  // until the viewer closes (lib/last-undo.ts). A PDF edit's stash would
+  // expire after 30 s on its own; it is held while it is offered.
+  const baseToast = useToast();
+  const { slot: lastUndo, offer: undoOffer } = useLastUndo();
+  const toast = useMemo(() => undoAwareToast({ show: baseToast.show }, lastUndo, () => {
+    const d = docRef.current;
+    const held = d?.pdfUri ? holdPdfEditUndo(d.id) : null;
+    return held ? () => discardPdfEditUndo(held) : undefined;
+  }), [baseToast.show, lastUndo]);
+  // Another screen on top (a tool, Mark up, the camera) may change pages this
+  // Undo would silently put back: the menu stops offering it.
+  useFocusEffect(useCallback(() => () => lastUndo.drop(), [lastUndo]));
   // The page counter row (image pages or PDF), directly above the toolbar:
   // ViewerScreen rests toasts on its bottom padding, so a toast covers the
   // counter (and at most the foot of the page) while the toolbar under it
@@ -335,7 +348,7 @@ function ViewerContent({
           jumpTimer.current = setTimeout(() => { jumpTo.current = null; }, 1500);
           requestAnimationFrame(() => applyJump());
         }
-        toast.show(n.message, n.action ? { action: n.action } : undefined);
+        toast.show(n.message, n.action ? { action: n.action, hold: n.hold } : undefined);
       };
       show();
       return subscribeViewerNotices(show);
@@ -398,9 +411,11 @@ function ViewerContent({
       // runPageEdit has re-targeted pending bakes by now, so the overlay maps
       // onto the new page order.
       setDocument(withPendingChoices(next));
+      // A newer edit: the last Undo no longer applies (an Undo of this edit is offered after).
+      lastUndo.drop();
       return next;
     });
-  }, [id, withPendingChoices]);
+  }, [id, withPendingChoices, lastUndo]);
 
   // ── Page edits ────────────────────────────────────────────────────────────
 
@@ -458,6 +473,7 @@ function ViewerContent({
   const handleFilter = useCallback((filter: PageFilter) => {
     const doc = docRef.current;
     if (!doc) return;
+    lastUndo.drop();
     const page = pageRef.current;
     const adjustment = doc.adjustments?.[page];
     const promise = bakePage(doc.id, page, filter, adjustment, { priority: 'high' });
@@ -469,7 +485,7 @@ function ViewerContent({
       Alert.alert("Couldn't apply the filter", 'Try again, or choose a different filter.');
       reload().catch(() => {});
     });
-  }, [withPendingChoices, reload]);
+  }, [withPendingChoices, reload, lastUndo]);
 
   const handleApplyToAll = useCallback(() => {
     const doc = docRef.current;
@@ -481,17 +497,42 @@ function ViewerContent({
       toast.show(`All pages already use ${FILTER_LABELS[filter]}`);
       return;
     }
+    // What the changed pages had, for Undo: each is baked back from its
+    // unfiltered .orig with its own filter, so nothing is lost.
+    const before = others.map(i => ({ index: i, filter: shown.filters?.[i] ?? ('original' as PageFilter), adjustment: shown.adjustments?.[i] }));
+    const count = doc.pages.length;
     const jobs = others.map(i => bakePage(doc.id, i, filter, shown.adjustments?.[i]));
     setDocument(prev => (prev ? withPendingChoices(prev) : prev));
     notifySuccess();
-    toast.show(`${FILTER_LABELS[filter]} applied to ${doc.pages.length === 2 ? 'both pages' : `all ${doc.pages.length} pages`}`);
+    const undo = () => {
+      const current = docRef.current;
+      // Pages added, deleted or moved since: the indices mean other pages.
+      if (!current || current.id !== doc.id || current.pages.length !== count) {
+        Alert.alert('Couldn’t undo', 'The pages have changed since, so the filters can’t be put back.');
+        return;
+      }
+      lastUndo.drop();
+      const back = before.map(b => bakePage(doc.id, b.index, b.filter, b.adjustment, { priority: 'high' }));
+      setDocument(prev => (prev ? withPendingChoices(prev) : prev));
+      notifySuccess();
+      Promise.all(back).catch(err => {
+        console.error('Undo apply to all failed', err);
+        Alert.alert("Couldn't put the filters back", 'Try again.');
+        reload().catch(() => {});
+      });
+    };
+    lastUndo.drop();
+    toast.show(
+      `${FILTER_LABELS[filter]} applied to ${count === 2 ? 'both pages' : `all ${count} pages`}`,
+      { action: { label: 'Undo', onPress: undo } },
+    );
     Promise.all(jobs).catch(err => {
       console.error('Apply to all failed', err);
       notifyError();
       Alert.alert("Couldn't apply the filter to every page", 'Try again.');
       reload().catch(() => {});
     });
-  }, [withPendingChoices, reload, toast]);
+  }, [withPendingChoices, reload, toast, lastUndo]);
 
   const flushAdjust = useCallback(() => {
     if (adjustTimer.current) {
@@ -516,6 +557,7 @@ function ViewerContent({
   const handleAdjust = useCallback((adj: PageAdjustment) => {
     const doc = docRef.current;
     if (!doc) return;
+    lastUndo.drop();
     const page = pageRef.current;
     if (pendingAdjust.current && pendingAdjust.current.pageIndex !== page) flushAdjust();
     pendingAdjust.current = { pageIndex: page, adjustment: adj };
@@ -524,7 +566,7 @@ function ViewerContent({
     setDocument(prev => (prev ? withPendingChoices(prev) : prev));
     if (adjustTimer.current) clearTimeout(adjustTimer.current);
     adjustTimer.current = setTimeout(flushAdjust, 250);
-  }, [flushAdjust, withPendingChoices]);
+  }, [flushAdjust, withPendingChoices, lastUndo]);
 
   // Soft delete: the document moves to Recently deleted (record and files kept),
   // and the toast on the screen underneath offers Undo.
@@ -1252,6 +1294,23 @@ function ViewerContent({
     onCreated: bumpLastSaved,
   });
 
+  // Scanned documents: Merge, Split and Blank page in the "…" menu (components/scan-doc-tools).
+  const scanTools = useScanDocTools({
+    document,
+    page: currentPage,
+    editDocument,
+    toast,
+    router,
+    showPage: useCallback((index: number) => {
+      setCurrentPage(index);
+      // After the pager has the new page count.
+      setTimeout(() => flatListRef.current?.scrollToOffset({ offset: index * screenWidth, animated: false }), 60);
+    }, [screenWidth]),
+    reload,
+    onEdited: useCallback(() => lastUndo.drop(), [lastUndo]),
+    onCreated: bumpLastSaved,
+  });
+
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -1328,17 +1387,20 @@ function ViewerContent({
     ? []
     : [
         { key: 'sign', icon: 'signature', label: 'Sign', onPress: () => openTool('/tools/sign') },
+        { key: 'redact', icon: 'eye-off-outline', label: 'Redact', onPress: () => openTool('/tools/redact') },
         { key: 'watermark', icon: 'watermark', label: 'Watermark', onPress: () => openTool('/tools/watermark') },
         { key: 'timestamp', icon: 'time-outline', label: 'Timestamp', onPress: () => openTool('/tools/timestamp') },
-        ...(pageCount > 1
-          ? [{ key: 'extract', icon: 'cut-outline' as const, label: 'Extract', onPress: () => openTool('/tools/extract') }]
-          : []),
       ];
+  // The last change's Undo, kept until the next edit (lib/last-undo.ts).
+  const undoRow: MoreAction[] = undoOffer
+    ? [{ key: 'undo', icon: 'arrow-undo-outline', label: undoOffer.label, onPress: () => { lastUndo.runCurrent(); } }]
+    : [];
   const convertAvailable = !!document.pdfUri && canConvertPdf();
   // Alert.prompt (the password field) is iOS-only.
   const canUnlock = Platform.OS === 'ios' && pdfUnlockAvailable();
   const moreGroups: MoreAction[][] = document.pdfUri
     ? [
+        undoRow,
         convertAvailable
           ? [{ key: 'convert', icon: 'images-outline', label: 'Convert to pages', onPress: handleConvertPdf }]
           : [],
@@ -1356,10 +1418,15 @@ function ViewerContent({
         ],
       ]
     : [
+        undoRow,
         [
           { key: 'rename', icon: 'rename', label: 'Rename', onPress: () => setRenameVisible(true) },
           ...(pageCount > 1
             ? [{ key: 'reorder', icon: 'reorder-three-outline' as const, label: 'Reorder pages', onPress: () => setReorderVisible(true) }]
+            : []),
+          ...scanTools.documentRows,
+          ...(pageCount > 1
+            ? [{ key: 'extract', icon: 'cut-outline' as const, label: 'Extract pages', onPress: () => openTool('/tools/extract') }]
             : []),
           { key: 'move', icon: 'folder-outline', label: 'Move to folder', detail: document.folder, onPress: openMove },
           { key: 'duplicate', icon: 'duplicate-outline', label: 'Duplicate', onPress: handleDuplicate },
@@ -1368,6 +1435,7 @@ function ViewerContent({
           // Page actions name the page they act on, like Delete page N below
           // (the same actions are in the thumbnail's touch-and-hold menu).
           { key: 'retake', icon: 'camera-reverse-outline', label: pageCount > 1 ? `Retake page ${page + 1}` : 'Retake page', onPress: () => handleRetake(page) },
+          ...scanTools.pageRows,
           // A one-page document as an image is Export, JPEG image.
           ...(pageCount > 1
             ? [{ key: 'share-page', icon: 'image-outline' as const, label: `Share ${pageLabel} as image`, onPress: handleSharePage }]
@@ -1667,6 +1735,7 @@ function ViewerContent({
 
       {moreSheet}
       {moveSheet}
+      {scanTools.sheets}
 
       <CropModal
         visible={cropVisible}
@@ -1700,25 +1769,31 @@ function ViewerContent({
           </View>
         ) : ocr?.status === 'done' && ocr.found ? (
           <>
-            {/* Selectable range by range, and editable (components/recognized-text). */}
-            <RecognizedText
+            {/* Selectable range by range, and editable, with Read aloud beside
+                Edit, then the chips (phone numbers, emails, links, addresses,
+                dates, codes on the page) and Copy / Share — which step aside
+                while the text is edited (components/text-actions). */}
+            <RecognizedTextPanel
               value={ocr.text}
               onChangeText={t => { setCopied(false); setOcr({ status: 'done', text: t, found: true }); }}
               onSave={t => saveRecognizedText(document.id, page, t)}
-              keyboardReserve={OCR_SHEET_RESERVE + TEXT_ACTIONS_HEIGHT}
+              // Copy / Share step aside while editing, so the text takes their room too.
+              keyboardReserve={OCR_SHEET_RESERVE - 52}
+              imageUri={pageFileUri(document.id, page)}
+              bleed={Spacing.xl}
+              footer={
+                <View style={styles.ocrActions}>
+                  <PrimaryButton
+                    title={copied ? 'Copied' : 'Copy all'}
+                    icon={copied ? 'checkmark' : 'copy-outline'}
+                    variant="secondary"
+                    style={styles.ocrBtn}
+                    onPress={handleCopyText}
+                  />
+                  <PrimaryButton title="Share" icon="share-outline" style={styles.ocrBtn} onPress={handleShareText} />
+                </View>
+              }
             />
-            {/* Read aloud, detected phone numbers / emails / links / addresses / dates, codes on the page. */}
-            <TextActions text={ocr.text} imageUri={pageFileUri(document.id, page)} bleed={Spacing.xl} />
-            <View style={styles.ocrActions}>
-              <PrimaryButton
-                title={copied ? 'Copied' : 'Copy all'}
-                icon={copied ? 'checkmark' : 'copy-outline'}
-                variant="secondary"
-                style={styles.ocrBtn}
-                onPress={handleCopyText}
-              />
-              <PrimaryButton title="Share" icon="share-outline" style={styles.ocrBtn} onPress={handleShareText} />
-            </View>
           </>
         ) : (
           <View style={styles.ocrBusy}>

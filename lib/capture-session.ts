@@ -50,9 +50,19 @@ export type CapturedPage = {
   previewUri: string | null;
 };
 
+/** What the camera is pointed at: names it in the status line and draws a guide for cards. */
+export type CaptureSubject = 'page' | 'card' | 'board' | 'book';
+
 export type CaptureOptions = {
   /** Shown at the top of the camera, e.g. "Retake page 2", "ID card". */
   title?: string;
+  /** Default: inferred from the title and guidance (captureSubject), else 'page'. */
+  subject?: CaptureSubject;
+  /**
+   * A card's front then its back (2 captures). Default: a 'card' session
+   * allowing exactly 2 pages (the ID card tool).
+   */
+  twoSided?: boolean;
   /** At most this many pages (1 for a retake). Default: no limit. */
   maxPages?: number;
   /** The review's confirm action, e.g. "Save", "Add", "Replace". Default "Save". */
@@ -254,6 +264,47 @@ export const NEW_PAGE_DELTA = 0.08;
 
 // ── Status line ──────────────────────────────────────────────────────────────
 
+/**
+ * The subject of a capture session: the explicit `subject`, else what its
+ * title or guidance names ("Business card", "Fit the front of the card…",
+ * "Whiteboard", "Book mode"), else a page.
+ */
+export function captureSubject(options: CaptureOptions | null | undefined): CaptureSubject {
+  if (options?.subject) return options.subject;
+  const text = `${options?.title ?? ''} ${options?.guidance ?? ''}`.toLowerCase();
+  if (/\bcard\b/.test(text)) return 'card';
+  if (/\bboard\b|whiteboard/.test(text)) return 'board';
+  if (/\bbook\b/.test(text)) return 'book';
+  return 'page';
+}
+
+const SUBJECT_NOUN: Record<CaptureSubject, string> = { page: 'page', card: 'card', board: 'board', book: 'book' };
+
+/** "Page", "Card"… */
+function capitalized(subject: CaptureSubject): string {
+  const n = SUBJECT_NOUN[subject];
+  return n.charAt(0).toUpperCase() + n.slice(1);
+}
+
+/**
+ * Which side of a two-sided card the camera wants now: the front first, then
+ * the back; a retake wants the side of the page it replaces. Undefined when
+ * the session isn't a two-sided card.
+ */
+export function cardSide(
+  options: CaptureOptions | null | undefined,
+  captured: number,
+  replaceIndex: number | null = null,
+): 'front' | 'back' | undefined {
+  const twoSided = options?.twoSided ?? (captureSubject(options) === 'card' && options?.maxPages === 2);
+  if (!twoSided) return undefined;
+  const index = replaceIndex ?? captured;
+  return index === 0 ? 'front' : 'back';
+}
+
+/** Width / height of the guide frame drawn for a card while none is found (ID-1: 85.6 x 54 mm). */
+export const CARD_ASPECT = 85.6 / 54;
+
 /** An outline smaller than this share of the frame is too far away to capture (the native view needs 18%). */
 export const MIN_PAGE_AREA = 0.18;
 
@@ -268,18 +319,50 @@ export type CameraStatusInput = {
   /** Pages captured since the outline last disappeared (the camera waits for a new page). */
   justCaptured: number | null;
   guidance?: string;
+  /** Default 'page'. */
+  subject?: CaptureSubject;
+  /** The system paused the camera (another app, Split View, heat). */
+  paused?: boolean;
+  /** A two-sided card: the side wanted now (cardSide). */
+  side?: 'front' | 'back';
 };
 
-/** The one line under the preview: what the camera is doing and what the user should do. */
+/**
+ * The one line under the preview: what the camera is doing and what the user
+ * should do. One short phrase, no closing period; two parts are joined by a
+ * dash ("Page 2 captured – show the next one").
+ */
 export function cameraStatus(s: CameraStatusInput): string {
+  const subject = s.subject ?? 'page';
+  const noun = SUBJECT_NOUN[subject];
+  if (s.paused) return 'Camera paused';
   if (s.capturing) return 'Capturing…';
   if (s.justCaptured !== null) {
+    if (s.side === 'back') return 'Front captured – turn the card over';
+    if (subject !== 'page') return `${capitalized(subject)} captured`;
     return s.autoCapture
-      ? `Page ${s.justCaptured} captured. Show the next page.`
+      ? `Page ${s.justCaptured} captured – show the next one`
       : `Page ${s.justCaptured} captured`;
   }
-  if (!s.quad) return s.guidance ?? 'Looking for a page';
+  if (!s.quad) return s.side ? `Fit the ${s.side} of the card in the frame` : (s.guidance ?? `Looking for a ${noun}`);
   if (quadArea(s.quad) < MIN_PAGE_AREA) return 'Move closer';
-  if (!s.autoCapture) return 'Page found. Tap the shutter.';
+  if (!s.autoCapture) return `${capitalized(subject)} found – tap the shutter`;
   return 'Hold still';
+}
+
+/** What the preview says while the system has paused the camera. */
+export function cameraPausedMessage(reason: string | undefined): { title: string; text: string } {
+  switch (reason) {
+    case 'in-use':
+      return { title: 'Camera in use', text: 'Another app is using the camera. Scanning resumes when it’s free.' };
+    case 'multitasking':
+      return {
+        title: 'Camera unavailable in Split View',
+        text: 'Make Scan Kit full screen to scan. You can still import photos of your documents.',
+      };
+    case 'pressure':
+      return { title: 'Camera paused', text: 'Your device is too warm to use the camera. Scanning resumes when it cools down.' };
+    default:
+      return { title: 'Camera paused', text: 'Scanning resumes in a moment.' };
+  }
 }

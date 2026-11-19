@@ -229,6 +229,8 @@ function ThemedStack() {
       <Stack.Screen name="tools/id-card" options={{ headerShown: false, presentation: 'card' }} />
       <Stack.Screen name="tools/compress" options={toolOptions} />
       <Stack.Screen name="tools/extract" options={toolOptions} />
+      <Stack.Screen name="tools/merge" options={toolOptions} />
+      <Stack.Screen name="tools/split" options={toolOptions} />
       <Stack.Screen name="tools/watermark" options={toolOptions} />
       <Stack.Screen name="tools/timestamp" options={toolOptions} />
       <Stack.Screen name="tools/sign" options={toolOptions} />

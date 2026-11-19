@@ -76,6 +76,8 @@ import {
 import { indexDocText } from './save-scan';
 import { pruneDocumentOcr } from './ocr-cache';
 import { ocrAvailable } from './ocr';
+import { discardCropStashes } from './page-source';
+import { invalidatePdfThumbs } from './pdf-thumb';
 
 /** A page's kept source photo and its crop geometry (lib/page-source.ts), photo last. */
 const SOURCE_SUFFIXES = ['.src.json', '.src.jpg'] as const;
@@ -445,6 +447,11 @@ async function stampPagesNow(
     bakePage(docId, r.index, r.filter, r.adjustment).catch(e => console.warn('Re-bake after stamp failed', e));
   }
   if (redact) {
+    // Nothing that shows the old pixels may stay: the crop editor's Undo
+    // copies of these pages, and renders of the PDF the document was
+    // converted from (lib/pdf-thumb.ts).
+    discardCropStashes(docId);
+    invalidatePdfThumbs(docId);
     await rebuildTextAfterRedact(docId);
     return { doc: (await getDocument(docId)) ?? start, undo };
   }

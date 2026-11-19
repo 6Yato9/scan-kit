@@ -3,21 +3,34 @@
 // its page like a scan does instead of a generic icon. Rendered once by the
 // native PDF rasterizer (VisionOcr.renderPdfPages) at a small size, kept in
 // Caches (never in the document's folder, which Files may show) and keyed by
-// the PDF file's modification time, so a changed PDF gets a new thumbnail.
+// the PDF file's modification time and size plus this session's edit
+// generation of the document, so a changed PDF gets a new thumbnail.
 // Builds without the rasterizer, locked PDFs and unreadable files keep the
 // icon: callers get null.
+//
+// The generation matters for Undo: it puts back a copy of the PDF that kept
+// its modification time (File.copy), so time and size alone would name the
+// pre-edit thumbnail — already deleted — and show a blank one (r12 code
+// review #3). Every edit, Undo, conversion or redaction calls
+// invalidatePdfThumbs, which also deletes the renders (they show the pages:
+// r12 code review #2) and tells the cards showing them to look again.
 import { useEffect, useState } from 'react';
 import { Directory, File, Paths } from 'expo-file-system';
 import { VisionOcr } from '../modules/vision-ocr/src';
+import { PDF_THUMB_DIR, removePdfThumbFiles } from './files';
 
 /** Long edge of the thumbnail: sharp in a three-column grid on a 3x screen. */
 const THUMB_EDGE = 360;
-const DIR_NAME = 'pdf-thumbs';
+const DIR_NAME = PDF_THUMB_DIR;
 
 /** key → thumbnail URI, or null when this PDF can't have one. */
 const known = new Map<string, string | null>();
 const waiting = new Map<string, Promise<string | null>>();
 let queue: Promise<unknown> = Promise.resolve();
+
+/** Document id → how many times its PDF was changed this session (see the header). */
+const generations = new Map<string, number>();
+const listeners = new Set<(docId: string) => void>();
 
 function thumbDir(): Directory {
   return new Directory(Paths.cache, DIR_NAME);
@@ -27,9 +40,40 @@ function keyFor(docId: string, pdfUri: string): string | null {
   try {
     const f = new File(pdfUri.split('?')[0]);
     if (!f.exists) return null;
-    return `${docId}-${Math.round(f.modificationTime ?? 0)}-${f.size}`;
+    return `${docId}-${Math.round(f.modificationTime ?? 0)}-${f.size}-g${generations.get(docId) ?? 0}`;
   } catch {
     return null;
+  }
+}
+
+/** A remembered thumbnail, unless its file has gone since (null: none known). */
+function knownUri(key: string): { uri: string | null } | null {
+  if (!known.has(key)) return null;
+  const uri = known.get(key) ?? null;
+  if (uri) {
+    try {
+      if (!new File(uri).exists) {
+        known.delete(key);
+        return null;
+      }
+    } catch {
+      return null;
+    }
+  }
+  return { uri };
+}
+
+/**
+ * Document `docId`'s PDF changed, was converted to pages, redacted or deleted:
+ * its renders are deleted, forgotten, and every card showing one looks again.
+ * Never throws.
+ */
+export function invalidatePdfThumbs(docId: string): void {
+  generations.set(docId, (generations.get(docId) ?? 0) + 1);
+  for (const key of [...known.keys()]) if (key.startsWith(`${docId}-`)) known.delete(key);
+  try { removePdfThumbFiles(docId); } catch {}
+  for (const fn of listeners) {
+    try { fn(docId); } catch {}
   }
 }
 
@@ -47,6 +91,8 @@ async function render(docId: string, key: string, pdfUri: string): Promise<strin
     tmp.create({ intermediates: true, idempotent: true });
     const pages = await renderPages(pdfUri.split('?')[0], tmp.uri, THUMB_EDGE);
     if (!pages.length) return null;
+    // Changed while rendering: this picture is of a PDF that is gone.
+    if (keyFor(docId, pdfUri) !== key) return null;
     // Older thumbnails of this document (an earlier version of its PDF) go.
     for (const item of thumbDir().list()) {
       if (item instanceof File && item.name.startsWith(`${docId}-`)) {
@@ -66,7 +112,8 @@ async function render(docId: string, key: string, pdfUri: string): Promise<strin
 export function pdfThumbnail(docId: string, pdfUri: string): Promise<string | null> {
   const key = keyFor(docId, pdfUri);
   if (!key) return Promise.resolve(null);
-  if (known.has(key)) return Promise.resolve(known.get(key) ?? null);
+  const remembered = knownUri(key);
+  if (remembered) return Promise.resolve(remembered.uri);
   const pending = waiting.get(key);
   if (pending) return pending;
   const job = queue.then(() => render(docId, key, pdfUri)).then(
@@ -91,8 +138,17 @@ export function usePdfThumbnail(docId: string, pdfUri: string | undefined): stri
   const [uri, setUri] = useState<string | null>(() => {
     if (!pdfUri) return null;
     const key = keyFor(docId, pdfUri);
-    return key ? known.get(key) ?? null : null;
+    return key ? knownUri(key)?.uri ?? null : null;
   });
+  // Bumped when the document's PDF changes (invalidatePdfThumbs): look again.
+  const [generation, setGeneration] = useState(() => generations.get(docId) ?? 0);
+  useEffect(() => {
+    const onChange = (changed: string) => {
+      if (changed === docId) setGeneration(generations.get(docId) ?? 0);
+    };
+    listeners.add(onChange);
+    return () => { listeners.delete(onChange); };
+  }, [docId]);
   useEffect(() => {
     if (!pdfUri || !pdfThumbsAvailable()) {
       setUri(null);
@@ -101,7 +157,7 @@ export function usePdfThumbnail(docId: string, pdfUri: string | undefined): stri
     let alive = true;
     pdfThumbnail(docId, pdfUri).then(u => { if (alive) setUri(u); });
     return () => { alive = false; };
-  }, [docId, pdfUri]);
+  }, [docId, pdfUri, generation]);
   return uri;
 }
 

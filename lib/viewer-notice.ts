@@ -22,6 +22,12 @@ export type ViewerNotice = {
   page?: number;
   /** Called once if `action` is never used (see the header). */
   onExpire?: () => void;
+  /**
+   * Set on a taken notice with `onExpire`: stops the ACTION_WINDOW_MS expiry
+   * (the viewer keeps offering the action in its menu) and returns the
+   * release, which expires it then unless the action was used.
+   */
+  hold?: () => () => void;
 };
 
 /**
@@ -70,6 +76,16 @@ export function takeViewerNotice(docId: string): ViewerNotice | null {
   const action = n.action;
   return {
     ...n,
+    hold: () => {
+      if (settled) return () => {};
+      clearTimeout(timer);
+      timers.delete(timer);
+      return () => {
+        if (settled) return;
+        settled = true;
+        expire(n);
+      };
+    },
     action: action
       ? {
           label: action.label,

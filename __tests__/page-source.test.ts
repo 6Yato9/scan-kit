@@ -36,6 +36,19 @@ jest.mock('expo-file-system', () => {
     constructor(...parts: any[]) { this.uri = parts.map(part).join('/').replace(/\/+/g, '/').replace('file:/', 'file:///'); }
     create() {}
     get exists() { return true; }
+    get name() { return this.uri.replace(/\/+$/, '').split('/').pop(); }
+    delete() {
+      for (const k of [...mockFs.keys()]) if (k.startsWith(`${this.uri}/`)) mockFs.delete(k);
+    }
+    list() {
+      const kids = new Set<string>();
+      for (const k of mockFs.keys()) {
+        if (!k.startsWith(`${this.uri}/`)) continue;
+        const rest = k.slice(this.uri.length + 1);
+        kids.add(rest.includes('/') ? `d:${rest.split('/')[0]}` : `f:${rest}`);
+      }
+      return [...kids].map(k => (k.startsWith('d:') ? new MockDirectory(this.uri, k.slice(2)) : new MockFile(this, k.slice(2))));
+    }
   }
   return { File: MockFile, Directory: MockDirectory, Paths: { cache: { uri: 'file:///cache' }, document: { uri: 'file:///docs' } } };
 });
@@ -71,11 +84,14 @@ import {
   discardPrepared,
   geometryOfInput,
   installPreparedSource,
+  discardCropStashes,
   noteRotation,
+  originalTargetFor,
   prepareSourcePage,
   readPageSource,
   recropPage,
   removePageSource,
+  takeCropStash,
   writeSourceMeta,
 } from '../lib/page-source';
 import { FULL_QUAD, rotateGeometry } from '../lib/quad';
@@ -261,5 +277,144 @@ describe('pages without a source are untouched', () => {
     removePageSource('doc', 0);
     expect(writeSourceMeta('doc', 0, { quad: [...FULL_QUAD], rotation: 0 })).toBe(false);
     expect(new Map(mockFs)).toEqual(before);
+  });
+});
+
+describe('the geometry is written atomically (r12 code review #6)', () => {
+  test('written whole beside the real file, then renamed over it: no side file is left', async () => {
+    await seedSourcePage();
+    expect(mockFs.has(f('page-0.src.new.json'))).toBe(false);
+    expect(JSON.parse(mockFs.get(f('page-0.src.json'))!).quad).toEqual([0.1, 0.1, 0.9, 0.1, 0.9, 0.9, 0.1, 0.9]);
+  });
+
+  test('a crash between removing the old geometry and the rename leaves the complete new one beside it', async () => {
+    await seedSourcePage();
+    const File = jest.requireMock('expo-file-system').File;
+    const move = File.prototype.move;
+    File.prototype.move = function (this: any, dest: any) {
+      if (String(dest.uri).endsWith('page-0.src.json')) throw new Error('killed');
+      return move.call(this, dest);
+    };
+    try {
+      expect(() => writeSourceMeta('doc', 0, { quad: [0.2, 0.2, 0.8, 0.2, 0.8, 0.8, 0.2, 0.8], rotation: 0 })).toThrow('killed');
+    } finally {
+      File.prototype.move = move;
+    }
+    // What the startup sweep promotes (lib/files.ts SIDE_FILES): complete and parseable.
+    expect(JSON.parse(mockFs.get(f('page-0.src.new.json'))!)).toMatchObject({ v: 1, quad: [0.2, 0.2, 0.8, 0.2, 0.8, 0.8, 0.2, 0.8] });
+  });
+
+  test('a crash while the side file is written leaves the old geometry untouched', async () => {
+    await seedSourcePage();
+    const before = mockFs.get(f('page-0.src.json'));
+    const File = jest.requireMock('expo-file-system').File;
+    const write = File.prototype.write;
+    File.prototype.write = function () { throw new Error('disk full'); };
+    try {
+      expect(() => writeSourceMeta('doc', 0, { quad: [...FULL_QUAD], rotation: 0 })).toThrow('disk full');
+    } finally {
+      File.prototype.write = write;
+    }
+    expect(mockFs.get(f('page-0.src.json'))).toBe(before);
+    expect(readPageSource('doc', 0)).not.toBeNull();
+  });
+
+  test('removing a source also removes a leftover side file', async () => {
+    await seedSourcePage();
+    mockFs.set(f('page-0.src.new.json'), '{}');
+    removePageSource('doc', 0);
+    expect([...mockFs.keys()].filter(k => k.includes('page-0.src'))).toEqual([]);
+  });
+});
+
+describe('the original photo of an edited page (r12 product #1)', () => {
+  const sign = () => {
+    // Sign draws into the page and its unfiltered shadow.
+    mockFs.set(f('page-0.orig.jpg'), 'SIGNED-ORIG');
+    mockFs.set(f('page-0.jpg'), 'SIGNED');
+  };
+
+  test('is offered once an edit no longer matches it, never while the source is valid', async () => {
+    await seedSourcePage();
+    expect(originalTargetFor('doc', 0)).toBeNull();
+    sign();
+    expect(cropTargetFor('doc', 0).hasSource).toBe(false); // Crop opens on the page as it is
+    const o = originalTargetFor('doc', 0);
+    expect(o).toMatchObject({ uri: f('page-0.src.jpg'), hasSource: true, geometry: { quad: [0.1, 0.1, 0.9, 0.1, 0.9, 0.9, 0.1, 0.9], rotation: 0 } });
+    expect(o!.original).toEqual({ bytes: 'SIGNED-ORIG'.length, md5: 'md5:SIGNED-ORIG' });
+  });
+
+  test('never for a redacted page (its source is deleted), nor without readable geometry', async () => {
+    await seedSourcePage();
+    sign();
+    removePageSource('doc', 0); // what Redact does (lib/page-stamp.ts dropPageSource)
+    expect(originalTargetFor('doc', 0)).toBeNull();
+    await seedSourcePage();
+    sign();
+    mockFs.delete(f('page-0.src.json')); // a redaction killed between its two deletes
+    expect(originalTargetFor('doc', 0)).toBeNull();
+    mockFs.set(f('page-0.src.json'), 'garbage');
+    expect(originalTargetFor('doc', 0)).toBeNull();
+  });
+
+  test('re-cropping it renders the page from the photo again (the signature goes) and keeps the edited page for Undo', async () => {
+    await seedSourcePage();
+    sign();
+    const o = originalTargetFor('doc', 0)!;
+    const wider = { quad: [0.02, 0.02, 0.98, 0.02, 0.98, 0.98, 0.02, 0.98], rotation: 0 as const };
+    await recropPage('doc', 0, o, wider, { keepSource: true });
+    const expected = `warp(norm(PHOTO)|${wider.quad.join(',')})`;
+    expect(mockFs.get(f('page-0.orig.jpg'))).toBe(expected);
+    expect(mockFs.get(f('page-0.jpg'))).toBe(expected); // the caller re-bakes the filter
+    // The photo is the page's valid source again.
+    expect(readPageSource('doc', 0)?.geometry).toEqual(wider);
+    expect(originalTargetFor('doc', 0)).toBeNull();
+    const stash = takeCropStash('doc', 0)!;
+    expect(mockFs.get(`${stash.dir}/page-0.jpg`)).toBe('SIGNED');
+    expect(mockFs.get(`${stash.dir}/page-0.orig.jpg`)).toBe('SIGNED-ORIG');
+    expect(stash.written).toEqual({ bytes: expected.length, md5: `md5:${expected}` });
+    expect(takeCropStash('doc', 0)).toBeNull(); // single use
+  });
+
+  test('the same corners still re-crop (it is the edits that go)', async () => {
+    await seedSourcePage();
+    sign();
+    const o = originalTargetFor('doc', 0)!;
+    await recropPage('doc', 0, o, o.geometry, { keepSource: false });
+    expect(mockFs.get(f('page-0.jpg'))).toBe('warp(norm(PHOTO)|0.1,0.1,0.9,0.1,0.9,0.9,0.1,0.9)');
+  });
+
+  test('refuses (changing nothing) when the page was edited again while the editor was open', async () => {
+    await seedSourcePage();
+    sign();
+    const o = originalTargetFor('doc', 0)!;
+    mockFs.set(f('page-0.orig.jpg'), 'SIGNED-AND-WATERMARKED');
+    const before = snapshot();
+    await expect(recropPage('doc', 0, o, o.geometry, { keepSource: true })).rejects.toThrow();
+    expect(new Map(mockFs)).toEqual(before);
+  });
+
+  test('cropping the edited page as it is keeps the original photo aside (not replaced by the page)', async () => {
+    await seedSourcePage();
+    sign();
+    const t = cropTargetFor('doc', 0);
+    expect(t.hasSource).toBe(false);
+    await recropPage('doc', 0, t, { quad: [0, 0, 1, 0, 1, 0.9, 0, 0.9], rotation: 0 }, { keepSource: true });
+    expect(mockFs.get(f('page-0.src.jpg'))).toBe('norm(PHOTO)');
+    expect(mockFs.get(f('page-0.orig.jpg'))).toBe('warp(SIGNED-ORIG|0,0,1,0,1,0.9,0,0.9)');
+    expect(originalTargetFor('doc', 0)?.uri).toBe(f('page-0.src.jpg'));
+    // No source to re-crop for Undo: the page itself was kept.
+    expect(mockFs.get(`${takeCropStash('doc', 0)!.dir}/page-0.jpg`)).toBe('SIGNED');
+  });
+
+  test('discardCropStashes drops a document\'s Undo copies (delete, redact)', async () => {
+    await seedSourcePage();
+    sign();
+    const o = originalTargetFor('doc', 0)!;
+    await recropPage('doc', 0, o, o.geometry, { keepSource: true });
+    expect([...mockFs.keys()].some(k => k.includes('/page-source/undo-doc-'))).toBe(true);
+    discardCropStashes('doc');
+    expect([...mockFs.keys()].some(k => k.includes('/page-source/undo-doc-'))).toBe(false);
+    expect(takeCropStash('doc', 0)).toBeNull();
   });
 });

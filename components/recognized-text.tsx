@@ -9,7 +9,7 @@
 // Share), without bringing up the keyboard. "Edit" makes it editable so OCR
 // mistakes can be fixed before copying; with `onSave` the correction is kept
 // (lib/recognized-text.ts).
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from 'react';
 import {
   Keyboard,
   Platform,
@@ -61,11 +61,13 @@ type Props = {
    * scanned code's content, for example).
    */
   readOnly?: boolean;
+  /** A control shown beside Edit while not editing (Read aloud). */
+  accessory?: ReactNode;
   style?: StyleProp<ViewStyle>;
 };
 
 export const RecognizedText = forwardRef<RecognizedTextHandle, Props>(function RecognizedText(
-  { value, onChangeText, onSave, onEditingChange, fill = false, maxHeight = 320, keyboardReserve = 0, surface, readOnly = false, style },
+  { value, onChangeText, onSave, onEditingChange, fill = false, maxHeight = 320, keyboardReserve = 0, surface, readOnly = false, accessory, style },
   ref,
 ) {
   const { colors, isDark } = useTheme();
@@ -149,7 +151,7 @@ export const RecognizedText = forwardRef<RecognizedTextHandle, Props>(function R
     if (saveState === 'saving') return 'Saving…';
     if (saveState === 'saved') return 'Changes saved.';
     if (saveState === 'failed') return 'Couldn’t save your changes. Try again.';
-    return 'Touch and hold to select text.';
+    return 'Touch and hold to select.';
   })();
 
   return (
@@ -197,6 +199,7 @@ export const RecognizedText = forwardRef<RecognizedTextHandle, Props>(function R
               {status}
             </Text>
           </View>
+          {editing ? null : accessory}
           <Pressable
             onPress={editing ? finishEditing : startEditing}
             disabled={saveState === 'saving'}

@@ -8,11 +8,13 @@
 // and never overwrite OCR text indexed in the background meanwhile.
 import { useCallback, useState } from 'react';
 import { Alert } from 'react-native';
+import { useRouter } from 'expo-router';
 import { Document } from '@/types/document';
 import { patchDocument, restoreDocument, saveFolder, getFolders, trashDocument } from '@/lib/storage';
 import { duplicateDocument, mergeInto } from '@/lib/doc-ops';
 import { mergeDocumentsToPdf, needsPdfMerge, PdfEditError } from '@/lib/pdf-edit';
 import { notifySuccess } from '@/lib/haptics';
+import { navigateWhenUnlocked } from '@/lib/nav-guard';
 import { useToast } from '@/components/toast';
 import { useScan } from '@/contexts/scan-context';
 import { DocActionsSheet } from '@/components/doc-actions-sheet';
@@ -38,6 +40,7 @@ export function useDocumentActions({
   onSelect?: (doc: Document) => void;
 }) {
   const toast = useToast();
+  const router = useRouter();
   const { bumpLastSaved } = useScan();
   const [actionsTarget, setActionsTarget] = useState<Document | null>(null);
   const [renameTarget, setRenameTarget] = useState<Document | null>(null);
@@ -128,6 +131,10 @@ export function useDocumentActions({
         toast.show(`Saved “${merged.name}”`);
       } catch (err) {
         const locked = err instanceof PdfEditError && err.kind === 'locked';
+        if (err instanceof PdfEditError && err.kind === 'restricted') {
+          Alert.alert('This PDF can’t be merged', 'Its author doesn’t allow changes to its pages.');
+          return;
+        }
         if (!locked) console.error('PDF merge failed', err);
         const who = locked ? [target, source].find(d => d.id === (err as PdfEditError).docId) : null;
         Alert.alert(
@@ -178,6 +185,7 @@ export function useDocumentActions({
         onRename={setRenameTarget}
         onDuplicate={doc => { handleDuplicate(doc); }}
         onMerge={setMergeTarget}
+        onSplit={doc => navigateWhenUnlocked(() => router.push({ pathname: '/tools/split', params: { docId: doc.id } }))}
         onMoveToFolder={setMoveTarget}
         onSelect={onSelect}
         onDelete={handleDelete}

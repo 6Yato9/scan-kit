@@ -67,6 +67,15 @@ export type ThemeColors = {
   /** The tab bar's moving selection pill. */
   barSelector: string;
   barSelectorBorder: string;
+  /** Crop editor (always dark): the dimmed photo outside the crop. */
+  chromeScrim: string;
+  /** Dark halo under lines and crosshairs drawn over a photo on chrome, so they read on white paper. */
+  chromeHalo: string;
+  /** Fill of a resting / grabbed handle over a photo on chrome. */
+  chromeHandleFill: string;
+  chromeHandleActive: string;
+  /** A caution (not an error) on chrome. */
+  chromeWarning: string;
 };
 
 export const Colors: Record<'light' | 'dark', ThemeColors> = {
@@ -115,6 +124,11 @@ export const Colors: Record<'light' | 'dark', ThemeColors> = {
     barBorder: 'rgba(0,0,0,0.08)',
     barSelector: 'rgba(0,0,0,0.07)',
     barSelectorBorder: 'rgba(0,0,0,0.10)',
+    chromeScrim: 'rgba(0,0,0,0.55)',
+    chromeHalo: 'rgba(0,0,0,0.45)',
+    chromeHandleFill: 'rgba(0,0,0,0.25)',
+    chromeHandleActive: 'rgba(255,255,255,0.35)',
+    chromeWarning: '#ffb340',
   },
   dark: {
     bg: '#111111',
@@ -164,6 +178,11 @@ export const Colors: Record<'light' | 'dark', ThemeColors> = {
     barBorder: 'rgba(255,255,255,0.12)',
     barSelector: 'rgba(255,255,255,0.12)',
     barSelectorBorder: 'rgba(255,255,255,0.18)',
+    chromeScrim: 'rgba(0,0,0,0.55)',
+    chromeHalo: 'rgba(0,0,0,0.45)',
+    chromeHandleFill: 'rgba(0,0,0,0.25)',
+    chromeHandleActive: 'rgba(255,255,255,0.35)',
+    chromeWarning: '#ffb340',
   },
 };
 

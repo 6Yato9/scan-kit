@@ -139,6 +139,38 @@ describe('history', () => {
     h.clear();
     expect(h.past.length).toBe(2); // add + one clear
   });
+
+  // The page mirrors its history to the app (HIST:) so a WebView whose
+  // process iOS killed can reload and get the drawing back (restoreHistory).
+  test('snapshot / restore survive JSON and keep undo and redo', () => {
+    const h = new MK.History();
+    const s1 = { type: 'stroke', tool: 'pen', color: '#111', width: 4, points: [[0, 0], [10, 10]] };
+    h.add(s1);
+    h.add({ type: 'text', id: 't7', text: 'Hi', color: '#111', size: 20, x: 5, y: 5 });
+    h.update('t7', { x: 40 });
+    h.add({ type: 'shape', shape: 'rect', color: '#111', width: 3, x1: 0, y1: 0, x2: 9, y2: 9 });
+    h.undo();
+    const snap = h.snapshot();
+    // Each op is stored once, however many states share it.
+    expect(snap.pool).toHaveLength(4);
+    const back = MK.History.restore(JSON.parse(JSON.stringify(snap)));
+    expect(back.ops).toEqual(h.ops);
+    expect(back.state()).toEqual(h.state());
+    back.undo();
+    expect(back.ops[1]).toMatchObject({ id: 't7', x: 5 });
+    back.redo(); back.redo();
+    expect(back.ops).toHaveLength(3);
+    expect(back.ops[2]).toMatchObject({ type: 'shape' });
+    expect(MK.maxTextSeq(back)).toBe(7);
+  });
+
+  test('restore of nothing or of garbage is an empty history, never a throw', () => {
+    for (const bad of [null, undefined, {}, { pool: 'x' }, { pool: [null, 3], ops: [0, 1, 9], past: 'no' }]) {
+      const h = MK.History.restore(bad);
+      expect(h.ops).toEqual([]);
+      expect(h.state()).toEqual({ canUndo: false, canRedo: false, count: 0 });
+    }
+  });
 });
 
 describe('rendering layers', () => {

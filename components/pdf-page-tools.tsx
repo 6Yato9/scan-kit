@@ -47,6 +47,17 @@ type Toast = { show: (message: string, options?: { action?: { label: string; onP
 
 type Busy = 'rotate' | 'blank' | 'delete' | 'reorder' | 'split' | 'merge' | 'undo';
 
+// The PDF itself changed (or was put back) but the document's record couldn't
+// be updated (lib/pdf-edit.ts kind 'partial'): never "unchanged".
+const PARTIAL_EDIT = {
+  title: 'Your PDF was changed',
+  body: 'Scan Kit couldn’t finish saving the change, so it can’t be undone. It’s finished the next time Scan Kit opens. Check that there’s free space.',
+};
+const PARTIAL_UNDO = {
+  title: 'The change was undone',
+  body: 'Scan Kit couldn’t finish saving it. It’s finished the next time Scan Kit opens. Check that there’s free space.',
+};
+
 const BUSY_LABEL: Record<Busy, string> = {
   rotate: 'Rotating',
   blank: 'Adding a page',
@@ -124,6 +135,18 @@ export function usePdfPageTools({
     setViewKey(k => k + 1);
   }, [onDocument]);
 
+  /** After a 'partial' edit or Undo: shows the PDF that is there now, and says what happened. */
+  const showPartial = useCallback(async (showPage: number, copy: { title: string; body: string }) => {
+    notifyError();
+    try {
+      const doc = (await getDocuments()).find(d => d.id === docId);
+      if (doc && mounted.current) showEdited(doc, showPage);
+    } catch {}
+    // After Reorder (a Modal) has closed: an alert presented over a Modal
+    // that is being dismissed goes with it.
+    setTimeout(() => { if (mounted.current) Alert.alert(copy.title, copy.body); }, 600);
+  }, [docId, showEdited]);
+
   const explain = useCallback((err: unknown, what: string) => {
     const kind = err instanceof PdfEditError ? err.kind : 'failed';
     if (kind === 'missing') {
@@ -133,6 +156,8 @@ export function usePdfPageTools({
     notifyError();
     if (kind === 'locked') {
       onLocked();
+    } else if (kind === 'restricted') {
+      Alert.alert('This PDF can’t be changed', 'Its author doesn’t allow changes to its pages. You can still view, share and print it.');
     } else if (kind === 'unavailable') {
       Alert.alert(`Couldn’t ${what}`, 'This version of Scan Kit can’t edit PDF pages.');
     } else if (kind === 'unreadable') {
@@ -158,12 +183,13 @@ export function usePdfPageTools({
       if (!mounted.current) return;
       const kind = err instanceof PdfEditError ? err.kind : 'failed';
       if (kind === 'missing') onMissing();
+      else if (kind === 'partial') await showPartial(showPage, PARTIAL_UNDO);
       else toast.show(kind === 'changed' ? 'Can’t undo: the PDF has changed since' : 'Couldn’t undo');
     } finally {
       busyRef.current = false;
       if (mounted.current) setBusy(null);
     }
-  }, [showEdited, onMissing, toast]);
+  }, [showEdited, onMissing, toast, showPartial]);
 
   /** Runs one edit: writes it, shows the result at `showPage`, offers Undo. */
   const runEdit = useCallback(async (
@@ -190,13 +216,18 @@ export function usePdfPageTools({
       toast.show(message, undo ? { action: { label: 'Undo', onPress: () => { handleUndo(undo, undoPage); } } } : undefined);
       return true;
     } catch (err) {
-      if (mounted.current) explain(err, what);
+      if (!mounted.current) return false;
+      if (err instanceof PdfEditError && err.kind === 'partial') {
+        await showPartial(showPage, PARTIAL_EDIT);
+        return true; // the PDF did change: e.g. Reorder closes
+      }
+      explain(err, what);
       return false;
     } finally {
       busyRef.current = false;
       if (mounted.current) setBusy(null);
     }
-  }, [docId, at, showEdited, toast, handleUndo, explain]);
+  }, [docId, at, showEdited, toast, handleUndo, explain, showPartial]);
 
   const rotate = useCallback((degrees: 90 | -90) => {
     if (!ready) return;
@@ -367,7 +398,7 @@ export function usePdfPageTools({
     },
     {
       key: 'reorder',
-      icon: 'reorder-three-outline',
+      icon: 'swap-vertical-outline',
       label: 'Reorder',
       a11y: 'Reorder pages',
       onPress: () => { openReorder(); },
@@ -376,7 +407,8 @@ export function usePdfPageTools({
     },
     {
       key: 'split',
-      icon: 'cut-outline',
+      // Not the scissors: they are Extract pages.
+      icon: 'split',
       label: 'Split',
       a11y: n > 1 ? `Split after page ${Math.min(at, n - 2) + 1}` : 'Split',
       onPress: split,
@@ -407,20 +439,21 @@ export function usePdfPageTools({
   const pageWord = n > 1 ? `page ${at + 1}` : 'page';
   /** Rows for the "…" sheet: document-level, then the page on screen. */
   const documentRows: MoreAction[] = !available ? [] : [
-    ...(ready && n > 1 ? [{ key: 'pdf-reorder', icon: 'reorder-three-outline' as const, label: 'Reorder pages', onPress: () => { openReorder(); } }] : []),
+    ...(ready && n > 1 ? [{ key: 'pdf-reorder', icon: 'swap-vertical-outline' as const, label: 'Reorder pages', onPress: () => { openReorder(); } }] : []),
     ...(canMergePdfDocuments()
       ? [{ key: 'pdf-merge', icon: 'git-merge-outline' as const, label: 'Merge with another document', onPress: openMerge }]
       : []),
   ];
   const pageRows: MoreAction[] = !ready ? [] : [
-    { key: 'pdf-rotate-ccw', icon: 'rotate-left', label: `Rotate ${pageWord} counterclockwise`, onPress: () => rotate(-90) },
+    // The same turn as the toolbar's Rotate (clockwise; touch and hold it to turn the other way).
+    { key: 'pdf-rotate', icon: 'refresh-outline', label: `Rotate ${pageWord} clockwise`, onPress: () => rotate(90) },
     { key: 'pdf-blank', icon: 'document-outline', label: `Add a blank page after ${pageWord}`, onPress: insertBlank },
     ...(n > 1
-      ? [{ key: 'pdf-split', icon: 'cut-outline' as const, label: `Split after page ${Math.min(at, n - 2) + 1}`, onPress: split }]
+      ? [{ key: 'pdf-split', icon: 'split' as const, label: `Split after page ${Math.min(at, n - 2) + 1}`, onPress: split }]
       : []),
   ];
   const deleteRow: MoreAction | null = ready && n > 1
-    ? { key: 'pdf-delete-page', icon: 'remove-circle-outline', label: `Delete page ${at + 1}`, destructive: true, onPress: deletePage }
+    ? { key: 'pdf-delete-page', icon: 'trash-outline', label: `Delete page ${at + 1}`, destructive: true, onPress: deletePage }
     : null;
 
   const busyOverlay: ReactNode = busy === 'split' || busy === 'merge' || busy === 'undo' ? (

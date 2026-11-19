@@ -16,6 +16,18 @@ import PDFKit
 /// orientation). `rotations[i]` is added to that page's rotation (a multiple
 /// of 90, either sign).
 ///
+/// Protected PDFs:
+///  - Opened with its password (the user unlocked it): rebuilt into a fresh,
+///    unencrypted document, the same as unlocking (lib/pdf-unlock.ts).
+///  - Opens without a password but is encrypted (an owner password with
+///    permissions, e.g. bank statements): edited IN PLACE when its permissions
+///    allow document assembly, so PDFKit writes it back with the same
+///    encryption and permissions and keeps its form fields, page labels and
+///    named destinations. When they don't allow assembly the edit is refused
+///    with `restrictedMessage` ("restricted"; ERR_PDF_RESTRICTED from the
+///    module): PDFKit itself won't rotate or remove pages of such a document,
+///    and rebuilding it would silently drop the author's restrictions.
+///
 /// The output is written to `outputPath` and read back before this returns:
 /// it must open, be unlocked, have exactly the planned pages and their planned
 /// rotations. Anything else removes it and throws, so a caller never swaps in
@@ -26,10 +38,17 @@ enum PdfEditor {
   }
 
   static let lockedMessage = "locked"
+  /// The PDF's permissions don't allow changing its pages (see the header).
+  static let restrictedMessage = "restricted"
 
   /// Opens a PDF, unlocking it with `password` when it is protected.
   /// Throws "locked" when it needs a password that wasn't given or is wrong.
   static func open(_ path: String, password: String?) throws -> PDFDocument {
+    try openReporting(path, password: password).doc
+  }
+
+  /// `open`, also saying whether a password was needed to open it.
+  static func openReporting(_ path: String, password: String?) throws -> (doc: PDFDocument, unlocked: Bool) {
     guard let doc = PDFDocument(url: URL(fileURLWithPath: path)) else {
       throw fail(1, "Could not open the PDF")
     }
@@ -37,8 +56,15 @@ enum PdfEditor {
       guard let pw = password, !pw.isEmpty, doc.unlock(withPassword: pw) else {
         throw fail(2, lockedMessage)
       }
+      return (doc, true)
     }
-    return doc
+    return (doc, false)
+  }
+
+  /// Encrypted with permissions that don't allow moving, removing, rotating
+  /// or inserting pages (and it opened without a password).
+  static func isRestricted(_ doc: PDFDocument, unlocked: Bool) -> Bool {
+    doc.isEncrypted && !unlocked && !doc.allowsDocumentAssembly
   }
 
   static func normalized(_ degrees: Int) -> Int {
@@ -50,9 +76,16 @@ enum PdfEditor {
     guard let doc = PDFDocument(url: URL(fileURLWithPath: path)) else {
       throw fail(1, "Could not open the PDF")
     }
-    var locked = doc.isLocked
+    let wasLocked = doc.isLocked
+    var locked = wasLocked
     if locked, let pw = password, !pw.isEmpty, doc.unlock(withPassword: pw) { locked = false }
-    return ["pageCount": doc.pageCount, "locked": locked, "encrypted": doc.isEncrypted]
+    return [
+      "pageCount": doc.pageCount,
+      "locked": locked,
+      "encrypted": doc.isEncrypted,
+      // Page edits would be refused (restrictedMessage).
+      "restricted": !locked && isRestricted(doc, unlocked: wasLocked),
+    ]
   }
 
   /// A blank page the size and orientation of `like`: PDFKit's own empty page
@@ -104,7 +137,8 @@ enum PdfEditor {
 
   static func compose(inputPath: String, outputPath: String, sources: [Int], rotations: [Int],
                       password: String?) throws -> Int {
-    let doc = try open(inputPath, password: password)
+    let (doc, unlocked) = try openReporting(inputPath, password: password)
+    guard !isRestricted(doc, unlocked: unlocked) else { throw fail(12, restrictedMessage) }
     let count = doc.pageCount
     guard count > 0 else { throw fail(4, "The PDF has no pages") }
     guard !sources.isEmpty, rotations.count == sources.count else { throw fail(5, "Bad page plan") }
@@ -137,17 +171,19 @@ enum PdfEditor {
     let links = outlineLinks(doc.outlineRoot, originals: originals)
 
     let out: PDFDocument
-    if doc.isEncrypted {
-      // Rebuilt into a fresh document so no encryption dictionary carries
-      // over (the same as unlocking, lib/pdf-unlock.ts), with metadata and
-      // bookmarks.
+    if unlocked {
+      // Opened with its password: rebuilt into a fresh document so no
+      // encryption dictionary carries over (the same as unlocking,
+      // lib/pdf-unlock.ts), with metadata and bookmarks. Writing it in place
+      // would keep it locked with a password Scan Kit doesn't store.
       out = PDFDocument()
       for page in targets { out.insert(page, at: out.pageCount) }
       if let attrs = doc.documentAttributes { out.documentAttributes = attrs }
       if let outline = doc.outlineRoot { out.outlineRoot = outline }
     } else {
       // Edited in place, so everything the document itself carries (form
-      // fields, bookmarks, metadata, page labels) stays.
+      // fields, bookmarks, metadata, page labels) stays; an owner-password
+      // PDF keeps its encryption and permissions.
       out = doc
       let keep = Set(sources.filter { $0 >= 0 })
       var i = count - 1

@@ -10,12 +10,21 @@
 // caller saves them. Nothing is written to the user's documents here.
 //
 // Capture:
-//  - The 3:4 preview shows exactly what is photographed (the native preview is
-//    aspect-fill of a 3:4 feed). The native view draws the page outline.
+//  - The preview shows exactly what is photographed: it takes the feed's shape
+//    (3:4 upright, 4:3 on an iPad turned sideways; the native view turns the
+//    feed and the photo with the interface). The native view draws the outline.
 //  - Auto-capture (remembered in Scan settings) fires once the page holds
 //    steady; the shutter's ring fills with the native `stability`. Manual mode
 //    hides the ring. Batch by default: each capture flies into the stack at the
-//    bottom left; "Done (N)" opens the review.
+//    bottom left (its badge counts them); "Done" opens the review. The native
+//    view remembers the last shot across the review, so the page still under
+//    the camera isn't taken twice while the next sheet (even in the same spot)
+//    is; a retake re-arms it (rearm).
+//  - The subject (page, card, board, book: lib/capture-session captureSubject)
+//    names what the status line asks for; a card gets a guide frame, and the ID
+//    card asks for the front, then the back.
+//  - The system can pause the camera (another app takes it, iPad Split View,
+//    heat): the preview says so and the shutter waits until it resumes.
 //  - "Review each page" (Scan settings) opens the review after every capture;
 //    a page limit (a retake: 1) opens it when reached.
 // Review (components/capture-review.tsx): crop on the whole photo
@@ -23,7 +32,8 @@
 //
 // App Lock / background: the camera runs only while this screen is focused,
 // the app is active and unlocked (`active`); the native session also stops by
-// itself in the background. The lock covers this screen like any other (the
+// itself in the background. Coming back to the app retries a camera that was
+// refused (access just granted in Settings) or had failed. The lock covers this screen like any other (the
 // /lock route above it, LockCoverScreen as a fallback); captured pages stay in
 // this screen's state, so after unlocking the user carries on where they were.
 //
@@ -62,10 +72,15 @@ import {
   type CameraCaptureEvent,
   type CameraDetectionEvent,
   type CameraErrorEvent,
+  type CameraStateEvent,
   type DocumentCameraRef,
 } from '@/modules/vision-ocr/src';
 import {
+  CARD_ASPECT,
+  cameraPausedMessage,
   cameraStatus,
+  captureSubject,
+  cardSide,
   claimCaptureSession,
   endCaptureSession,
   initialGeometry,
@@ -147,6 +162,7 @@ export default function CameraScreen() {
   const [options] = useState(() => claimCaptureSession(sessionId));
   const maxPages = options?.maxPages && options.maxPages > 0 ? options.maxPages : Infinity;
   const doneLabel = options?.doneLabel ?? 'Save';
+  const subject = captureSubject(options);
 
   // A stale route (no session: a dev reload) has nothing to do.
   useEffect(() => {
@@ -256,7 +272,11 @@ export default function CameraScreen() {
   const available = isDocumentCameraAvailable() && !!DocumentCameraView;
   const [cameraState, setCameraState] = useState<CameraState>(available ? 'ready' : 'unavailable');
   const [cameraKey, setCameraKey] = useState(0);
+  /** The system paused the camera (CameraStateEvent reason), or null. */
+  const [paused, setPaused] = useState<string | null>(null);
   const [quad, setQuad] = useState<number[] | null>(null);
+  /** Width / height of the camera frames (CameraDetectionEvent.aspect), once known. */
+  const [feedAspect, setFeedAspect] = useState<number | null>(null);
   const [capturing, setCapturing] = useState(false);
   const capturingRef = useRef(false);
   capturingRef.current = capturing;
@@ -267,7 +287,15 @@ export default function CameraScreen() {
 
   const photos = useMemo(devPhotos, []);
   const [devIndex, setDevIndex] = useState(0);
+  const [devJitter, setDevJitter] = useState(false);
   const simulatorImageUri = photos.length ? photos[devIndex % photos.length] : undefined;
+  // Dev only: drive the still feed from a debugger (next sheet, hand-held jitter).
+  useEffect(() => {
+    if (!__DEV__ || !photos.length) return;
+    const g = globalThis as { __camDev?: unknown };
+    g.__camDev = { photo: (i: number) => setDevIndex(i), jitter: (on: boolean) => setDevJitter(on) };
+    return () => { g.__camDev = undefined; };
+  }, [photos.length]);
 
   const active = !!options && !!settings && focused && appActive && !locked
     && mode === 'camera' && !cropKey && cameraState === 'ready';
@@ -279,6 +307,22 @@ export default function CameraScreen() {
     setQuad(null);
     stability.setValue(0);
   }, [active, stability]);
+
+  // Back in the app (from Settings, typically): a camera that was refused or
+  // had failed gets another go with a fresh native view. Still refused, it
+  // says so again.
+  const cameraStateRef = useRef(cameraState);
+  cameraStateRef.current = cameraState;
+  useEffect(() => {
+    if (!appActive) return;
+    const st = cameraStateRef.current;
+    if (st === 'permission' || st === 'failed') {
+      setCameraState('ready');
+      setCameraKey(k => k + 1);
+    }
+  }, [appActive]);
+  // A new native view starts unpaused.
+  useEffect(() => { setPaused(null); }, [cameraKey]);
 
   // A manual capture's note fades by itself; an automatic one stays until
   // the page is taken away (the camera waits for a new page).
@@ -307,7 +351,8 @@ export default function CameraScreen() {
   const shotQuad = useRef<number[] | null>(null);
 
   const onDetection = useCallback((e: NativeSyntheticEvent<CameraDetectionEvent>) => {
-    const { quad: q, stability: s } = e.nativeEvent;
+    const { quad: q, stability: s, aspect } = e.nativeEvent;
+    if (typeof aspect === 'number' && aspect >= 0.5 && aspect <= 2) setFeedAspect(a => (a !== null && Math.abs(a - aspect) < 0.01 ? a : aspect));
     if (__DEV__) devLog(`${q ? 'q' : '-'}${s.toFixed(2)}`);
     liveQuad.current = q;
     if (heldRef.current && (!q || !shotQuad.current || maxCornerDelta(q, shotQuad.current) > NEW_PAGE_DELTA)) {
@@ -331,11 +376,15 @@ export default function CameraScreen() {
   }, [flashAnim]);
 
   // ── Layout ────────────────────────────────────────────────────────────────
+  // The preview has the camera frames' own shape (3:4 upright; 4:3 on an iPad
+  // turned sideways, as the native view reports), so it shows exactly what is
+  // photographed.
+  const aspect = feedAspect ?? (W > H ? 4 / 3 : 3 / 4);
   const top = insets.top + TOP_BAR;
   const bottomInset = Math.max(insets.bottom, Spacing.md);
   const room = H - top - HINT_AREA - CONTROLS - bottomInset;
-  const previewH = Math.max(200, Math.min((W * 4) / 3, room));
-  const previewW = (previewH * 3) / 4;
+  const previewH = Math.max(200, Math.min(W / aspect, room));
+  const previewW = previewH * aspect;
   const previewLeft = (W - previewW) / 2;
   const spare = Math.max(0, room - previewH);
   const controlsTop = top + previewH + HINT_AREA + spare / 2;
@@ -392,15 +441,31 @@ export default function CameraScreen() {
     renderPreview(page.key, sourceUri, geometry);
   }, [discard, discardPage, flyTo, maxPages, renderPreview, setPages, setReplaceIndex]);
 
+  const activeRef = useRef(false);
+  activeRef.current = active;
   const onCameraError = useCallback((e: NativeSyntheticEvent<CameraErrorEvent>) => {
-    const { code } = e.nativeEvent;
+    const { code, capture } = e.nativeEvent;
+    const wasCapturing = capturingRef.current;
     setCapturing(false);
     if (code === 'permission') setCameraState('permission');
     else if (code === 'unavailable') setCameraState('unavailable');
-    // A failed shot leaves the camera running: say so and let them try again.
-    else if (capturingRef.current) setNotice('Couldn’t take the photo. Try again.');
-    else setCameraState('failed');
+    // One shot failed, the camera keeps running: say so and let them try
+    // again. A shot cut short by leaving the screen or the app isn't news.
+    else if (capture || wasCapturing) {
+      if (activeRef.current) setNotice('Couldn’t take the photo – try again');
+    } else if (activeRef.current) setCameraState('failed');
   }, []);
+
+  const onCameraState = useCallback((e: NativeSyntheticEvent<CameraStateEvent>) => {
+    const { state, reason } = e.nativeEvent;
+    if (__DEV__) devLog(`STATE ${state}${reason ? ` ${reason}` : ''}`);
+    setPaused(state === 'paused' ? reason ?? 'other' : null);
+    if (state === 'paused') {
+      setCapturing(false);
+      setQuad(null);
+      stability.setValue(0);
+    }
+  }, [stability]);
 
   const shoot = useCallback(() => {
     if (!camRef.current || capturingRef.current) return;
@@ -408,9 +473,13 @@ export default function CameraScreen() {
       setCapturing(false);
       if (err?.code === 'busy' || err?.code === 'not-running') return;
       notifyWarning();
-      setNotice('Couldn’t take the photo. Try again.');
+      setNotice('Couldn’t take the photo – try again');
     });
   }, []);
+
+  /** Newer native views remember the last shot across pauses (no JS hold needed) and can forget it. */
+  const nativeRemembers = () => typeof camRef.current?.rearm === 'function';
+  const rearmCamera = () => { camRef.current?.rearm?.().catch(() => {}); };
 
   // ── Actions ───────────────────────────────────────────────────────────────
   // Started by a tap, so this runs at once (the review's Save reaches it
@@ -462,9 +531,13 @@ export default function CameraScreen() {
       setReplaceIndex(index);
       setJustCaptured(null);
       setHeld(false);
+      rearmCamera();
     } else {
       setJustCaptured(pagesRef.current.length);
-      setHeld(true);
+      // The page just taken is often still under the camera. A native view
+      // that remembers its last shot handles that itself (and still takes a
+      // new sheet put in the same spot); an older one is held in JS.
+      setHeld(!nativeRemembers());
     }
     setMode('camera');
   };
@@ -487,6 +560,8 @@ export default function CameraScreen() {
     setReplaceIndex(i);
     setJustCaptured(null);
     setHeld(false);
+    // Retaking is often the same page again: let it be auto-captured.
+    rearmCamera();
     setMode('camera');
   };
 
@@ -524,13 +599,31 @@ export default function CameraScreen() {
   // ── Render ────────────────────────────────────────────────────────────────
   const last = pages[pages.length - 1];
   const retaking = replaceIndex !== null;
-  const modeTitle = retaking
-    ? (pages.length > 1 ? `Retake page ${(replaceIndex ?? 0) + 1}` : 'Retake page')
-    : options?.title ?? null;
+  const side = cardSide(options, pages.length, replaceIndex);
+  const modeTitle = side && options?.title
+    ? `${options.title} – ${side}`
+    : retaking
+      ? (subject !== 'page' ? `Retake ${subject}` : pages.length > 1 ? `Retake page ${(replaceIndex ?? 0) + 1}` : 'Retake page')
+      : options?.title ?? null;
   const status = notice ?? (cameraState === 'ready'
-    ? cameraStatus({ quad, stability: 0, autoCapture, capturing, justCaptured, guidance: options?.guidance })
+    ? cameraStatus({
+      quad,
+      stability: 0,
+      autoCapture,
+      capturing,
+      justCaptured,
+      guidance: options?.guidance,
+      subject,
+      side,
+      paused: !!paused,
+    })
     : '');
   const lookingForPage = !notice && !capturing && justCaptured === null && !quad;
+  const pausedMessage = paused ? cameraPausedMessage(paused) : null;
+  // A card's guide frame: ID-1 proportions, 80% of the preview's width.
+  const showCardGuide = subject === 'card' && cameraState === 'ready' && !paused && !quad && !capturing;
+  const guideW = Math.min(previewW * 0.8, (previewH * 0.8) * CARD_ASPECT);
+  const guideH = guideW / CARD_ASPECT;
   const Cam = DocumentCameraView;
 
   const flyScale = fly.interpolate({ inputRange: [0, 1], outputRange: [1, STACK_W / previewW] });
@@ -588,12 +681,30 @@ export default function CameraScreen() {
             flash={flash}
             active={active}
             simulatorImageUri={simulatorImageUri}
+            simulatorJitter={__DEV__ && devJitter ? 1 : 0}
             onDetection={onDetection}
             onCaptureStart={onCaptureStart}
             onCapture={onCapture}
             onCameraError={onCameraError}
+            onCameraState={onCameraState}
           />
         ) : null}
+        {showCardGuide && (
+          <View
+            pointerEvents="none"
+            style={[styles.guide, { width: guideW, height: guideH, left: (previewW - guideW) / 2, top: (previewH - guideH) / 2 }]}
+          >
+            <View style={[styles.guideCorner, styles.guideTL, { borderColor: colors.chromeText }]} />
+            <View style={[styles.guideCorner, styles.guideTR, { borderColor: colors.chromeText }]} />
+            <View style={[styles.guideCorner, styles.guideBR, { borderColor: colors.chromeText }]} />
+            <View style={[styles.guideCorner, styles.guideBL, { borderColor: colors.chromeText }]} />
+          </View>
+        )}
+        {pausedMessage && cameraState === 'ready' && (
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.chromeRaised }]}>
+            <CameraMessage icon="pause-circle-outline" title={pausedMessage.title} text={pausedMessage.text} />
+          </View>
+        )}
         {cameraState === 'permission' && (
           <CameraMessage
             icon="camera-outline"
@@ -618,15 +729,17 @@ export default function CameraScreen() {
           />
         )}
         <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: colors.chromeText, opacity: flashAnim }]} />
-        {photos.length > 0 && cameraState === 'ready' && (
+        {__DEV__ && photos.length > 0 && cameraState === 'ready' && (
           <Pressable
             onPress={() => setDevIndex(i => i + 1)}
+            onLongPress={() => setDevJitter(j => !j)}
             accessibilityRole="button"
             accessibilityLabel="Next test photo"
+            accessibilityHint="Long press to toggle hand-held jitter"
             style={[styles.devChip, { backgroundColor: colors.scrim }]}
           >
             <Text style={[Type.caption, { color: colors.onScrim }]} numberOfLines={1}>
-              {`Dev photo ${(devIndex % photos.length) + 1}/${photos.length}: ${decodeURIComponent((simulatorImageUri ?? '').split('/').pop() ?? '')}`}
+              {`Dev photo ${(devIndex % photos.length) + 1}/${photos.length}${devJitter ? ' + jitter' : ''}: ${decodeURIComponent((simulatorImageUri ?? '').split('/').pop() ?? '')}`}
             </Text>
           </Pressable>
         )}
@@ -662,7 +775,7 @@ export default function CameraScreen() {
         {cameraState === 'ready' ? (
           <ShutterButton
             onPress={shoot}
-            disabled={!active}
+            disabled={!active || !!paused}
             busy={capturing}
             progress={stability}
             ring={autoCapture && !held}
@@ -679,7 +792,7 @@ export default function CameraScreen() {
               style={({ pressed }) => [styles.done, { backgroundColor: colors.accentFill }, pressed && { opacity: 0.7 }]}
             >
               <Text style={[Type.subhead, styles.doneText, { color: colors.onAccent }]} numberOfLines={1} maxFontSizeMultiplier={1.2}>
-                {`Done (${pages.length})`}
+                Done
               </Text>
             </Pressable>
           ) : null}
@@ -774,6 +887,12 @@ const styles = StyleSheet.create({
   },
   doneText: { fontWeight: '700' },
   flying: { position: 'absolute', overflow: 'hidden', borderWidth: 2, borderRadius: Radius.sm },
+  guide: { position: 'absolute' },
+  guideCorner: { position: 'absolute', width: 28, height: 28, opacity: 0.85 },
+  guideTL: { left: 0, top: 0, borderLeftWidth: 3, borderTopWidth: 3, borderTopLeftRadius: Radius.sm },
+  guideTR: { right: 0, top: 0, borderRightWidth: 3, borderTopWidth: 3, borderTopRightRadius: Radius.sm },
+  guideBR: { right: 0, bottom: 0, borderRightWidth: 3, borderBottomWidth: 3, borderBottomRightRadius: Radius.sm },
+  guideBL: { left: 0, bottom: 0, borderLeftWidth: 3, borderBottomWidth: 3, borderBottomLeftRadius: Radius.sm },
   devChip: {
     position: 'absolute',
     left: Spacing.sm,

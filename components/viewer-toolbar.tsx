@@ -3,15 +3,14 @@
 // Text. Each button opens its tool directly, so fixing a page never means
 // hunting behind "…". Always-dark chrome, like the rest of the viewer.
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/theme-context';
+import { AppIcon, type AppIconName } from '@/components/app-icon';
 import { HIT, Spacing, Type } from '@/lib/theme';
-
-type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
 export type ToolbarItem = {
   key: string;
-  icon: IconName;
+  /** An Ionicon, or one of the app's SF Symbol glyphs (components/app-icon). */
+  icon: AppIconName;
   label: string;
   /** VoiceOver label when it should say more than the visible label. */
   a11y?: string;
@@ -46,7 +45,7 @@ export function ViewerToolbar({ items }: { items: ToolbarItem[] }) {
             {item.busy ? (
               <ActivityIndicator size="small" color={colors.chromeText} />
             ) : (
-              <Ionicons name={item.icon} size={24} color={colors.chromeText} />
+              <AppIcon name={item.icon} size={24} color={colors.chromeText} />
             )}
           </View>
           <Text

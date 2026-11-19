@@ -101,7 +101,8 @@ type VisionOcrNative = {
    * page shaped like input page k. Pages are moved, not redrawn: text stays
    * selectable. The output is read back and checked before this resolves to
    * its page count. Rejects ERR_PDF_LOCKED (message "locked") when the PDF needs
-   * a password that wasn't given, ERR_PDF_EDIT otherwise.
+   * a password that wasn't given, ERR_PDF_RESTRICTED (message "restricted")
+   * when its permissions don't allow changing pages, ERR_PDF_EDIT otherwise.
    */
   pdfEditPages?: (
     inputUri: string,
@@ -110,8 +111,13 @@ type VisionOcrNative = {
     rotations: number[],
     password?: string | null,
   ) => Promise<number>;
-  /** Page count and protection of a PDF. Rejects ERR_PDF_INFO when it can't be opened. */
-  pdfInfo?: (uri: string, password?: string | null) => Promise<{ pageCount: number; locked: boolean; encrypted: boolean }>;
+  /**
+   * Page count and protection of a PDF. Rejects ERR_PDF_INFO when it can't be opened.
+   * `restricted` (newer builds; treat undefined as false): the PDF opens
+   * without a password but its permissions don't allow changing its pages, so
+   * pdfEditPages / mergePdfs reject it with ERR_PDF_RESTRICTED ("restricted").
+   */
+  pdfInfo?: (uri: string, password?: string | null) => Promise<{ pageCount: number; locked: boolean; encrypted: boolean; restricted?: boolean }>;
   /** Moves `srcUri` over `destUri` in one atomic rename (dest is never missing or partial). */
   replaceFile?: (srcUri: string, destUri: string) => Promise<string>;
   /** Upright JPEG copy (EXIF orientation baked into the pixels), long edge capped at maxEdge (never upscaled). */
@@ -161,4 +167,6 @@ export {
   type CameraDetectionEvent,
   type CameraCaptureEvent,
   type CameraErrorEvent,
+  type CameraPauseReason,
+  type CameraStateEvent,
 } from './DocumentCameraView';

@@ -77,7 +77,7 @@ export const DOC_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
  * (lib/page-source.ts), their side and reorder-temp files, the PDF.
  */
 const DOC_FOLDER_FILE =
-  /^(?:page-\d+(?:\.orig|\.src)?(?:\.new|\.part|\.shifting|\.tmp)?\.jpg|page-tmp-\d+(?:\.orig|\.src)?\.jpg|page-(?:tmp-)?\d+\.src\.json|document\.pdf|reorder\.commit)$/;
+  /^(?:page-\d+(?:\.orig|\.src)?(?:\.new|\.part|\.shifting|\.tmp)?\.jpg|page-tmp-\d+(?:\.orig|\.src)?\.jpg|page-(?:tmp-)?\d+\.src(?:\.new)?\.json|document\.pdf|reorder\.commit)$/;
 /** A page or a PDF: what makes a folder a document's rather than an empty look-alike. */
 const DOC_CONTENT = /^(?:page-\d+\.jpg|document\.pdf)$/;
 const OCR_DIR = 'ocr';

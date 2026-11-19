@@ -5,7 +5,7 @@
 // Crop opens the four-corner editor on the WHOLE photo, so a crop that cut
 // into the page can be widened; Rotate turns the page; Retake goes back to
 // the camera for this page; Delete drops it. Always-dark chrome.
-import { useCallback, useEffect, useRef, type ComponentProps } from 'react';
+import { useCallback, useEffect, useRef, useState, type ComponentProps } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -23,6 +23,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/theme-context';
 import { HeaderIconButton, HeaderTextButton, ScreenHeader } from '@/components/screen-header';
 import { ThumbnailStrip } from '@/components/thumbnail-strip';
+import { FilterBaker } from '@/components/filter-baker';
+import { ReviewFilterTray, useFilteredPreviews, useReviewFilters } from '@/components/review-filter-tray';
 import { HIT, Spacing, Type } from '@/lib/theme';
 import type { CapturedPage } from '@/lib/capture-session';
 
@@ -67,6 +69,11 @@ export function CaptureReview({
   const { width } = useWindowDimensions();
   const listRef = useRef<FlatList<CapturedPage>>(null);
   const current = pages[index];
+  // The filter to save with (lib/review-filter.ts): offered only when the
+  // scan that opened the camera saves with it. The pages show it applied.
+  const filterSession = useReviewFilters();
+  const [filtering, setFiltering] = useState(false);
+  const filtered = useFilteredPreviews(pages, !!filterSession);
 
   // The strip (or a deletion) picked a page: bring it into view.
   const shown = useRef(index);
@@ -93,6 +100,9 @@ export function CaptureReview({
   const actions: { key: string; icon: IconName; label: string; a11y: string; onPress: () => void; flip?: boolean }[] = [
     { key: 'crop', icon: 'crop-outline', label: 'Crop', a11y: 'Adjust the crop', onPress: () => onCrop(index) },
     { key: 'rotate', icon: 'refresh-outline', label: 'Rotate', a11y: 'Rotate page clockwise', onPress: () => onRotate(index) },
+    ...(filterSession
+      ? [{ key: 'filter', icon: 'color-filter-outline' as IconName, label: 'Filter', a11y: 'Choose a filter', onPress: () => setFiltering(true) }]
+      : []),
     { key: 'retake', icon: 'camera-outline', label: 'Retake', a11y: 'Retake this page', onPress: () => onRetake(index) },
     { key: 'delete', icon: 'trash-outline', label: 'Delete', a11y: 'Delete this page', onPress: () => onDelete(index) },
   ];
@@ -121,13 +131,13 @@ export function CaptureReview({
           <View style={[styles.page, { width }]}>
             {item.previewUri ? (
               <Image
-                source={{ uri: item.previewUri }}
+                source={{ uri: filtered.uris.get(item.key) ?? item.previewUri }}
                 style={styles.pageImage}
                 resizeMode="contain"
                 accessibilityLabel={`Page ${i + 1}`}
               />
             ) : null}
-            {(!item.previewUri || rendering.has(item.key)) && (
+            {(!item.previewUri || rendering.has(item.key) || filtered.pending.has(item.key)) && (
               <ActivityIndicator style={StyleSheet.absoluteFill} color={colors.chromeMuted} accessibilityLabel="Preparing page" />
             )}
           </View>
@@ -167,6 +177,14 @@ export function CaptureReview({
           </Pressable>
         ))}
       </View>
+
+      {/* Over the strip and the actions while a filter is being chosen. */}
+      {filtering && filterSession ? (
+        <View style={styles.tray}>
+          <ReviewFilterTray page={current} pageCount={count} bottomInset={insets.bottom} onDone={() => setFiltering(false)} />
+        </View>
+      ) : null}
+      {filterSession ? <FilterBaker /> : null}
     </View>
   );
 }
@@ -181,4 +199,5 @@ const styles = StyleSheet.create({
   actionIcon: { height: 26, justifyContent: 'center' },
   actionLabel: { fontWeight: '500' },
   flip: { transform: [{ scaleX: -1 }] },
+  tray: { position: 'absolute', left: 0, right: 0, bottom: 0 },
 });

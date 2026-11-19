@@ -16,7 +16,7 @@ import { useTheme } from '@/contexts/theme-context';
 import { Spacing, Type } from '@/lib/theme';
 import { documentBytes } from '@/lib/doc-size';
 import { formatBytes } from '@/components/tool-ui';
-import { canMergePdfDocuments } from '@/lib/pdf-edit';
+import { canEditPdfPages, canMergePdfDocuments } from '@/lib/pdf-edit';
 
 type Props = {
   visible: boolean;
@@ -24,6 +24,8 @@ type Props = {
   onRename: (doc: Document) => void;
   onDuplicate: (doc: Document) => void;
   onMerge: (doc: Document) => void;
+  /** Optional — opens Split for this document (two or more pages, or an editable PDF). */
+  onSplit?: (doc: Document) => void;
   onMoveToFolder: (doc: Document) => void;
   /** Optional — opens the export / share sheet. */
   onShare?: (doc: Document) => void;
@@ -39,6 +41,7 @@ export function DocActionsSheet({
   onRename,
   onDuplicate,
   onMerge,
+  onSplit,
   onMoveToFolder,
   onShare,
   onSelect,
@@ -70,6 +73,8 @@ export function DocActionsSheet({
 
   // An imported PDF merges into a new PDF (lib/pdf-edit) in builds that can.
   const canMerge = !doc.pdfUri || canMergePdfDocuments();
+  // Split needs two pages; a PDF's page count is checked by the Split screen.
+  const canSplit = !!onSplit && (doc.pdfUri ? canEditPdfPages() : doc.pages.length > 1);
 
   return (
     <BottomSheet
@@ -110,8 +115,9 @@ export function DocActionsSheet({
           detail={canMerge ? undefined : 'Not available for PDFs'}
           disabled={!canMerge}
           onPress={run(onMerge)}
-          last={!onSelect}
+          last={!onSelect && !canSplit}
         />
+        {canSplit && onSplit ? <SheetRow icon="split" label="Split" onPress={run(onSplit)} last={!onSelect} /> : null}
         {onSelect && <SheetRow icon="checkmark-circle-outline" label="Select" onPress={run(onSelect)} last />}
       </SheetGroup>
 

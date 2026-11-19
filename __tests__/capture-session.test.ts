@@ -3,8 +3,12 @@
 jest.mock('expo-router', () => ({ router: { push: jest.fn() } }));
 
 import {
+  CARD_ASPECT,
   CLAIM_TIMEOUT_MS,
+  cameraPausedMessage,
   cameraStatus,
+  captureSubject,
+  cardSide,
   claimCaptureSession,
   endCaptureSession,
   initialGeometry,
@@ -181,10 +185,87 @@ describe('cameraStatus', () => {
     expect(cameraStatus({ ...base, guidance: 'Fit the open book in the frame' })).toBe('Fit the open book in the frame');
     expect(cameraStatus({ ...base, quad: [0.4, 0.4, 0.6, 0.4, 0.6, 0.6, 0.4, 0.6] })).toBe('Move closer');
     expect(cameraStatus({ ...base, quad: page })).toBe('Hold still');
-    expect(cameraStatus({ ...base, quad: page, autoCapture: false })).toBe('Page found. Tap the shutter.');
+    expect(cameraStatus({ ...base, quad: page, autoCapture: false })).toBe('Page found – tap the shutter');
     expect(cameraStatus({ ...base, quad: page, capturing: true })).toBe('Capturing…');
-    expect(cameraStatus({ ...base, quad: page, justCaptured: 2 })).toBe('Page 2 captured. Show the next page.');
+    expect(cameraStatus({ ...base, quad: page, justCaptured: 2 })).toBe('Page 2 captured – show the next one');
     expect(cameraStatus({ ...base, quad: page, justCaptured: 2, autoCapture: false })).toBe('Page 2 captured');
+  });
+
+  test('one phrase each, never a closing period', () => {
+    const inputs = [
+      base,
+      { ...base, quad: page },
+      { ...base, quad: page, autoCapture: false },
+      { ...base, quad: page, justCaptured: 3 },
+      { ...base, quad: page, justCaptured: 1, subject: 'card' as const, side: 'back' as const },
+      { ...base, paused: true },
+    ];
+    for (const i of inputs) expect(cameraStatus(i)).not.toMatch(/\.$/);
+  });
+
+  test('names the subject: a card is not a page', () => {
+    expect(cameraStatus({ ...base, subject: 'card' })).toBe('Looking for a card');
+    expect(cameraStatus({ ...base, subject: 'card', guidance: 'Fit the whole card in the frame' })).toBe('Fit the whole card in the frame');
+    expect(cameraStatus({ ...base, quad: page, autoCapture: false, subject: 'card' })).toBe('Card found – tap the shutter');
+    expect(cameraStatus({ ...base, quad: page, justCaptured: 1, subject: 'card' })).toBe('Card captured');
+    expect(cameraStatus({ ...base, quad: page, autoCapture: false, subject: 'board' })).toBe('Board found – tap the shutter');
+  });
+
+  test('a two-sided card asks for the front, then the back', () => {
+    expect(cameraStatus({ ...base, subject: 'card', side: 'front', guidance: 'Fit the front of the card in the frame' }))
+      .toBe('Fit the front of the card in the frame');
+    expect(cameraStatus({ ...base, quad: page, justCaptured: 1, subject: 'card', side: 'back' })).toBe('Front captured – turn the card over');
+    expect(cameraStatus({ ...base, subject: 'card', side: 'back' })).toBe('Fit the back of the card in the frame');
+  });
+
+  test('a paused camera says so before anything else', () => {
+    expect(cameraStatus({ ...base, quad: page, capturing: true, paused: true })).toBe('Camera paused');
+  });
+});
+
+describe('captureSubject / cardSide', () => {
+  test('infers the subject from the tools’ titles and guidance', () => {
+    expect(captureSubject(null)).toBe('page');
+    expect(captureSubject({})).toBe('page');
+    expect(captureSubject({ title: 'Business card', maxPages: 1, guidance: 'Fit the whole card in the frame' })).toBe('card');
+    expect(captureSubject({ title: 'ID card', maxPages: 2 })).toBe('card');
+    expect(captureSubject({ title: 'Back of card', maxPages: 1 })).toBe('card');
+    expect(captureSubject({ title: 'Whiteboard', guidance: 'Fit the whole board in the frame' })).toBe('board');
+    expect(captureSubject({ title: 'Book mode', guidance: 'Fit the open book in the frame' })).toBe('book');
+    expect(captureSubject({ title: 'Retake page 2', maxPages: 1 })).toBe('page');
+    expect(captureSubject({ title: 'Cardiff lease', subject: 'page' })).toBe('page');
+    expect(captureSubject({ title: 'Scorecards' })).toBe('page');
+  });
+
+  test('only the two-capture card session has sides', () => {
+    const id = { title: 'ID card', maxPages: 2 };
+    expect(cardSide(id, 0)).toBe('front');
+    expect(cardSide(id, 1)).toBe('back');
+    expect(cardSide(id, 2, 0)).toBe('front'); // retaking the front
+    expect(cardSide(id, 2, 1)).toBe('back');
+    expect(cardSide({ title: 'Business card', maxPages: 1 }, 0)).toBeUndefined();
+    expect(cardSide({ title: 'Book mode' }, 0)).toBeUndefined();
+    expect(cardSide({ title: 'Passport', maxPages: 2, twoSided: true, subject: 'card' }, 1)).toBe('back');
+    expect(cardSide({ title: 'ID card', maxPages: 2, twoSided: false }, 0)).toBeUndefined();
+  });
+
+  test('the card guide has ID-1 proportions', () => {
+    expect(CARD_ASPECT).toBeCloseTo(1.585, 3);
+  });
+});
+
+describe('cameraPausedMessage', () => {
+  test('explains each reason, with a fallback', () => {
+    expect(cameraPausedMessage('multitasking').title).toBe('Camera unavailable in Split View');
+    expect(cameraPausedMessage('multitasking').text).toMatch(/full screen/);
+    expect(cameraPausedMessage('in-use').title).toBe('Camera in use');
+    expect(cameraPausedMessage('pressure').text).toMatch(/too warm/);
+    expect(cameraPausedMessage(undefined)).toEqual(cameraPausedMessage('other'));
+    for (const r of ['in-use', 'multitasking', 'pressure', 'other']) {
+      const m = cameraPausedMessage(r);
+      expect(m.text).toMatch(/\.$/); // body copy is full sentences
+      expect(m.title).not.toMatch(/\.$/);
+    }
   });
 });
 

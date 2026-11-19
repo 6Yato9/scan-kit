@@ -9,10 +9,27 @@
 // pixels — the crop screen stays open over it meanwhile — and should the app
 // die first, the startup self-heal finds the page (identical to its .orig with
 // a look recorded: lib/storage.ts pendingBakeMigrations) and bakes it.
+//
+// Undo: a crop from a valid source is undone by re-cropping that source to
+// the previous corners. A crop that replaced pixels no source can give back
+// — starting again from the original photo (which drops a signature or
+// markup), or cropping an edited page whose original photo is kept aside —
+// is undone by putting back the copy of the page recropPage kept
+// (lib/page-source.ts takeCropStash).
+import { File } from 'expo-file-system';
 import { Document, PageAdjustment } from '../types/document';
 import { bakePage, pendingBakesFor, subscribeBakeChanges } from './bake';
-import { pageLayoutGeneration } from './files';
-import { cropTargetFor, recropPage, type CropTarget } from './page-source';
+import { pageLayoutGeneration, restorePageWithShadow } from './files';
+import {
+  cropTargetFor,
+  discardCropStash,
+  recropPage,
+  sameStamp,
+  takeCropStash,
+  unfilteredStamp,
+  type CropStash,
+  type CropTarget,
+} from './page-source';
 import { sameGeometry, type PageGeometry } from './quad';
 
 const isDefaultAdj = (a: PageAdjustment | undefined) =>
@@ -30,7 +47,9 @@ export async function recropPatch(
   keepSource: boolean,
 ): Promise<Partial<Document>> {
   if (index < 0 || index >= fresh.pages.length) throw new Error('recrop: no such page');
-  const uri = await recropPage(fresh.id, index, target, geometry, { keepSource });
+  const uri = target.restore
+    ? restoreStashedPage(fresh.id, index, target.restore)
+    : await recropPage(fresh.id, index, target, geometry, { keepSource });
   const pages = [...fresh.pages];
   pages[index] = uri;
   return { pages };
@@ -86,8 +105,11 @@ export async function rebakeAfterCrop(doc: Document, index: number, timeoutMs = 
 
 // ── Undo ────────────────────────────────────────────────────────────────────
 
-/** What Undo needs: the page's previous corners on its (now kept) source photo. */
-export type CropUndo = { docId: string; index: number; geometry: PageGeometry; layout: number };
+/**
+ * What Undo needs: the page's previous corners on its (now kept) source photo,
+ * or (`stash`) the copy of the page as it was.
+ */
+export type CropUndo = { docId: string; index: number; geometry: PageGeometry; layout: number; stash?: CropStash };
 
 export class CropUndoError extends Error {
   constructor(message: string) {
@@ -96,15 +118,24 @@ export class CropUndoError extends Error {
   }
 }
 
+const CHANGED_SINCE = 'The page has been changed since, so the crop can’t be undone.';
+
 /**
  * The Undo for a crop from `before` (the editor's target) to `after`, or null
- * when there is nothing to undo or it can't be done exactly: only a page that
- * keeps a source photo can be put back by re-cropping it.
+ * when there is nothing to undo or it can't be done exactly. Call right after
+ * the crop: it takes the copy of the page that crop kept, if any.
  */
 export function cropUndoFor(docId: string, index: number, before: CropTarget, after: PageGeometry, keepSource: boolean): CropUndo | null {
+  const stash = takeCropStash(docId, index);
+  if (stash) return { docId, index, geometry: before.geometry, layout: pageLayoutGeneration(docId), stash };
   if (!before.hasSource && !keepSource) return null;
   if (sameGeometry(before.geometry, after)) return null;
   return { docId, index, geometry: before.geometry, layout: pageLayoutGeneration(docId) };
+}
+
+/** Throws away an Undo nobody will use (its copy of the page, if it kept one). */
+export function discardCropUndo(undo: CropUndo | null | undefined): void {
+  discardCropStash(undo?.stash);
 }
 
 /**
@@ -114,9 +145,31 @@ export function cropUndoFor(docId: string, index: number, before: CropTarget, af
  */
 export function undoTargetFor(undo: CropUndo): CropTarget {
   if (pageLayoutGeneration(undo.docId) !== undo.layout) {
+    discardCropUndo(undo);
     throw new CropUndoError('The pages have been moved or deleted since, so the crop can’t be undone.');
   }
+  if (undo.stash) {
+    const page = new File(undo.stash.dir, 'page-0.jpg');
+    if (!page.exists) throw new CropUndoError('The earlier version of the page is no longer available.');
+    return { uri: page.uri, geometry: undo.geometry, hasSource: false, bytes: 0, md5: null, restore: undo.stash };
+  }
   const target = cropTargetFor(undo.docId, undo.index);
-  if (!target.hasSource) throw new CropUndoError('The page has been changed since, so the crop can’t be undone.');
+  if (!target.hasSource) throw new CropUndoError(CHANGED_SINCE);
   return target;
+}
+
+/**
+ * Puts the page copy `stash` back as page `index` (with its .orig, or none if
+ * it had none), only while the page is still exactly what the crop wrote. Its
+ * source files are left alone: their stamp decides whether they describe the
+ * page again. Runs under the page lock (recropPatch). Single use.
+ */
+function restoreStashedPage(docId: string, index: number, stash: CropStash): string {
+  if (!sameStamp(unfilteredStamp(docId, index), stash.written)) {
+    discardCropStash(stash);
+    throw new CropUndoError(CHANGED_SINCE);
+  }
+  const uri = restorePageWithShadow(new File(stash.dir, 'page-0.jpg').uri, docId, index);
+  discardCropStash(stash);
+  return uri;
 }

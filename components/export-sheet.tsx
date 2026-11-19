@@ -10,7 +10,6 @@
 import { Alert, Image, Linking, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { File } from 'expo-file-system';
-import JSZip from 'jszip';
 import {
   canProtectPdf,
   estimatePdfBytes,
@@ -56,9 +55,9 @@ import { useTheme } from '@/contexts/theme-context';
 import { getDocSettings } from '@/lib/storage';
 import { documentBytes } from '@/lib/doc-size';
 import { formatBytes } from '@/components/tool-ui';
+import { zipFiles } from '@/lib/zip-stream';
 import { notifySuccess } from '@/lib/haptics';
-import { HIT, Radius, Spacing, Type } from '@/lib/theme';
-import { Ionicons } from '@expo/vector-icons';
+import { Radius, Spacing, Type } from '@/lib/theme';
 
 type Props = {
   visible: boolean;
@@ -267,23 +266,28 @@ export function ExportSheet({ visible, document, onClose }: Props) {
       }
       return { uris };
     }
-    // JPEGs don't compress further, so STORE them: far less CPU, and bytes are
-    // added as binary instead of base64 strings to keep peak memory down.
-    const zip = new JSZip();
-    for (let i = 0; i < pageCount; i++) {
-      if (signal.aborted) throw new CancelledError();
-      setBusy({ title, label: `Adding page ${i + 1} of ${pageCount}`, progress: (i / pageCount) * 0.8 });
-      const bytes = await new File(cleanFileUri(document.pages[i])).bytes();
-      zip.file(`Page ${String(i + 1).padStart(2, '0')}.jpg`, bytes, { binary: true });
-    }
-    if (signal.aborted) throw new CancelledError();
-    setBusy({ title, label: 'Creating ZIP file', progress: 0.9 });
-    const data = await zip.generateAsync({ type: 'uint8array', compression: 'STORE' });
-    if (signal.aborted) throw new CancelledError();
+    // Streamed straight to the file (lib/zip-stream.ts, as Share documents
+    // does): each page is copied in 1 MB chunks, STORED (JPEGs don't compress
+    // further), so memory stays flat however many pages there are — never the
+    // whole archive in memory twice (r12 device review B2).
     const uri = `${dir}${encodeURIComponent(exportFileName(document.name, 'zip'))}`;
-    const out = new File(uri);
-    out.create({ overwrite: true });
-    out.write(data);
+    const pages = [...document.pages];
+    const date = new Date(document.updatedAt || document.createdAt || Date.now());
+    await zipFiles(
+      uri,
+      pages.map((page, i) => ({
+        name: `Page ${String(i + 1).padStart(2, '0')}.jpg`,
+        date,
+        produce: async () => ({ uri: cleanFileUri(page), temporary: false }),
+      })),
+      {
+        signal,
+        onItem: i => {
+          if (!signal.aborted) setBusy({ title, label: `Adding page ${i + 1} of ${pageCount}`, progress: (i / pageCount) * 0.95 });
+        },
+      },
+    );
+    if (signal.aborted) throw new CancelledError();
     return { uri, mimeType: 'application/zip', UTI: 'public.zip-archive' };
   }
 
@@ -502,11 +506,20 @@ export function ExportSheet({ visible, document, onClose }: Props) {
     setPageNumbers(p);
     setExportPageNumbers(p).catch(() => {});
   };
+  // Each choice reads as what lands on the page: nothing, "1, 2, 3", "1 of 3".
+  const pageTotal = Math.max(1, pageCount);
   const pageNumberOptions: { value: PageNumberStyle; label: string }[] = [
     { value: 'off', label: 'Off' },
-    { value: 'number', label: '1' },
-    { value: 'of-total', label: `1 of ${Math.max(1, pageCount)}` },
+    { value: 'number', label: pageTotal > 2 ? '1, 2, 3' : pageTotal === 2 ? '1, 2' : '1' },
+    { value: 'of-total', label: `1 of ${pageTotal}` },
   ];
+  const numbersLabel = pageNumberOptions[1].label;
+  const pageNumberNote =
+    pageNumbers === 'number'
+      ? `At the bottom of each page: ${numbersLabel}${pageTotal > 3 ? '…' : ''}`
+      : pageNumbers === 'of-total'
+        ? `At the bottom of each page: 1 of ${pageTotal}${pageTotal > 1 ? `, 2 of ${pageTotal}${pageTotal > 2 ? '…' : ''}` : ''}`
+        : 'Added at the bottom of each page of a PDF or print.';
 
   return (
     <BottomSheet visible={visible} onClose={handleClose} variant="grouped">
@@ -595,20 +608,17 @@ export function ExportSheet({ visible, document, onClose }: Props) {
           {/* PDF and print only (JPEG images stay as stored). Imported PDFs
               are shared as the file itself, so they get no numbers. */}
           {!isPdfDoc && pageCount > 0 ? (
-            <SheetGroup>
-              <View style={styles.optionRow}>
-                <View style={[styles.optionIcon, { backgroundColor: colors.accentLight }]}>
-                  <Ionicons name="list-outline" size={18} color={colors.accent} />
-                </View>
-                <View style={styles.optionText}>
-                  <Text style={[Type.body, { color: colors.text }]} numberOfLines={1}>Page numbers</Text>
-                  <Text style={[Type.footnote, { color: colors.muted }]} numberOfLines={1}>In PDFs and prints</Text>
-                </View>
-                <View style={styles.optionControl} accessibilityLabel="Page numbers">
+            <>
+              <SectionLabel style={styles.label}>Page numbers</SectionLabel>
+              <SheetGroup>
+                <View style={styles.numbersBody} accessibilityLabel="Page numbers">
                   <SegmentedControl options={pageNumberOptions} value={pageNumbers} onChange={choosePageNumbers} />
+                  <Text style={[Type.footnote, styles.numbersNote, { color: colors.muted }]} numberOfLines={1}>
+                    {pageNumberNote}
+                  </Text>
                 </View>
-              </View>
-            </SheetGroup>
+              </SheetGroup>
+            </>
           ) : null}
           <SectionLabel style={styles.label}>Share as</SectionLabel>
           <SheetGroup>
@@ -722,9 +732,7 @@ const styles = StyleSheet.create({
   pwDivider: { borderBottomWidth: StyleSheet.hairlineWidth },
   pwHint: { marginHorizontal: Spacing.xs, lineHeight: 18, minHeight: 36 },
   pwActions: { gap: Spacing.sm, marginTop: Spacing.lg },
-  optionRow: { flexDirection: 'row', alignItems: 'center', paddingLeft: Spacing.lg, paddingRight: Spacing.sm, minHeight: HIT + 12, gap: Spacing.md },
-  optionIcon: { width: 30, height: 30, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  optionText: { flex: 1 },
-  optionControl: { width: 168 },
+  numbersBody: { padding: Spacing.sm, gap: Spacing.sm },
+  numbersNote: { paddingHorizontal: Spacing.sm },
   pdfNote: { marginTop: Spacing.sm, marginHorizontal: Spacing.xs, lineHeight: 18 },
 });

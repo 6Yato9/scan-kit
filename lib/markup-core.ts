@@ -22,7 +22,9 @@
 //
 // History. A list of ops states: every action (stroke, shape, text added,
 // edited, moved or deleted, Erase all) pushes one, so Undo / Redo cover all
-// of them.
+// of them. snapshot() / History.restore() carry the whole history out of the
+// WebView and back in, so a reloaded page (its process killed by iOS) gets
+// the drawing back.
 
 export const MARKUP_CORE_JS = String.raw`
 var MK = (function () {
@@ -168,6 +170,59 @@ var MK = (function () {
   History.prototype.state = function () {
     return { canUndo: this.past.length > 0, canRedo: this.future.length > 0, count: this.ops.length };
   };
+  /**
+   * The whole history (undo and redo states included) as plain data, for the
+   * app to keep outside the WebView: iOS can kill a WebView's content process
+   * (memory pressure while the app is in the background), and the drawing must
+   * survive the reload. States share their ops, so each op is stored once in
+   * 'pool' and every state is a list of indexes into it.
+   */
+  History.prototype.snapshot = function () {
+    var pool = [];
+    var index = new Map();
+    function ref(list) {
+      return list.map(function (op) {
+        var i = index.get(op);
+        if (i === undefined) { i = pool.length; pool.push(op); index.set(op, i); }
+        return i;
+      });
+    }
+    var past = this.past.map(ref);
+    var ops = ref(this.ops);
+    var future = this.future.map(ref);
+    return { pool: pool, past: past, ops: ops, future: future };
+  };
+  /** A History rebuilt from snapshot(); anything malformed is skipped, never thrown. */
+  History.restore = function (snap) {
+    var h = new History();
+    if (!snap || !Array.isArray(snap.pool)) return h;
+    var pool = snap.pool;
+    function deref(list) {
+      var out = [];
+      if (!Array.isArray(list)) return out;
+      for (var i = 0; i < list.length; i++) {
+        var op = pool[list[i]];
+        if (op && typeof op === 'object' && typeof op.type === 'string') out.push(op);
+      }
+      return out;
+    }
+    h.past = Array.isArray(snap.past) ? snap.past.map(deref) : [];
+    h.ops = deref(snap.ops);
+    h.future = Array.isArray(snap.future) ? snap.future.map(deref) : [];
+    return h;
+  };
+  /** The highest number used in a text op's id ('t12' -> 12), so new ids don't collide after a restore. */
+  function maxTextSeq(h) {
+    var max = 0;
+    var lists = [h.ops].concat(h.past, h.future);
+    for (var i = 0; i < lists.length; i++) {
+      for (var j = 0; j < lists[i].length; j++) {
+        var m = /^t(\d+)$/.exec(String(lists[i][j].id || ''));
+        if (m && Number(m[1]) > max) max = Number(m[1]);
+      }
+    }
+    return max;
+  }
 
   // ── Drawing ───────────────────────────────────────────────────────────────
   function mid(a, b) { return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]; }
@@ -310,7 +365,7 @@ var MK = (function () {
   return {
     fitView: fitView, toImage: toImage, clampView: clampView, pinchView: pinchView,
     arrowHead: arrowHead, fontFor: fontFor, textBox: textBox, hitText: hitText, clampTextPos: clampTextPos,
-    History: History, styleStroke: styleStroke, tracePath: tracePath, traceSegment: traceSegment,
+    History: History, maxTextSeq: maxTextSeq, styleStroke: styleStroke, tracePath: tracePath, traceSegment: traceSegment,
     drawShape: drawShape, drawText: drawText, renderOps: renderOps, hasHighlights: hasHighlights,
     outputSize: outputSize, isTinyShape: isTinyShape, LINE_HEIGHT: LINE_HEIGHT,
   };

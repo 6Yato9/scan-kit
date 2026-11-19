@@ -28,6 +28,7 @@ import { runPageEdit } from './bake';
 import { finishAddedPages } from './add-pages';
 import { indexDocText } from './save-scan';
 import { MAX_PAGE_EDGE } from './image-size';
+import { invalidatePdfThumbs } from './pdf-thumb';
 
 /** Caches folder for render output and Undo stashes; cleared by the startup sweep. */
 export const CONVERT_DIR = 'pdf-convert';
@@ -185,6 +186,9 @@ export async function convertPdfToPages(docId: string, options: ConvertOptions =
     } catch (err) {
       console.warn('convertPdfToPages: could not stash the PDF', err);
     }
+    // Renders of the PDF's pages in Caches go with it (a converted page may
+    // be redacted next: no unredacted picture of it may stay behind).
+    invalidatePdfThumbs(docId);
 
     finishAddedPages(result.doc, result.doc.pages.map((_, i) => i), filter);
     return { doc: result.doc, pageCount: result.doc.pages.length, undo };

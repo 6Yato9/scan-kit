@@ -1,7 +1,8 @@
 // app/tools/sign.tsx
-// Draw (or pick a saved) signature, choose its ink, the page (or every page),
-// then place it on the page by hand — drag it to move it, drag a corner or
-// pinch to resize it (components/placement-frame.tsx) — and sign the
+// Draw (or pick a saved) signature, then place it on the page by hand right
+// under it — drag it to move it, drag a corner or pinch to resize it
+// (components/placement-frame.tsx) — choose its ink and the page (or every
+// page), and sign the
 // document itself: the signature is drawn into the page (and its unfiltered
 // shadow), so the pages stay searchable and re-filterable, and the viewer
 // offers Undo (lib/page-stamp.ts). "Save as a copy" signs a duplicate.
@@ -11,6 +12,7 @@ import {
   Image,
   Pressable,
   ScrollView,
+  type LayoutChangeEvent,
   StyleSheet,
   Text,
   View,
@@ -40,12 +42,14 @@ import { FilterBaker } from '@/components/filter-baker';
 import { PageThumb } from '@/components/page-thumb';
 import { reportStampFailure, usePageStamper, useStampFinish } from '@/components/page-stamper';
 import { SignaturePlacer } from '@/components/placement-frame';
+import { emptySpotPlacement, lineToPageRect, type PageRect } from '@/lib/placement';
+import { recognizeLines } from '@/lib/ocr';
+import { getImageSize } from '@/lib/image-size';
 import { copyName, stampCopy, stampPages, targetPages } from '@/lib/page-stamp';
 import { notifySuccess, tapLight } from '@/lib/haptics';
 import {
   SIGNATURE_INK,
   clampPlacement,
-  defaultPlacement,
   type Placement,
   type Signature,
   type SignatureInk,
@@ -61,8 +65,13 @@ import {
 } from '@/lib/saved-signatures';
 
 const PAD_HEIGHT = 180;
-/** A new signature's width on the page, as a fraction of the page width. */
-const START_WIDTH = 0.32;
+/**
+ * A new signature's width on the page, as a fraction of the page width: big
+ * enough that its corner handles sit around it, not on it.
+ */
+const START_WIDTH = 0.38;
+/** After the last stroke, how long before the screen scrolls the page into view. */
+const REVEAL_AFTER_DRAW_MS = 1200;
 const INKS: { value: SignatureInk; label: string; color: string }[] = [
   { value: 'black', label: 'Black', color: SIGNATURE_INK.black },
   { value: 'blue', label: 'Blue', color: SIGNATURE_INK.blue },
@@ -160,8 +169,39 @@ export default function SignScreen() {
   }, [fixed, doc]);
   const pageUri = doc ? doc.pages[Math.min(pageIndex, doc.pages.length - 1)] : null;
   const aspect = useImageAspect(pageUri);
-  // Kept whole on this page whatever page or signature it was made for.
-  const place = sig ? clampPlacement(sig, placement ?? defaultPlacement(sig, aspect, START_WIDTH), aspect) : null;
+  const pageText = usePageText(pageUri);
+  // Kept whole on this page whatever page or signature it was made for. Until
+  // the user moves it, it starts in an empty spot near the bottom right (clear
+  // of the page's text when it has been read).
+  const place = sig
+    ? clampPlacement(sig, placement ?? emptySpotPlacement(sig.height / sig.width, aspect, pageText, START_WIDTH), aspect)
+    : null;
+
+  // Once there is a signature, the page it goes on scrolls into view: at once
+  // for a saved one, a moment after the last stroke for a drawn one (so a
+  // second stroke, a dot on an i, isn't cut off by the scroll).
+  const scrollRef = useRef<ScrollView>(null);
+  const placerY = useRef<number | null>(null);
+  const revealTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const revealed = useRef(false);
+  const cancelReveal = () => {
+    if (revealTimer.current) clearTimeout(revealTimer.current);
+    revealTimer.current = null;
+  };
+  useEffect(() => () => cancelReveal(), []);
+  const revealPlacer = (delay: number) => {
+    cancelReveal();
+    if (revealed.current) return;
+    revealTimer.current = setTimeout(() => {
+      revealTimer.current = null;
+      if (placerY.current == null) return;
+      revealed.current = true;
+      scrollRef.current?.scrollTo({ y: Math.max(0, placerY.current - Spacing.xl), animated: true });
+    }, delay);
+  };
+  const onPlacementLayout = (e: LayoutChangeEvent) => {
+    placerY.current = e.nativeEvent.layout.y;
+  };
 
   // The pad draws in the theme's text colour; a theme change reloads it empty.
   const html = useMemo(() => padHtml(colors.text, Ink.signature), [colors.text]);
@@ -183,6 +223,7 @@ export default function SignScreen() {
       // Keep any placement the user already chose; clampPlacement fits the new shape.
       setSig(parsed);
       setSavedPick(null);
+      revealPlacer(REVEAL_AFTER_DRAW_MS);
     } catch {
       Alert.alert('Couldn’t capture the signature', 'Clear the box and try again.');
     }
@@ -193,6 +234,8 @@ export default function SignScreen() {
     setSig(null);
     setSavedPick(null);
     setPlacement(null);
+    cancelReveal();
+    revealed.current = false;
     tapLight();
   };
 
@@ -204,6 +247,7 @@ export default function SignScreen() {
       setSig(loaded);
       setSavedPick(s.id);
       tapLight();
+      revealPlacer(150);
     } catch {
       Alert.alert('Couldn’t load the signature', 'Draw it in the box instead.');
     }
@@ -317,6 +361,7 @@ export default function SignScreen() {
       title="Sign"
       busy={!!progress}
       scrollEnabled={!drawing && !placing}
+      scrollRef={scrollRef}
       footer={
         <>
           {progress ? (
@@ -367,15 +412,17 @@ export default function SignScreen() {
                   accessibilityHint="Touch and hold to remove it"
                   style={({ pressed }) => [
                     styles.savedTile,
-                    { backgroundColor: colors.paper, borderColor: on ? colors.accent : colors.thumbBorder },
+                    { backgroundColor: colors.card, borderColor: on ? colors.accent : colors.thumbBorder },
                     on && styles.savedTileOn,
                     pressed && { opacity: 0.7 },
                   ]}
                 >
+                  {/* Drawn like the pad: the theme's text colour on the card (a
+                      white slab in dark mode otherwise). The ink shows on the page. */}
                   <Image
-                    key={ink}
+                    key={colors.text}
                     source={{ uri: s.uri }}
-                    style={[styles.savedImg, ink !== 'black' ? { tintColor: SIGNATURE_INK[ink] } : null]}
+                    style={[styles.savedImg, { tintColor: colors.text }]}
                     resizeMode="contain"
                   />
                   {on ? (
@@ -394,7 +441,10 @@ export default function SignScreen() {
       ) : null}
       <View
         style={[styles.pad, { borderColor: colors.border, backgroundColor: colors.card }]}
-        onTouchStart={() => setDrawing(true)}
+        onTouchStart={() => {
+          setDrawing(true);
+          cancelReveal();
+        }}
         onTouchEnd={() => setDrawing(false)}
         onTouchCancel={() => setDrawing(false)}
       >
@@ -418,12 +468,11 @@ export default function SignScreen() {
         />
       </View>
 
-      {/* 3. Ink */}
-      <SectionLabel>Ink</SectionLabel>
-      <ColorSwatches options={INKS} value={ink} onChange={setInk} />
-
-      {/* 4. Page, and where on it: the signature is placed by hand on the
-          page itself, exactly where it will be drawn into it. */}
+      {/* 3. Page, and where on it — right under the signature, so the page
+          is in view as soon as there is something to place: the signature
+          is placed by hand on the page itself, exactly where it will be
+          drawn into it. */}
+      <View onLayout={onPlacementLayout} collapsable={false}>
       {multiPage ? (
         <>
           <SectionLabel>{everyPage ? 'Every page' : `Page ${pageIndex + 1} of ${doc.pages.length}`}</SectionLabel>
@@ -480,6 +529,11 @@ export default function SignScreen() {
             ? 'Drag the signature to move it. Drag a corner or pinch to resize it.'
             : 'Draw or choose a signature, then place it on the page.'}
       </ToolNote>
+      </View>
+
+      {/* 4. Ink */}
+      <SectionLabel>Ink</SectionLabel>
+      <ColorSwatches options={INKS} value={ink} onChange={setInk} />
 
       {multiPage ? (
         <View style={[styles.switchRow, { backgroundColor: colors.card }]}>
@@ -545,3 +599,33 @@ const styles = StyleSheet.create({
   },
   orDraw: { marginTop: Spacing.sm, marginBottom: Spacing.sm, paddingHorizontal: Spacing.xs },
 });
+
+/**
+ * The text lines on a page, as page fractions, so a new signature can start
+ * clear of them. Read on device (lib/ocr, usually from the OCR cache: the text
+ * index has already read every page). Empty until known, and when OCR is
+ * unavailable or fails.
+ */
+function usePageText(pageUri: string | null): PageRect[] {
+  const [rects, setRects] = useState<PageRect[]>([]);
+  useEffect(() => {
+    setRects([]);
+    if (!pageUri) return;
+    let live = true;
+    Promise.all([recognizeLines(pageUri), getImageSize(pageUri)])
+      .then(([ocr, size]) => {
+        if (!live || !size) return;
+        const out: PageRect[] = [];
+        for (const line of ocr.lines) {
+          const r = lineToPageRect(line, size.width, size.height);
+          if (r) out.push(r);
+        }
+        setRects(out);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [pageUri]);
+  return rects;
+}

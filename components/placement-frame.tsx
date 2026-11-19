@@ -45,7 +45,9 @@ import {
 import type { Placement } from '@/lib/stamp';
 
 /** Corner handle: the dot that shows, and the touch target around it. */
-const DOT = 16;
+// Small, so they sit at the corners of a small signature without hiding it;
+// the white ring keeps them visible on ink and on paper.
+const DOT = 12;
 const TARGET = 44;
 /** Extra reach around the signature's body for grabbing it. */
 const BODY_SLOP = 10;

@@ -67,10 +67,62 @@ function bumpLayout(docId: string): void {
  */
 export function deleteDocumentFiles(docId: string): void {
   forgetDocumentOcr(docId);
+  // Renders of its PDF pages in Caches (lib/pdf-thumb.ts), and the crop
+  // editor's Undo copies of its pages (lib/page-source.ts): a deleted
+  // document leaves no picture of itself behind (r12 code review #2).
+  removePdfThumbFiles(docId);
+  removeCacheEntries('page-source', name => name.startsWith(`undo-${docId}-`));
   for (const dir of docDirs(docId)) {
     if (isUserVisibleUri(dir.uri)) removeAppFiles(dir);
     else dir.delete();
   }
+}
+
+// ── PDF page renders (Caches/pdf-thumbs, lib/pdf-thumb.ts) ──────────────────
+// Named for their document: `<docId>-<key>.jpg` (first page), `pages-<docId>-
+// <key>/` (every page, for Reorder) and `tmp-<docId>-<key>-…/` (a render in
+// progress). They show the pages' content, so they go whenever the PDF does:
+// deleted, converted to pages, redacted, or edited (lib/pdf-thumb.ts
+// invalidatePdfThumbs), and at launch for any document that is not a PDF.
+
+/** Caches folder of the PDF page renders. */
+export const PDF_THUMB_DIR = 'pdf-thumbs';
+
+/** True when the pdf-thumbs entry `name` belongs to document `docId`. */
+export function isPdfThumbOf(name: string, docId: string): boolean {
+  return !!docId && (name.startsWith(`${docId}-`) || name.startsWith(`pages-${docId}-`) || name.startsWith(`tmp-${docId}-`));
+}
+
+/** Deletes the entries of Caches/`folder` whose names match. Never throws; returns how many went. */
+function removeCacheEntries(folder: string, match: (name: string) => boolean): number {
+  let removed = 0;
+  try {
+    const dir = new Directory(Paths.cache, folder);
+    if (!dir.exists) return 0;
+    for (const item of dir.list()) {
+      try {
+        if (!match(baseName(item.uri))) continue;
+        item.delete();
+        removed++;
+      } catch {}
+    }
+  } catch {}
+  return removed;
+}
+
+/** Deletes every render of document `docId`'s PDF. Never throws; returns how many entries went. */
+export function removePdfThumbFiles(docId: string): number {
+  return removeCacheEntries(PDF_THUMB_DIR, name => isPdfThumbOf(name, docId));
+}
+
+/**
+ * Startup: deletes the renders of every document that is not, or no longer,
+ * a PDF — `pdfDocIds` are the ones that are. Returns how many went.
+ */
+export function sweepPdfThumbs(pdfDocIds: string[]): number {
+  // Anything else there is a deleted or converted document's render (a cache:
+  // whatever is still needed is rendered again).
+  return removeCacheEntries(PDF_THUMB_DIR, name => !pdfDocIds.some(id => isPdfThumbOf(name, id)));
 }
 
 /**
@@ -521,6 +573,8 @@ const SIDE_FILES: { re: RegExp; target: (m: RegExpMatchArray) => string }[] = [
   // replacePage / replaceOriginal: page-3.new.jpg → page-3.jpg, page-3.orig.new.jpg → page-3.orig.jpg
   // (and the same for a source photo, page-3.src.new.jpg → page-3.src.jpg)
   { re: /^page-(\d+)((?:\.orig|\.src)?)\.new\.jpg$/, target: m => `page-${m[1]}${m[2]}.jpg` },
+  // writeSourceMeta (lib/page-source.ts): page-3.src.new.json → page-3.src.json
+  { re: /^page-(\d+)\.src\.new\.json$/, target: m => `page-${m[1]}.src.json` },
   // older builds' deleteSinglePage: page-4.shifting.jpg was headed for page-3.jpg
   { re: /^page-(\d+)((?:\.orig)?)\.shifting\.jpg$/, target: m => `page-${Number(m[1]) - 1}${m[2]}.jpg` },
   // older builds' generic temp: page-3.tmp.jpg → page-3.jpg
@@ -662,7 +716,7 @@ const PROTECTED_DIR_NAMES = new Set([SCAN_DIR_NAME, SIGNATURES_DIR_NAME]);
 /** What a document's record points at (lib/storage.ts documentFileRefsForCleanup). */
 export type DocFileRefs = { id: string; pages: string[]; pdfUri?: string; updatedAt: number };
 
-const PAGE_FILE = /^page-\d+(?:(?:\.orig|\.src)?\.jpg|\.src\.json)$/;
+const PAGE_FILE = /^page-\d+(?:(?:\.orig|\.src)?\.jpg|\.src(?:\.new)?\.json)$/;
 
 /**
  * Reads document `id`'s current record and runs `act` on it INSIDE the docs
@@ -731,7 +785,9 @@ export async function sweepConvertLeftovers(
   withFresh: WithFreshFileRefs,
   now: number = Date.now(),
 ): Promise<number> {
-  let removed = 0;
+  // Page renders of documents that are gone or no longer PDFs (a record list
+  // that can't be trusted never gets here: lib/storage documentFileRefsForCleanup).
+  let removed = sweepPdfThumbs(records.filter(r => !!r.pdfUri && r.pages.length === 0).map(r => r.id));
   for (const snapshot of records) {
     if (!recordSettled(snapshot, now)) continue; // changed recently in the snapshot already
     try {

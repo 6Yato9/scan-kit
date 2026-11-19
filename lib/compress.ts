@@ -3,12 +3,18 @@
 // shadow (the unfiltered source every filter bake re-derives from) is
 // compressed with the same settings, otherwise the next filter change would
 // re-bake from the full-size original and silently undo the saving.
+//
+// A compressed page also drops its kept source photo (lib/page-source.ts): it
+// is the biggest file a page has (up to 4096 px), this is Settings' "Free up
+// space", and Crop › Original photo would re-render the page from it at full
+// size, quietly undoing the compression.
 import { Image } from 'react-native';
 import { File } from 'expo-file-system';
 import { manipulateAsync, SaveFormat, type Action } from 'expo-image-manipulator';
 import { originalUri, replaceOriginal, replacePage } from './files';
 import { patchDocument } from './storage';
 import { runPageEdit } from './bake';
+import { removePageSource } from './page-source';
 import type { Document } from '../types/document';
 
 export type CompressLevel = 'small' | 'balanced' | 'sharp';
@@ -92,13 +98,15 @@ export async function compressDocument(
         try { new File(page).delete(); } catch {}
       }
       const origPath = originalUri(doc.id, i);
+      let origChanged = false;
       if (new File(origPath).exists) {
         const orig = await compressFile(origPath, level);
         if (orig) {
-          replaceOriginal(orig, doc.id, i);
+          origChanged = replaceOriginal(orig, doc.id, i);
           try { new File(orig).delete(); } catch {}
         }
       }
+      if (page || origChanged) removePageSource(doc.id, i);
       return !!page;
     });
     if (changed) changedPages++;

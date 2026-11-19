@@ -99,6 +99,7 @@ export function ToolScreen({
   scrollEnabled = true,
   right,
   busy = false,
+  scrollRef,
 }: {
   title: string;
   children: ReactNode;
@@ -114,6 +115,8 @@ export function ToolScreen({
    * so it is never left half-done (Sign / Watermark / Timestamp).
    */
   busy?: boolean;
+  /** The body's ScrollView, for a screen that scrolls a section into view (Sign). */
+  scrollRef?: React.Ref<ScrollView>;
 }) {
   const router = useRouter();
   const navigation = useNavigation();
@@ -160,6 +163,7 @@ export function ToolScreen({
       />
       {scroll ? (
         <ScrollView
+          ref={scrollRef}
           style={styles.flex}
           contentContainerStyle={[styles.body, !footer && { paddingBottom: insets.bottom + Spacing.xxl }]}
           scrollEnabled={scrollEnabled}

@@ -26,7 +26,11 @@ import { Colors } from '@/lib/theme';
 
 /** Optional trailing button, e.g. Undo after a delete. Keeps the toast up longer. */
 export type ToastAction = { label: string; onPress: () => void };
-type ToastOptions = { action?: ToastAction };
+type ToastOptions = {
+  action?: ToastAction;
+  /** An Undo after an edit that changed or removed something: the action stays up longer (ACTION_VISIBLE_MS_LONG). */
+  long?: boolean;
+};
 
 /** Claims the toast's position (distance of its bottom edge above the screen's bottom); returns the release. */
 type ClaimAnchor = (bottom: number) => () => void;
@@ -39,6 +43,9 @@ export const VISIBLE_MS = 1800;
 export const ACTION_VISIBLE_MS = 6000;
 /** VoiceOver reads the message first, then the user swipes to the action. */
 export const ACTION_VISIBLE_MS_SCREEN_READER = 10000;
+/** `long` toasts (Undo after a destructive edit): time to notice the change, then reach Undo. */
+export const ACTION_VISIBLE_MS_LONG = 10000;
+export const ACTION_VISIBLE_MS_LONG_SCREEN_READER = 15000;
 
 export function ToastProvider({
   children,
@@ -122,7 +129,9 @@ export function ToastProvider({
     ]).start();
 
     const visible = options?.action
-      ? (screenReader.current ? ACTION_VISIBLE_MS_SCREEN_READER : ACTION_VISIBLE_MS)
+      ? options.long
+        ? (screenReader.current ? ACTION_VISIBLE_MS_LONG_SCREEN_READER : ACTION_VISIBLE_MS_LONG)
+        : (screenReader.current ? ACTION_VISIBLE_MS_SCREEN_READER : ACTION_VISIBLE_MS)
       : VISIBLE_MS;
     hideTimer.current = setTimeout(hide, visible);
   }, [opacity, translateY, hide]);

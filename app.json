@@ -12,6 +12,7 @@
       "supportsTablet": true,
       "infoPlist": {
         "NSCameraUsageDescription": "Scan Kit needs camera access to scan documents.",
+        "NSMicrophoneUsageDescription": "Scan Kit doesn’t use the microphone or record audio.",
         "NSCalendarsUsageDescription": "Scan Kit adds the dates you pick in a scanned page to your calendar.",
         "NSContactsUsageDescription": "Scan Kit saves the business cards you scan as new contacts.",
         "ITSAppUsesNonExemptEncryption": false,

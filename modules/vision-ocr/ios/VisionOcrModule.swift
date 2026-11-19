@@ -31,14 +31,16 @@ public class VisionOcrModule: Module {
     // Must stay the SECOND view: the first one is the module's default view
     // (requireNativeView('VisionOcr') = PdfDocumentView in shipped JS).
     View(DocumentCameraView.self) {
-      Events("onDetection", "onCapture", "onCaptureStart", "onCameraError")
+      Events("onDetection", "onCapture", "onCaptureStart", "onCameraError", "onCameraState")
       Prop("autoCapture") { (view: DocumentCameraView, on: Bool) in view.setAutoCapture(on) }
       Prop("flash") { (view: DocumentCameraView, mode: String) in view.setFlash(mode) }
       Prop("torch") { (view: DocumentCameraView, on: Bool) in view.setTorch(on) }
       Prop("active") { (view: DocumentCameraView, on: Bool) in view.setActive(on) }
       Prop("simulatorImageUri") { (view: DocumentCameraView, uri: String?) in view.setSimulatorImage(uri) }
+      Prop("simulatorJitter") { (view: DocumentCameraView, amount: Double?) in view.setSimulatorJitter(amount ?? 0) }
       OnViewDidUpdateProps { (view: DocumentCameraView) in view.propsDidUpdate() }
       AsyncFunction("capture") { (view: DocumentCameraView, promise: Promise) in view.capture(promise) }
+      AsyncFunction("rearm") { (view: DocumentCameraView) in view.rearm() }
     }
 
     /// Page outline in a photo: [x0,y0,...,x3,y3] TL, TR, BR, BL, normalised
@@ -143,7 +145,8 @@ public class VisionOcrModule: Module {
           try PdfMerger.merge(inputPaths: inputUris.map(path), outputPath: path(outputUri))
           promise.resolve(URL(fileURLWithPath: path(outputUri)).absoluteString)
         } catch {
-          promise.reject("ERR_PDF_MERGE", error.localizedDescription)
+          let message = error.localizedDescription
+          promise.reject(message == PdfEditor.restrictedMessage ? "ERR_PDF_RESTRICTED" : "ERR_PDF_MERGE", message)
         }
       }
     }
@@ -176,7 +179,8 @@ public class VisionOcrModule: Module {
     /// Page edits that keep a PDF a PDF (PdfEditor): rotate, delete, reorder,
     /// blank pages, split. Writes `outputUri` and verifies it before resolving
     /// to its page count. Rejects ERR_PDF_LOCKED (message "locked") when the
-    /// PDF needs a password, ERR_PDF_EDIT otherwise.
+    /// PDF needs a password, ERR_PDF_RESTRICTED (message "restricted") when its
+    /// permissions don't allow changing pages, ERR_PDF_EDIT otherwise.
     AsyncFunction("pdfEditPages") { (inputUri: String, outputUri: String, sources: [Int], rotations: [Int], password: String?, promise: Promise) in
       DispatchQueue.global(qos: .userInitiated).async {
         func path(_ u: String) -> String { URL(string: u).flatMap { $0.isFileURL ? $0.path : nil } ?? u }
@@ -188,7 +192,9 @@ public class VisionOcrModule: Module {
           promise.resolve(n)
         } catch {
           let message = error.localizedDescription
-          promise.reject(message == PdfEditor.lockedMessage ? "ERR_PDF_LOCKED" : "ERR_PDF_EDIT", message)
+          let code = message == PdfEditor.lockedMessage ? "ERR_PDF_LOCKED"
+            : message == PdfEditor.restrictedMessage ? "ERR_PDF_RESTRICTED" : "ERR_PDF_EDIT"
+          promise.reject(code, message)
         }
       }
     }

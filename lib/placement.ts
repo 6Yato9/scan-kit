@@ -166,3 +166,79 @@ function snap(v: number): number {
 export function sameAnchor(a: Anchor, b: Anchor): boolean {
   return Math.abs(a.x - b.x) < 1e-6 && Math.abs(a.y - b.y) < 1e-6;
 }
+
+// ── Where a new signature lands ─────────────────────────────────────────────
+
+/** A text line on the page, as fractions (0..1) of the page width / height. */
+export type PageRect = { x: number; y: number; w: number; h: number };
+
+/** Margin kept from the page edges, as fractions of the page width / height. */
+const SPOT_MARGIN_X = 0.06;
+const SPOT_MARGIN_Y = 0.05;
+/**
+ * Room kept around each text line: across, as a fraction of the page width;
+ * above and below, of the page height (generous, as a printed line often sits
+ * in a ruled box or on a rule the OCR box doesn't include).
+ */
+const SPOT_TEXT_PAD = 0.015;
+const SPOT_TEXT_PAD_Y = 0.04;
+
+/**
+ * A text line's box in page fractions, from OCR pixel coordinates on an
+ * image `width` × `height`. Null for an empty or invalid line.
+ */
+export function lineToPageRect(
+  line: { left: number; top: number; width: number; height: number },
+  width: number,
+  height: number,
+): PageRect | null {
+  if (!(width > 0) || !(height > 0) || !(line.width > 0) || !(line.height > 0)) return null;
+  return { x: line.left / width, y: line.top / height, w: line.width / width, h: line.height / height };
+}
+
+/**
+ * Where a new signature `w` of the page wide (its height `h / w` = `ratio`, on
+ * a page of aspect `pageAspect` = height / width) is placed by default: the
+ * lowest, then rightmost, spot that covers no text, on the right half of the
+ * page if there is one there (`text`, the page's OCR
+ * lines), inside the page margins. When every spot covers some text, the one
+ * covering least; with no text known, the bottom right corner.
+ */
+export function emptySpotPlacement(ratio: number, pageAspect: number, text: readonly PageRect[], w: number): Placement {
+  const hFrac = (w * ratio) / (pageAspect > 0 ? pageAspect : 1);
+  const right = Math.max(0, 1 - w - SPOT_MARGIN_X);
+  const bottom = Math.max(0, 1 - hFrac - SPOT_MARGIN_Y);
+  const corner = { w, x: right, y: bottom };
+  if (!text.length || !(ratio > 0)) return corner;
+  const padY = SPOT_TEXT_PAD_Y;
+  const boxes = text.map(t => ({ x0: t.x - SPOT_TEXT_PAD, y0: t.y - padY, x1: t.x + t.w + SPOT_TEXT_PAD, y1: t.y + t.h + padY }));
+  const covered = (x: number, y: number) => {
+    let area = 0;
+    for (const b of boxes) {
+      const ox = Math.min(x + w, b.x1) - Math.max(x, b.x0);
+      const oy = Math.min(y + hFrac, b.y1) - Math.max(y, b.y0);
+      if (ox > 0 && oy > 0) area += ox * oy;
+    }
+    return area;
+  };
+  const left = Math.min(SPOT_MARGIN_X, right);
+  const top = Math.min(SPOT_MARGIN_Y, bottom);
+  let best = corner;
+  let bestArea = Infinity;
+  // Bottom up, right to left, first on the right half of the page (where a
+  // signature goes), then anywhere: the first spot with no text wins.
+  for (const rightHalf of [true, false]) {
+    for (let y = bottom; y >= top - 1e-9; y -= 0.02) {
+      for (let x = right; x >= left - 1e-9; x -= 0.04) {
+        if (rightHalf && x + w / 2 < 0.5) continue;
+        const area = covered(x, y);
+        if (area === 0) return { w, x, y };
+        if (area < bestArea - 1e-12) {
+          bestArea = area;
+          best = { w, x, y };
+        }
+      }
+    }
+  }
+  return best;
+}

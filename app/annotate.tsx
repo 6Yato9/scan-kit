@@ -3,7 +3,7 @@
 // for everything and two-finger zoom. The drawing runs in a LocalWebView
 // (lib/markup-html.ts + lib/markup-core.ts); Done draws the marks into the page
 // (and its unfiltered .orig shadow) at full size, exactly as previewed.
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { LocalWebView } from '@/components/local-webview';
+import { AppIcon, type AppIconName } from '@/components/app-icon';
 import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
 import { File } from 'expo-file-system';
@@ -81,14 +82,21 @@ const SHAPES: { id: Shape; icon: IconName; label: string }[] = [
   { id: 'line', icon: 'remove-outline', label: 'Line' },
   { id: 'arrow', icon: 'arrow-forward-outline', label: 'Arrow' },
 ];
-const TOOLS: { id: Tool; icon: IconName; label: string }[] = [
-  { id: 'pen', icon: 'pencil-outline', label: 'Pen' },
-  { id: 'highlighter', icon: 'brush-outline', label: 'Highlight' },
+const TOOLS: { id: Tool; icon: AppIconName; label: string }[] = [
+  { id: 'pen', icon: 'pen', label: 'Pen' },
+  { id: 'highlighter', icon: 'highlighter', label: 'Highlight' },
   { id: 'text', icon: 'text-outline', label: 'Text' },
   { id: 'shape', icon: 'shapes-outline', label: 'Shape' },
-  { id: 'eraser', icon: 'backspace-outline', label: 'Eraser' },
+  { id: 'eraser', icon: 'eraser', label: 'Eraser' },
 ];
 const SHAPE_WIDTH = 3;
+/**
+ * The options row has two groups of this many fixed slots (colours, then
+ * sizes or shapes), so nothing moves sideways when the tool changes.
+ */
+const SLOTS = 4;
+/** Done waits this long for the drawing before giving up (the page may have died). */
+const RESULT_TIMEOUT_MS = 30_000;
 
 type TextDraft = { mode: 'new'; x: number; y: number } | { mode: 'edit'; id: string };
 
@@ -120,7 +128,21 @@ export default function AnnotateScreen() {
   // while the user draws, the page pixels we composite onto are stale and the
   // page is re-baked from the (now inked) .orig after saving.
   const loadedLook = useRef<string>('');
+  // The drawing's whole history as the page last reported it (HIST:), kept
+  // here so it survives the WebView's content process being killed: the page
+  // reloads and gets it back (restoreHistory).
+  const historyCopy = useRef<string | null>(null);
+  // Done is waiting for the page's RESULT: its timer, and a token so a result
+  // that arrives after the timeout is ignored.
+  const resultWait = useRef<{ token: number; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const resultSeq = useRef(0);
   const dirty = history.count > 0;
+
+  const stopWaiting = () => {
+    if (resultWait.current) clearTimeout(resultWait.current.timer);
+    resultWait.current = null;
+  };
+  useEffect(() => () => stopWaiting(), []);
 
   const config = (): MarkupConfig => ({
     tool,
@@ -223,7 +245,14 @@ export default function AnnotateScreen() {
     const data = event.nativeEvent.data;
     const body = (prefix: string) => JSON.parse(data.slice(prefix.length));
     if (data.startsWith('READY:')) {
+      // A reload after the page's process died: put the drawing back.
+      const copy = historyCopy.current;
+      if (copy) webRef.current?.injectJavaScript(`restoreHistory(JSON.parse(${JSON.stringify(copy)})); true;`);
       setLoaded(true);
+      return;
+    }
+    if (data.startsWith('HIST:')) {
+      historyCopy.current = data.slice('HIST:'.length);
       return;
     }
     if (data === 'LOAD_ERROR') {
@@ -247,12 +276,17 @@ export default function AnnotateScreen() {
       return;
     }
     if (data.startsWith('ERROR:')) {
+      if (!resultWait.current) return;
+      stopWaiting();
       setSaving(false);
       console.error('Markup render failed', data);
       Alert.alert('Couldn’t save your markup', 'Try again.');
       return;
     }
     if (!data.startsWith('RESULT:')) return;
+    // Only the answer Done is waiting for (not one that came after the timeout).
+    if (!resultWait.current) return;
+    stopWaiting();
     try {
       const payload = body('RESULT:') as { page: string; orig: string | null };
       await save(payload);
@@ -277,7 +311,28 @@ export default function AnnotateScreen() {
       return;
     }
     setSaving(true);
+    const token = ++resultSeq.current;
+    const timer = setTimeout(() => {
+      if (resultWait.current?.token !== token) return;
+      resultWait.current = null;
+      setSaving(false);
+      Alert.alert('Couldn’t save your markup', 'Try again. Your marks are still on the page.');
+    }, RESULT_TIMEOUT_MS);
+    resultWait.current = { token, timer };
     inject('getResult()');
+  };
+
+  // iOS can kill the WebView's content process (memory pressure, often while
+  // the app is in the background): the page goes blank and stops answering.
+  // Reload it; READY then restores the drawing from historyCopy.
+  const onPageDied = () => {
+    setLoaded(false);
+    if (resultWait.current) {
+      stopWaiting();
+      setSaving(false);
+      Alert.alert('Couldn’t save your markup', 'Markup had to reload the page. Your marks are back — tap Done again.');
+    }
+    webRef.current?.reload();
   };
 
   const handleCancel = () => {
@@ -318,77 +373,57 @@ export default function AnnotateScreen() {
   };
 
   // ── Toolbar pieces ────────────────────────────────────────────────────────
-  const swatches = (list: { hex: string; label: string }[], value: string, onPick: (hex: string) => void, label: string) => (
-    <View style={styles.group} accessibilityRole="radiogroup" accessibilityLabel={label}>
-      {list.map(c => {
-        const active = value === c.hex;
-        return (
-          <Pressable
-            key={c.hex}
-            onPress={() => { selection(); onPick(c.hex); }}
-            style={styles.optionHit}
-            accessibilityRole="radio"
-            accessibilityLabel={c.label}
-            accessibilityState={{ selected: active }}
-          >
-            <View style={[styles.swatchRing, { borderColor: active ? colors.chromeText : 'transparent' }]}>
-              <View style={[styles.swatch, { backgroundColor: c.hex, borderColor: colors.chromeMuted }]} />
-            </View>
-          </Pressable>
-        );
-      })}
+  // Every option is drawn the same way: its content in a circle that gets a
+  // ring when it is the one chosen (colours, sizes, shapes, text sizes alike).
+  const option = (key: string, active: boolean, label: string, onPress: () => void, content: ReactNode) => (
+    <View key={key} style={styles.slot}>
+      <Pressable
+        onPress={() => { selection(); onPress(); }}
+        style={({ pressed }) => [styles.optionHit, pressed && { opacity: 0.6 }]}
+        accessibilityRole="radio"
+        accessibilityLabel={label}
+        accessibilityState={{ selected: active }}
+      >
+        <View style={[styles.ring, { borderColor: active ? colors.chromeText : 'transparent' }]}>{content}</View>
+      </Pressable>
     </View>
   );
 
-  const dots = (list: { size: number; label: string }[], value: number, onPick: (n: number) => void, color: string, scale: (n: number) => number) => (
-    <View style={styles.group} accessibilityRole="radiogroup" accessibilityLabel="Size">
-      {list.map(({ size, label }) => {
-        const active = value === size;
-        const d = scale(size);
-        return (
-          <Pressable
-            key={size}
-            onPress={() => { selection(); onPick(size); }}
-            style={[styles.optionHit, active && { backgroundColor: colors.chromeBorder }]}
-            accessibilityRole="radio"
-            accessibilityLabel={label}
-            accessibilityState={{ selected: active }}
-          >
-            <View style={{ width: d, height: d, borderRadius: d / 2, backgroundColor: color, borderWidth: 1, borderColor: colors.chromeMuted }} />
-          </Pressable>
-        );
-      })}
+  /** A group of SLOTS fixed slots, filled from the left (empty slots keep the spacing). */
+  const group = (label: string, items: ReactNode[]) => (
+    <View style={styles.group} accessibilityRole="radiogroup" accessibilityLabel={label}>
+      {items}
+      {Array.from({ length: Math.max(0, SLOTS - items.length) }, (_, i) => <View key={`empty-${i}`} style={styles.slot} />)}
     </View>
   );
+
+  const swatches = (list: { hex: string; label: string }[], value: string, onPick: (hex: string) => void, label: string) =>
+    group(label, list.map(c => option(c.hex, value === c.hex, c.label, () => onPick(c.hex), (
+      <View style={[styles.swatch, { backgroundColor: c.hex, borderColor: colors.chromeMuted }]} />
+    ))));
+
+  const dots = (list: { size: number; label: string }[], value: number, onPick: (n: number) => void, color: string, scale: (n: number) => number) =>
+    group('Size', list.map(({ size, label }) => {
+      const d = scale(size);
+      return option(String(size), value === size, label, () => onPick(size), (
+        <View style={{ width: d, height: d, borderRadius: d / 2, backgroundColor: color, borderWidth: 1, borderColor: colors.chromeMuted }} />
+      ));
+    }));
 
   const iconOptions = <T extends string | number>(
     list: { id: T; icon: IconName; label: string; iconSize?: number }[],
     value: T,
     onPick: (v: T) => void,
     label: string,
-  ) => (
-    <View style={styles.group} accessibilityRole="radiogroup" accessibilityLabel={label}>
-      {list.map(o => {
-        const active = value === o.id;
-        return (
-          <Pressable
-            key={String(o.id)}
-            onPress={() => { selection(); onPick(o.id); }}
-            style={[styles.optionHit, active && { backgroundColor: colors.chromeBorder }]}
-            accessibilityRole="radio"
-            accessibilityLabel={o.label}
-            accessibilityState={{ selected: active }}
-          >
-            <Ionicons name={o.icon} size={o.iconSize ?? 22} color={active ? colors.chromeAccent : colors.chromeText} />
-          </Pressable>
-        );
-      })}
-    </View>
-  );
+  ) =>
+    group(label, list.map(o => option(String(o.id), value === o.id, o.label, () => onPick(o.id), (
+      <Ionicons name={o.icon} size={o.iconSize ?? 22} color={colors.chromeText} />
+    ))));
 
   const divider = <View style={[styles.divider, { backgroundColor: colors.chromeBorder }]} />;
   const textSizeOptions = TEXT_SIZES.map(t => ({ id: t.size, icon: 'text-outline' as IconName, label: t.label, iconSize: t.icon }));
 
+  // Colours always on the left; sizes (or shapes) always start right after the divider.
   const options = (() => {
     switch (tool) {
       case 'pen':
@@ -398,23 +433,25 @@ export default function AnnotateScreen() {
       case 'text':
         return <>{swatches(INK_COLORS, inkColor, setInkColor, 'Text color')}{divider}{iconOptions(textSizeOptions, textSize, setTextSize, 'Text size')}</>;
       case 'shape':
-        return <>{iconOptions(SHAPES, shape, setShape, 'Shape')}{divider}{swatches(INK_COLORS, inkColor, setInkColor, 'Shape color')}</>;
+        return <>{swatches(INK_COLORS, inkColor, setInkColor, 'Shape color')}{divider}{iconOptions(SHAPES, shape, setShape, 'Shape')}</>;
       case 'eraser':
         return (
           <>
-            {dots(ERASER_SIZES, eraserSize, setEraserSize, colors.chromeMuted, s => s * 0.7)}
+            <View style={styles.group}>
+              <Pressable
+                onPress={() => { tapLight(); inject('clearAll()'); }}
+                disabled={!dirty}
+                style={({ pressed }) => [styles.eraseAll, (pressed || !dirty) && { opacity: dirty ? 0.6 : 0.35 }]}
+                accessibilityRole="button"
+                accessibilityLabel="Erase all marks"
+                accessibilityState={{ disabled: !dirty }}
+              >
+                <Ionicons name="trash-outline" size={20} color={colors.chromeText} />
+                <Text allowFontScaling={false} style={[Type.subhead, { color: colors.chromeText }]}>Erase all</Text>
+              </Pressable>
+            </View>
             {divider}
-            <Pressable
-              onPress={() => { tapLight(); inject('clearAll()'); }}
-              disabled={!dirty}
-              style={({ pressed }) => [styles.eraseAll, (pressed || !dirty) && { opacity: dirty ? 0.6 : 0.35 }]}
-              accessibilityRole="button"
-              accessibilityLabel="Erase all marks"
-              accessibilityState={{ disabled: !dirty }}
-            >
-              <Ionicons name="trash-outline" size={20} color={colors.chromeText} />
-              <Text allowFontScaling={false} style={[Type.subhead, { color: colors.chromeText }]}>Erase all</Text>
-            </Pressable>
+            {dots(ERASER_SIZES, eraserSize, setEraserSize, colors.chromeMuted, s => s * 0.7)}
           </>
         );
     }
@@ -426,6 +463,8 @@ export default function AnnotateScreen() {
     : tool === 'eraser' ? 'Erases your marks, never the page.'
     : null;
 
+  // Same shape as a tool button (an icon box over a label line), so the
+  // arrows line up with the tool icons.
   const historyButton = (icon: IconName, label: string, enabled: boolean, onPress: () => void) => (
     <Pressable
       onPress={onPress}
@@ -436,7 +475,12 @@ export default function AnnotateScreen() {
       accessibilityLabel={label}
       accessibilityState={{ disabled: !enabled }}
     >
-      <Ionicons name={icon} size={22} color={enabled ? colors.chromeText : colors.chromeBorder} />
+      <View style={styles.toolIcon}>
+        <Ionicons name={icon} size={22} color={enabled ? colors.chromeText : colors.chromeBorder} />
+      </View>
+      <Text allowFontScaling={false} style={[styles.toolLabel, styles.labelSpacer]} importantForAccessibility="no" accessibilityElementsHidden>
+        {' '}
+      </Text>
     </Pressable>
   );
 
@@ -467,6 +511,13 @@ export default function AnnotateScreen() {
             scrollEnabled={false}
             bounces={false}
             onMessage={handleMessage}
+            onContentProcessDidTerminate={onPageDied}
+            onRenderProcessGone={onPageDied}
+            onError={() => {
+              Alert.alert('Couldn’t open this page for markup', 'Close Markup and try again.', [
+                { text: 'Close', onPress: () => router.back() },
+              ]);
+            }}
           />
         ) : null}
         {!loaded ? (
@@ -500,7 +551,7 @@ export default function AnnotateScreen() {
                 accessibilityState={{ selected: active }}
               >
                 <View style={[styles.toolIcon, { backgroundColor: active ? colors.chromeBorder : 'transparent' }]}>
-                  <Ionicons name={t.icon} size={22} color={active ? colors.chromeAccent : colors.chromeText} />
+                  <AppIcon name={t.icon} size={22} color={active ? colors.chromeAccent : colors.chromeText} />
                 </View>
                 <Text allowFontScaling={false} style={[styles.toolLabel, { color: active ? colors.chromeAccent : colors.chromeMuted }]}>
                   {t.label}
@@ -563,7 +614,7 @@ function TextSheet({
         style={[Type.body, styles.textInput, { color: colors.text, backgroundColor: colors.bg }]}
       />
       <View style={styles.sheetOptions}>
-        <View style={styles.group} accessibilityRole="radiogroup" accessibilityLabel="Text color">
+        <View style={styles.sheetGroup} accessibilityRole="radiogroup" accessibilityLabel="Text color">
           {INK_COLORS.map(c => {
             const active = color === c.hex;
             return (
@@ -575,27 +626,29 @@ function TextSheet({
                 accessibilityLabel={c.label}
                 accessibilityState={{ selected: active }}
               >
-                <View style={[styles.swatchRing, { borderColor: active ? colors.text : 'transparent' }]}>
+                <View style={[styles.ring, { borderColor: active ? colors.text : 'transparent' }]}>
                   <View style={[styles.swatch, { backgroundColor: c.hex, borderColor: colors.muted }]} />
                 </View>
               </Pressable>
             );
           })}
         </View>
-        <View style={[styles.divider, { backgroundColor: colors.border }]} />
-        <View style={styles.group} accessibilityRole="radiogroup" accessibilityLabel="Text size">
+        <View style={[styles.divider, styles.sheetDivider, { backgroundColor: colors.border }]} />
+        <View style={styles.sheetGroup} accessibilityRole="radiogroup" accessibilityLabel="Text size">
           {TEXT_SIZES.map(t => {
             const active = size === t.size;
             return (
               <Pressable
                 key={t.size}
                 onPress={() => { selection(); onSize(t.size); }}
-                style={[styles.optionHit, active && { backgroundColor: colors.separator }]}
+                style={styles.optionHit}
                 accessibilityRole="radio"
                 accessibilityLabel={t.label}
                 accessibilityState={{ selected: active }}
               >
-                <Ionicons name="text-outline" size={t.icon} color={active ? colors.accent : colors.text} />
+                <View style={[styles.ring, { borderColor: active ? colors.text : 'transparent' }]}>
+                  <Ionicons name="text-outline" size={t.icon} color={colors.text} />
+                </View>
               </Pressable>
             );
           })}
@@ -645,17 +698,18 @@ const styles = StyleSheet.create({
   optionsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
     paddingHorizontal: Spacing.sm,
     minHeight: HIT + Spacing.xs,
   },
-  group: { flexDirection: 'row', alignItems: 'center' },
-  divider: { width: StyleSheet.hairlineWidth, height: 28, marginHorizontal: Spacing.sm },
-  optionHit: { width: HIT, height: HIT, borderRadius: HIT / 2, alignItems: 'center', justifyContent: 'center' },
-  swatchRing: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+  // Each half of the options row: SLOTS equal slots, whatever the tool.
+  group: { flex: 1, flexDirection: 'row', alignItems: 'center' },
+  slot: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  divider: { width: StyleSheet.hairlineWidth, height: 28, marginHorizontal: Spacing.xs },
+  optionHit: { width: HIT, height: HIT, alignItems: 'center', justifyContent: 'center' },
+  ring: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     borderWidth: 2,
     alignItems: 'center',
     justifyContent: 'center',
@@ -677,6 +731,7 @@ const styles = StyleSheet.create({
   toolsDivider: { width: StyleSheet.hairlineWidth, height: 32 },
   toolBtn: { flex: 1, minHeight: HIT + 8, alignItems: 'center', justifyContent: 'center', gap: 2 },
   historyBtn: { flex: 0, width: 44 },
+  labelSpacer: { opacity: 0 },
   toolIcon: { width: 40, height: 30, borderRadius: Radius.sm + 2, alignItems: 'center', justifyContent: 'center' },
   toolLabel: { fontSize: 11, fontWeight: '500' },
   textInput: {
@@ -689,5 +744,7 @@ const styles = StyleSheet.create({
     lineHeight: 22,
   },
   sheetOptions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: Spacing.sm },
+  sheetGroup: { flexDirection: 'row', alignItems: 'center' },
+  sheetDivider: { marginHorizontal: Spacing.sm },
   sheetActions: { flexDirection: 'row', gap: Spacing.md, marginTop: Spacing.md },
 });

@@ -14,18 +14,29 @@ import Vision
 /// React Native from the events below.
 ///
 /// Events:
-///   onDetection   { quad: number[8] | null, stability: 0...1 }   (~8 Hz)
+///   onDetection   { quad: number[8] | null, stability: 0...1, aspect }   (~8 Hz)
 ///   onCaptureStart {}                                             (shutter fired)
 ///   onCapture     { sourceUri, width, height, quad: number[8] | null }
-///   onCameraError { code: 'permission' | 'unavailable' | 'failed', message }
+///   onCameraError { code: 'permission' | 'unavailable' | 'failed', message, capture?: true }
+///                 (`capture`: one shot failed, the camera keeps running)
+///   onCameraState { state: 'running' | 'paused', reason?: 'in-use' | 'multitasking' | 'pressure' | 'other' }
+///                 (paused: the system interrupted the session; it resumes by itself)
+///
+/// Orientation: the preview, the analysed frames and the photo all follow the
+/// interface orientation (iPad turns), so the photo is upright as the user
+/// sees the page and the outline maps straight onto the preview.
 ///
 /// Simulator / tests: with `simulatorImageUri` set (or when there is no
 /// camera) the same pipeline runs on that still image as if it were the feed.
+/// Changing the image while running keeps the detection state, like the next
+/// sheet put under a running camera. `simulatorJitter` (0...1) adds hand-held
+/// noise to the still's outline and marks some frames unsteady.
 public class DocumentCameraView: ExpoView, AVCaptureVideoDataOutputSampleBufferDelegate {
   let onDetection = EventDispatcher()
   let onCapture = EventDispatcher()
   let onCaptureStart = EventDispatcher()
   let onCameraError = EventDispatcher()
+  let onCameraState = EventDispatcher()
 
   // MARK: Props (main thread)
   private var autoCapture = true
@@ -33,6 +44,9 @@ public class DocumentCameraView: ExpoView, AVCaptureVideoDataOutputSampleBufferD
   private var torchOn = false
   private var active = true
   private var simulatorPath: String?
+  /// Interface orientation as a capture rotation angle (90 = portrait).
+  private var rotationAngle: CGFloat = 90
+  private var reportedState: String?        // main
   private var appInForeground = UIApplication.shared.applicationState != .background
 
   // MARK: Layers (main thread)
@@ -51,8 +65,10 @@ public class DocumentCameraView: ExpoView, AVCaptureVideoDataOutputSampleBufferD
   private let workQueue = DispatchQueue(label: "scankit.camera.work", qos: .userInitiated)
   private let photoOutput = AVCapturePhotoOutput()
   private let videoOutput = AVCaptureVideoDataOutput()
-  private var device: AVCaptureDevice?
+  private var device: AVCaptureDevice?      // sessionQueue
   private var configured = false            // sessionQueue
+  private var sessionRotation: CGFloat = 90 // sessionQueue
+  private var restartedAfterError = false   // sessionQueue
   private var photoDelegates: [Int64: PhotoDelegate] = [:]  // sessionQueue
   private let motion = CMMotionManager()
   private var reportedError: String?        // main
@@ -66,7 +82,16 @@ public class DocumentCameraView: ExpoView, AVCaptureVideoDataOutputSampleBufferD
   private var lastEmit: CFTimeInterval = 0
   private var lastEmittedHadQuad = false
   private var captureInFlight = false
+  private var captureToken = 0
   private var autoCaptureEnabled = true
+  /// The camera, for focus state (set from sessionQueue once configured).
+  private var focusDevice: AVCaptureDevice?
+  private var focusAdjustingSince: CFTimeInterval?
+  /// Content of the page in the latest frame with an outline.
+  private var lastSignature: PageSignature?
+  private var stillGray: GrayImage?
+  private var jitter: Double = 0
+  private var noise = SplitMix(seed: 0x5CA7)
   private var captureFlash: AVCaptureDevice.FlashMode = .auto
   private var sharpnessPeak: Double = 0
   private var motionLevel: Double = 0
@@ -83,6 +108,12 @@ public class DocumentCameraView: ExpoView, AVCaptureVideoDataOutputSampleBufferD
   /// Live outlines smaller than this aren't shown (something on the page, or
   /// noise); auto-capture additionally needs the tracker's minArea.
   private static let liveMinArea: CGFloat = 0.1
+  /// A shot that hasn't come back by then is given up (the shutter must
+  /// never stay busy for good).
+  private static let captureTimeout: Double = 10
+  /// Long edge of a saved capture: what lib/page-source keeps of a photo
+  /// (SOURCE_MAX_EDGE), so the photo is decoded and encoded once.
+  private static let captureMaxEdge = 4096
 
   public required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
@@ -107,6 +138,10 @@ public class DocumentCameraView: ExpoView, AVCaptureVideoDataOutputSampleBufferD
                    name: UIApplication.willEnterForegroundNotification, object: nil)
     nc.addObserver(self, selector: #selector(sessionRuntimeError(_:)),
                    name: .AVCaptureSessionRuntimeError, object: session)
+    nc.addObserver(self, selector: #selector(sessionWasInterrupted(_:)),
+                   name: .AVCaptureSessionWasInterrupted, object: session)
+    nc.addObserver(self, selector: #selector(sessionInterruptionEnded(_:)),
+                   name: .AVCaptureSessionInterruptionEnded, object: session)
   }
 
   deinit {
@@ -146,8 +181,17 @@ public class DocumentCameraView: ExpoView, AVCaptureVideoDataOutputSampleBufferD
   func setSimulatorImage(_ uri: String?) {
     let p = uri.flatMap { $0.isEmpty ? nil : DocumentGeometry.path($0.components(separatedBy: "?")[0]) }
     guard p != simulatorPath else { return }
+    let swap = p != nil && simulatorPath != nil
     simulatorPath = p
-    stopEverything()
+    // Another still while running: a new sheet under the same camera, so the
+    // detection state carries on (propsDidUpdate loads it). Camera <-> still:
+    // start over.
+    if !swap { stopEverything() }
+  }
+
+  func setSimulatorJitter(_ amount: Double) {
+    let j = max(0, min(1, amount))
+    analysisQueue.async { self.jitter = j }
   }
 
   /// Called once per prop batch, so start/stop decisions see all new props.
@@ -159,6 +203,7 @@ public class DocumentCameraView: ExpoView, AVCaptureVideoDataOutputSampleBufferD
 
   public override func didMoveToWindow() {
     super.didMoveToWindow()
+    updateRotation()
     updateRunning()
   }
 
@@ -174,14 +219,61 @@ public class DocumentCameraView: ExpoView, AVCaptureVideoDataOutputSampleBufferD
 
   @objc private func sessionRuntimeError(_ note: Notification) {
     let err = note.userInfo?[AVCaptureSessionErrorKey] as? AVError
-    // Media services reset: try once more; anything else is reported.
     if err?.code == .mediaServicesWereReset {
-      sessionQueue.async { if self.configured { self.session.startRunning() } }
-    } else {
+      // The media server restarted: every input and output is dead. Rebuild
+      // the session from scratch, then start it again if it should run.
+      sessionQueue.async {
+        self.teardownSession()
+        DispatchQueue.main.async { self.updateRunning() }
+      }
+      return
+    }
+    // Anything else: restart once; a second failure is reported (the screen
+    // offers Try again, which builds a new camera view).
+    sessionQueue.async {
+      if !self.restartedAfterError && self.configured {
+        self.restartedAfterError = true
+        self.session.startRunning()
+        if self.session.isRunning { return }
+      }
       DispatchQueue.main.async {
         self.report("failed", err?.localizedDescription ?? "The camera stopped unexpectedly")
       }
     }
+  }
+
+  @objc private func sessionWasInterrupted(_ note: Notification) {
+    var reason = "other"
+    if let raw = (note.userInfo?[AVCaptureSessionInterruptionReasonKey] as? NSNumber)?.intValue,
+       let r = AVCaptureSession.InterruptionReason(rawValue: raw) {
+      switch r {
+      case .videoDeviceInUseByAnotherClient: reason = "in-use"
+      case .videoDeviceNotAvailableWithMultipleForegroundApps: reason = "multitasking"
+      case .videoDeviceNotAvailableDueToSystemPressure: reason = "pressure"
+      case .videoDeviceNotAvailableInBackground: reason = "background"
+      default: reason = "other"
+      }
+    }
+    analysisQueue.async { self.resetDetection() }
+    DispatchQueue.main.async {
+      self.setOverlay(nil, animated: true)
+      // Going to the background is not news (the screen pauses itself).
+      if reason != "background" { self.reportState("paused", reason: reason) }
+    }
+  }
+
+  @objc private func sessionInterruptionEnded(_ note: Notification) {
+    DispatchQueue.main.async { self.reportState("running", reason: nil) }
+  }
+
+  /// main.
+  private func reportState(_ state: String, reason: String?) {
+    let key = "\(state):\(reason ?? "")"
+    guard reportedState != key else { return }
+    reportedState = key
+    var payload: [String: Any] = ["state": state]
+    if let r = reason { payload["reason"] = r }
+    onCameraState(payload)
   }
 
   private var shouldRun: Bool { active && window != nil && appInForeground }
@@ -214,6 +306,8 @@ public class DocumentCameraView: ExpoView, AVCaptureVideoDataOutputSampleBufferD
       self.resetDetection()
     }
     setOverlay(nil, animated: false)
+    // Paused by us, not interrupted: whatever comes next starts clean.
+    reportedState = nil
   }
 
   private func report(_ code: String, _ message: String) {
@@ -282,14 +376,19 @@ public class DocumentCameraView: ExpoView, AVCaptureVideoDataOutputSampleBufferD
         }
       }
       if !self.session.isRunning { self.session.startRunning() }
+      let running = self.session.isRunning
+      if running { self.restartedAfterError = false }
       DispatchQueue.main.async {
         guard self.shouldRun else {
           self.stopEverything()
           return
         }
         self.reportedError = nil
-        if let c = self.previewLayer?.connection { Self.setPortrait(c) }
+        if let c = self.previewLayer?.connection { Self.setRotation(c, self.rotationAngle) }
         self.applyTorch()
+        // Started while another app holds the camera: the interruption
+        // notification says so; otherwise it is running.
+        if running && !self.session.isInterrupted { self.reportState("running", reason: nil) }
       }
     }
   }
@@ -301,7 +400,17 @@ public class DocumentCameraView: ExpoView, AVCaptureVideoDataOutputSampleBufferD
     }
     session.beginConfiguration()
     defer { session.commitConfiguration() }
+    // A retry after a partial failure (or a media services reset) starts
+    // from an empty session.
+    for i in session.inputs { session.removeInput(i) }
+    for o in session.outputs { session.removeOutput(o) }
     session.sessionPreset = .photo
+    // iPad Split View / Slide Over / Stage Manager: keep the camera where
+    // the hardware allows it (otherwise the session is interrupted with
+    // reason "multitasking").
+    if #available(iOS 16.0, *), session.isMultitaskingCameraAccessSupported {
+      session.isMultitaskingCameraAccessEnabled = true
+    }
 
     let input = try AVCaptureDeviceInput(device: dev)
     guard session.canAddInput(input) else {
@@ -317,13 +426,17 @@ public class DocumentCameraView: ExpoView, AVCaptureVideoDataOutputSampleBufferD
 
     videoOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarFullRange]
     videoOutput.alwaysDiscardsLateVideoFrames = true
+    // Analyse preview-sized frames (about 1920 x 1440), not the photo
+    // preset's full sensor size: detection needs no more, and 12 MP frames
+    // at 15 Hz cost heat and battery for nothing.
+    videoOutput.deliversPreviewSizedOutputBuffers = true
     videoOutput.setSampleBufferDelegate(self, queue: analysisQueue)
     if session.canAddOutput(videoOutput) { session.addOutput(videoOutput) }
 
-    // Upright portrait buffers and photos: analysis then works in the same
-    // upright, top-left-origin space as the preview and the saved photo.
-    if let c = videoOutput.connection(with: .video) { Self.setPortrait(c) }
-    if let c = photoOutput.connection(with: .video) { Self.setPortrait(c) }
+    // Buffers and photos upright as the interface is: analysis then works in
+    // the same upright, top-left-origin space as the preview and the photo.
+    if let c = videoOutput.connection(with: .video) { Self.setRotation(c, sessionRotation) }
+    if let c = photoOutput.connection(with: .video) { Self.setRotation(c, sessionRotation) }
 
     try dev.lockForConfiguration()
     if dev.isFocusModeSupported(.continuousAutoFocus) { dev.focusMode = .continuousAutoFocus }
@@ -347,13 +460,62 @@ public class DocumentCameraView: ExpoView, AVCaptureVideoDataOutputSampleBufferD
     }
     dev.unlockForConfiguration()
     device = dev
+    analysisQueue.async { self.focusDevice = dev }
   }
 
-  private static func setPortrait(_ c: AVCaptureConnection) {
+  /// sessionQueue: back to an unconfigured session (media services reset).
+  private func teardownSession() {
+    if session.isRunning { session.stopRunning() }
+    session.beginConfiguration()
+    for i in session.inputs { session.removeInput(i) }
+    for o in session.outputs { session.removeOutput(o) }
+    session.commitConfiguration()
+    configured = false
+    device = nil
+    analysisQueue.async { self.focusDevice = nil }
+  }
+
+  /// Rotation angle for the current interface orientation (90 = portrait),
+  /// as AVCaptureConnection.videoRotationAngle counts it for the back camera.
+  private func interfaceRotationAngle() -> CGFloat {
+    guard let scene = window?.windowScene else { return rotationAngle }
+    switch scene.interfaceOrientation {
+    case .landscapeRight: return 0
+    case .landscapeLeft: return 180
+    case .portraitUpsideDown: return 270
+    case .portrait: return 90
+    default: return rotationAngle
+    }
+  }
+
+  /// main: follows the interface orientation (iPad), turning the preview,
+  /// the analysed frames and the photo together.
+  private func updateRotation() {
+    let angle = interfaceRotationAngle()
+    guard angle != rotationAngle else { return }
+    rotationAngle = angle
+    if let c = previewLayer?.connection { Self.setRotation(c, angle) }
+    sessionQueue.async {
+      self.sessionRotation = angle
+      if let c = self.videoOutput.connection(with: .video) { Self.setRotation(c, angle) }
+      if let c = self.photoOutput.connection(with: .video) { Self.setRotation(c, angle) }
+    }
+    // Outlines (and page signatures) from the old orientation mean nothing
+    // in the new one.
+    analysisQueue.async { self.resetDetection(forgetCapture: true) }
+    setOverlay(nil, animated: false)
+  }
+
+  private static func setRotation(_ c: AVCaptureConnection, _ angle: CGFloat) {
     if #available(iOS 17.0, *) {
-      if c.isVideoRotationAngleSupported(90) { c.videoRotationAngle = 90 }
+      if c.isVideoRotationAngleSupported(angle) { c.videoRotationAngle = angle }
     } else if c.isVideoOrientationSupported {
-      c.videoOrientation = .portrait
+      switch Int(angle) {
+      case 0: c.videoOrientation = .landscapeRight
+      case 180: c.videoOrientation = .landscapeLeft
+      case 270: c.videoOrientation = .portraitUpsideDown
+      default: c.videoOrientation = .portrait
+      }
     }
   }
 
@@ -387,7 +549,7 @@ public class DocumentCameraView: ExpoView, AVCaptureVideoDataOutputSampleBufferD
       let sharp = Self.sharpness(pixels, quad: quad)
       sharpnessPeak = max(sharp, sharpnessPeak * 0.97)
       // Blurry relative to what this page looked like a moment ago (motion
-      // blur, refocusing), or the lens is still hunting.
+      // blur, refocusing).
       if sharp < sharpnessPeak * 0.6 { steady = false }
     } else {
       sharpnessPeak = 0
@@ -398,8 +560,32 @@ public class DocumentCameraView: ExpoView, AVCaptureVideoDataOutputSampleBufferD
       motionLevel = motionLevel * 0.6 + level * 0.4
       if motionLevel > 1 { steady = false }
     }
-    if let dev = device, dev.isAdjustingFocus { steady = false }
-    handleDetection(quad, imageSize: size, now: now, steady: steady)
+    // The lens settling counts as unsteady, but a lens that keeps hunting
+    // (low light, a glossy page) would block auto-capture for good: after
+    // 0.8 s the sharpness test alone decides.
+    if let dev = focusDevice, dev.isAdjustingFocus {
+      let since = focusAdjustingSince ?? now
+      focusAdjustingSince = since
+      if now - since < 0.8 { steady = false }
+    } else {
+      focusAdjustingSince = nil
+    }
+    handleDetection(quad, imageSize: size, now: now, steady: steady) { Self.signature(pixels, quad: $0) }
+  }
+
+  /// Content signature of the page inside `quad`, from the luma plane.
+  private static func signature(_ buffer: CVPixelBuffer, quad: [CGPoint]) -> PageSignature? {
+    CVPixelBufferLockBaseAddress(buffer, .readOnly)
+    defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+    guard CVPixelBufferGetPlaneCount(buffer) > 0,
+          let base = CVPixelBufferGetBaseAddressOfPlane(buffer, 0) else { return nil }
+    let w = CVPixelBufferGetWidthOfPlane(buffer, 0), h = CVPixelBufferGetHeightOfPlane(buffer, 0)
+    let stride = CVPixelBufferGetBytesPerRowOfPlane(buffer, 0)
+    let ptr = base.assumingMemoryBound(to: UInt8.self)
+    return PageSignature.make(quad: quad) { x, y in
+      let xi = min(w - 1, max(0, Int(x * CGFloat(w)))), yi = min(h - 1, max(0, Int(y * CGFloat(h))))
+      return Float(ptr[yi * stride + xi])
+    }
   }
 
   /// Variance of the Laplacian of luma inside the quad's bounding box,
@@ -450,6 +636,7 @@ public class DocumentCameraView: ExpoView, AVCaptureVideoDataOutputSampleBufferD
           return
         }
         self.stillImage = cg
+        self.stillGray = GrayImage(cg, longEdge: 640)
         self.stillSourcePath = path
         DispatchQueue.main.async {
           self.imageSize = CGSize(width: cg.width, height: cg.height)
@@ -477,22 +664,40 @@ public class DocumentCameraView: ExpoView, AVCaptureVideoDataOutputSampleBufferD
   private func analyseStill() {
     guard mode == .still, let cg = stillImage else { return }
     let now = CACurrentMediaTime()
-    let quad = DocumentGeometry.detect(handler: VNImageRequestHandler(cgImage: cg, options: [:]), minArea: Self.liveMinArea)
-    handleDetection(quad, imageSize: CGSize(width: cg.width, height: cg.height), now: now, steady: true)
+    var quad = DocumentGeometry.detect(handler: VNImageRequestHandler(cgImage: cg, options: [:]), minArea: Self.liveMinArea)
+    var steady = true
+    if jitter > 0, let q = quad {
+      // Dev: a hand-held phone. Corners wander (sigma up to 0.6% of the
+      // frame) and some frames are blurred or shaken.
+      let amp = 0.006 * jitter
+      quad = q.map { CGPoint(x: $0.x + CGFloat(noise.gauss() * amp), y: $0.y + CGFloat(noise.gauss() * amp)) }
+      steady = noise.next() >= 0.2 * jitter
+    }
+    let gray = stillGray
+    handleDetection(quad, imageSize: CGSize(width: cg.width, height: cg.height), now: now, steady: steady) { q in
+      gray.flatMap { PageSignature.make(quad: q, luma: $0.luma) }
+    }
   }
 
   // MARK: - Detection -> overlay, events, auto-capture (analysisQueue)
 
-  private func resetDetection() {
-    tracker = AutoCaptureTracker()
+  /// Starts detection over. The last capture is remembered (see
+  /// AutoCaptureTracker.restarted) unless `forgetCapture`.
+  private func resetDetection(forgetCapture: Bool = false) {
+    tracker = forgetCapture ? AutoCaptureTracker() : tracker.restarted()
     smoothed = nil
     missedFrames = 0
     sharpnessPeak = 0
     motionLevel = 0
     lastEmittedHadQuad = false
+    lastSignature = nil
+    focusAdjustingSince = nil
   }
 
-  private func handleDetection(_ quad: [CGPoint]?, imageSize: CGSize, now: CFTimeInterval, steady: Bool) {
+  /// `signatureOf` reads the page content inside an outline of this frame;
+  /// it is given the SMOOTHED outline (detector noise misaligns the grid).
+  private func handleDetection(_ quad: [CGPoint]?, imageSize: CGSize, now: CFTimeInterval, steady: Bool,
+                               signatureOf: ([CGPoint]) -> PageSignature?) {
     // Overlay: exponential smoothing of the corners; snap on a big jump (a
     // different page); keep the last outline through a couple of missed
     // frames so it doesn't flicker.
@@ -509,7 +714,9 @@ public class DocumentCameraView: ExpoView, AVCaptureVideoDataOutputSampleBufferD
       if missedFrames > 3 { smoothed = nil }
     }
 
-    let (progress, fire) = tracker.update(quad: quad, now: now, steady: steady)
+    let signature = quad != nil ? smoothed.flatMap(signatureOf) : nil
+    if let sig = signature { lastSignature = sig }
+    let (progress, fire) = tracker.update(quad: quad, now: now, steady: steady, signature: signature)
     let shown = smoothed
     let stability = captureInFlight ? 0 : progress
 
@@ -525,6 +732,9 @@ public class DocumentCameraView: ExpoView, AVCaptureVideoDataOutputSampleBufferD
       let payload: [String: Any] = [
         "quad": shown.map { DocumentGeometry.flatten($0) } ?? NSNull(),
         "stability": stability,
+        // Width / height of the upright frames: 3:4 in portrait, 4:3 when an
+        // iPad is turned. The screen sizes its preview to it.
+        "aspect": imageSize.height > 0 ? Double(imageSize.width / imageSize.height) : 0.75,
       ]
       DispatchQueue.main.async { self.onDetection(payload) }
     }
@@ -599,10 +809,17 @@ public class DocumentCameraView: ExpoView, AVCaptureVideoDataOutputSampleBufferD
     stillLayer.frame = bounds
     overlay.frame = bounds
     CATransaction.commit()
+    updateRotation()
     if let q = shownQuad { setOverlay(q, animated: false) }
   }
 
   // MARK: - Capture
+
+  /// Forget the last capture: the page under the camera may be auto-captured
+  /// again (a retake of the same page).
+  func rearm() {
+    analysisQueue.async { self.resetDetection(forgetCapture: true) }
+  }
 
   /// Manual shutter. Resolves once the page has been delivered via onCapture.
   func capture(_ promise: Promise) {
@@ -615,7 +832,7 @@ public class DocumentCameraView: ExpoView, AVCaptureVideoDataOutputSampleBufferD
         promise.reject("busy", "A capture is already in progress")
         return
       }
-      self.beginCapture(fallback: self.tracker.anchor ?? self.smoothed) { error in
+      self.beginCapture(fallback: self.tracker.smoothed ?? self.smoothed) { error in
         if let e = error { promise.reject(e.code, e.message) } else { promise.resolve(nil) }
       }
     }
@@ -624,36 +841,57 @@ public class DocumentCameraView: ExpoView, AVCaptureVideoDataOutputSampleBufferD
   /// analysisQueue.
   private func beginCapture(fallback: [CGPoint]?, completion: ((DocumentGeometry.Failure?) -> Void)?) {
     captureInFlight = true
-    tracker.didCapture(quad: fallback, now: CACurrentMediaTime())
+    captureToken += 1
+    let token = captureToken
+    tracker.didCapture(quad: fallback, now: CACurrentMediaTime(), signature: fallback == nil ? nil : lastSignature)
     let still = mode == .still ? stillSourcePath : nil
     let flash = captureFlash
     DispatchQueue.main.async { self.onCaptureStart([:]) }
 
+    // Settles this shot exactly once: the photo, a failure, or the watchdog.
+    // A result for a shot already given up is thrown away (its file deleted).
     let finish: (Result<[String: Any], DocumentGeometry.Failure>) -> Void = { result in
       self.analysisQueue.async {
+        guard self.captureInFlight, self.captureToken == token else {
+          if case .success(let payload) = result, let uri = payload["sourceUri"] as? String,
+             let url = URL(string: uri) {
+            try? FileManager.default.removeItem(at: url)
+          }
+          return
+        }
         self.captureInFlight = false
         // The hold starts over for the next page.
-        self.tracker.didCapture(quad: self.tracker.anchor ?? fallback, now: CACurrentMediaTime())
-      }
-      DispatchQueue.main.async {
-        switch result {
-        case .success(let payload):
-          self.onCapture(payload)
-          completion?(nil)
-        case .failure(let e):
-          self.onCameraError(["code": "failed", "message": e.message])
-          completion?(e)
+        self.tracker.captureFinished(now: CACurrentMediaTime())
+        // Stopped meanwhile (backgrounded, locked, closed): a failure is
+        // expected and not worth an error; the screen resumes by itself.
+        let running = self.mode != .idle
+        DispatchQueue.main.async {
+          switch result {
+          case .success(let payload):
+            self.onCapture(payload)
+            completion?(nil)
+          case .failure(let e):
+            if running {
+              self.onCameraError(["code": "failed", "message": e.message, "capture": true])
+              completion?(e)
+            } else {
+              completion?(.init(code: "not-running", message: e.message))
+            }
+          }
         }
       }
+    }
+    analysisQueue.asyncAfter(deadline: .now() + Self.captureTimeout) {
+      guard self.captureInFlight, self.captureToken == token else { return }
+      finish(.failure(.init(code: "failed", message: "The photo took too long")))
     }
 
     if let path = still {
       workQueue.async {
-        let out = Self.newSourcePath()
         do {
-          let (w, h) = try DocumentGeometry.normalize(srcPath: path, outPath: out, maxEdge: 100_000, quality: 0.92)
-          let quad = (try? DocumentGeometry.detectQuad(path: out)) ?? fallback
-          finish(.success(Self.payload(out, w, h, quad)))
+          let src = try DocumentGeometry.source(path: path)
+          let (out, w, h, quad) = try Self.saveCapture(src)
+          finish(.success(Self.payload(out, w, h, quad ?? fallback)))
         } catch let e as DocumentGeometry.Failure {
           finish(.failure(e))
         } catch {
@@ -668,7 +906,7 @@ public class DocumentCameraView: ExpoView, AVCaptureVideoDataOutputSampleBufferD
         finish(.failure(.init(code: "not-running", message: "The camera is not running")))
         return
       }
-      Self.setPortrait(conn)
+      Self.setRotation(conn, self.sessionRotation)
       let settings = AVCapturePhotoSettings()
       if self.photoOutput.supportedFlashModes.contains(flash) { settings.flashMode = flash }
       settings.photoQualityPrioritization = .balanced
@@ -681,7 +919,10 @@ public class DocumentCameraView: ExpoView, AVCaptureVideoDataOutputSampleBufferD
         }
         self.workQueue.async {
           do {
-            let (out, w, h, quad) = try Self.saveCapture(data)
+            guard let src = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary) else {
+              throw DocumentGeometry.Failure(code: "failed", message: "Could not read the photo")
+            }
+            let (out, w, h, quad) = try Self.saveCapture(src)
             finish(.success(Self.payload(out, w, h, quad ?? fallback)))
           } catch let e as DocumentGeometry.Failure {
             finish(.failure(e))
@@ -695,26 +936,20 @@ public class DocumentCameraView: ExpoView, AVCaptureVideoDataOutputSampleBufferD
     }
   }
 
-  /// Upright full-resolution JPEG (q 0.92) in Caches/scanner-src, plus the
-  /// page outline detected on the still (sharper than any video frame).
-  private static func saveCapture(_ data: Data) throws -> (String, Int, Int, [CGPoint]?) {
+  /// Upright JPEG (q 0.92, long edge at most captureMaxEdge) in
+  /// Caches/scanner-src, plus the page outline detected on the still
+  /// (sharper than any video frame). The photo is decoded once and encoded
+  /// once; the outline is found on that same bitmap. The JPEG is already what
+  /// the save path keeps (lib/page-source normalizeImage copies it as is).
+  private static func saveCapture(_ src: CGImageSource) throws -> (String, Int, Int, [CGPoint]?) {
     try autoreleasepool {
-      guard let src = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary) else {
-        throw DocumentGeometry.Failure(code: "failed", message: "Could not read the photo")
+      guard let image = DocumentGeometry.upright(source: src, maxPixel: captureMaxEdge) else {
+        throw DocumentGeometry.Failure(code: "failed", message: "Could not decode the photo")
       }
       let out = newSourcePath()
-      let size: (Int, Int) = try autoreleasepool {
-        guard let full = DocumentGeometry.upright(source: src, maxPixel: 100_000) else {
-          throw DocumentGeometry.Failure(code: "failed", message: "Could not decode the photo")
-        }
-        try DocumentGeometry.writeJPEG(full, to: out, quality: 0.92)
-        return (full.width, full.height)
-      }
-      let quad: [CGPoint]? = autoreleasepool {
-        guard let small = DocumentGeometry.upright(source: src, maxPixel: 2048) else { return nil }
-        return DocumentGeometry.detect(small)
-      }
-      return (out, size.0, size.1, quad)
+      try DocumentGeometry.writeJPEG(image, to: out, quality: 0.92)
+      let quad = DocumentGeometry.detect(image)
+      return (out, image.width, image.height, quad)
     }
   }
 
@@ -768,4 +1003,50 @@ private final class PhotoDelegate: NSObject, AVCapturePhotoCaptureDelegate {
 
 extension DocumentGeometry.Failure: LocalizedError {
   var errorDescription: String? { message }
+}
+
+/// An 8-bit grey copy of a still (simulator feed) for page signatures.
+private struct GrayImage {
+  let width: Int
+  let height: Int
+  let pixels: [UInt8]
+
+  init?(_ image: CGImage, longEdge: Int) {
+    let s = Double(longEdge) / Double(max(image.width, image.height, 1))
+    let w = max(1, Int(Double(image.width) * min(1, s))), h = max(1, Int(Double(image.height) * min(1, s)))
+    var px = [UInt8](repeating: 0, count: w * h)
+    let ok: Bool = px.withUnsafeMutableBytes { buf in
+      guard let ctx = CGContext(data: buf.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w,
+                                space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return false }
+      ctx.interpolationQuality = .medium
+      ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+      return true
+    }
+    guard ok else { return nil }
+    width = w
+    height = h
+    pixels = px
+  }
+
+  func luma(_ x: CGFloat, _ y: CGFloat) -> Float {
+    let xi = min(width - 1, max(0, Int(x * CGFloat(width)))), yi = min(height - 1, max(0, Int(y * CGFloat(height))))
+    return Float(pixels[yi * width + xi])
+  }
+}
+
+/// Small deterministic random numbers (dev jitter only).
+private struct SplitMix {
+  var state: UInt64
+  init(seed: UInt64) { state = seed }
+  mutating func next() -> Double {
+    state &+= 0x9E3779B97F4A7C15
+    var z = state
+    z = (z ^ (z >> 30)) &* 0xBF58476D1CE4E5B9
+    z = (z ^ (z >> 27)) &* 0x94D049BB133111EB
+    return Double((z ^ (z >> 31)) >> 11) / Double(1 << 53)
+  }
+  mutating func gauss() -> Double {
+    let u = max(1e-12, next()), v = next()
+    return (-2 * log(u)).squareRoot() * cos(2 * .pi * v)
+  }
 }

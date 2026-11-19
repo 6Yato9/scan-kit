@@ -1,20 +1,30 @@
 // app/tools/id-card.tsx
-// Capture the front (and optionally the back) of an ID card and save them as a
-// two-page document named "ID card …". Camera captures keep their photo, so
-// either side can be re-cropped later.
+// Capture the front (and optionally the back) of an ID card and save it as a
+// document named "ID card …", in one of two layouts:
+// - One page (default): both sides on ONE sheet of the paper size from
+//   Document settings, each at the card's real size (85.6 × 53.98 mm), like a
+//   photocopy (lib/id-card-sheet.ts, composed in an off-screen canvas). Its
+//   text is recognised from the composed page, so search finds both sides.
+// - Two pages: each side its own page. Camera captures keep their photo, so
+//   either side can be re-cropped later.
 import { useEffect, useRef, useState } from 'react';
+import * as FileSystem from 'expo-file-system/legacy';
 import { ActionSheetIOS, Alert, Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { AppIcon } from '@/components/app-icon';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/contexts/theme-context';
 import { useScan } from '@/contexts/scan-context';
 import { PrimaryButton } from '@/components/primary-button';
-import { SectionRow, ToolNote, ToolScreen } from '@/components/tool-ui';
+import { Segmented, SectionRow, ToolNote, ToolScreen } from '@/components/tool-ui';
+import { SectionLabel } from '@/components/section-label';
+import { LocalWebView } from '@/components/local-webview';
 import { saveScan, indexDocText } from '@/lib/save-scan';
-import { getScanSettings } from '@/lib/storage';
+import { getDocSettings, getScanSettings } from '@/lib/storage';
+import { getImageSize } from '@/lib/image-size';
+import { buildIdCardSheetHtml, planIdCardSheet, sheetPaperFor } from '@/lib/id-card-sheet';
 import { autoName } from '@/lib/auto-name';
 import { notifyError, notifySuccess } from '@/lib/haptics';
-import { alertScanError, deleteTempFiles, pickPhotos, renderSourcePage, scanPagesWithCamera } from '@/lib/tool-scan';
+import { alertScanError, cameraTempUri, deleteTempFiles, pickPhotos, renderSourcePage, scanPagesWithCamera } from '@/lib/tool-scan';
 import { inputUri, isSourceInput, type ScanPageInput } from '@/lib/page-source';
 import { Radius, Spacing, Type } from '@/lib/theme';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
@@ -37,6 +47,14 @@ async function toShot(page: ScanPageInput): Promise<Shot> {
   }
 }
 const QUALITY = { low: 0.5, medium: 0.75, high: 0.9 } as const;
+
+type Layout = 'one' | 'two';
+const LAYOUTS: { value: Layout; label: string }[] = [
+  { value: 'one', label: 'One page' },
+  { value: 'two', label: 'Two pages' },
+];
+/** The composing canvas gets this long before the save gives up. */
+const COMPOSE_TIMEOUT_MS = 30_000;
 
 function chooseSource(title: string): Promise<'camera' | 'photos' | null> {
   return new Promise(resolve => {
@@ -62,7 +80,15 @@ export default function IdCardScreen() {
   const [front, setFront] = useState<Shot | null>(null);
   const [back, setBack] = useState<Shot | null>(null);
   const [saving, setSaving] = useState(false);
+  const [layout, setLayout] = useState<Layout>('one');
+  const [paperLabel, setPaperLabel] = useState<'A4' | 'Letter'>('A4');
+  // The off-screen canvas composing the one-page sheet, while it runs.
+  const [compose, setCompose] = useState<{ html: string; key: number } | null>(null);
+  const composeWait = useRef<{ resolve: (dataUrl: string) => void; reject: (err: Error) => void } | null>(null);
   const busy = useRef(false);
+  useEffect(() => {
+    getDocSettings().then(s => setPaperLabel(sheetPaperFor(s.pdfPageSize))).catch(() => {});
+  }, []);
   // Captures not saved when the screen closes are temp files: remove them.
   const shotsRef = useRef<(Shot | null)[]>([]);
   shotsRef.current = [front, back];
@@ -105,18 +131,84 @@ export default function IdCardScreen() {
     }
   };
 
+  /** Draws `srcs` into the sheet in the off-screen canvas; resolves with its JPEG data URL. */
+  const composeSheet = (html: string) => new Promise<string>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      composeWait.current = null;
+      setCompose(null);
+      reject(new Error('compose timed out'));
+    }, COMPOSE_TIMEOUT_MS);
+    composeWait.current = {
+      resolve: url => { clearTimeout(timer); resolve(url); },
+      reject: err => { clearTimeout(timer); reject(err); },
+    };
+    setCompose({ html, key: Date.now() });
+  });
+
+  const onComposeMessage = (e: { nativeEvent: { data: string } }) => {
+    const wait = composeWait.current;
+    composeWait.current = null;
+    setCompose(null);
+    const data = e.nativeEvent.data;
+    if (!wait) return;
+    if (data.startsWith('data:image/jpeg')) wait.resolve(data);
+    else wait.reject(new Error(data.slice(0, 40)));
+  };
+  const onComposeFail = () => {
+    const wait = composeWait.current;
+    composeWait.current = null;
+    setCompose(null);
+    wait?.reject(new Error('compose failed'));
+  };
+
+  /** Both sides on one sheet at real size (lib/id-card-sheet.ts), as a temp JPEG. */
+  const buildSheet = async (shots: Shot[]): Promise<{ uri: string; temps: string[] }> => {
+    const temps: string[] = [];
+    try {
+      const srcs: string[] = [];
+      for (const s of shots) {
+        if (isSourceInput(s.page)) {
+          const rendered = await renderSourcePage(s.page, 0.92);
+          temps.push(rendered);
+          srcs.push(rendered);
+        } else {
+          srcs.push(s.page);
+        }
+      }
+      const sizes = [];
+      for (const src of srcs) sizes.push((await getImageSize(src)) ?? { width: 856, height: 540 });
+      const docSettings = await getDocSettings().catch(() => null);
+      const plan = planIdCardSheet(sizes, sheetPaperFor(docSettings?.pdfPageSize));
+      const dataUrl = await composeSheet(buildIdCardSheetHtml(srcs.map(u => u.split('?')[0]), plan));
+      const out = cameraTempUri('id-sheet');
+      temps.push(out);
+      await FileSystem.writeAsStringAsync(out, dataUrl.slice(dataUrl.indexOf(',') + 1), { encoding: 'base64' });
+      return { uri: out, temps };
+    } catch (err) {
+      deleteTempFiles(temps);
+      throw err;
+    }
+  };
+
   const save = async () => {
     if (!front || saving) return;
     setSaving(true);
+    let temps: string[] = [];
     try {
       const settings = await getScanSettings();
       const shots = back ? [front, back] : [front];
+      let pages: ScanPageInput[] = shots.map(s => s.page);
+      if (layout === 'one') {
+        const sheet = await buildSheet(shots);
+        temps = sheet.temps;
+        pages = [sheet.uri];
+      }
       const { id, pages: stored } = await saveScan({
-        pages: shots.map(s => s.page),
+        pages,
         name: autoName(new Date(), 'ID card'),
         quality: QUALITY[settings.quality],
       });
-      deleteTempFiles(shots.flatMap(shotFiles));
+      deleteTempFiles([...shots.flatMap(shotFiles), ...temps]);
       bumpLastSaved();
       indexDocText(id, stored).catch(() => {});
       notifySuccess();
@@ -124,8 +216,14 @@ export default function IdCardScreen() {
       noteNewDocument(id);
       navigateWhenUnlocked(() => router.replace({ pathname: '/viewer', params: { id } }));
     } catch {
+      deleteTempFiles(temps);
       notifyError();
-      Alert.alert('Couldn’t save the ID card', 'There may not be enough storage space. Try again.');
+      Alert.alert(
+        'Couldn’t save the ID card',
+        layout === 'one'
+          ? 'The page couldn’t be put together. Try again, or choose Two pages.'
+          : 'There may not be enough storage space. Try again.',
+      );
     } finally {
       setSaving(false);
     }
@@ -180,9 +278,28 @@ export default function IdCardScreen() {
         />
       }
     >
+      <SectionLabel>Layout</SectionLabel>
+      <Segmented options={LAYOUTS} value={layout} onChange={setLayout} />
       {slot('front', front)}
       {slot('back', back)}
-      <ToolNote>Both sides are saved together as one document. It stays on this device.</ToolNote>
+      <ToolNote>
+        {layout === 'one'
+          ? `Both sides go on one ${paperLabel} page at the card’s real size, 85.6 × 54 mm, ready to print at 100%. It stays on this device.`
+          : 'Each side is saved as its own page of one document. It stays on this device.'}
+      </ToolNote>
+      {compose ? (
+        <View style={styles.host} pointerEvents="none">
+          <LocalWebView
+            key={compose.key}
+            html={compose.html}
+            style={styles.web}
+            onMessage={onComposeMessage}
+            onError={onComposeFail}
+            onContentProcessDidTerminate={onComposeFail}
+            javaScriptEnabled
+          />
+        </View>
+      ) : null}
     </ToolScreen>
   );
 }
@@ -195,4 +312,8 @@ const styles = StyleSheet.create({
   preview: { width: '100%', height: '100%' },
   placeholder: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: Spacing.sm },
   addIcon: { width: 52, height: 52, borderRadius: 26, alignItems: 'center', justifyContent: 'center' },
+  // Same host trick as Long image: WKWebView only runs its JavaScript when it
+  // is really laid out, so it is kept on screen at 1% opacity in a 2pt strip.
+  host: { position: 'absolute', top: 0, left: 0, width: 320, height: 2, overflow: 'hidden', opacity: 0.01 },
+  web: { width: 320, height: 480 },
 });

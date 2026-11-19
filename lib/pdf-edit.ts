@@ -26,6 +26,10 @@
 // finds the journal and clears the record's search text so it is read again
 // from the PDF that is actually there. Work folders of earlier sessions are
 // removed at launch.
+// Step 5 FAILING after the rename (the record write throws — a full disk) is
+// the same situation while the app is running: the PDF has changed, so the
+// edit rejects with kind 'partial' (never "unchanged"), and the work folder
+// with its journal and before.pdf is kept for that next-launch recovery.
 //
 // All of it runs under the document's page lock (lib/bake withDocLock), like
 // Convert to pages, unlocking and text indexing, so two PDF operations on one
@@ -45,6 +49,7 @@ import { copyPdfToStorage, deleteDocumentFiles } from './files';
 import { deleteDocument, getDocSettings, getDocument, saveDocument, trashDocument, updateDocumentWith } from './storage';
 import { deleteJsonSync, privateStateDir, readJsonSync, writeJsonSync } from './storage-layout';
 import { bumpPdfTextGeneration, joinPdfPageTexts } from './pdf-text';
+import { invalidatePdfThumbs } from './pdf-thumb';
 import { generatePdf } from './pdf';
 import { ocrAvailable } from './ocr';
 
@@ -129,9 +134,21 @@ export function splitNames(name: string): [string, string] {
 
 // ── Errors ───────────────────────────────────────────────────────────────────
 
-export type PdfEditErrorKind = 'unavailable' | 'missing' | 'locked' | 'changed' | 'unreadable' | 'failed';
+export type PdfEditErrorKind =
+  | 'unavailable'
+  | 'missing'
+  | 'locked'
+  | 'restricted'
+  | 'changed'
+  | 'unreadable'
+  | 'failed'
+  | 'partial';
 
-/** An edit that didn't happen. The document is unchanged. */
+/**
+ * An edit that didn't happen: the document is unchanged — except kind
+ * 'partial', where the PDF WAS changed (or put back, for an Undo) but the
+ * record couldn't be updated; the next launch finishes it.
+ */
 export class PdfEditError extends Error {
   readonly kind: PdfEditErrorKind;
   /** For 'locked' in a merge: which document needs its password. */
@@ -148,6 +165,8 @@ function classify(err: unknown): PdfEditError {
   if (err instanceof PdfEditError) return err;
   const msg = err instanceof Error ? err.message : String(err ?? '');
   const code = (err as { code?: string } | null)?.code ?? '';
+  // The PDF's own permissions forbid changing its pages (PdfEditor.swift / PdfMerger.swift).
+  if (code === 'ERR_PDF_RESTRICTED' || /^restricted$/i.test(msg)) return new PdfEditError('restricted', msg);
   if (code === 'ERR_PDF_LOCKED' || /^locked$|password|encrypt/i.test(msg)) return new PdfEditError('locked', msg);
   if (/could not open|no pages/i.test(msg)) return new PdfEditError('unreadable', msg);
   return new PdfEditError('failed', msg);
@@ -251,10 +270,20 @@ async function swapIn(docId: string, target: string, src: File, work: Directory,
     deleteJsonSync(work, JOURNAL); // nothing was swapped: the stored PDF is as it was
     throw classify(err);
   }
+  // From here the stored PDF is the new one, whatever happens next.
   bumpPdfTextGeneration(docId);
-  const ok = await updateDocumentWith(docId, latest =>
-    latest.pdfUri && clean(latest.pdfUri) === target ? { ...patch, updatedAt: Date.now() } : null,
-  );
+  invalidatePdfThumbs(docId);
+  let ok: boolean;
+  try {
+    ok = await updateDocumentWith(docId, latest =>
+      latest.pdfUri && clean(latest.pdfUri) === target ? { ...patch, updatedAt: Date.now() } : null,
+    );
+  } catch (err) {
+    // The journal stays (with before.pdf beside it): the next launch's
+    // recovery makes the record match the PDF that is there.
+    console.warn('PDF edit: the PDF changed but its record was not updated', err);
+    throw new PdfEditError('partial', 'record not updated');
+  }
   deleteJsonSync(work, JOURNAL);
   return ok;
 }
@@ -284,6 +313,20 @@ export function discardPdfEditUndo(undo: PdfEditUndo | null | undefined): void {
     undoSlots.delete(undo.docId);
   }
   deleteQuietly(new Directory(undo.dir));
+}
+
+/**
+ * Keeps `docId`'s current Undo stash past UNDO_TTL_MS: the viewer offers it in
+ * its "…" menu until the next edit (lib/last-undo.ts). Returns the stash, or
+ * null when there is none; whoever holds it discards it (discardPdfEditUndo)
+ * when the offer ends. Undo still refuses if the PDF changed since, and the
+ * work folder is removed at the next launch whatever happens.
+ */
+export function holdPdfEditUndo(docId: string): PdfEditUndo | null {
+  const slot = undoSlots.get(docId);
+  if (!slot) return null;
+  clearTimeout(slot.timer);
+  return slot.undo;
 }
 
 function keepUndo(undo: PdfEditUndo): void {
@@ -359,6 +402,11 @@ export async function editStoredPdf(
         keepWork = true;
       }
       return { doc: next, pageCount, undo };
+    } catch (err) {
+      // The PDF changed but the record didn't: the folder (journal, before.pdf)
+      // is what the next launch's recovery works from.
+      if (err instanceof PdfEditError && err.kind === 'partial') keepWork = true;
+      throw err;
     } finally {
       if (!keepWork) deleteQuietly(work);
     }
@@ -373,6 +421,7 @@ export async function editStoredPdf(
 export async function undoPdfEdit(undo: PdfEditUndo): Promise<Document> {
   const slot = undoSlots.get(undo.docId);
   if (slot?.undo === undo) clearTimeout(slot.timer);
+  let keepWork = false;
   try {
     return await withDocLock(undo.docId, async () => {
       const work = new Directory(undo.dir);
@@ -382,14 +431,25 @@ export async function undoPdfEdit(undo: PdfEditUndo): Promise<Document> {
       if (!doc) throw new PdfEditError('missing', 'document missing');
       if (!doc.pdfUri || clean(doc.pdfUri) !== undo.target) throw new PdfEditError('changed', 'document changed');
       if (!samePrint(printOf(undo.target), undo.written)) throw new PdfEditError('changed', 'PDF changed since');
-      const ok = await swapIn(undo.docId, undo.target, before, work, { ocrText: undo.ocrText });
+      let ok: boolean;
+      try {
+        ok = await swapIn(undo.docId, undo.target, before, work, { ocrText: undo.ocrText });
+      } catch (err) {
+        if (err instanceof PdfEditError && err.kind === 'partial') keepWork = true;
+        throw err;
+      }
       if (!ok) throw new PdfEditError('missing', 'document missing');
       const next = await getDocument(undo.docId);
       if (!next) throw new PdfEditError('missing', 'document missing');
       return next;
     });
   } finally {
-    discardPdfEditUndo(undo);
+    if (keepWork) {
+      // Recovery's folder now (see the header): only forget the Undo slot.
+      if (undoSlots.get(undo.docId)?.undo === undo) undoSlots.delete(undo.docId);
+    } else {
+      discardPdfEditUndo(undo);
+    }
   }
 }
 

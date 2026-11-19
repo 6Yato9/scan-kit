@@ -11,7 +11,7 @@ import { docDir } from './storage-layout';
 import { Document, PageAdjustment, PageFilter } from '../types/document';
 import { copyDocumentFiles, copyPageWithShadow, copyPdfToStorage, deleteDocumentFiles, reorderPages } from './files';
 import { PAGE_FAMILY_SUFFIXES, PAGE_SHADOW_SUFFIXES } from './page-family';
-import { getDocument, patchDocument, saveDocument } from './storage';
+import { deleteDocument, getDocument, patchDocument, saveDocument, trashDocument } from './storage';
 import { remapForReorder, runPageEdit, withDocLock } from './bake';
 import { indexDocText } from './save-scan';
 
@@ -160,6 +160,23 @@ export async function mergeIntoNew(docs: Document[], name: string): Promise<Docu
   return newDoc;
 }
 
+/** The stored record's pages `sorted` as a new document's fields (files copied with their shadows). */
+function copyPagesToNew(fresh: Document, sorted: number[], newId: string, name: string, now: number): Document {
+  const pages = sorted.map((src, dest) => copyPageWithShadow(fresh.pages[src], newId, dest));
+  const filters: PageFilter[] = sorted.map(i => fresh.filters?.[i] ?? 'original');
+  const adjustments: PageAdjustment[] = sorted.map(i => fresh.adjustments?.[i] ?? { ...DEFAULT_ADJ });
+  return {
+    id: newId,
+    name: name.slice(0, 120),
+    pages,
+    filters: filters.every(f => f === 'original') ? undefined : filters,
+    adjustments: adjustments.every(a => !a.brightness && !a.contrast && !a.saturation && !a.sharpness) ? undefined : adjustments,
+    folder: fresh.folder,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
 /**
  * Copies pages `indices` of `source` into a new document (Extract pages) and
  * returns it. The source is left untouched.
@@ -180,21 +197,8 @@ export async function extractPages(source: Document, indices: number[]): Promise
       throw new Error('extractPages: no such page');
     }
     try {
-      const pages = sorted.map((src, dest) => copyPageWithShadow(fresh.pages[src], newId, dest));
-      const filters: PageFilter[] = sorted.map(i => fresh.filters?.[i] ?? 'original');
-      const adjustments: PageAdjustment[] = sorted.map(i => fresh.adjustments?.[i] ?? { ...DEFAULT_ADJ });
-      const now = Date.now();
       const label = `${sorted.length === 1 ? 'page' : 'pages'} ${sorted.map(i => i + 1).join(', ')}`;
-      const doc: Document = {
-        id: newId,
-        name: `${fresh.name} (${label})`.slice(0, 120),
-        pages,
-        filters: filters.every(f => f === 'original') ? undefined : filters,
-        adjustments: adjustments.every(a => !a.brightness && !a.contrast && !a.saturation && !a.sharpness) ? undefined : adjustments,
-        folder: fresh.folder,
-        createdAt: now,
-        updatedAt: now,
-      };
+      const doc = copyPagesToNew(fresh, sorted, newId, `${fresh.name} (${label})`, Date.now());
       await saveDocument(doc);
       return doc;
     } catch (err) {
@@ -207,4 +211,73 @@ export async function extractPages(source: Document, indices: number[]): Promise
   // identity, so the OCR cache usually answers without reading them again.
   indexDocText(created.id, created.pages).catch(err => console.warn('Index extracted pages failed', err));
   return created;
+}
+
+/** Page indices of the two parts of an `count`-page split after page `after` (zero-based). */
+export function splitRanges(count: number, after: number): [number[], number[]] {
+  if (!Number.isInteger(after) || after < 0 || after >= count - 1) throw new RangeError('nothing to split');
+  const all = Array.from({ length: count }, (_, i) => i);
+  return [all.slice(0, after + 1), all.slice(after + 1)];
+}
+
+export type ImageSplitResult = { first: Document; second: Document; originalTrashed: boolean };
+
+/**
+ * Splits a scanned document after page `after` (zero-based) into two new
+ * documents, "<name> (1)" and "<name> (2)", in the same folder — the same
+ * names and choices as splitting an imported PDF (lib/pdf-edit.ts). Every page
+ * is copied with its shadows (the unfiltered .orig, the source photo and its
+ * crop geometry), filter and adjustments, so each part can still be filtered,
+ * re-cropped and widened like the original. The original is kept unless
+ * `trashOriginal` (then it moves to Recently deleted, where it can be restored).
+ *
+ * Copies from the STORED record under the source's page lock (like
+ * extractPages), and refuses when its page count differs from `expectedCount`
+ * (the split point would mean another page). Nothing half-made stays: if the
+ * second part fails, the first is removed again.
+ */
+export async function splitDocument(
+  sourceId: string,
+  after: number,
+  options: { trashOriginal?: boolean; expectedCount?: number } = {},
+): Promise<ImageSplitResult> {
+  const ids = [Crypto.randomUUID(), Crypto.randomUUID()];
+  const made = await withDocLock(sourceId, async () => {
+    const fresh = await getDocument(sourceId);
+    if (!fresh || fresh.trashedAt) throw new Error('splitDocument: document missing');
+    if (fresh.pdfUri || fresh.pages.length === 0) throw new Error('splitDocument: not a scanned document');
+    if (options.expectedCount != null && fresh.pages.length !== options.expectedCount) throw new Error('splitDocument: document changed');
+    const parts = splitRanges(fresh.pages.length, after);
+    const now = Date.now();
+    const docs: Document[] = [];
+    try {
+      for (let k = 0; k < 2; k++) {
+        // The first part sorts as the newer of the two in "Date added".
+        const doc = copyPagesToNew(fresh, parts[k], ids[k], `${fresh.name} (${k + 1})`, now + (1 - k));
+        await saveDocument(doc);
+        docs.push(doc);
+      }
+    } catch (err) {
+      for (const d of docs) {
+        try { await deleteDocument(d.id); } catch {}
+      }
+      for (const id of ids) {
+        try { deleteDocumentFiles(id); } catch {}
+      }
+      throw err;
+    }
+    return { first: docs[0], second: docs[1] };
+  });
+  let originalTrashed = false;
+  if (options.trashOriginal) {
+    try {
+      originalTrashed = await trashDocument(sourceId);
+    } catch (err) {
+      console.warn('Split: could not move the original to Recently deleted', err);
+    }
+  }
+  for (const d of [made.first, made.second]) {
+    indexDocText(d.id, d.pages).catch(err => console.warn('Index split part failed', err));
+  }
+  return { ...made, originalTrashed };
 }

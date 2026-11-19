@@ -2,6 +2,8 @@
 // and dragging the timestamp; plus how the result maps onto the page that
 // lib/stamp.ts draws, for pages of any shape.
 import {
+  emptySpotPlacement,
+  lineToPageRect,
   anchorToOrigin,
   boxToPlacement,
   centerBoxAt,
@@ -213,5 +215,49 @@ describe('timestamp anchor', () => {
     expect(resolveStamp({ kind: 'timestamp', text: 'x', corner: 'top-right' })).toMatchObject({ ax: 1, ay: 0 });
     expect(resolveStamp({ kind: 'timestamp', text: 'x', corner: 'top-right', anchor: { x: 0.5, y: 0.25 } })).toMatchObject({ ax: 0.5, ay: 0.25 });
     expect(resolveStamp({ kind: 'timestamp', text: 'x', corner: 'top-right', anchor: { x: 7, y: Number.NaN } })).toMatchObject({ ax: 1, ay: 0 });
+  });
+});
+
+describe('emptySpotPlacement (where a new signature lands)', () => {
+  const A4 = Math.SQRT2;
+  const ratio = 0.3; // a wide signature
+  const h = (w: number) => (w * ratio) / A4;
+  const overlaps = (p: { x: number; y: number; w: number }, r: { x: number; y: number; w: number; h: number }) =>
+    p.x < r.x + r.w && p.x + p.w > r.x && p.y < r.y + r.h && p.y + h(p.w) > r.y;
+
+  test('with no text known: the bottom right corner, inside the margins', () => {
+    const p = emptySpotPlacement(ratio, A4, [], 0.38);
+    expect(p.w).toBe(0.38);
+    expect(p.x + p.w).toBeLessThan(1);
+    expect(p.x).toBeGreaterThan(0.5);
+    expect(p.y + h(p.w)).toBeLessThan(1);
+    expect(p.y).toBeGreaterThan(0.8);
+  });
+
+  test('clear of the text: an invoice with a total box at the bottom right', () => {
+    const text = [
+      { x: 0.08, y: 0.08, w: 0.6, h: 0.04 },
+      { x: 0.08, y: 0.15, w: 0.5, h: 0.02 },
+      { x: 0.08, y: 0.3, w: 0.6, h: 0.15 },
+      { x: 0.7, y: 0.86, w: 0.24, h: 0.03 }, // TOTAL
+    ];
+    const p = emptySpotPlacement(ratio, A4, text, 0.38);
+    for (const r of text) expect(overlaps(p, r)).toBe(false);
+    // Still on the right half, and low on the page.
+    expect(p.x + p.w / 2).toBeGreaterThanOrEqual(0.5);
+    expect(p.y).toBeGreaterThan(0.5);
+  });
+
+  test('a page full of text: the spot covering least', () => {
+    const full = Array.from({ length: 40 }, (_, i) => ({ x: 0.05, y: 0.02 + i * 0.024, w: 0.9, h: 0.012 }));
+    const p = emptySpotPlacement(ratio, A4, full, 0.38);
+    expect(p.x).toBeGreaterThanOrEqual(0);
+    expect(p.x + p.w).toBeLessThanOrEqual(1);
+    expect(p.y + h(p.w)).toBeLessThanOrEqual(1);
+  });
+
+  test('lineToPageRect turns OCR pixels into page fractions', () => {
+    expect(lineToPageRect({ left: 100, top: 200, width: 500, height: 40 }, 1000, 2000)).toEqual({ x: 0.1, y: 0.1, w: 0.5, h: 0.02 });
+    expect(lineToPageRect({ left: 0, top: 0, width: 0, height: 10 }, 1000, 2000)).toBeNull();
   });
 });

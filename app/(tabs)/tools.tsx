@@ -18,10 +18,11 @@ type Tool = {
 };
 
 // Genuine tools only. Anything the core screens already do lives there instead:
-// import (Files "+"), reorder / rotate / text (viewer), print / save as images /
-// smaller PDF (Export), merge (Files: select or long-press), and Free up space
-// (Settings › Storage, beside the space used: it converts nothing). Tiles keep
-// the same four columns in every section, so icons line up down the screen.
+// import (Files "+"), reorder / rotate / text (viewer) and print / save as
+// images (Export). Every section is one or two full rows of four, so icons
+// line up down the screen. Pages holds the whole-document verbs (Merge, Split,
+// Extract pages, Compress) that also live in Files' select mode and the
+// viewer's "…" menu, so they can be found without knowing those places.
 // QR code sits in Convert beside Extract text: both read what is printed on a
 // page or photo (a camera or a photo), while Scan holds the capture modes.
 const TOOL_SECTIONS: { title: string; tools: Tool[] }[] = [
@@ -38,10 +39,18 @@ const TOOL_SECTIONS: { title: string; tools: Tool[] }[] = [
     title: 'Edit',
     tools: [
       { id: 'sign', icon: 'signature', label: 'Sign', href: '/tools/sign' },
+      { id: 'redact', icon: 'eye-off-outline', label: 'Redact', href: '/tools/redact' },
       { id: 'watermark', icon: 'watermark', label: 'Watermark', href: '/tools/watermark' },
       { id: 'timestamp', icon: 'time-outline', label: 'Timestamp', href: '/tools/timestamp' },
-      { id: 'erase-marks', icon: 'color-wand-outline', label: 'Erase marks', href: '/tools/erase-marks' },
-      { id: 'redact', icon: 'eye-off-outline', label: 'Redact', href: '/tools/redact' },
+    ],
+  },
+  {
+    title: 'Pages',
+    tools: [
+      { id: 'merge', icon: 'git-merge-outline', label: 'Merge', href: '/tools/merge' },
+      { id: 'split', icon: 'split', label: 'Split', href: '/tools/split' },
+      { id: 'extract', icon: 'cut-outline', label: 'Extract pages', href: '/tools/extract' },
+      { id: 'compress', icon: 'contract-outline', label: 'Compress', href: { pathname: '/tools/compress', params: { mode: 'pdf' } } },
     ],
   },
   {
@@ -49,8 +58,8 @@ const TOOL_SECTIONS: { title: string; tools: Tool[] }[] = [
     tools: [
       { id: 'extract-text', icon: 'reader-outline', label: 'Extract text', href: '/tools/extract-text' },
       { id: 'qr', icon: 'qr-code-outline', label: 'QR code', href: '/tools/qr' },
-      { id: 'extract', icon: 'cut-outline', label: 'Extract pages', href: '/tools/extract' },
       { id: 'long-image', icon: 'long-image', label: 'Long image', href: '/tools/long-image' },
+      { id: 'erase-marks', icon: 'color-wand-outline', label: 'Erase marks', href: '/tools/erase-marks' },
     ],
   },
 ];

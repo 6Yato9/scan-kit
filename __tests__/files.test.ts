@@ -668,6 +668,53 @@ describe('temp files (critique #10)', () => {
   });
 });
 
+describe('PDF page renders in Caches/pdf-thumbs (r12 code review #2)', () => {
+  const CACHE = { uri: 'file:///Library/Caches/' };
+  const thumbs = () => {
+    const root = new MockDirectory(CACHE, 'pdf-thumbs');
+    const items = {
+      first: new MockFile(`${root.uri}/doc-a-171-900-g0.jpg`),
+      pages: new MockDirectory(root, 'pages-doc-a-171-900-g0'),
+      tmp: new MockDirectory(root, 'tmp-doc-a-171-900-g0-x'),
+      other: new MockFile(`${root.uri}/doc-b-5-6-g0.jpg`),
+      gone: new MockFile(`${root.uri}/doc-c-5-6-g0.jpg`),
+    };
+    root.list = jest.fn(() => Object.values(items).filter((i: any) => i.exists !== false));
+    return items;
+  };
+
+  test('deleting a document removes its first-page and per-page renders, and its crop Undo copies', () => {
+    const t = thumbs();
+    const stashRoot = new MockDirectory(CACHE, 'page-source');
+    const stash = new MockDirectory(stashRoot, 'undo-doc-a-1-1');
+    const otherStash = new MockDirectory(stashRoot, 'undo-doc-b-1-1');
+    stashRoot.list = jest.fn(() => [stash, otherStash]);
+    deleteDocumentFiles('doc-a');
+    expect(t.first.exists).toBe(false);
+    expect(t.pages.delete).toHaveBeenCalled();
+    expect(t.tmp.delete).toHaveBeenCalled();
+    expect(t.other.exists).toBe(true);
+    expect(stash.delete).toHaveBeenCalled();
+    expect(otherStash.delete).not.toHaveBeenCalled();
+  });
+
+  test('the startup sweep keeps only the renders of documents that are still PDFs', async () => {
+    const t = thumbs();
+    await sweepConvertLeftovers(
+      [
+        { id: 'doc-a', pages: [`${DOCS}/doc-a/page-0.jpg`], updatedAt: 1 }, // converted to pages
+        { id: 'doc-b', pages: [], pdfUri: `${DOCS}/doc-b/document.pdf`, updatedAt: 1 },
+        // doc-c: deleted
+      ],
+      jest.fn(async (_id: string, act: any) => act(null)) as any,
+    );
+    expect(t.first.exists).toBe(false);
+    expect(t.pages.delete).toHaveBeenCalled();
+    expect(t.gone.exists).toBe(false);
+    expect(t.other.exists).toBe(true);
+  });
+});
+
 describe('restorePageWithShadow (retake Undo) never deletes before it has a copy', () => {
   beforeEach(() => jest.clearAllMocks());
   const stash = (page: string, orig?: string) => {
@@ -1065,6 +1112,19 @@ describe('source photos travel with their pages (R12)', () => {
     expect(read('s4', 'page-0.src.json')).toBe('A-geo');
     expect(read('s4', 'page-1.src.part.jpg')).toBeUndefined();
     expect(read('s4', 'page-1.src.jpg')).toBeUndefined();
+  });
+
+  test('an interrupted geometry write is finished (page-N.src.new.json promoted) or its leftover removed', async () => {
+    seedFile('s5', 'page-0.jpg', 'A'); seedFile('s5', 'page-0.src.jpg', 'A-src');
+    seedFile('s5', 'page-0.src.new.json', 'A-geo-new'); // killed between the delete and the rename
+    absent('s5', 'page-0.src.json');
+    seedFile('s5', 'page-1.jpg', 'B'); seedFile('s5', 'page-1.src.jpg', 'B-src');
+    seedFile('s5', 'page-1.src.json', 'B-geo'); seedFile('s5', 'page-1.src.new.json', 'B-half'); // killed before the delete
+    rootWith(listFromContents('s5'));
+    await garbageCollectOrphans(['s5']);
+    expect(read('s5', 'page-0.src.json')).toBe('A-geo-new');
+    expect(read('s5', 'page-1.src.json')).toBe('B-geo');
+    expect(Object.keys(fileContents).filter(u => u.includes('/s5/') && u.endsWith('.src.new.json'))).toEqual([]);
   });
 
   test('copyPageWithShadow carries the source, and clears a stale one when the copied page has none', () => {

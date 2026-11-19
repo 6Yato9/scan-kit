@@ -392,6 +392,10 @@ export default function FilesScreen() {
         Alert.alert(`“${who?.name ?? 'A PDF'}” is password protected`, 'Open it and enter its password, then merge again.');
         return;
       }
+      if (err instanceof PdfEditError && err.kind === 'restricted') {
+        Alert.alert('A PDF can’t be merged', 'One of these PDFs doesn’t allow changes to its pages. Leave it out and merge the others.');
+        return;
+      }
       console.error('Batch merge failed', err);
       Alert.alert("Couldn't merge documents", 'There may not be enough free space. Please try again.');
     }

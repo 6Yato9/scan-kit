@@ -8,6 +8,7 @@ import { autoName } from '@/lib/auto-name';
 import { bakePages } from '@/lib/bake';
 import { alertScanError, scanPagesWithCamera, takeUncroppedPages, ToolScanError } from '@/lib/tool-scan';
 import { noteNewDocument } from '@/lib/new-doc-note';
+import { bakeGroups, withReviewFilters } from '@/lib/review-filter';
 import { serialized } from '@/lib/serial';
 import { useTheme } from '@/contexts/theme-context';
 import { Radius, Spacing, Type } from '@/lib/theme';
@@ -17,6 +18,8 @@ type SaveInput = {
   pages?: ScanPageInput[];
   pdfUri?: string;
   defaultFilter?: PageFilter | 'original';
+  /** A filter per page, chosen in the camera's review (lib/review-filter.ts); wins over `defaultFilter`. */
+  pageFilters?: PageFilter[];
 };
 
 type ScanContextType = {
@@ -82,7 +85,12 @@ export function ScanProvider({ children }: { children: ReactNode }) {
       // after so the index — and the title it names the document by — reflects
       // the final pixels.
       (async () => {
-        if (pages.length && filter !== 'original') await bakePages(id, pages.map((_, i) => i), filter);
+        const chosen = input.pageFilters;
+        if (pages.length && chosen && chosen.length === pages.length) {
+          await Promise.all(bakeGroups(chosen).map(g => bakePages(id, g.indices, g.filter)));
+        } else if (pages.length && filter !== 'original') {
+          await bakePages(id, pages.map((_, i) => i), filter);
+        }
         if (pages.length) await indexDocText(id, pages);
       })().catch(err => console.error('post-save processing failed', err));
       return id;
@@ -106,9 +114,12 @@ export function ScanProvider({ children }: { children: ReactNode }) {
       // Scan Kit's camera (with its own review step) or Apple's document
       // scanner, as chosen in Settings › Scan (lib/tool-scan.ts). Either way
       // the app lock can't close the camera from under this promise.
-      const pages = await scanPagesWithCamera();
+      // The review offers the filter to save with, starting at Scan
+      // settings' default (lib/review-filter.ts).
+      const { defaultFilter } = await getScanSettings();
+      const { pages, filters } = await withReviewFilters(defaultFilter, () => scanPagesWithCamera());
       if (!pages?.length) return null;
-      return await saveAndOpen({ pages });
+      return await saveAndOpen({ pages, pageFilters: filters });
     } catch (err) {
       if (err instanceof ToolScanError) {
         notifyError();

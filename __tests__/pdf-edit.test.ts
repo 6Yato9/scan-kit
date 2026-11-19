@@ -132,6 +132,8 @@ const mockGenerate = jest.fn(async (pages: string[], _opts: any) => {
 });
 jest.mock('../lib/pdf', () => ({ generatePdf: (p: string[], o: any) => mockGenerate(p, o) }));
 jest.mock('../lib/ocr', () => ({ ocrAvailable: () => true }));
+const mockInvalidateThumbs = jest.fn();
+jest.mock('../lib/pdf-thumb', () => ({ invalidatePdfThumbs: (id: string) => mockInvalidateThumbs(id) }));
 
 import {
   blankLike,
@@ -150,6 +152,8 @@ import {
   recoverInterruptedPdfEdits,
   reorderPlan,
   resetPdfEditForTests,
+  holdPdfEditUndo,
+  UNDO_TTL_MS,
   rotatePlan,
   samePrint,
   splitNames,
@@ -329,6 +333,55 @@ describe('undoPdfEdit', () => {
   });
 });
 
+describe('a record write that fails AFTER the PDF was swapped (r12 code review #1)', () => {
+  /** What the next launch sees: this session's folder, renamed as an earlier session's. */
+  const asEarlierSession = () => {
+    for (const [k, v] of [...mockFs]) {
+      const m = /^file:\/\/\/support\/pdf-edit\/[^-/]+-(.*)$/.exec(k);
+      if (!m) continue;
+      mockFs.delete(k);
+      mockFs.set(`file:///support/pdf-edit/oldsession-${m[1]}`, v);
+    }
+  };
+
+  test('edit: rejects as partial (never "unchanged"), keeps the journal and before.pdf; the next launch reconciles', async () => {
+    mockUpdate.mockRejectedValueOnce(new Error('disk full'));
+    await expect(editStoredPdf('d1', rotatePlan(4, 0, 90))).rejects.toMatchObject({ kind: 'partial' });
+    expect(mockFs.get(PDF)).toBe('edit(v1|0,1,2,3|90,0,0,0)'); // the PDF did change
+    expect(mockDocs.get('d1').ocrText).toBe('old text'); // the record didn't
+    expect(workFiles().some(f => f.endsWith('/journal.json'))).toBe(true);
+    expect(workFiles().some(f => f.endsWith('/before.pdf'))).toBe(true);
+    expect(mockInvalidateThumbs).toHaveBeenCalledWith('d1'); // its old renders are gone
+    asEarlierSession();
+    expect(await recoverInterruptedPdfEdits()).toBe(1);
+    expect(mockDocs.get('d1').ocrText).toBeUndefined(); // read again from the PDF that is there
+    expect(mockDocs.get('d1').updatedAt).toBeGreaterThan(1);
+    expect(workFiles()).toEqual([]);
+  });
+
+  test('Undo: rejects as partial, the PDF is back, the journal stays for the next launch', async () => {
+    const { undo } = await editStoredPdf('d1', deletePlan(4, 2));
+    mockUpdate.mockRejectedValueOnce(new Error('disk full'));
+    await expect(undoPdfEdit(undo!)).rejects.toMatchObject({ kind: 'partial' });
+    expect(mockFs.get(PDF)).toBe('v1');
+    expect(workFiles().some(f => f.endsWith('/journal.json'))).toBe(true);
+    asEarlierSession();
+    expect(await recoverInterruptedPdfEdits()).toBe(1);
+    expect(mockDocs.get('d1').ocrText).toBeUndefined();
+    expect(workFiles()).toEqual([]);
+  });
+
+  test('the cached page renders are dropped after an edit and after its Undo, not after a failed swap', async () => {
+    const { undo } = await editStoredPdf('d1', rotatePlan(4, 0, 90));
+    expect(mockInvalidateThumbs).toHaveBeenCalledTimes(1);
+    await undoPdfEdit(undo!);
+    expect(mockInvalidateThumbs).toHaveBeenCalledTimes(2);
+    mockNative.replaceFile.mockRejectedValueOnce(new Error('Could not replace the file'));
+    await expect(editStoredPdf('d1', rotatePlan(4, 0, 90))).rejects.toBeInstanceOf(PdfEditError);
+    expect(mockInvalidateThumbs).toHaveBeenCalledTimes(2);
+  });
+});
+
 // ── Crash recovery ───────────────────────────────────────────────────────────
 
 describe('recoverInterruptedPdfEdits', () => {
@@ -456,4 +509,36 @@ test('a text index read before an edit does not overwrite the edited PDF’s tex
   release(['stale text of the old PDF']);
   expect(await indexing).toBe('skipped');
   expect(mockDocs.get('d1').ocrText).toBe(doc.ocrText);
+});
+
+// Round 12b: the viewer offers the last Undo in its "…" menu until the next
+// edit, so it holds the stash past UNDO_TTL_MS; Undo still checks the PDF.
+describe('holdPdfEditUndo', () => {
+  afterEach(() => jest.useRealTimers());
+
+  test('an unheld stash is dropped after UNDO_TTL_MS; a held one stays until discarded', async () => {
+    jest.useFakeTimers();
+    const first = await editStoredPdf('d1', rotatePlan(4, 0, 90));
+    jest.advanceTimersByTime(UNDO_TTL_MS);
+    expect(mockFs.has(`${first.undo!.dir}/before.pdf`)).toBe(false);
+
+    const second = await editStoredPdf('d1', rotatePlan(4, 1, 90));
+    expect(holdPdfEditUndo('d1')).toBe(second.undo);
+    jest.advanceTimersByTime(UNDO_TTL_MS * 20);
+    expect(mockFs.has(`${second.undo!.dir}/before.pdf`)).toBe(true);
+    jest.useRealTimers();
+    await undoPdfEdit(second.undo!);
+    expect(mockFs.get(PDF)).toBe('edit(v1|0,1,2,3|90,0,0,0)');
+  });
+
+  test('nothing to hold for a document without an Undo', () => {
+    expect(holdPdfEditUndo('nope')).toBeNull();
+  });
+
+  test('a held stash is still refused once the PDF changed', async () => {
+    const { undo } = await editStoredPdf('d1', deletePlan(4, 2));
+    holdPdfEditUndo('d1');
+    mockFs.set(PDF, 'changed elsewhere');
+    await expect(undoPdfEdit(undo!)).rejects.toMatchObject({ kind: 'changed' });
+  });
 });

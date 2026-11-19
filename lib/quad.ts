@@ -232,3 +232,65 @@ export function sameGeometry(a: PageGeometry, b: PageGeometry, eps = 1e-4): bool
   return a.rotation === b.rotation && a.quad.length === 8 && b.quad.length === 8
     && a.quad.every((v, i) => Math.abs(v - b.quad[i]) <= eps);
 }
+
+// ── Masking outside the crop (components/crop-modal.tsx) ────────────────────
+
+/**
+ * One half-plane clip of the crop editor's mask: a `size`×`size` square,
+ * placed at (left, top) in the frame and turned by `angle` (radians, about its
+ * centre, as an RN transform does), whose top side lies on one edge of the
+ * outline and which reaches inwards. Clipping to it (overflow hidden) keeps
+ * the inner side of that edge. `inner` places a frame-sized child, turned by
+ * -angle, so that inside the square the frame's own coordinates apply again —
+ * which lets the four clips nest: inside all four is exactly the outline.
+ */
+export type EdgeClip = { left: number; top: number; size: number; angle: number; inner: { left: number; top: number } };
+
+/**
+ * The four clips (see EdgeClip) for a convex outline `pts` (screen points, in
+ * either winding) inside a `frameW`×`frameH` frame that contains it. Null when
+ * the outline is degenerate.
+ */
+export function edgeClips(pts: Point[], frameW: number, frameH: number): EdgeClip[] | null {
+  if (pts.length !== 4 || !(frameW > 0 && frameH > 0)) return null;
+  const area = polygonArea(pts);
+  if (!Number.isFinite(area) || Math.abs(area) < 1) return null;
+  // Clockwise on screen (y down) has a positive shoelace sum: the inside is to
+  // the right of each edge's direction, i.e. along (-dy, dx).
+  const ordered = area > 0 ? pts : [...pts].reverse();
+  // Every corner lies in the frame, so a square this big reaches past the
+  // frame along the whole edge line and all the way across inwards.
+  const size = 2 * Math.hypot(frameW, frameH) + 4;
+  const half = size / 2;
+  const clips: EdgeClip[] = [];
+  for (let i = 0; i < 4; i++) {
+    const a = ordered[i], b = ordered[(i + 1) % 4];
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    if (!(len > 1e-6)) return null;
+    const dx = (b.x - a.x) / len, dy = (b.y - a.y) / len;
+    const angle = Math.atan2(dy, dx);
+    // Centre: from `a`, half the square inwards (the normal).
+    const cx = a.x - dy * half;
+    const cy = a.y + dx * half;
+    // The frame's centre in the square's own (unturned) coordinates.
+    const vx = frameW / 2 - cx, vy = frameH / 2 - cy;
+    const lx = vx * Math.cos(angle) + vy * Math.sin(angle) + half;
+    const ly = -vx * Math.sin(angle) + vy * Math.cos(angle) + half;
+    clips.push({ left: cx - half, top: cy - half, size, angle, inner: { left: lx - frameW / 2, top: ly - frameH / 2 } });
+  }
+  return clips;
+}
+
+/**
+ * Where frame point `p` lands in clip `c`'s own (unturned) coordinates — for
+ * tests: a point is kept by the clip when both of these are within 0..size.
+ */
+export function pointInClip(p: Point, c: EdgeClip): Point {
+  const half = c.size / 2;
+  const cx = c.left + half, cy = c.top + half;
+  const vx = p.x - cx, vy = p.y - cy;
+  return {
+    x: vx * Math.cos(c.angle) + vy * Math.sin(c.angle) + half,
+    y: -vx * Math.sin(c.angle) + vy * Math.cos(c.angle) + half,
+  };
+}

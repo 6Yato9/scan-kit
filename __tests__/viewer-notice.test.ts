@@ -56,3 +56,44 @@ test('a notice without onExpire is handed over untouched', () => {
   postViewerNotice({ docId: 'a', message: 'Saved', action });
   expect(takeViewerNotice('a')!.action).toBe(action);
 });
+
+// Round 12b: the viewer keeps an Undo in its "…" menu until the next edit
+// (lib/last-undo.ts), so it holds the notice's action past ACTION_WINDOW_MS.
+describe('hold', () => {
+  test('a held action outlives ACTION_WINDOW_MS and its release expires it once', () => {
+    const onExpire = jest.fn();
+    const onPress = jest.fn();
+    postViewerNotice({ docId: 'a', message: 'Signed', action: { label: 'Undo', onPress }, onExpire });
+    const n = takeViewerNotice('a')!;
+    const release = n.hold!();
+    jest.advanceTimersByTime(ACTION_WINDOW_MS * 10);
+    expect(onExpire).not.toHaveBeenCalled();
+    release();
+    release();
+    expect(onExpire).toHaveBeenCalledTimes(1);
+    n.action!.onPress();
+    expect(onPress).not.toHaveBeenCalled();
+  });
+
+  test('releasing after the action was used releases nothing', () => {
+    const onExpire = jest.fn();
+    const onPress = jest.fn();
+    postViewerNotice({ docId: 'a', message: 'Signed', action: { label: 'Undo', onPress }, onExpire });
+    const n = takeViewerNotice('a')!;
+    const release = n.hold!();
+    n.action!.onPress();
+    release();
+    jest.runAllTimers();
+    expect(onPress).toHaveBeenCalledTimes(1);
+    expect(onExpire).not.toHaveBeenCalled();
+  });
+
+  test('holding after it expired is a no-op', () => {
+    const onExpire = jest.fn();
+    postViewerNotice({ docId: 'a', message: 'Signed', action: { label: 'Undo', onPress: jest.fn() }, onExpire });
+    const n = takeViewerNotice('a')!;
+    jest.advanceTimersByTime(ACTION_WINDOW_MS);
+    n.hold!()();
+    expect(onExpire).toHaveBeenCalledTimes(1);
+  });
+});

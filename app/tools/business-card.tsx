@@ -288,7 +288,7 @@ export default function BusinessCardScreen() {
             ? [
                 { icon: 'lock-closed-outline', text: 'The card is read on this device. Nothing is uploaded.' },
                 { icon: 'create-outline', text: 'Review every detail in the contact form before it’s saved.' },
-                { icon: 'document-outline', text: 'The scan is kept in Documents, named after the person.' },
+                { icon: 'document-outline', text: 'The scan is kept in Files, named after the person.' },
               ]
             : undefined
         }

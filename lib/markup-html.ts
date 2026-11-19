@@ -4,9 +4,11 @@
 // handling, and the save (getResult). The drawing engine is lib/markup-core.ts.
 //
 // Messages to the app: READY:{w,h} · LOAD_ERROR · STATE:{canUndo,canRedo,count}
+//   · HIST:<History.snapshot()> (after every change, so the app holds a copy)
 //   · TEXT_NEW:{x,y} · TEXT_EDIT:{id,text,color,size} · RESULT:{page,orig} · ERROR:<reason>
 // Calls from the app: setConfig({...}) · addText(x,y,text,color,size) ·
 //   updateText(id,text,color,size) · deleteText(id) · undo() · redo() · clearAll() · getResult()
+//   · restoreHistory(snapshot) (after a reload, see app/annotate.tsx)
 // Sizes from the app (pen widths, text size) are in screen points at the
 // page's fitted size; the page converts them to page pixels.
 import { MARKUP_CORE_JS } from './markup-core';
@@ -70,7 +72,11 @@ var mode = null, live = null, start = null, dragOp = null, dragPos = null, pinch
 var seq = 0;
 
 function post(m) { if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(m); }
-function postState() { post('STATE:' + JSON.stringify(hist.state())); }
+function postState() {
+  post('STATE:' + JSON.stringify(hist.state()));
+  // The app keeps a copy of the drawing: iOS may kill this page's process.
+  try { post('HIST:' + JSON.stringify(hist.snapshot())); } catch (e) {}
+}
 
 function layout() {
   VW = window.innerWidth; VH = window.innerHeight;
@@ -265,6 +271,11 @@ function deleteText(id) { hist.remove(id); render(); postState(); }
 function undo() { if (hist.undo()) { render(); postState(); } }
 function redo() { if (hist.redo()) { render(); postState(); } }
 function clearAll() { hist.clear(); render(); postState(); }
+function restoreHistory(snap) {
+  hist = MK.History.restore(snap);
+  seq = Math.max(seq, MK.maxTextSeq(hist));
+  render(); postState();
+}
 
 function makeCanvas(w, h) { var c = document.createElement('canvas'); c.width = w; c.height = h; return c; }
 function free(c) { if (c) { c.width = 0; c.height = 0; } }
@@ -314,7 +325,8 @@ function onImage() {
   layout();
   bg.style.visibility = 'visible';
   post('READY:' + JSON.stringify({ w: IW, h: IH }));
-  postState();
+  // No HIST yet: after a reload the app's copy is the drawing to restore.
+  post('STATE:' + JSON.stringify(hist.state()));
 }
 bg.onload = onImage;
 bg.onerror = function () { post('LOAD_ERROR'); };

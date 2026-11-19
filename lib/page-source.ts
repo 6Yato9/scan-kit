@@ -29,6 +29,15 @@
 // page as it is, which keeps those edits). So a source can never be paired
 // with the wrong page, and re-cropping can never silently throw an edit away.
 //
+// THE ORIGINAL PHOTO (R12b). A source whose stamp no longer matches because
+// the page was edited since (Sign, Markup, Watermark, Timestamp) is kept on
+// disk: Crop offers it as "Original photo" (originalTargetFor), clearly
+// marked as starting the page again from the photo — which drops those edits.
+// Re-cropping it re-stamps the source, so it is a normal source again. It is
+// never offered for a redacted page: Redact deletes the page's source
+// (lib/page-stamp.ts; its Undo puts it back with the unredacted page), and
+// Compress drops it too (the photo would undo the saving).
+//
 // File families. The two source files move with their page exactly like the
 // `.orig` shadow does, in every operation of lib/files.ts (copy, delete-shift,
 // reorder, restore, merge, extract, duplicate, the startup sweep) — see
@@ -212,6 +221,12 @@ export async function renderGeometry(
 
 export const sourceName = (i: number) => `page-${i}.src.jpg`;
 export const sourceMetaName = (i: number) => `page-${i}.src.json`;
+/**
+ * The geometry being written (writeSourceMeta): renamed over the real one when
+ * complete. The startup sweep promotes it when the real one is missing (the
+ * app died between the two steps) and deletes it otherwise (lib/files.ts).
+ */
+export const sourceMetaSideName = (i: number) => `page-${i}.src.new.json`;
 
 type SourceMeta = { v: 1; quad: Quad; rotation: Rotation; bytes: number; md5: string | null };
 
@@ -221,7 +236,15 @@ function unfilteredFile(dir: Directory, i: number): File {
   return orig.exists ? orig : new File(dir, `page-${i}.jpg`);
 }
 
-function stampOf(f: File): { bytes: number; md5: string | null } | null {
+/** Identifies an image's bytes (md5 null: couldn't be read). */
+export type Stamp = { bytes: number; md5: string | null };
+
+/** True when two stamps describe the same bytes (an unknown md5 only compares sizes). */
+export function sameStamp(a: Stamp | null | undefined, b: Stamp | null | undefined): boolean {
+  return !!a && !!b && a.bytes > 0 && a.bytes === b.bytes && (!a.md5 || !b.md5 || a.md5 === b.md5);
+}
+
+function stampOf(f: File): Stamp | null {
   try {
     if (!f.exists) return null;
     const bytes = f.size;
@@ -289,17 +312,33 @@ export function writeSourceMeta(docId: string, i: number, geometry: PageGeometry
   const stamp = stampOf(unfilteredFile(dir, i));
   if (!stamp) return false;
   const meta: SourceMeta = { v: 1, quad: geometry.quad.map(n => Math.round(n * 1e6) / 1e6), rotation: normRotation(geometry.rotation), ...stamp };
-  const f = new File(dir, sourceMetaName(i));
-  if (f.exists) f.delete();
-  f.create();
-  f.write(JSON.stringify(meta));
+  // Written whole beside the real file, then renamed over it: a crash leaves
+  // the old geometry or the new one (or, between the delete and the rename,
+  // the complete side file the startup sweep promotes) — never an empty or
+  // half-written one, which would orphan the photo (r12 code review #6).
+  const side = new File(dir, sourceMetaSideName(i));
+  if (side.exists) side.delete();
+  side.create();
+  side.write(JSON.stringify(meta));
+  const dest = new File(dir, sourceMetaName(i));
+  if (dest.exists) dest.delete();
+  side.move(dest);
   return true;
+}
+
+/** The identity of page `i`'s unfiltered image (its .orig, or the page), or null without one. */
+export function unfilteredStamp(docId: string, i: number): Stamp | null {
+  try {
+    return stampOf(unfilteredFile(resolveDocDir(docId), i));
+  } catch {
+    return null;
+  }
 }
 
 /** Removes page `i`'s source photo and geometry (both, whichever exist). */
 export function removePageSource(docId: string, i: number): void {
   const dir = resolveDocDir(docId);
-  for (const name of [sourceMetaName(i), sourceName(i)]) {
+  for (const name of [sourceMetaSideName(i), sourceMetaName(i), sourceName(i)]) {
     try {
       const f = new File(dir, name);
       if (f.exists) f.delete();
@@ -371,6 +410,20 @@ export type CropTarget = {
   /** Identity of the image at `uri` when this was read (see recropPage). */
   bytes: number;
   md5: string | null;
+  /**
+   * Set when `uri` is the page's ORIGINAL photo that later edits (a signature,
+   * markup…) no longer match (originalTargetFor): cropping it starts the page
+   * again from the photo and drops those edits. Holds the identity of the
+   * page's unfiltered image when the editor opened, so a change made meanwhile
+   * is never thrown away unseen.
+   */
+  original?: Stamp;
+  /**
+   * Internal, for Undo (lib/recrop.ts): put back the copy of the page kept in
+   * `dir` instead of rendering — only while the page's unfiltered image is
+   * still exactly `written`, what the crop being undone wrote.
+   */
+  restore?: CropStash;
 };
 
 /**
@@ -387,19 +440,132 @@ export function cropTargetFor(docId: string, i: number): CropTarget {
 }
 
 /**
+ * Page `i`'s original photo, when it keeps one that the page no longer matches
+ * because it was edited since (see THE ORIGINAL PHOTO above), with the corners
+ * last used on it. Null when the page has a valid source (cropTargetFor shows
+ * that), or no usable photo and geometry at all — a photo without readable
+ * geometry is never offered (a redaction interrupted between its two deletes
+ * leaves exactly that). Never throws.
+ */
+export function originalTargetFor(docId: string, i: number): CropTarget | null {
+  try {
+    if (readPageSource(docId, i)) return null;
+    const dir = resolveDocDir(docId);
+    const src = new File(dir, sourceName(i));
+    const metaFile = new File(dir, sourceMetaName(i));
+    if (!src.exists || !metaFile.exists) return null;
+    const meta = parseMeta(metaFile.textSync());
+    if (!meta) return null;
+    const page = stampOf(unfilteredFile(dir, i));
+    const photo = stampOf(src);
+    if (!page || !photo) return null;
+    return {
+      uri: src.uri,
+      geometry: { quad: [...meta.quad], rotation: meta.rotation },
+      hasSource: true,
+      ...photo,
+      original: page,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// Undo for a crop that replaced pixels a source can't give back (the edited
+// page, when starting again from the original photo; or a page cropped while
+// its original photo is kept aside): a copy of the page and its .orig, in
+// Caches/page-source (swept at launch), named for the document so deleting or
+// redacting it can drop them at once.
+
+/** A copy of a page kept for Undo, and what the crop then wrote. */
+export type CropStash = { dir: string; written: Stamp };
+
+const cropStashes = new Map<string, CropStash>();
+const stashKey = (docId: string, i: number) => `${docId}/${i}`;
+let stashSeq = 0;
+
+function deleteDirQuietly(uri: string): void {
+  try {
+    const d = new Directory(uri);
+    if (d.exists) d.delete();
+  } catch {}
+}
+
+/** Copies page `i` (and its .orig) aside for Undo, or null when that fails (no space): the crop still runs. */
+function stashPage(docId: string, i: number): string | null {
+  const dir = new Directory(tempDir(), `undo-${docId}-${Date.now()}-${++stashSeq}`);
+  try {
+    dir.create({ intermediates: true, idempotent: true });
+    const docFolder = resolveDocDir(docId);
+    new File(docFolder, `page-${i}.jpg`).copy(new File(dir, 'page-0.jpg'));
+    const orig = new File(docFolder, `page-${i}.orig.jpg`);
+    if (orig.exists) orig.copy(new File(dir, 'page-0.orig.jpg'));
+    return dir.uri;
+  } catch (err) {
+    console.warn('page-source: no Undo copy of the page', err);
+    deleteDirQuietly(dir.uri);
+    return null;
+  }
+}
+
+/**
+ * The Undo copy the last crop of page `i` kept (single use), or null when
+ * that crop kept none (its source can redo the old crop instead).
+ */
+export function takeCropStash(docId: string, i: number): CropStash | null {
+  const key = stashKey(docId, i);
+  const s = cropStashes.get(key) ?? null;
+  cropStashes.delete(key);
+  return s;
+}
+
+/** Throws away an Undo copy nobody will use. Never throws. */
+export function discardCropStash(stash: CropStash | null | undefined): void {
+  if (stash) deleteDirQuietly(stash.dir);
+}
+
+/**
+ * Removes every Undo copy of `docId`'s pages (the document is being deleted,
+ * or redacted: the copies hold the old pixels). Never throws.
+ */
+export function discardCropStashes(docId: string): void {
+  for (const [key, s] of [...cropStashes]) {
+    if (key.startsWith(`${docId}/`)) {
+      cropStashes.delete(key);
+      deleteDirQuietly(s.dir);
+    }
+  }
+  try {
+    const root = new Directory(Paths.cache, SOURCE_TEMP_DIR);
+    if (!root.exists) return;
+    for (const item of root.list()) {
+      if (item instanceof Directory && item.name.startsWith(`undo-${docId}-`)) deleteDirQuietly(item.uri);
+    }
+  } catch {}
+}
+
+/**
  * Re-crops page `i` of `docId` to `geometry`, measured on `target` (what
- * cropTargetFor returned when the editor opened). Writes the page's new
- * unfiltered pixels to its `.orig` and the page (the caller re-bakes the
- * page's filter afterwards — see app/viewer.tsx), then records the geometry.
+ * cropTargetFor — or originalTargetFor — returned when the editor opened).
+ * Writes the page's new unfiltered pixels to its `.orig` and the page (the
+ * caller re-bakes the page's filter afterwards — see app/viewer.tsx), then
+ * records the geometry.
  *
  * A page without a source gets one here — the image it was cropped from — when
- * `keepSource` is on, so the next crop can be widened back again.
+ * `keepSource` is on, so the next crop can be widened back again. Not when it
+ * keeps an original photo aside (edited since): that photo stays, still
+ * offered as the original, and the page is copied for Undo instead.
+ *
+ * From the original photo (`target.original`): the page is rendered from the
+ * photo again — edits made since are dropped, as the editor said — and the
+ * photo becomes the page's valid source again. The edited page is copied for
+ * Undo (takeCropStash).
  *
  * MUST run under the document's page lock (runPageEdit) with `pages: [i]`.
  * Order: .orig first, then the page, then the geometry; an interruption
  * leaves at worst a stamp mismatch (the source is then ignored), never a page
  * paired with the wrong source. Throws (nothing stored changed) when the
- * render fails, or when the page's source changed since the editor opened.
+ * render fails, or when the page or its source changed since the editor opened.
  */
 export async function recropPage(
   docId: string,
@@ -409,23 +575,29 @@ export async function recropPage(
   options: { keepSource: boolean; quality?: number },
 ): Promise<string> {
   const dir = resolveDocDir(docId);
+  discardCropStash(takeCropStash(docId, i)); // a newer crop: the older Undo is gone
   // The corners were placed on `target`; the image must still be that one. (A
   // filter bake finishing meanwhile may have moved the unfiltered page to its
   // .orig — same bytes, other name — which is fine.)
-  const current = cropTargetFor(docId, i);
-  const same = current.hasSource === target.hasSource && current.bytes > 0 && current.bytes === target.bytes
-    && (!current.md5 || !target.md5 || current.md5 === target.md5);
-  if (!same) throw new Error('recropPage: the page changed while it was being cropped');
+  const fromOriginal = !!target.original;
+  const current = fromOriginal ? originalTargetFor(docId, i) : cropTargetFor(docId, i);
+  const same = !!current && current.hasSource === target.hasSource && !!current.original === fromOriginal
+    && sameStamp(current, target) && (!fromOriginal || sameStamp(current.original, target.original));
+  if (!current || !same) throw new Error('recropPage: the page changed while it was being cropped');
+  // A page cropped as it is while its original photo is kept aside.
+  const keepsOriginal = !target.hasSource && originalTargetFor(docId, i) !== null;
   const quality = options.quality ?? 0.92;
   const out = tempFile('crop');
   // A .part name: the startup sweep deletes it (never promotes it) if we die.
   const sourceSide = new File(dir, `page-${i}.src.part.jpg`);
   const sourceSidePath = sourceSide.uri;
+  let stash: string | null = null;
   try {
     const rendered = await renderGeometry(current.uri, geometry, out.uri, quality);
+    if (fromOriginal || keepsOriginal) stash = stashPage(docId, i);
     // A page cropped for the first time keeps what it was cropped from.
     let adopt = false;
-    if (!target.hasSource && options.keepSource) {
+    if (!target.hasSource && options.keepSource && !keepsOriginal) {
       if (sourceSide.exists) sourceSide.delete();
       new File(clean(current.uri)).copy(sourceSide);
       adopt = true;
@@ -448,10 +620,16 @@ export async function recropPage(
       sourceSide.move(new File(dir, sourceName(i)));
     }
     if (target.hasSource || adopt) writeSourceMeta(docId, i, geometry);
-    else removePageSource(docId, i);
+    else if (!keepsOriginal) removePageSource(docId, i);
+    const written = stash ? unfilteredStamp(docId, i) : null;
+    if (stash && written) {
+      cropStashes.set(stashKey(docId, i), { dir: stash, written });
+      stash = null;
+    }
     return new File(dir, `page-${i}.jpg`).uri;
   } finally {
     deleteQuietly(out.uri);
+    if (stash) deleteDirQuietly(stash); // failed, or nothing to undo to
     // A fresh handle: File.move re-points the moved instance at its destination.
     try {
       const leftover = new File(sourceSidePath);
