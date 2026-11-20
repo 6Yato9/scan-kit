@@ -1,5 +1,6 @@
 // app/settings/scan-settings.tsx
 import { useCallback, useState } from 'react';
+import { Platform } from 'react-native';
 import { FILTER_CAPTIONS, FILTER_LABELS } from '@/components/page-actions-sheet';
 import { useFocusEffect } from 'expo-router';
 import { PREVIEW_FILTERS } from '@/lib/bake';
@@ -44,9 +45,11 @@ const CAMERA_OPTIONS: { label: string; value: NonNullable<ScanSettings['camera']
 
 export default function ScanSettingsScreen() {
   const [settings, setSettings] = useState<ScanSettings | null>(null);
-  // Builds without Scan Kit's camera view always use Apple's scanner.
+  // Builds without Scan Kit's camera view always use Apple's scanner. Android
+  // has only Scan Kit's camera (Google's scanner is never used): no choice.
   const [hasOwnCamera] = useState(scanKitCameraAvailable);
-  const camera = settings?.camera === 'apple' ? 'apple' : 'scankit';
+  const canChooseCamera = hasOwnCamera && Platform.OS === 'ios';
+  const camera = Platform.OS === 'ios' && settings?.camera === 'apple' ? 'apple' : 'scankit';
 
   useFocusEffect(useCallback(() => {
     let cancelled = false;
@@ -65,7 +68,7 @@ export default function ScanSettingsScreen() {
     <ToolScreen title="Scan settings">
       {hasOwnCamera && (
         <>
-          <SettingsGroup title="Camera">
+          {canChooseCamera && <SettingsGroup title="Camera">
             {CAMERA_OPTIONS.map((opt, i) => (
               <SettingsRow
                 key={opt.value}
@@ -76,7 +79,7 @@ export default function ScanSettingsScreen() {
                 last={i === CAMERA_OPTIONS.length - 1}
               />
             ))}
-          </SettingsGroup>
+          </SettingsGroup>}
 
           {camera === 'scankit' && (
             <SettingsGroup

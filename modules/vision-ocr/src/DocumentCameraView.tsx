@@ -1,5 +1,6 @@
-// Scan Kit's own document camera (iOS, native view `DocumentCameraView` of
-// the VisionOcr module): live preview, native page-outline overlay and
+// Scan Kit's own document camera (native view `DocumentCameraView` of the
+// VisionOcr module: AVFoundation + Vision on iOS, CameraX + Scan Kit's own
+// page detector on Android, same contract): live preview, native page-outline overlay and
 // steady-page auto-capture. Every capture keeps the ORIGINAL full photo plus
 // the detected outline, so a crop can later be widened as well as narrowed.
 //
@@ -7,7 +8,7 @@
 // the auto-capture progress ring belong in React Native (use onDetection).
 //
 // `DocumentCameraView` is null when this build doesn't register the view
-// (older dev clients, Android, web): check `isDocumentCameraAvailable()`.
+// (older dev clients, web): check `isDocumentCameraAvailable()`.
 import { requireNativeView } from 'expo';
 import type { Ref } from 'react';
 import type { NativeSyntheticEvent, ViewProps } from 'react-native';

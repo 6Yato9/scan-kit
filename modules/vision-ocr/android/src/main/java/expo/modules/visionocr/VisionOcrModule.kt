@@ -19,11 +19,10 @@ import java.io.File
  * VisionOcrModule.swift; the JS (modules/vision-ocr/src/index.ts) feature-
  * checks every function, so only what exists here lights up on Android.
  *
- * No views yet: the JS checks getViewConfig('VisionOcr') before using
- * PdfDocumentView or DocumentCameraView, so without them the viewer keeps its
- * "PDF not available on Android yet" state and the camera stays off. When the
- * views come (phases 2-3), PdfDocumentView must be registered FIRST (it is the
- * module's default view in shipped JS).
+ * Views, in the same order as iOS: PdfDocumentView FIRST (the module's
+ * default view in shipped JS; a placeholder until phase 3, which JS doesn't
+ * use on Android yet), then DocumentCameraView (phase 2: CameraX, page
+ * detection, auto-capture).
  *
  * Every function runs off the main thread (shareFiles presents on it), and
  * rejects with promise.reject(code, message) so JS sees the exact message,
@@ -72,6 +71,66 @@ class VisionOcrModule : Module() {
       synchronized(this@VisionOcrModule) {
         reader?.close()
         reader = null
+      }
+    }
+
+    // Must stay the FIRST view: requireNativeView('VisionOcr') without a name
+    // is the PDF viewer in shipped JS.
+    View(PdfDocumentView::class) {
+      Events("onPageChange", "onLoadError")
+      Prop("source") { view: PdfDocumentView, uri: String? -> view.setSource(uri) }
+      Prop("backgroundHex") { _: PdfDocumentView, _: String? -> }
+      Prop("initialPage") { _: PdfDocumentView, _: Int? -> }
+    }
+
+    // Scan Kit's own document camera (DocumentCameraView.kt), same contract
+    // as DocumentCameraView.swift.
+    View(DocumentCameraView::class) {
+      Events("onDetection", "onCapture", "onCaptureStart", "onCameraError", "onCameraState")
+      Prop("autoCapture") { view: DocumentCameraView, on: Boolean? -> view.setAutoCapture(on ?: true) }
+      Prop("flash") { view: DocumentCameraView, mode: String? -> view.setFlash(mode ?: "auto") }
+      Prop("torch") { view: DocumentCameraView, on: Boolean? -> view.setTorch(on ?: false) }
+      Prop("active") { view: DocumentCameraView, on: Boolean? -> view.setActive(on ?: true) }
+      Prop("simulatorImageUri") { view: DocumentCameraView, uri: String? -> view.setSimulatorImage(uri) }
+      Prop("simulatorJitter") { view: DocumentCameraView, amount: Double? -> view.setSimulatorJitter(amount ?: 0.0) }
+      OnViewDidUpdateProps { view: DocumentCameraView -> view.propsDidUpdate() }
+      OnViewDestroys { view: DocumentCameraView -> view.destroy() }
+      AsyncFunction("capture") { view: DocumentCameraView, promise: Promise -> view.capture(promise) }
+      AsyncFunction("rearm") { view: DocumentCameraView -> view.rearm() }
+    }
+
+    /** Whether the device has any camera to scan with (JS offers Import photos otherwise). */
+    Function("hasCamera") {
+      context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_CAMERA_ANY)
+    }
+
+    /**
+     * Page outline in a photo: [x0,y0,...,x3,y3] TL, TR, BR, BL, normalised
+     * 0..1, top-left origin, upright (EXIF applied). null when not confident.
+     */
+    AsyncFunction("detectQuad") { uri: String, promise: Promise ->
+      run(promise, "ERR_DETECT_QUAD") {
+        PageScan.detectQuad(ImageFiles.pathOf(uri), 0.15)?.let { PageGeometry.flatten(it) }
+      }
+    }
+
+    /**
+     * Auto-crop on import: { uri, detected }. A confident outline (at least
+     * 30 % of the photo) is perspective-corrected into a new JPEG; otherwise
+     * the input comes back unchanged.
+     */
+    AsyncFunction("detectDocument") { uri: String, quality: Double, promise: Promise ->
+      run(promise, "ERR_DOC_DETECT") {
+        val input = ImageFiles.pathOf(uri)
+        val quad = PageScan.detectQuad(input, 0.30)
+        if (quad == null) {
+          mapOf("uri" to uri, "detected" to false)
+        } else {
+          val dir = File(context.cacheDir, "page-source").apply { mkdirs() }
+          val out = File(dir, "doc-${java.util.UUID.randomUUID().toString().uppercase()}.jpg")
+          ImageFiles.warp(input, quad, out, if (quality.isFinite()) quality.coerceIn(0.0, 1.0) else 0.9, 4096)
+          mapOf("uri" to ImageFiles.uriOf(out), "detected" to true)
+        }
       }
     }
 

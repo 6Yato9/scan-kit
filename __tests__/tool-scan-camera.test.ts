@@ -36,6 +36,10 @@ jest.mock('../lib/page-source', () => ({
 }));
 let mockAvailable = true;
 jest.mock('../modules/vision-ocr/src/DocumentCameraView', () => ({ isDocumentCameraAvailable: () => mockAvailable }));
+let mockHasCamera: boolean | undefined = undefined;
+jest.mock('../modules/vision-ocr/src', () => ({
+  VisionOcr: { get hasCamera() { return mockHasCamera === undefined ? undefined : () => mockHasCamera; } },
+}));
 const mockOpen = jest.fn();
 jest.mock('../lib/capture-session', () => ({
   openCaptureSession: (...a: unknown[]) => mockOpen(...a),
@@ -43,7 +47,7 @@ jest.mock('../lib/capture-session', () => ({
 }));
 
 import DocumentScanner from 'react-native-document-scanner-plugin';
-import { cameraChoice, scanPagesWithCamera, scanWithCamera } from '../lib/tool-scan';
+import { cameraChoice, deviceHasCamera, scanPagesWithCamera, scanWithCamera } from '../lib/tool-scan';
 
 const Q = [0.1, 0.1, 0.9, 0.1, 0.9, 0.9, 0.1, 0.9];
 const captured = (n: number) => Array.from({ length: n }, (_, i) => ({
@@ -55,6 +59,7 @@ beforeEach(() => {
   mockDeleted.length = 0;
   mockSettings = { quality: 'high' };
   mockAvailable = true;
+  mockHasCamera = undefined;
   mockOpen.mockReset();
   (DocumentScanner.scanDocument as jest.Mock).mockReset();
 });
@@ -100,7 +105,7 @@ test('scanWithCamera renders the crops and deletes the photos', async () => {
   expect(mockDeleted).toContain('file:///c/scanner-src/src-0.jpg');
 });
 
-describe('Android without Scan Kit’s camera (port phase 1)', () => {
+describe('Android (port phase 2): Scan Kit’s camera, or Import photos without a camera', () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const RN = require('react-native') as { Platform: { OS: string }; Alert: { alert: jest.Mock } };
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -111,7 +116,7 @@ describe('Android without Scan Kit’s camera (port phase 1)', () => {
 
   beforeEach(() => {
     RN.Platform.OS = 'android';
-    mockAvailable = false;
+    mockHasCamera = true;
     RN.Alert.alert.mockReset();
     picker.launchImageLibraryAsync.mockReset();
     detect.autoCropDocument.mockReset();
@@ -127,25 +132,40 @@ describe('Android without Scan Kit’s camera (port phase 1)', () => {
     });
   };
 
-  test('says the camera is coming and imports photos instead; never opens Google’s scanner', async () => {
+  test('opens Scan Kit’s camera (never Apple’s or Google’s scanner), even with an iOS “Apple” setting restored', async () => {
+    mockSettings = { quality: 'high', camera: 'apple' };
+    expect(await cameraChoice()).toBe('scankit');
+    mockOpen.mockResolvedValue(captured(1));
+    const pages = await scanPagesWithCamera({ title: 'Whiteboard' });
+    expect(mockOpen).toHaveBeenCalledWith({ title: 'Whiteboard' });
+    expect(pages).toEqual([{ sourceUri: 'file:///c/scanner-src/src-0.jpg', quad: Q, rotation: 0 }]);
+    expect(RN.Alert.alert).not.toHaveBeenCalled();
+    expect(DocumentScanner.scanDocument).not.toHaveBeenCalled();
+  });
+
+  test('a device without a camera says so and imports photos instead', async () => {
+    mockHasCamera = false;
+    expect(deviceHasCamera()).toBe(false);
     pressInAlert('Import photos');
     picker.launchImageLibraryAsync.mockResolvedValue({ canceled: false, assets: [{ uri: 'file:///c/p1.jpg' }, { uri: 'file:///c/p2.jpg' }] });
     const pages = await scanPagesWithCamera();
-    expect(RN.Alert.alert.mock.calls[0][0]).toBe('Camera coming soon on Android');
+    expect(RN.Alert.alert.mock.calls[0][0]).toBe('No camera on this device');
     expect(pages).toEqual(['file:///c/p1.jpg', 'file:///c/p2.jpg']);
     expect(picker.launchImageLibraryAsync).toHaveBeenCalledWith(expect.objectContaining({ allowsMultipleSelection: true }));
-    expect(DocumentScanner.scanDocument).not.toHaveBeenCalled();
     expect(mockOpen).not.toHaveBeenCalled();
   });
 
-  test('a one-page camera (Retake) picks one photo', async () => {
+  test('a build without the camera view behaves like a device without a camera', async () => {
+    mockAvailable = false;
     pressInAlert('Import photos');
     picker.launchImageLibraryAsync.mockResolvedValue({ canceled: false, assets: [{ uri: 'file:///c/p1.jpg' }] });
     expect(await scanPagesWithCamera({ maxPages: 1 })).toEqual(['file:///c/p1.jpg']);
     expect(picker.launchImageLibraryAsync).toHaveBeenCalledWith(expect.objectContaining({ allowsMultipleSelection: false }));
+    expect(mockOpen).not.toHaveBeenCalled();
   });
 
   test('Cancel (or dismissing the dialog) is a cancelled scan', async () => {
+    mockHasCamera = false;
     pressInAlert('Cancel');
     expect(await scanPagesWithCamera()).toBeNull();
     RN.Alert.alert.mockImplementationOnce((_t: string, _m: string, _b: Btn[], opts: { onDismiss?: () => void }) => opts.onDismiss?.());
@@ -153,4 +173,9 @@ describe('Android without Scan Kit’s camera (port phase 1)', () => {
     expect(picker.launchImageLibraryAsync).not.toHaveBeenCalled();
     expect(DocumentScanner.scanDocument).not.toHaveBeenCalled();
   });
+});
+
+test('deviceHasCamera: true where the build doesn’t report it (iOS)', () => {
+  mockHasCamera = undefined;
+  expect(deviceHasCamera()).toBe(true);
 });

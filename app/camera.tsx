@@ -51,6 +51,7 @@ import {
   Alert,
   Animated,
   AppState,
+  BackHandler,
   Easing,
   Image,
   Linking,
@@ -611,6 +612,21 @@ export default function CameraScreen() {
     setPages(order.map(k => list[k]));
     setIndex(to);
   };
+
+  // Android back button / gesture: the same as the screen's own back. The
+  // crop editor (a Modal) handles it itself.
+  const backPress = useRef<() => boolean>(() => false);
+  backPress.current = () => {
+    if (cropKey) return false;
+    if (mode === 'review') backToCamera();
+    else handleClose();
+    return true;
+  };
+  useEffect(() => {
+    if (!focused || locked) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => backPress.current());
+    return () => sub.remove();
+  }, [focused, locked]);
 
   const cropPage = cropKey ? pages.find(p => p.key === cropKey) ?? null : null;
   const cropTarget: CropTarget | undefined = useMemo(

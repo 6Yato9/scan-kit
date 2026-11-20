@@ -34,6 +34,14 @@ dependencies {
   // (the root project lists https://www.jitpack.io).
   implementation 'com.github.adaptech-cz.Tesseract4Android:tesseract4android-openmp:4.8.0'
   implementation 'androidx.exifinterface:exifinterface:1.4.1'
+  // Document camera (DocumentCameraView.kt): the same CameraX version as
+  // expo-camera, so the app carries one copy. Page detection is our own
+  // Kotlin (PageDetector.kt): no OpenCV, nothing downloaded.
+  def camerax_version = '1.5.0-rc01'
+  implementation "androidx.camera:camera-core:${camerax_version}"
+  implementation "androidx.camera:camera-camera2:${camerax_version}"
+  implementation "androidx.camera:camera-lifecycle:${camerax_version}"
+  implementation "androidx.camera:camera-view:${camerax_version}"
 
   testImplementation 'junit:junit:4.13.2'
 }

@@ -13,9 +13,10 @@
 //    Pages come back as finished, cropped image URIs. iOS only: on Android
 //    that package is Google's Play-Services scanner, which is never linked
 //    (react-native.config.js) nor loaded.
-//  - Android before Scan Kit's own camera exists there: no camera at all.
-//    Scanning explains that and offers to import photos instead
-//    (androidImportInstead); those photos come back like Apple's pages.
+//  - Android: Scan Kit's camera only (there is no choice to make). A device
+//    without any camera (or a build without the view) can't scan: scanning
+//    says so and offers to import photos instead (importInstead); those
+//    photos come back like Apple's pages.
 // Outcomes are normalised into pages, "cancelled" (null) or a ToolScanError
 // with copy that is safe to show.
 import { Alert, Linking, Platform } from 'react-native';
@@ -51,8 +52,24 @@ export function scanKitCameraAvailable(): boolean {
   return isDocumentCameraAvailable();
 }
 
-/** The camera Scan opens: the user's choice, or Apple's scanner when this build has no camera view. */
+/**
+ * Whether the device has a camera at all (Android builds report it; iOS
+ * devices always have one, and the camera screen explains the rare case).
+ */
+export function deviceHasCamera(): boolean {
+  try {
+    // Loaded here: the module's JS reaches for native code as it loads.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { VisionOcr } = require('../modules/vision-ocr/src') as typeof import('../modules/vision-ocr/src');
+    return typeof VisionOcr?.hasCamera === 'function' ? VisionOcr.hasCamera() : true;
+  } catch {
+    return true;
+  }
+}
+
+/** The camera Scan opens: the user's choice, or Apple's scanner when this build has no camera view. Android: always Scan Kit's. */
 export async function cameraChoice(): Promise<CameraKind> {
+  if (Platform.OS === 'android') return 'scankit';
   if (!scanKitCameraAvailable()) return 'apple';
   try {
     return (await getScanSettings()).camera === 'apple' ? 'apple' : 'scankit';
@@ -107,7 +124,7 @@ export async function scanWithAppleScanner(): Promise<string[] | null> {
  * scanner throws ToolScanError.
  */
 export async function scanPagesWithCamera(options: CaptureOptions = {}): Promise<ScanPageInput[] | null> {
-  if (Platform.OS === 'android' && !scanKitCameraAvailable()) return androidImportInstead(options);
+  if (Platform.OS === 'android' && (!scanKitCameraAvailable() || !deviceHasCamera())) return importInstead(options);
   if ((await cameraChoice()) === 'scankit') {
     const pages = await openCaptureSession(options);
     return pages && pages.length ? pages.map(p => toSourceInput(p.sourceUri, p.geometry)) : null;
@@ -122,26 +139,26 @@ export async function scanPagesWithCamera(options: CaptureOptions = {}): Promise
   return images;
 }
 
-/** Copy of the "no camera on Android yet" dialog (exported for tests). */
-export const ANDROID_CAMERA_SOON = {
-  title: 'Camera coming soon on Android',
-  message: 'Scanning with the camera arrives in a later version of Scan Kit for Android. For now, import photos of your documents: Scan Kit keeps them as pages, like a scan.',
+/** Copy of the "no camera" dialog (exported for tests). */
+export const NO_CAMERA = {
+  title: 'No camera on this device',
+  message: 'Scan Kit can’t find a camera to scan with. Import photos of your documents instead: Scan Kit keeps them as pages, like a scan.',
   importLabel: 'Import photos',
 } as const;
 
 /**
- * Android until Scan Kit's own camera exists there (phase 2 of the port): says
- * so and offers to import photos instead. The picked photos are the scan's
- * pages (null when the user cancels either step), capped at `maxPages`.
+ * Android without a camera to scan with: says so and offers to import photos
+ * instead. The picked photos are the scan's pages (null when the user cancels
+ * either step), capped at `maxPages`.
  */
-async function androidImportInstead(options: CaptureOptions): Promise<ScanPageInput[] | null> {
+async function importInstead(options: CaptureOptions): Promise<ScanPageInput[] | null> {
   const choice = await new Promise<'import' | 'cancel'>(resolve => {
     Alert.alert(
-      ANDROID_CAMERA_SOON.title,
-      ANDROID_CAMERA_SOON.message,
+      NO_CAMERA.title,
+      NO_CAMERA.message,
       [
         { text: 'Cancel', style: 'cancel', onPress: () => resolve('cancel') },
-        { text: ANDROID_CAMERA_SOON.importLabel, onPress: () => resolve('import') },
+        { text: NO_CAMERA.importLabel, onPress: () => resolve('import') },
       ],
       { cancelable: true, onDismiss: () => resolve('cancel') },
     );

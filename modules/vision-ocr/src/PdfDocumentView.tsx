@@ -2,7 +2,7 @@
 // `PdfDocumentView` (or null when the native view isn't in this build — the
 // caller then falls back to a WebView).
 import { requireNativeView } from 'expo';
-import type { ViewProps } from 'react-native';
+import { Platform, type ViewProps } from 'react-native';
 
 export type PdfDocumentViewProps = ViewProps & {
   /** file:// URI of the PDF. */
@@ -25,7 +25,13 @@ type ExpoGlobal = { getViewConfig?: (moduleName: string, viewName?: string) => u
  * only the view config does. (requireNativeView never throws for a missing
  * view — it warns and returns a component that renders nothing.)
  */
-export function hasNativePdfView(expo: ExpoGlobal | undefined = (globalThis as { expo?: ExpoGlobal }).expo): boolean {
+export function hasNativePdfView(
+  expo: ExpoGlobal | undefined = (globalThis as { expo?: ExpoGlobal }).expo,
+  os: string = Platform.OS,
+): boolean {
+  // Android registers a placeholder in the PDF viewer's slot (the camera view
+  // needs the second one) until its real viewer exists (port phase 3).
+  if (os === 'android') return false;
   try {
     return !!expo?.getViewConfig?.('VisionOcr');
   } catch {

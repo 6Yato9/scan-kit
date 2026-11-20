@@ -192,6 +192,8 @@ type VisionOcrNative = {
   copyIncomingFile?: (sourceUri: string, destUri: string) => Promise<string>;
   /** Android only: the name, MIME type and size of an incoming content:// (or file://) URL, null when unknown. */
   incomingFileInfo?: (uri: string) => Promise<{ name: string | null; mimeType: string | null; size: number | null }>;
+  /** Android only (synchronous): whether the device has any camera to scan with. */
+  hasCamera?: () => boolean;
   /**
    * Page outline in a photo: [x0,y0, x1,y1, x2,y2, x3,y3] = top-left, top-right,
    * bottom-right, bottom-left, normalised 0..1, top-left origin, in the photo's

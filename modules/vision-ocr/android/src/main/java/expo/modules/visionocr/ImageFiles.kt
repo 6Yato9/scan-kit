@@ -162,6 +162,24 @@ object ImageFiles {
     return out
   }
 
+  /** A grey copy of `bitmap` with its long edge at most `maxLong` (for page detection and signatures). */
+  fun gray(bitmap: Bitmap, maxLong: Int): GrayImage {
+    val long = max(bitmap.width, bitmap.height)
+    val src = if (long > maxLong) {
+      val (w, h) = QuadMath.capped(bitmap.width, bitmap.height, maxLong)
+      Bitmap.createScaledBitmap(bitmap, w, h, true)
+    } else {
+      bitmap
+    }
+    try {
+      val px = IntArray(src.width * src.height)
+      src.getPixels(px, 0, src.width, 0, 0, src.width, src.height)
+      return GrayImage.fromArgb(src.width, src.height, px)
+    } finally {
+      if (src !== bitmap) src.recycle()
+    }
+  }
+
   // ── normalizeImage ─────────────────────────────────────────────────────────
 
   /**

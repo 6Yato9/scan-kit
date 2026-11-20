@@ -68,5 +68,7 @@ describe('hasNativePdfView', () => {
     expect(hasNativePdfView({})).toBe(false);
     expect(hasNativePdfView(undefined)).toBe(false);
     expect(hasNativePdfView({ getViewConfig: () => { throw new Error('no'); } })).toBe(false);
+    // Android: the slot holds a placeholder until the real viewer exists.
+    expect(hasNativePdfView({ getViewConfig: () => ({ validAttributes: {} }) }, 'android')).toBe(false);
   });
 });
