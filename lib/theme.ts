@@ -76,6 +76,10 @@ export type ThemeColors = {
   chromeHandleActive: string;
   /** A caution (not an error) on chrome. */
   chromeWarning: string;
+  /** Floating "glass" controls over the live camera: blur material, a dimming fill on top of it, and the hairline. */
+  chromeGlassTint: 'systemThinMaterialDark';
+  chromeGlassFill: string;
+  chromeGlassBorder: string;
 };
 
 export const Colors: Record<'light' | 'dark', ThemeColors> = {
@@ -129,6 +133,9 @@ export const Colors: Record<'light' | 'dark', ThemeColors> = {
     chromeHandleFill: 'rgba(0,0,0,0.25)',
     chromeHandleActive: 'rgba(255,255,255,0.35)',
     chromeWarning: '#ffb340',
+    chromeGlassTint: 'systemThinMaterialDark',
+    chromeGlassFill: 'rgba(0,0,0,0.36)',
+    chromeGlassBorder: 'rgba(255,255,255,0.16)',
   },
   dark: {
     bg: '#111111',
@@ -183,6 +190,9 @@ export const Colors: Record<'light' | 'dark', ThemeColors> = {
     chromeHandleFill: 'rgba(0,0,0,0.25)',
     chromeHandleActive: 'rgba(255,255,255,0.35)',
     chromeWarning: '#ffb340',
+    chromeGlassTint: 'systemThinMaterialDark',
+    chromeGlassFill: 'rgba(0,0,0,0.36)',
+    chromeGlassBorder: 'rgba(255,255,255,0.16)',
   },
 };
 

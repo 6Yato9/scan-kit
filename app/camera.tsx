@@ -1,7 +1,8 @@
 // app/camera.tsx
-// Scan Kit's document camera: a full-screen, always-dark capture screen over
-// the native preview (modules/vision-ocr DocumentCameraView), followed by a
-// review of the captured pages before anything is saved.
+// Scan Kit's document camera: the native preview (modules/vision-ocr
+// DocumentCameraView) fills the whole screen, edge to edge, with every control
+// floating over it on glass, followed by a review of the captured pages
+// before anything is saved.
 //
 // Opened through a capture session (lib/capture-session.ts, via
 // lib/tool-scan.ts scanPagesWithCamera) by the Scan button, the viewer's Add
@@ -10,16 +11,22 @@
 // caller saves them. Nothing is written to the user's documents here.
 //
 // Capture:
-//  - The preview shows exactly what is photographed: it takes the feed's shape
-//    (3:4 upright, 4:3 on an iPad turned sideways; the native view turns the
-//    feed and the photo with the interface). The native view draws the outline.
+//  - The preview covers the screen aspect-fill (the feed is 3:4 upright, 4:3 on
+//    an iPad turned sideways; the native view turns the feed and the photo with
+//    the interface), so a strip at the sides (top and bottom on a turned iPad)
+//    is photographed but not shown — the photo holds a little more, never less.
+//    The native view draws the outline in its own, aspect-fill coordinates;
+//    RN geometry over the preview uses the same rule (lib/camera-layout.ts).
+//  - Floating chrome: close, flash and auto-capture at the top; one status pill
+//    below them (the mode title and what to do now); the stack, the shutter
+//    and Done at the bottom. The status bar is hidden while the camera shows.
 //  - Auto-capture (remembered in Scan settings) fires once the page holds
 //    steady; the shutter's ring fills with the native `stability`. Manual mode
-//    hides the ring. Batch by default: each capture flies into the stack at the
-//    bottom left (its badge counts them); "Done" opens the review. The native
-//    view remembers the last shot across the review, so the page still under
-//    the camera isn't taken twice while the next sheet (even in the same spot)
-//    is; a retake re-arms it (rearm).
+//    hides the ring. Batch by default: each capture flies from where the page
+//    was on screen into the stack at the bottom left (its badge counts them);
+//    "Done" opens the review. The native view remembers the last shot across
+//    the review, so the page still under the camera isn't taken twice while
+//    the next sheet (even in the same spot) is; a retake re-arms it (rearm).
 //  - The subject (page, card, board, book: lib/capture-session captureSubject)
 //    names what the status line asks for; a card gets a guide frame, and the ID
 //    card asks for the front, then the back.
@@ -61,8 +68,18 @@ import { StatusBar } from 'expo-status-bar';
 import { Directory, File, Paths } from 'expo-file-system';
 import { useTheme } from '@/contexts/theme-context';
 import { useAppLocked } from '@/components/lock-gate';
-import { HeaderIconButton } from '@/components/screen-header';
-import { CameraMessage, CaptureStack, ChromePill, SHUTTER_SIZE, ShutterButton, STACK_W } from '@/components/camera-controls';
+import {
+  CameraMessage,
+  CaptureStack,
+  ChromePill,
+  GlassIconButton,
+  SHUTTER_HALO,
+  STACK_H,
+  STACK_W,
+  ShutterButton,
+  StatusPill,
+  type StatusTone,
+} from '@/components/camera-controls';
 import { CaptureReview } from '@/components/capture-review';
 import { CropModal } from '@/components/crop-modal';
 import { movedOrder } from '@/components/thumbnail-strip';
@@ -96,6 +113,15 @@ import { getScanSettings, saveScanSettings, type ScanSettings } from '@/lib/stor
 import { notifyWarning, tapLight, tapMedium } from '@/lib/haptics';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
 import { Radius, Spacing, Type } from '@/lib/theme';
+import {
+  CAMERA_CONTROLS,
+  aspectFillRect,
+  cameraChromeLayout,
+  centredFrame,
+  flyTransform,
+  quadScreenRect,
+  type Rect,
+} from '@/lib/camera-layout';
 
 type Flash = 'off' | 'auto' | 'on';
 type CameraState = 'ready' | 'permission' | 'unavailable' | 'failed';
@@ -104,12 +130,6 @@ const FLASH_NEXT: Record<Flash, Flash> = { auto: 'on', on: 'off', off: 'auto' };
 const FLASH_ICON = { auto: 'flash-outline', on: 'flash', off: 'flash-off-outline' } as const;
 const FLASH_LABEL: Record<Flash, string> = { auto: 'Auto', on: 'On', off: 'Off' };
 
-/** Height of the top bar below the safe area. */
-const TOP_BAR = 52;
-/** Mode title + status line under the preview. */
-const HINT_AREA = 60;
-/** Shutter row. */
-const CONTROLS = 100;
 /** Long edge of the review's page previews. */
 const PREVIEW_MAX_EDGE = 1400;
 /** A manual capture's "Page N captured" stays this long. */
@@ -275,8 +295,6 @@ export default function CameraScreen() {
   /** The system paused the camera (CameraStateEvent reason), or null. */
   const [paused, setPaused] = useState<string | null>(null);
   const [quad, setQuad] = useState<number[] | null>(null);
-  /** Width / height of the camera frames (CameraDetectionEvent.aspect), once known. */
-  const [feedAspect, setFeedAspect] = useState<number | null>(null);
   const [capturing, setCapturing] = useState(false);
   const capturingRef = useRef(false);
   capturingRef.current = capturing;
@@ -351,8 +369,7 @@ export default function CameraScreen() {
   const shotQuad = useRef<number[] | null>(null);
 
   const onDetection = useCallback((e: NativeSyntheticEvent<CameraDetectionEvent>) => {
-    const { quad: q, stability: s, aspect } = e.nativeEvent;
-    if (typeof aspect === 'number' && aspect >= 0.5 && aspect <= 2) setFeedAspect(a => (a !== null && Math.abs(a - aspect) < 0.01 ? a : aspect));
+    const { quad: q, stability: s } = e.nativeEvent;
     if (__DEV__) devLog(`${q ? 'q' : '-'}${s.toFixed(2)}`);
     liveQuad.current = q;
     if (heldRef.current && (!q || !shotQuad.current || maxCornerDelta(q, shotQuad.current) > NEW_PAGE_DELTA)) {
@@ -376,25 +393,24 @@ export default function CameraScreen() {
   }, [flashAnim]);
 
   // ── Layout ────────────────────────────────────────────────────────────────
-  // The preview has the camera frames' own shape (3:4 upright; 4:3 on an iPad
-  // turned sideways, as the native view reports), so it shows exactly what is
-  // photographed.
-  const aspect = feedAspect ?? (W > H ? 4 / 3 : 3 / 4);
-  const top = insets.top + TOP_BAR;
-  const bottomInset = Math.max(insets.bottom, Spacing.md);
-  const room = H - top - HINT_AREA - CONTROLS - bottomInset;
-  const previewH = Math.max(200, Math.min(W / aspect, room));
-  const previewW = previewH * aspect;
-  const previewLeft = (W - previewW) / 2;
-  const spare = Math.max(0, room - previewH);
-  const controlsTop = top + previewH + HINT_AREA + spare / 2;
-  const stackCenter = { x: Spacing.gutter + (STACK_W + 20) / 2, y: controlsTop + CONTROLS / 2 };
+  // The preview is the whole screen; the controls float over it, inside the
+  // safe area (lib/camera-layout.ts).
+  const chrome = cameraChromeLayout(W, H, insets);
+  /** The top card of the stack (CaptureStack centres it in its hit box at the left of the bottom row). */
+  const stackRect: Rect = {
+    x: chrome.padLeft + 10,
+    y: chrome.controlsY + (CAMERA_CONTROLS - STACK_H) / 2,
+    w: STACK_W,
+    h: STACK_H,
+  };
 
-  // The captured photo flies from the preview into the stack.
-  const [flying, setFlying] = useState<{ key: string; uri: string } | null>(null);
+  // The captured page flies from where it was on screen into the stack.
+  type Flight = { key: string; uri: string; from: Rect; photo: Rect };
+  const [flying, setFlying] = useState<Flight | null>(null);
   const fly = useRef(new Animated.Value(0)).current;
-  const flyTo = useCallback((key: string, uri: string) => {
-    setFlying({ key, uri });
+  const flyTo = useCallback((flight: Flight) => {
+    const { key } = flight;
+    setFlying(flight);
     fly.setValue(0);
     Animated.timing(fly, { toValue: 1, duration: 460, easing: Easing.bezier(0.2, 0.8, 0.2, 1), useNativeDriver: true }).start(() => {
       setFlying(f => (f?.key === key ? null : f));
@@ -404,6 +420,14 @@ export default function CameraScreen() {
   const onCapture = useCallback((e: NativeSyntheticEvent<CameraCaptureEvent>) => {
     setCapturing(false);
     const { sourceUri, width, height, quad: q } = e.nativeEvent;
+    // Where the page was on screen: the photo has the feed's shape and is
+    // shown aspect-fill like the preview. No outline: the whole screen.
+    const photoAspect = width > 0 && height > 0 ? width / height : 3 / 4;
+    const flight = {
+      uri: sourceUri,
+      from: quadScreenRect(q, photoAspect, W, H) ?? { x: 0, y: 0, w: W, h: H },
+      photo: aspectFillRect(photoAspect, W, H),
+    };
     if (__DEV__) devLog(`CAPTURE ${sourceUri.split('/').pop()}`);
     if (!mounted.current || closing.current) {
       deleteTempFiles([sourceUri]);
@@ -435,11 +459,11 @@ export default function CameraScreen() {
         setMode('review');
       } else {
         setJustCaptured(next.length);
-        flyTo(page.key, sourceUri);
+        flyTo({ key: page.key, ...flight });
       }
     }
     renderPreview(page.key, sourceUri, geometry);
-  }, [discard, discardPage, flyTo, maxPages, renderPreview, setPages, setReplaceIndex]);
+  }, [W, H, discard, discardPage, flyTo, maxPages, renderPreview, setPages, setReplaceIndex]);
 
   const activeRef = useRef(false);
   activeRef.current = active;
@@ -618,60 +642,31 @@ export default function CameraScreen() {
       paused: !!paused,
     })
     : '');
-  const lookingForPage = !notice && !capturing && justCaptured === null && !quad;
   const pausedMessage = paused ? cameraPausedMessage(paused) : null;
-  // A card's guide frame: ID-1 proportions, 80% of the preview's width.
-  const showCardGuide = subject === 'card' && cameraState === 'ready' && !paused && !quad && !capturing;
-  const guideW = Math.min(previewW * 0.8, (previewH * 0.8) * CARD_ASPECT);
-  const guideH = guideW / CARD_ASPECT;
+  // The pill speaks only while the camera runs; a pause or a missing camera
+  // has its own full-screen message.
+  const live = cameraState === 'ready' && !pausedMessage;
+  const tone: StatusTone = notice ? 'warning' : !capturing && justCaptured !== null ? 'done' : 'normal';
+  // A card's guide frame: ID-1 proportions, centred in the free middle of the screen.
+  const showCardGuide = subject === 'card' && live && !quad && !capturing;
+  const guide = centredFrame(chrome.middle, CARD_ASPECT, 0.85);
+  /** Room for a full-screen message: between the top row and the bottom row. */
+  const messageArea = { paddingTop: chrome.pillY, paddingBottom: H - chrome.controlsY };
   const Cam = DocumentCameraView;
 
-  const flyScale = fly.interpolate({ inputRange: [0, 1], outputRange: [1, STACK_W / previewW] });
-  const flyX = fly.interpolate({ inputRange: [0, 1], outputRange: [0, stackCenter.x - (previewLeft + previewW / 2)] });
-  const flyY = fly.interpolate({ inputRange: [0, 1], outputRange: [0, stackCenter.y - (top + previewH / 2)] });
+  const path = flying ? flyTransform(flying.from, stackRect) : { dx: 0, dy: 0, scale: 1 };
+  const flyScale = fly.interpolate({ inputRange: [0, 1], outputRange: [1, path.scale] });
+  const flyX = fly.interpolate({ inputRange: [0, 1], outputRange: [0, path.dx] });
+  const flyY = fly.interpolate({ inputRange: [0, 1], outputRange: [0, path.dy] });
   const flyOpacity = fly.interpolate({ inputRange: [0, 0.85, 1], outputRange: [1, 1, 0] });
 
   return (
     <View style={[styles.root, { backgroundColor: colors.chrome }]}>
-      <StatusBar style="light" />
+      {/* Hidden over the live camera only: the review, the lock screen above it and the screen behind keep theirs. */}
+      <StatusBar style="light" hidden={mode === 'camera' && focused && !locked} animated />
 
-      {/* Top bar */}
-      <View style={[styles.topBar, { paddingTop: insets.top, height: top }]}>
-        <HeaderIconButton icon="close" size={26} label={retaking ? 'Cancel retake' : 'Close camera'} color={colors.chromeText} onPress={handleClose} />
-        <View style={styles.topRight}>
-          <ChromePill
-            icon={FLASH_ICON[flash]}
-            label={FLASH_LABEL[flash]}
-            active={flash === 'on'}
-            accessibilityLabel={`Flash: ${FLASH_LABEL[flash]}`}
-            onPress={() => { tapLight(); changeSettings({ cameraFlash: FLASH_NEXT[flash] }); }}
-            disabled={cameraState !== 'ready'}
-          />
-          <ChromePill
-            icon={autoCapture ? 'scan-outline' : 'hand-left-outline'}
-            label={autoCapture ? 'Auto-capture' : 'Manual'}
-            active={autoCapture}
-            accessibilityLabel={autoCapture ? 'Capture: automatic. Switch to manual' : 'Capture: manual. Switch to automatic'}
-            onPress={() => { tapLight(); changeSettings({ autoCapture: !autoCapture }); }}
-            disabled={cameraState !== 'ready'}
-          />
-        </View>
-      </View>
-
-      {/* Preview */}
-      <View
-        style={[
-          styles.preview,
-          {
-            top,
-            left: previewLeft,
-            width: previewW,
-            height: previewH,
-            backgroundColor: colors.chromeRaised,
-            borderRadius: previewW < W - 1 ? Radius.md : 0,
-          },
-        ]}
-      >
+      {/* Preview: the whole screen, under the status bar and the home indicator. */}
+      <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.chrome }]}>
         {cameraState === 'ready' && Cam && settings && options ? (
           <Cam
             key={cameraKey}
@@ -690,81 +685,87 @@ export default function CameraScreen() {
           />
         ) : null}
         {showCardGuide && (
-          <View
-            pointerEvents="none"
-            style={[styles.guide, { width: guideW, height: guideH, left: (previewW - guideW) / 2, top: (previewH - guideH) / 2 }]}
-          >
-            <View style={[styles.guideCorner, styles.guideTL, { borderColor: colors.chromeText }]} />
-            <View style={[styles.guideCorner, styles.guideTR, { borderColor: colors.chromeText }]} />
-            <View style={[styles.guideCorner, styles.guideBR, { borderColor: colors.chromeText }]} />
-            <View style={[styles.guideCorner, styles.guideBL, { borderColor: colors.chromeText }]} />
+          <View pointerEvents="none" style={[styles.guide, { left: guide.x, top: guide.y, width: guide.w, height: guide.h }]}>
+            <View style={[styles.guideCorner, styles.guideTL, { borderColor: colors.chromeText, shadowColor: colors.shadow }]} />
+            <View style={[styles.guideCorner, styles.guideTR, { borderColor: colors.chromeText, shadowColor: colors.shadow }]} />
+            <View style={[styles.guideCorner, styles.guideBR, { borderColor: colors.chromeText, shadowColor: colors.shadow }]} />
+            <View style={[styles.guideCorner, styles.guideBL, { borderColor: colors.chromeText, shadowColor: colors.shadow }]} />
           </View>
         )}
-        {pausedMessage && cameraState === 'ready' && (
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.chromeRaised }]}>
-            <CameraMessage icon="pause-circle-outline" title={pausedMessage.title} text={pausedMessage.text} />
-          </View>
-        )}
-        {cameraState === 'permission' && (
+        <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: colors.chromeText, opacity: flashAnim }]} />
+      </View>
+
+      {/* Full-screen messages: the camera paused, refused, missing or failed. */}
+      {pausedMessage && cameraState === 'ready' && (
+        <View style={[StyleSheet.absoluteFill, messageArea, { backgroundColor: colors.chrome }]}>
+          <CameraMessage icon="pause-circle-outline" title={pausedMessage.title} text={pausedMessage.text} />
+        </View>
+      )}
+      {cameraState === 'permission' && (
+        <View style={[StyleSheet.absoluteFill, messageArea]}>
           <CameraMessage
             icon="camera-outline"
             title="Allow camera access"
             text="Scan Kit uses the camera to scan your documents. Photos stay on this device. Turn on Camera for Scan Kit in Settings."
             action={{ title: 'Open Settings', icon: 'settings-outline', onPress: () => { Linking.openSettings().catch(() => {}); } }}
           />
-        )}
-        {cameraState === 'unavailable' && (
+        </View>
+      )}
+      {cameraState === 'unavailable' && (
+        <View style={[StyleSheet.absoluteFill, messageArea]}>
           <CameraMessage
             icon="videocam-off-outline"
             title="Camera not available"
             text="The camera can’t be used on this device right now. You can import photos of your documents instead."
           />
-        )}
-        {cameraState === 'failed' && (
+        </View>
+      )}
+      {cameraState === 'failed' && (
+        <View style={[StyleSheet.absoluteFill, messageArea]}>
           <CameraMessage
             icon="camera-outline"
             title="Couldn’t start the camera"
             text="Something interrupted the camera. Try again in a moment."
             action={{ title: 'Try again', icon: 'refresh-outline', onPress: () => { setCameraState('ready'); setCameraKey(k => k + 1); } }}
           />
-        )}
-        <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: colors.chromeText, opacity: flashAnim }]} />
-        {__DEV__ && photos.length > 0 && cameraState === 'ready' && (
-          <Pressable
-            onPress={() => setDevIndex(i => i + 1)}
-            onLongPress={() => setDevJitter(j => !j)}
-            accessibilityRole="button"
-            accessibilityLabel="Next test photo"
-            accessibilityHint="Long press to toggle hand-held jitter"
-            style={[styles.devChip, { backgroundColor: colors.scrim }]}
-          >
-            <Text style={[Type.caption, { color: colors.onScrim }]} numberOfLines={1}>
-              {`Dev photo ${(devIndex % photos.length) + 1}/${photos.length}${devJitter ? ' + jitter' : ''}: ${decodeURIComponent((simulatorImageUri ?? '').split('/').pop() ?? '')}`}
-            </Text>
-          </Pressable>
-        )}
-      </View>
+        </View>
+      )}
 
-      {/* Mode + status */}
-      <View style={[styles.hintArea, { top: top + previewH, height: HINT_AREA }]}>
-        {modeTitle ? (
-          <Text style={[Type.sectionLabel, { color: colors.chromeAccent }]} numberOfLines={1} accessibilityRole="header">
-            {modeTitle}
-          </Text>
+      {/* Top row: close; flash and auto-capture while the camera runs. */}
+      <View style={[styles.topRow, { top: chrome.topRowY, left: chrome.padLeft, right: chrome.padRight }]}>
+        <GlassIconButton icon="close" size={24} accessibilityLabel={retaking ? 'Cancel retake' : 'Close camera'} onPress={handleClose} />
+        {live ? (
+          <View style={styles.topRight}>
+            <ChromePill
+              icon={FLASH_ICON[flash]}
+              label={FLASH_LABEL[flash]}
+              active={flash === 'on'}
+              accessibilityLabel={`Flash: ${FLASH_LABEL[flash]}`}
+              onPress={() => { tapLight(); changeSettings({ cameraFlash: FLASH_NEXT[flash] }); }}
+            />
+            <ChromePill
+              icon={autoCapture ? 'scan-outline' : 'hand-left-outline'}
+              label={autoCapture ? 'Auto-capture' : 'Manual'}
+              active={autoCapture}
+              accessibilityLabel={autoCapture ? 'Capture: automatic. Switch to manual' : 'Capture: manual. Switch to automatic'}
+              onPress={() => { tapLight(); changeSettings({ autoCapture: !autoCapture }); }}
+            />
+          </View>
         ) : null}
-        <Text
-          style={[Type.subhead, styles.status, { color: lookingForPage || notice ? colors.chromeMuted : colors.chromeText }]}
-          numberOfLines={1}
-          adjustsFontSizeToFit
-          minimumFontScale={0.85}
-          accessibilityLiveRegion="polite"
-        >
-          {status}
-        </Text>
       </View>
 
-      {/* Shutter row */}
-      <View style={[styles.controls, { top: controlsTop, height: CONTROLS }]}>
+      {/* Status: one floating pill under the top row. */}
+      <View pointerEvents="none" style={[styles.pillRow, { top: chrome.pillY, left: chrome.padLeft, right: chrome.padRight }]}>
+        <StatusPill
+          title={live ? modeTitle : null}
+          text={live ? status : ''}
+          tone={tone}
+          maxWidth={Math.max(0, W - chrome.padLeft - chrome.padRight)}
+        />
+      </View>
+
+      {/* Bottom row: the stack of captured pages, the shutter, Done. */}
+      <View style={[styles.controls, { top: chrome.controlsY, height: CAMERA_CONTROLS, left: insets.left, right: insets.right }]}>
         <View style={[styles.side, styles.sideLeft]}>
           <CaptureStack
             uri={last ? last.previewUri ?? last.sourceUri : null}
@@ -789,7 +790,7 @@ export default function CameraScreen() {
               onPress={() => openReview(0)}
               accessibilityRole="button"
               accessibilityLabel={`Done, review ${pages.length === 1 ? '1 page' : `${pages.length} pages`}`}
-              style={({ pressed }) => [styles.done, { backgroundColor: colors.accentFill }, pressed && { opacity: 0.7 }]}
+              style={({ pressed }) => [styles.done, { backgroundColor: colors.accentFill, shadowColor: colors.shadow }, pressed && { opacity: 0.7 }]}
             >
               <Text style={[Type.subhead, styles.doneText, { color: colors.onAccent }]} numberOfLines={1} maxFontSizeMultiplier={1.2}>
                 Done
@@ -799,23 +800,48 @@ export default function CameraScreen() {
         </View>
       </View>
 
+      {__DEV__ && photos.length > 0 && live && (
+        <Pressable
+          onPress={() => setDevIndex(i => i + 1)}
+          onLongPress={() => setDevJitter(j => !j)}
+          accessibilityRole="button"
+          accessibilityLabel="Next test photo"
+          accessibilityHint="Long press to toggle hand-held jitter"
+          style={[styles.devChip, { left: chrome.padLeft, bottom: H - chrome.controlsY + Spacing.xs, backgroundColor: colors.scrim }]}
+        >
+          <Text style={[Type.caption, { color: colors.onScrim }]} numberOfLines={1}>
+            {`Dev photo ${(devIndex % photos.length) + 1}/${photos.length}${devJitter ? ' + jitter' : ''}: ${decodeURIComponent((simulatorImageUri ?? '').split('/').pop() ?? '')}`}
+          </Text>
+        </Pressable>
+      )}
+
       {flying && (
         <Animated.View
           pointerEvents="none"
           style={[
             styles.flying,
             {
-              top,
-              left: previewLeft,
-              width: previewW,
-              height: previewH,
+              left: flying.from.x,
+              top: flying.from.y,
+              width: flying.from.w,
+              height: flying.from.h,
               borderColor: colors.chromeText,
               opacity: flyOpacity,
               transform: [{ translateX: flyX }, { translateY: flyY }, { scale: flyScale }],
             },
           ]}
         >
-          <Image source={{ uri: flying.uri }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+          {/* The photo as the preview showed it, seen through the page's box. */}
+          <Image
+            source={{ uri: flying.uri }}
+            style={{
+              position: 'absolute',
+              left: flying.photo.x - flying.from.x,
+              top: flying.photo.y - flying.from.y,
+              width: flying.photo.w,
+              height: flying.photo.h,
+            }}
+          />
         </Animated.View>
       )}
 
@@ -852,30 +878,18 @@ export default function CameraScreen() {
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  topBar: {
+  topRow: {
     position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 0,
+    height: 44,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: Spacing.sm,
   },
-  topRight: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, paddingRight: Spacing.xs },
-  preview: { position: 'absolute', overflow: 'hidden' },
-  hintArea: {
-    position: 'absolute',
-    left: Spacing.gutter,
-    right: Spacing.gutter,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 2,
-  },
-  status: { textAlign: 'center' },
-  controls: { position: 'absolute', left: 0, right: 0, flexDirection: 'row', alignItems: 'center' },
+  topRight: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  pillRow: { position: 'absolute', alignItems: 'center' },
+  controls: { position: 'absolute', flexDirection: 'row', alignItems: 'center' },
   side: { flex: 1, justifyContent: 'center' },
-  shutterSpace: { width: SHUTTER_SIZE, height: SHUTTER_SIZE },
+  shutterSpace: { width: SHUTTER_HALO, height: SHUTTER_HALO },
   sideLeft: { alignItems: 'flex-start', paddingLeft: Spacing.gutter },
   sideRight: { alignItems: 'flex-end', paddingRight: Spacing.gutter },
   done: {
@@ -884,19 +898,28 @@ const styles = StyleSheet.create({
     borderRadius: Radius.pill,
     alignItems: 'center',
     justifyContent: 'center',
+    shadowOpacity: 0.35,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
   },
   doneText: { fontWeight: '700' },
   flying: { position: 'absolute', overflow: 'hidden', borderWidth: 2, borderRadius: Radius.sm },
   guide: { position: 'absolute' },
-  guideCorner: { position: 'absolute', width: 28, height: 28, opacity: 0.85 },
+  guideCorner: {
+    position: 'absolute',
+    width: 28,
+    height: 28,
+    opacity: 0.9,
+    shadowOpacity: 0.5,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 0 },
+  },
   guideTL: { left: 0, top: 0, borderLeftWidth: 3, borderTopWidth: 3, borderTopLeftRadius: Radius.sm },
   guideTR: { right: 0, top: 0, borderRightWidth: 3, borderTopWidth: 3, borderTopRightRadius: Radius.sm },
   guideBR: { right: 0, bottom: 0, borderRightWidth: 3, borderBottomWidth: 3, borderBottomRightRadius: Radius.sm },
   guideBL: { left: 0, bottom: 0, borderLeftWidth: 3, borderBottomWidth: 3, borderBottomLeftRadius: Radius.sm },
   devChip: {
     position: 'absolute',
-    left: Spacing.sm,
-    top: Spacing.sm,
     maxWidth: '80%',
     paddingHorizontal: Spacing.sm,
     paddingVertical: Spacing.xs,
