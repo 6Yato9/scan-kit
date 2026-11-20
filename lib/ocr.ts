@@ -1,59 +1,24 @@
 // lib/ocr.ts
-// Single OCR code path for the whole app.
+// Single OCR code path for the whole app: VisionOcr.recognize from the local
+// module in modules/vision-ocr.
 //
-// iOS: Apple Vision via the local module in modules/vision-ocr. Google ML Kit is
-// excluded from iOS (react-native.config.js) — its frameworks have no
-// arm64-simulator slice, and Vision is more accurate on iOS.
-// Android: @react-native-ml-kit/text-recognition.
-//
-// Either native module can be missing (a dev client built before it was added),
-// so both are resolved defensively and every consumer routes through here.
-import { Platform } from 'react-native';
+// iOS: Apple Vision. Android: bundled Google ML Kit (Latin) plus Tesseract for
+// Arabic, merged per line (modules/vision-ocr/android TextReader). Neither uses
+// the network. The module can be missing (a dev client built before it was
+// added): OCR then degrades to "no text" everywhere, and every consumer routes
+// through here.
 import { VisionOcr } from '../modules/vision-ocr/src';
 import { fileIdentity, readCachedOcr, writeCachedOcr } from './ocr-cache';
 
-type TextLine = { text: string; frame?: { left: number; top: number; width: number; height: number } };
-type TextBlock = { text: string; frame?: { left: number; top: number; width: number; height: number }; lines: TextLine[] };
-type RecognizeResult = { text: string; blocks: TextBlock[] };
-
-let MlKit: { recognize: (uri: string) => Promise<RecognizeResult> } | null = null;
-if (Platform.OS === 'android') {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    MlKit = require('@react-native-ml-kit/text-recognition').default;
-  } catch {
-    // package not linked — OCR features will degrade gracefully.
-  }
-}
-
 /** One recognition pass, normalised to text + positioned lines. */
 async function recognize(uri: string): Promise<{ text: string; lines: OcrLine[] }> {
-  if (VisionOcr) {
-    const r = await VisionOcr.recognize(uri);
-    return { text: r.text ?? '', lines: r.lines ?? [] };
-  }
-  if (MlKit) {
-    const result = await MlKit.recognize(uri);
-    const lines: OcrLine[] = [];
-    for (const block of result.blocks ?? []) {
-      for (const line of block.lines ?? []) {
-        if (!line.frame) continue;
-        lines.push({
-          text: line.text,
-          left: line.frame.left,
-          top: line.frame.top,
-          width: line.frame.width,
-          height: line.frame.height,
-        });
-      }
-    }
-    return { text: result.text ?? '', lines };
-  }
-  return { text: '', lines: [] };
+  if (typeof VisionOcr?.recognize !== 'function') return { text: '', lines: [] };
+  const r = await VisionOcr.recognize(uri);
+  return { text: r.text ?? '', lines: r.lines ?? [] };
 }
 
 export function ocrAvailable(): boolean {
-  return VisionOcr !== null || MlKit !== null;
+  return typeof VisionOcr?.recognize === 'function';
 }
 
 export type OcrLine = {

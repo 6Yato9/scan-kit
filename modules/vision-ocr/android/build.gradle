@@ -1,0 +1,39 @@
+// Android side of modules/vision-ocr (phase 1 of docs/android-port-plan.md).
+// Everything runs on the device: no Google Play Services feature, no network.
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.visionocr'
+version = '1.0.0'
+
+android {
+  namespace "expo.modules.visionocr"
+  defaultConfig {
+    versionCode 1
+    versionName '1.0.0'
+  }
+  buildFeatures {
+    buildConfig true
+  }
+  testOptions {
+    unitTests.returnDefaultValues = true
+  }
+}
+
+dependencies {
+  // Latin text recognition with the model BUNDLED in the APK. (The
+  // play-services-mlkit-* artifacts download their model through Play
+  // Services instead: never use those here.)
+  implementation 'com.google.mlkit:text-recognition:16.0.1'
+  // Language identification, bundled model (not play-services-mlkit-language-id).
+  implementation 'com.google.mlkit:language-id:17.0.6'
+  // Arabic text recognition: Tesseract 5 (Apache-2.0) with tessdata_fast
+  // ara.traineddata in src/main/assets/tessdata. Published on JitPack only
+  // (the root project lists https://www.jitpack.io).
+  implementation 'com.github.adaptech-cz.Tesseract4Android:tesseract4android-openmp:4.8.0'
+  implementation 'androidx.exifinterface:exifinterface:1.4.1'
+
+  testImplementation 'junit:junit:4.13.2'
+}

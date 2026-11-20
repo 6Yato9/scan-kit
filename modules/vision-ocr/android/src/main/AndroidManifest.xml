@@ -1,0 +1,49 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+  xmlns:tools="http://schemas.android.com/tools">
+  <application>
+    <!-- shareFiles: the app's own files handed to the share chooser as content:// URIs. -->
+    <provider
+      android:name="expo.modules.visionocr.VisionOcrFileProvider"
+      android:authorities="${applicationId}.visionocr.fileprovider"
+      android:exported="false"
+      android:grantUriPermissions="true">
+      <meta-data
+        android:name="android.support.FILE_PROVIDER_PATHS"
+        android:resource="@xml/visionocr_file_paths" />
+    </provider>
+
+    <!--
+      Home-screen shortcuts (res/xml/scankit_shortcuts.xml, written by
+      plugins/with-android-platform.js) start this invisible activity. The
+      launcher starts a static shortcut with FLAG_ACTIVITY_CLEAR_TASK, which
+      would destroy whatever screen the user had open; started in its own
+      empty task (taskAffinity ""), the trampoline clears only that task and
+      hands the action to the running app (QuickActionTrampolineActivity).
+    -->
+    <activity
+      android:name="expo.modules.visionocr.QuickActionTrampolineActivity"
+      android:exported="false"
+      android:excludeFromRecents="true"
+      android:noHistory="true"
+      android:taskAffinity=""
+      android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+    <!--
+      No usage telemetry. Google's ML Kit libraries (text recognition,
+      language ID, and expo-camera's barcode scanner) log anonymous usage
+      events through Google's datatransport ("Firelog") and upload them
+      whenever there is a network. Scan Kit is fully on-device: without this
+      backend registry the events have nowhere to go and are discarded.
+    -->
+    <service
+      android:name="com.google.android.datatransport.runtime.backends.TransportBackendDiscovery"
+      tools:node="remove" />
+  </application>
+
+  <queries>
+    <intent>
+      <action android:name="android.intent.action.SEND_MULTIPLE" />
+      <data android:mimeType="*/*" />
+    </intent>
+  </queries>
+</manifest>

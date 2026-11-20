@@ -161,6 +161,10 @@ export type NativePdfPermissionsInfo = {
 export type PresentOutcome = 'saved' | 'cancelled' | 'denied' | 'unavailable';
 
 type VisionOcrNative = {
+  /**
+   * iOS: Apple Vision. Android: bundled ML Kit (Latin) and, for pages in
+   * Arabic script, Tesseract (modules/vision-ocr/android TextReader).
+   */
   recognize(uri: string): Promise<VisionResult>;
   /** Present only in dev clients built after document detection was added. */
   detectDocument?: (uri: string, quality: number) => Promise<DetectResult>;
@@ -184,8 +188,10 @@ type VisionOcrNative = {
   unlockPdf?: (inputUri: string, outputUri: string, password: string) => Promise<string>;
   /** One share sheet with several files; only lib/share.ts may call it (lock gate). */
   shareFiles?: (uris: string[], title?: string | null) => Promise<void>;
-  /** Copy a system-provided (possibly security-scoped) file into the app. */
+  /** Copy a system-provided (possibly security-scoped) file into the app. Android: also content:// sources. */
   copyIncomingFile?: (sourceUri: string, destUri: string) => Promise<string>;
+  /** Android only: the name, MIME type and size of an incoming content:// (or file://) URL, null when unknown. */
+  incomingFileInfo?: (uri: string) => Promise<{ name: string | null; mimeType: string | null; size: number | null }>;
   /**
    * Page outline in a photo: [x0,y0, x1,y1, x2,y2, x3,y3] = top-left, top-right,
    * bottom-right, bottom-left, normalised 0..1, top-left origin, in the photo's
@@ -308,7 +314,7 @@ type VisionOcrNative = {
   ) => { remove: () => void };
 };
 
-/** null on Android, on web, and in a dev client built before this module existed. */
+/** null on web, and in a dev client built before this module existed (on Android: before port phase 1). */
 export const VisionOcr = requireOptionalNativeModule<VisionOcrNative>('VisionOcr');
 
 export {

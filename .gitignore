@@ -42,3 +42,7 @@ app-example
 /ios
 /android
 .superpowers
+
+# Gradle output of local native modules
+modules/*/android/build/
+modules/*/android/.cxx/

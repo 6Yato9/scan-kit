@@ -1,7 +1,10 @@
 {
-  "platforms": ["apple"],
+  "platforms": ["apple", "android"],
   "apple": {
     "modules": ["VisionOcrModule", "QuickActionsModule"],
     "appDelegateSubscribers": ["QuickActionsAppDelegate"]
+  },
+  "android": {
+    "modules": ["expo.modules.visionocr.VisionOcrModule", "expo.modules.visionocr.QuickActionsModule"]
   }
 }

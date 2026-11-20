@@ -4,7 +4,7 @@ jest.mock('react-native-document-scanner-plugin', () => ({ scanDocument: jest.fn
 jest.mock('expo-image-picker', () => ({
   launchImageLibraryAsync: jest.fn(async () => ({ canceled: false, assets: [{ uri: 'file:///c/ImagePicker/a.jpg' }, { uri: 'file:///c/ImagePicker/b.jpg' }] })),
 }));
-jest.mock('react-native', () => ({ Alert: { alert: jest.fn() }, Linking: {} }));
+jest.mock('react-native', () => ({ Alert: { alert: jest.fn() }, Linking: {}, Platform: { OS: 'ios' } }));
 jest.mock('expo-file-system', () => ({ File: class {}, Directory: class {}, Paths: {} }));
 jest.mock('../lib/storage', () => ({ getScanSettings: async () => ({ quality: 'high' }) }));
 jest.mock('../lib/system-ui', () => ({ withSystemUI: (fn: () => unknown) => fn() }));

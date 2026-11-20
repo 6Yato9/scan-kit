@@ -10,11 +10,15 @@
 //    SourcePageInput (lib/page-source.ts).
 //  - Apple's document scanner (VisionKit, react-native-document-scanner-plugin):
 //    the fallback, and the only camera of builds without the native view.
-//    Pages come back as finished, cropped image URIs.
+//    Pages come back as finished, cropped image URIs. iOS only: on Android
+//    that package is Google's Play-Services scanner, which is never linked
+//    (react-native.config.js) nor loaded.
+//  - Android before Scan Kit's own camera exists there: no camera at all.
+//    Scanning explains that and offers to import photos instead
+//    (androidImportInstead); those photos come back like Apple's pages.
 // Outcomes are normalised into pages, "cancelled" (null) or a ToolScanError
 // with copy that is safe to show.
-import { Alert, Linking } from 'react-native';
-import DocumentScanner from 'react-native-document-scanner-plugin';
+import { Alert, Linking, Platform } from 'react-native';
 import { Directory, File, Paths } from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import { getScanSettings } from './storage';
@@ -63,9 +67,17 @@ export async function cameraChoice(): Promise<CameraKind> {
  * when the user cancelled.
  */
 export async function scanWithAppleScanner(): Promise<string[] | null> {
+  if (Platform.OS !== 'ios') {
+    throw new ToolScanError('unavailable', 'The document camera isn’t available right now. Try again, or import a photo instead.');
+  }
   const settings = await getScanSettings();
   let images: string[] | undefined;
   try {
+    // Loaded here, on iOS only: its JS looks up the native module as it loads,
+    // and Android doesn't link it (react-native.config.js).
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const scannerModule = require('react-native-document-scanner-plugin');
+    const DocumentScanner = (scannerModule.default ?? scannerModule) as typeof import('react-native-document-scanner-plugin').default;
     // Tracked so the app lock doesn't present over the camera (lib/system-ui).
     const res = await withSystemUI(
       () => DocumentScanner.scanDocument({ croppedImageQuality: SCAN_QUALITY[settings.quality] }),
@@ -95,6 +107,7 @@ export async function scanWithAppleScanner(): Promise<string[] | null> {
  * scanner throws ToolScanError.
  */
 export async function scanPagesWithCamera(options: CaptureOptions = {}): Promise<ScanPageInput[] | null> {
+  if (Platform.OS === 'android' && !scanKitCameraAvailable()) return androidImportInstead(options);
   if ((await cameraChoice()) === 'scankit') {
     const pages = await openCaptureSession(options);
     return pages && pages.length ? pages.map(p => toSourceInput(p.sourceUri, p.geometry)) : null;
@@ -107,6 +120,41 @@ export async function scanPagesWithCamera(options: CaptureOptions = {}): Promise
     return images.slice(0, max);
   }
   return images;
+}
+
+/** Copy of the "no camera on Android yet" dialog (exported for tests). */
+export const ANDROID_CAMERA_SOON = {
+  title: 'Camera coming soon on Android',
+  message: 'Scanning with the camera arrives in a later version of Scan Kit for Android. For now, import photos of your documents: Scan Kit keeps them as pages, like a scan.',
+  importLabel: 'Import photos',
+} as const;
+
+/**
+ * Android until Scan Kit's own camera exists there (phase 2 of the port): says
+ * so and offers to import photos instead. The picked photos are the scan's
+ * pages (null when the user cancels either step), capped at `maxPages`.
+ */
+async function androidImportInstead(options: CaptureOptions): Promise<ScanPageInput[] | null> {
+  const choice = await new Promise<'import' | 'cancel'>(resolve => {
+    Alert.alert(
+      ANDROID_CAMERA_SOON.title,
+      ANDROID_CAMERA_SOON.message,
+      [
+        { text: 'Cancel', style: 'cancel', onPress: () => resolve('cancel') },
+        { text: ANDROID_CAMERA_SOON.importLabel, onPress: () => resolve('import') },
+      ],
+      { cancelable: true, onDismiss: () => resolve('cancel') },
+    );
+  });
+  if (choice !== 'import') return null;
+  const max = options.maxPages;
+  const photos = await pickPhotos(max !== 1);
+  if (!photos?.length) return null;
+  if (max && max > 0 && photos.length > max) {
+    deleteTempFiles(photos.slice(max));
+    return photos.slice(0, max);
+  }
+  return photos;
 }
 
 /** A fresh file:// URI in Caches/scanner-src for a page rendered from a capture (swept at startup). */

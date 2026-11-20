@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- What shareFiles may hand out: the app's own files and caches, nothing else. -->
+<paths>
+  <files-path name="files" path="." />
+  <cache-path name="cache" path="." />
+</paths>

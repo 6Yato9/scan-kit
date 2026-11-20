@@ -1,7 +1,7 @@
 // lib/tool-scan.ts: which camera a scan opens, and what each hands back.
 jest.mock('react-native-document-scanner-plugin', () => ({ scanDocument: jest.fn() }));
 jest.mock('expo-image-picker', () => ({ launchImageLibraryAsync: jest.fn() }));
-jest.mock('react-native', () => ({ Alert: { alert: jest.fn() }, Linking: {} }));
+jest.mock('react-native', () => ({ Alert: { alert: jest.fn() }, Linking: {}, Platform: { OS: 'ios' } }));
 const mockDeleted: string[] = [];
 jest.mock('expo-file-system', () => ({
   File: class {
@@ -98,4 +98,59 @@ test('scanWithCamera renders the crops and deletes the photos', async () => {
   expect(out).toHaveLength(1);
   expect(out![0]).toMatch(/scanner-src\/page-/);
   expect(mockDeleted).toContain('file:///c/scanner-src/src-0.jpg');
+});
+
+describe('Android without Scan Kit’s camera (port phase 1)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const RN = require('react-native') as { Platform: { OS: string }; Alert: { alert: jest.Mock } };
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const picker = require('expo-image-picker') as { launchImageLibraryAsync: jest.Mock };
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const detect = require('../lib/document-detect') as { autoCropDocument: jest.Mock };
+  type Btn = { text: string; onPress?: () => void };
+
+  beforeEach(() => {
+    RN.Platform.OS = 'android';
+    mockAvailable = false;
+    RN.Alert.alert.mockReset();
+    picker.launchImageLibraryAsync.mockReset();
+    detect.autoCropDocument.mockReset();
+    detect.autoCropDocument.mockImplementation(async (uri: string) => ({ uri, detected: false }));
+  });
+  afterAll(() => {
+    RN.Platform.OS = 'ios';
+  });
+
+  const pressInAlert = (label: string) => {
+    RN.Alert.alert.mockImplementationOnce((_t: string, _m: string, buttons: Btn[]) => {
+      buttons.find(b => b.text === label)?.onPress?.();
+    });
+  };
+
+  test('says the camera is coming and imports photos instead; never opens Google’s scanner', async () => {
+    pressInAlert('Import photos');
+    picker.launchImageLibraryAsync.mockResolvedValue({ canceled: false, assets: [{ uri: 'file:///c/p1.jpg' }, { uri: 'file:///c/p2.jpg' }] });
+    const pages = await scanPagesWithCamera();
+    expect(RN.Alert.alert.mock.calls[0][0]).toBe('Camera coming soon on Android');
+    expect(pages).toEqual(['file:///c/p1.jpg', 'file:///c/p2.jpg']);
+    expect(picker.launchImageLibraryAsync).toHaveBeenCalledWith(expect.objectContaining({ allowsMultipleSelection: true }));
+    expect(DocumentScanner.scanDocument).not.toHaveBeenCalled();
+    expect(mockOpen).not.toHaveBeenCalled();
+  });
+
+  test('a one-page camera (Retake) picks one photo', async () => {
+    pressInAlert('Import photos');
+    picker.launchImageLibraryAsync.mockResolvedValue({ canceled: false, assets: [{ uri: 'file:///c/p1.jpg' }] });
+    expect(await scanPagesWithCamera({ maxPages: 1 })).toEqual(['file:///c/p1.jpg']);
+    expect(picker.launchImageLibraryAsync).toHaveBeenCalledWith(expect.objectContaining({ allowsMultipleSelection: false }));
+  });
+
+  test('Cancel (or dismissing the dialog) is a cancelled scan', async () => {
+    pressInAlert('Cancel');
+    expect(await scanPagesWithCamera()).toBeNull();
+    RN.Alert.alert.mockImplementationOnce((_t: string, _m: string, _b: Btn[], opts: { onDismiss?: () => void }) => opts.onDismiss?.());
+    expect(await scanPagesWithCamera()).toBeNull();
+    expect(picker.launchImageLibraryAsync).not.toHaveBeenCalled();
+    expect(DocumentScanner.scanDocument).not.toHaveBeenCalled();
+  });
 });

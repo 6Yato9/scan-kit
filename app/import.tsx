@@ -3,7 +3,10 @@
 // incoming PDF or image as a new document and replaces itself with the viewer.
 // Images are auto-cropped like any other photo import. iOS hands over either
 // a copy in Documents/Inbox or (open in place) the user's original file; it is
-// copied into our cache first (stageCopy) and only an Inbox copy is removed. Our copy is kept until a document has been saved from it, so
+// copied into our cache first (stageCopy) and only an Inbox copy is removed.
+// Android hands over content:// URLs (one, or several shared together as
+// `uris`): their name and type come from the system (incomingFileInfo), and
+// several images become one document (planIncomingImport). Our copy is kept until a document has been saved from it, so
 // a failed save offers "Try again" instead of asking for the file again. A
 // scan still being saved when the file arrives is waited for, not an error.
 //
@@ -20,7 +23,16 @@ import { useTheme } from '@/contexts/theme-context';
 import { useImportDocuments } from '@/components/use-import';
 import { PrimaryButton } from '@/components/primary-button';
 import { LockScreen, useAppLocked } from '@/components/lock-gate';
-import { displayNameOf, documentNameFor, importKindOf } from '@/lib/incoming-file';
+import {
+  displayNameOf,
+  documentNameFor,
+  documentNameFromFileName,
+  importKindOf,
+  isContentUrl,
+  parseIncomingUris,
+  planIncomingImport,
+  type ImportKind,
+} from '@/lib/incoming-file';
 import { abandonSystemUI } from '@/lib/system-ui';
 import { indexPdfText } from '@/lib/pdf-text';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
@@ -49,8 +61,8 @@ function stagingDir(): Directory {
  * read whole); a plain copy can't reach such a file at all. The original is
  * only ever read, never moved or removed (removeInboxCopy aside).
  */
-async function stageCopy(uri: string): Promise<string> {
-  const name = displayNameOf(uri).replace(/[^\w .()-]/g, '_') || 'import';
+async function stageCopy(uri: string, displayName: string = displayNameOf(uri)): Promise<string> {
+  const name = displayName.replace(/[^\w .()-]/g, '_') || 'import';
   const dest = new File(stagingDir(), `incoming-${Date.now()}-${name}`);
   const native = VisionOcr?.copyIncomingFile;
   if (native) {
@@ -65,8 +77,23 @@ async function stageCopy(uri: string): Promise<string> {
   // coordinated read couldn't open (an ordinary file in our own Inbox).
   const leftover = new File(dest.uri);
   if (leftover.exists) leftover.delete();
+  if (isContentUrl(uri)) throw new Error('A content URL needs the native copy');
   new File(uri).copy(new File(dest.uri));
   return dest.uri;
+}
+
+type IncomingFile = { uri: string; name: string; kind: ImportKind | null };
+
+/**
+ * Name and kind of an incoming file. A file:// URL is judged by its name; an
+ * Android content:// URL has none, so the system is asked (incomingFileInfo).
+ */
+async function describeIncoming(uri: string): Promise<IncomingFile> {
+  const info = isContentUrl(uri) && typeof VisionOcr?.incomingFileInfo === 'function'
+    ? await VisionOcr.incomingFileInfo(uri).catch(() => null)
+    : null;
+  const name = info?.name || displayNameOf(uri);
+  return { uri, name, kind: importKindOf(info?.name ?? uri, info?.mimeType) };
 }
 
 /** A fresh copy of a staged file for one import attempt, or null if it can't be made. */
@@ -130,7 +157,7 @@ function removeInboxCopy(uri: string) {
 }
 
 export default function ImportScreen() {
-  const { uri } = useLocalSearchParams<{ uri?: string }>();
+  const { uri, uris } = useLocalSearchParams<{ uri?: string; uris?: string }>();
   const router = useRouter();
   const { colors } = useTheme();
   const { saveFiles } = useImportDocuments();
@@ -140,7 +167,13 @@ export default function ImportScreen() {
   const [savedId, setSavedId] = useState<string | null>(null);
   const started = useRef(false);
   const mounted = useRef(true);
-  const fileName = uri ? displayNameOf(uri) : 'this file';
+  // What is being imported, once known (a content:// URL's name is asked for).
+  const [incoming, setIncoming] = useState<{ files: IncomingFile[]; kind: ImportKind } | null>(null);
+  const sources = parseIncomingUris(uri, uris);
+  const fileName = incoming
+    ? (incoming.files.length > 1 ? `${incoming.files.length} files` : incoming.files[0].name)
+    : sources.length > 1 ? `${sources.length} files`
+    : sources.length === 1 && !isContentUrl(sources[0]) ? displayNameOf(sources[0]) : 'this file';
 
   useEffect(() => {
     mounted.current = true;
@@ -155,30 +188,33 @@ export default function ImportScreen() {
   // from it, so a failed save can be retried without sharing the file again
   // (iOS's Inbox copy is gone by then); deleted once saved or when the user
   // leaves this screen.
-  const stagedRef = useRef<string | null>(null);
+  const stagedRef = useRef<string[] | null>(null);
+  const planRef = useRef<{ kind: ImportKind; name: string | null } | null>(null);
   const attemptingRef = useRef(false);
 
   const dropStaged = () => {
-    if (stagedRef.current) deleteQuietly(stagedRef.current);
+    stagedRef.current?.forEach(deleteQuietly);
     stagedRef.current = null;
   };
 
   /** Saves the staged copy as a document; on failure keeps it for "Try again". */
   const attempt = async () => {
     const staged = stagedRef.current;
-    if (!staged || attemptingRef.current) return;
+    const plan = planRef.current;
+    if (!staged?.length || !plan || attemptingRef.current) return;
     attemptingRef.current = true;
     setStatus({ state: 'working' });
-    // The import consumes the file it is given (auto-crop deletes its input
-    // once it has a cropped copy), so each attempt works on its own copy and
-    // the staged one survives a failure.
-    let work: string | null = null;
+    // The import consumes the files it is given (auto-crop deletes its input
+    // once it has a cropped copy), so each attempt works on its own copies and
+    // the staged ones survive a failure.
+    let work: (string | null)[] = [];
     try {
-      const kind = importKindOf(uri!);
-      work = copyOf(staged);
+      const kind = plan.kind;
+      work = staged.map(copyOf);
+      const copies = work.every(Boolean) ? (work as string[]) : null;
       // Waits for a scan that is still being saved (scan-context saveAndOpen).
-      const id = kind && work
-        ? await saveFiles([work], kind, documentNameFor(uri!)).catch(err => {
+      const id = copies
+        ? await saveFiles(copies, kind, plan.name).catch(err => {
             console.error('Import incoming file failed', err);
             return null;
           })
@@ -204,7 +240,7 @@ export default function ImportScreen() {
         retry: true,
       });
     } finally {
-      if (work) deleteQuietly(work);
+      work.forEach(w => { if (w) deleteQuietly(w); });
       attemptingRef.current = false;
     }
   };
@@ -212,43 +248,62 @@ export default function ImportScreen() {
   useEffect(() => {
     if (started.current) return;
     started.current = true;
-    const source = uri ? uri.split('?')[0] : null;
-    const kind = uri ? importKindOf(uri) : null;
-    if (!source || !kind) {
-      if (source) removeInboxCopy(source);
-      setStatus({
-        state: 'failed',
-        title: 'Scan Kit can’t open this file',
-        body: 'Only PDFs and images can be imported.',
-      });
+    const list = parseIncomingUris(uri, uris).map(u => (isContentUrl(u) ? u : u.split('?')[0]));
+    const cantOpen = () => setStatus({
+      state: 'failed',
+      title: 'Scan Kit can’t open this file',
+      body: 'Only PDFs and images can be imported.',
+    });
+    if (!list.length) {
+      cantOpen();
       return;
     }
-    stageCopy(source).then(
-      staged => {
-        if (!mounted.current) {
-          deleteQuietly(staged);
-          return;
-        }
-        stagedRef.current = staged;
-        // We have our own copy now (kept until the import succeeds); iOS's
-        // Inbox copy is no longer needed whatever happens next.
-        removeInboxCopy(source);
-        attempt();
-      },
-      err => {
+    (async () => {
+      const files = await Promise.all(list.map(describeIncoming));
+      const plan = planIncomingImport(files);
+      if (!plan) {
+        list.forEach(removeInboxCopy);
+        if (mounted.current) cantOpen();
+        return;
+      }
+      const chosen = plan.uris.map(u => files.find(f => f.uri === u)!);
+      if (mounted.current) setIncoming({ files: chosen, kind: plan.kind });
+      const staged: string[] = [];
+      try {
+        for (const f of chosen) staged.push(await stageCopy(f.uri, f.name));
+      } catch (err) {
         console.warn('Stage incoming file failed', err);
-        removeInboxCopy(source);
+        staged.forEach(deleteQuietly);
+        list.forEach(removeInboxCopy);
         if (!mounted.current) return;
         setStatus({
           state: 'failed',
           title: 'Couldn’t open the file',
           body: 'It may have been moved or deleted. Try sharing it again.',
         });
-      },
-    );
+        return;
+      }
+      if (!mounted.current) {
+        staged.forEach(deleteQuietly);
+        return;
+      }
+      stagedRef.current = staged;
+      // A file keeps its own name ("Invoice.pdf" → "Invoice"); several shared
+      // photos get the usual "Scan <date>".
+      planRef.current = {
+        kind: plan.kind,
+        name: chosen.length === 1
+          ? (isContentUrl(chosen[0].uri) ? documentNameFromFileName(chosen[0].name) : documentNameFor(chosen[0].uri))
+          : null,
+      };
+      // We have our own copies now (kept until the import succeeds); iOS's
+      // Inbox copy is no longer needed whatever happens next.
+      list.forEach(removeInboxCopy);
+      attempt();
+    })();
     // `attempt` reads refs only; this runs once per incoming file.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [uri, saveFiles]);
+  }, [uri, uris, saveFiles]);
 
   // Leaving the screen with a failed import: the staged copy goes too.
   useEffect(() => () => {

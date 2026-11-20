@@ -437,3 +437,15 @@ Rough total: **16–20 developer-weeks**, with Phase 2 (camera) and Phase 4 (fil
 - OpenCV on Maven Central: https://central.sonatype.com/artifact/org.opencv/opencv , listing https://repo1.maven.org/maven2/org/opencv/opencv/
 - ML Kit versions: Google Maven metadata (`dl.google.com/dl/android/maven2/com/google/mlkit/{text-recognition,language-id,barcode-scanning}`): text-recognition 16.0.1, language-id 17.0.6, barcode-scanning 17.3.0.
 - Vision text-recognition languages (not confirmed for Arabic): https://developer.apple.com/documentation/vision/recognizetextrequest/supportedrecognitionlanguages
+
+---
+
+## Phase 1 status (2026-11-20)
+
+Implemented in `modules/vision-ocr/android/` (Kotlin, Expo Modules API) with the iOS JS contracts: `recognize`, `warpQuad`, `normalizeImage`, `replaceFile`, `copyIncomingFile` (content:// and file://), `incomingFileInfo` (new, Android only), `shareFiles` (FileProvider `${applicationId}.visionocr.fileprovider`), `detectLanguage` (bundled ML Kit language ID), and the `ScanKitQuickActions` module. No views are registered yet, so `PdfDocumentView`/`DocumentCameraView` stay null in JS and the phase-0 PDF placeholder remains.
+
+**OCR engines (owner decision: on-device, no Play Services).** ML Kit Latin (bundled model) reads every page. ML Kit skips script it can't read instead of misreading it, so Arabic is detected from *unread ink*: glyph-sized dark strokes on paper-bright background outside every ML Kit line (`OcrLayout.ink`), at least 0.3 % of the page and a fifth of the ink ML Kit read; a large share of misread-looking ML Kit lines also triggers it, and an Arabic device language lowers both bars. Only then does Tesseract (tessdata_fast `ara`, 1.4 MB) run, on a copy at 1800 px with ML Kit's clean lines painted white. Merge: ML Kit wins wherever it read a clean line; Tesseract lines are kept when they are ≥ 60 % Arabic letters with confidence ≥ 0.6. Rows read right to left when mostly Arabic. Known limit: Arabic-Indic digits are often misread (tessdata_best did no better on them, at 12.6 MB).
+
+**Other decisions.** `react-native-document-scanner-plugin` and `@react-native-ml-kit/text-recognition` are no longer linked on Android (`react-native.config.js`); Scan on Android shows "Camera coming soon on Android" with Import photos until phase 2. "Share to Scan Kit" (`SEND`/`SEND_MULTIPLE`) is rewritten natively into the VIEW URL that `+native-intent` handles; several images become one document. ML Kit's Firelog usage telemetry is cut off (the datatransport backend registry is removed from the manifest). `plugins/with-android-platform.js` writes the app shortcuts and `AsyncStorage_db_size_in_MB=512`; `app.json` sets `allowBackup: false`, `blockedPermissions`, intent filters and `minSdkVersion 26`.
+
+Still to do from phase 1: `detectBarcodes`, `writeVCard`, `detectData` natively (the JS fallback already finds phones, emails and links on Android; dates need the planned JS date finder), and real-phone checks of share-to-app from OEM apps.
