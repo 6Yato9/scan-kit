@@ -34,6 +34,7 @@ import {
   Image,
   Modal,
   PanResponder,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -93,6 +94,8 @@ type Props = {
 };
 
 const HANDLE_RING = 24;
+/** Side margin of the crop area on Android (see styles.cropArea). */
+const ANDROID_CROP_SIDE = 52;
 const LOUPE = 116;
 const ZOOM = 2.5;
 const CORNER_LABELS = ['Top-left corner', 'Top-right corner', 'Bottom-right corner', 'Bottom-left corner'];
@@ -622,7 +625,15 @@ const styles = StyleSheet.create({
   abs: { position: 'absolute' },
   clip: { position: 'absolute', overflow: 'hidden' },
   // Handles at the image edge reach past it; nothing here clips.
-  cropArea: { flex: 1, marginHorizontal: Spacing.xxl, marginVertical: Spacing.xl, position: 'relative' },
+  // Android: the corner handles' touch area (HIT/2 around each corner) must
+  // start beyond the system back gesture's edge zone (~24-32dp), or dragging a
+  // corner near the screen edge closes the editor instead.
+  cropArea: {
+    flex: 1,
+    marginHorizontal: Platform.OS === 'android' ? ANDROID_CROP_SIDE : Spacing.xxl,
+    marginVertical: Spacing.xl,
+    position: 'relative',
+  },
   handle: { position: 'absolute', width: HIT, height: HIT, alignItems: 'center', justifyContent: 'center' },
   ring: { width: HANDLE_RING, height: HANDLE_RING, borderRadius: HANDLE_RING / 2, borderWidth: 3 },
   edgeGrip: { width: 26, height: 6, borderRadius: 3 },

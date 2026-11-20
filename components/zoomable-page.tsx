@@ -17,12 +17,15 @@
 // (allowDownscaling false) — but only while the page is zoomed, so swiping
 // through pages at fit costs no more memory than before.
 // `cacheKey` makes an in-place rewrite of the same file load again (the file
-// URI itself carries no version).
+// URI itself carries no version). On Android expo-image ignores `cacheKey` for
+// file:// URIs (Glide keys its memory cache on the URI string), so there the
+// version rides in a `?v=` query instead; Android opens a file:// URI by its
+// path, so the query never reaches the file system.
 //
 // `onZoomChange(true)` when the page goes beyond fit, false when it is back,
 // so the viewer can tell (e.g. to hide chrome) — optional.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, View, type GestureResponderEvent } from 'react-native';
+import { Platform, Pressable, ScrollView, StyleSheet, View, type GestureResponderEvent } from 'react-native';
 import { Image } from 'expo-image';
 
 export const MAX_ZOOM = 5;
@@ -127,7 +130,7 @@ export function ZoomablePage({ uri, cacheKey, width, height, inset, resetKey, on
       <Pressable onPress={onPress} accessible={false}>
         <View style={[styles.box, { width, height, paddingHorizontal: inset }]} pointerEvents="none">
           <Image
-            source={{ uri, cacheKey }}
+            source={Platform.OS === 'android' ? { uri: `${uri}?v=${encodeURIComponent(cacheKey)}` } : { uri, cacheKey }}
             style={styles.image}
             contentFit="contain"
             allowDownscaling={!sharp}

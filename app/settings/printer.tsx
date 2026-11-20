@@ -3,7 +3,7 @@
 // where the printer itself is chosen, so this screen holds what the app
 // controls: a link to the paper size (set in Document settings) and a test page.
 import { useCallback, useRef, useState } from 'react';
-import { Alert, StyleSheet, Text, View } from 'react-native';
+import { Alert, Platform, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/theme-context';
@@ -101,7 +101,9 @@ export default function PrinterScreen() {
         />
       </View>
       <Text style={[Type.footnote, styles.footer, { color: colors.muted }]}>
-        Scan Kit prints with AirPrint. Make sure your printer is on the same Wi-Fi network as this device.
+        {Platform.OS === 'android'
+          ? 'Scan Kit prints with Android’s print service. Make sure your printer is set up on this device.'
+          : 'Scan Kit prints with AirPrint. Make sure your printer is on the same Wi-Fi network as this device.'}
       </Text>
     </ToolScreen>
   );

@@ -25,10 +25,17 @@
 // The HTML file and the copies are removed when the view unmounts or the HTML
 // changes; stray ones are swept with the other temps (lib/files.ts TEMP_DIRS
 // 'webview').
+//
+// Android: allowFileAccess (+ FromFileURLs / Universal, so a canvas can read
+// the pixels of a file:// image) lets the WebView read every file in the
+// app's private data folder, so the readable root is the whole app folder and
+// nothing is copied. `allowingReadAccessToURL` is ignored there.
 import { forwardRef, useEffect, useMemo } from 'react';
+import { Platform } from 'react-native';
 import { WebView, type WebViewProps } from 'react-native-webview';
 import { Directory, File, Paths } from 'expo-file-system';
 import { localImagesOutside, swapUrls, webviewReadRoot } from '@/lib/webview-access';
+import { containerRoot } from '@/lib/files';
 
 let seq = 0;
 
@@ -85,7 +92,8 @@ function removeFile(uri: string | null): void {
 type Props = Omit<WebViewProps, 'source' | 'allowingReadAccessToURL'> & { html: string };
 
 export const LocalWebView = forwardRef<WebView, Props>(function LocalWebView({ html, ...rest }, ref) {
-  const readAccess = useMemo(() => webviewReadRoot(), []);
+  // Android reads the whole app folder (see the header); iOS only <container>/Library/.
+  const readAccess = useMemo(() => (Platform.OS === 'android' ? containerRoot() : webviewReadRoot()), []);
   const page = useMemo(() => {
     const prepared = withReadableImages(html, readAccess);
     return { uri: writeHtmlFile(prepared.html), copies: prepared.copies };

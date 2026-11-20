@@ -7,7 +7,7 @@
 // waits on the share sheet: `shareFile` returns as soon as the sheet is up, so
 // the UI can't get stuck if expo-sharing never settles. Work in progress shows a
 // progress state with Cancel, and closing the sheet cancels it too.
-import { Alert, Linking, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Linking, Platform, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   canProtectPdf,
@@ -570,7 +570,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
   const submitPassword = () => {
     if (pwReady) run('protected', pw);
   };
-  const printDetail = detailLine(['Any AirPrint printer', paper === 'Auto' || isPdfDoc ? null : paperName(paper)]);
+  const printDetail = detailLine([Platform.OS === 'android' ? 'Print or save as PDF' : 'Any AirPrint printer', paper === 'Auto' || isPdfDoc ? null : paperName(paper)]);
   const optionsSummary = layoutSummary(layout, paper, ocrCan);
   const choosePageNumbers = (p: PageNumberStyle) => updatePageNumbers({ style: p });
   // Only a paper other than Document settings' is pinned; "Same as Document

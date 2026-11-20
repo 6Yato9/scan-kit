@@ -6,6 +6,7 @@
 // trapping the user: anything that means "this device cannot authenticate
 // right now" (no hardware, nothing enrolled, no passcode, or a thrown error)
 // resolves to 'unavailable' so the caller can fail OPEN.
+import { Platform } from 'react-native';
 import * as LocalAuthentication from 'expo-local-authentication';
 
 export type AuthResult = 'success' | 'failed' | 'unavailable';
@@ -53,6 +54,23 @@ export async function hasBiometricHardware(): Promise<boolean> {
 }
 
 /** Which unlock method the device will offer, for labels and icons. */
+const IOS_LOCK_METHOD: Record<BiometricKind, string> = {
+  faceId: 'Face ID',
+  touchId: 'Touch ID',
+  passcode: 'your passcode',
+};
+/** Android has no "Face ID" / "Touch ID": its own words for the same methods. */
+const ANDROID_LOCK_METHOD: Record<BiometricKind, string> = {
+  faceId: 'your face',
+  touchId: 'your fingerprint',
+  passcode: 'your screen lock',
+};
+
+/** How to name the lock method in a sentence ("Unlock with …", "Ask for … on return"). */
+export function lockMethodLabel(kind: BiometricKind, os: string = Platform.OS): string {
+  return (os === 'android' ? ANDROID_LOCK_METHOD : IOS_LOCK_METHOD)[kind];
+}
+
 export async function biometricKind(): Promise<BiometricKind> {
   try {
     if (!(await canUseBiometrics())) return 'passcode';

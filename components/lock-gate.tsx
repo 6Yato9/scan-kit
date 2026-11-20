@@ -73,7 +73,7 @@ import { FullWindowOverlay } from 'react-native-screens';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';
-import { authenticate, biometricKind, BiometricKind, isAuthenticating } from '@/lib/biometrics';
+import { authenticate, biometricKind, BiometricKind, isAuthenticating, lockMethodLabel } from '@/lib/biometrics';
 import { getAppLockEnabled, subscribeAppLock } from '@/lib/storage';
 import { installAlertGuard } from '@/lib/alert-guard';
 import { isSystemUIOpen, subscribeSystemUI } from '@/lib/system-ui';
@@ -111,18 +111,12 @@ export function useLockState(): LockState {
   return useContext(LockContext);
 }
 
-const METHOD_LABEL: Record<BiometricKind, string> = {
-  faceId: 'Face ID',
-  touchId: 'Touch ID',
-  passcode: 'your passcode',
-};
-
 /** The lock screen itself, used by the cold-start overlay and the /lock route. */
 export function LockScreen() {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const { kind, tryUnlock } = useLockState();
-  const method = METHOD_LABEL[kind];
+  const method = lockMethodLabel(kind);
   return (
     <View
       style={[styles.lockScreen, { backgroundColor: colors.bg, paddingTop: insets.top, paddingBottom: insets.bottom + Spacing.xxl }]}

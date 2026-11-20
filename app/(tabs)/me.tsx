@@ -1,7 +1,7 @@
 // app/(tabs)/me.tsx
 // Settings tab.
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, InteractionManager, ScrollView, StyleSheet, View } from 'react-native';
+import { Alert, InteractionManager, Platform, ScrollView, StyleSheet, View } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Directory, File } from 'expo-file-system';
@@ -11,7 +11,7 @@ import { getAppLockEnabled, getDocuments, setAppLockEnabled, TRASH_RETENTION_DAY
 import { MultiShareSheet } from '@/components/multi-share-sheet';
 import { useToast } from '@/components/toast';
 import type { Document } from '@/types/document';
-import { authenticate, biometricKind, BiometricKind, canAuthenticate } from '@/lib/biometrics';
+import { authenticate, biometricKind, BiometricKind, canAuthenticate, lockMethodLabel } from '@/lib/biometrics';
 import { tapLight } from '@/lib/haptics';
 import { filesCopyAvailable, getFilesCopyEnabled, removeFilesCopies, setFilesCopyEnabled } from '@/lib/files-copy';
 import { getRecoveredGroups } from '@/lib/recovered-files';
@@ -45,12 +45,6 @@ function formatBytes(bytes: number): string {
   }
   return `${value.toFixed(value < 10 ? 1 : 0)} ${units[i]}`;
 }
-
-const LOCK_METHOD: Record<BiometricKind, string> = {
-  faceId: 'Face ID',
-  touchId: 'Touch ID',
-  passcode: 'your passcode',
-};
 
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
@@ -141,8 +135,10 @@ export default function SettingsScreen() {
     if (next) {
       if (!(await canAuthenticate())) {
         Alert.alert(
-          'Set up a passcode first',
-          'App lock uses Face ID, Touch ID or your device passcode. Turn one on in the Settings app, then try again.',
+          Platform.OS === 'android' ? 'Set up a screen lock first' : 'Set up a passcode first',
+          Platform.OS === 'android'
+            ? 'App lock uses your fingerprint, your face or your screen lock. Set up a screen lock in the Settings app, then try again.'
+            : 'App lock uses Face ID, Touch ID or your device passcode. Turn one on in the Settings app, then try again.',
         );
         return;
       }
@@ -186,7 +182,7 @@ export default function SettingsScreen() {
             <SettingsRow
               icon="lock-closed-outline"
               label="App lock"
-              description={`Ask for ${LOCK_METHOD[lockKind]} on return`}
+              description={`Ask for ${lockMethodLabel(lockKind)} on return`}
               accessory={{ type: 'switch', value: appLock, onChange: handleToggleAppLock }}
               last
             />

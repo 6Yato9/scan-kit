@@ -2,6 +2,7 @@
 // Short, scannable help: how to do the main things in Scan Kit.
 // Rows are the shared SettingsRow (tinted icon tile, label, description), the
 // same as About, so every list in Settings draws its icons one way.
+import { Platform } from 'react-native';
 import type { AppIconName } from '@/components/app-icon';
 import { SettingsGroup, SettingsRow } from '@/components/settings-list';
 import { ToolScreen } from '@/components/tool-ui';
@@ -37,7 +38,9 @@ const SECTIONS: { title: string; tips: Tip[] }[] = [
     title: 'Privacy',
     tips: [
       { icon: 'phone-portrait-outline', title: 'On your device', text: 'Your scans are stored only on this device. There is no account and no cloud upload.' },
-      { icon: 'lock-closed-outline', title: 'App lock', text: 'Turn on App lock in Settings to require Face ID or your passcode whenever you return to Scan Kit.' },
+      { icon: 'lock-closed-outline', title: 'App lock', text: Platform.OS === 'android'
+        ? 'Turn on App lock in Settings to require your fingerprint, face or screen lock whenever you return to Scan Kit.'
+        : 'Turn on App lock in Settings to require Face ID or your passcode whenever you return to Scan Kit.' },
     ],
   },
 ];

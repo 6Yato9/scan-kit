@@ -5,6 +5,7 @@ import {
   ActionSheetIOS,
   ActivityIndicator,
   Alert,
+  BackHandler,
   FlatList,
   Platform,
   Pressable,
@@ -595,6 +596,18 @@ function ViewerContent({
   // Flush any pending adjust bake on unmount so the last 0-250 ms of slider
   // movement isn't dropped. The root baker picks it up once this screen's goes.
   useEffect(() => () => flushAdjust(), [flushAdjust]);
+
+  // Android's back button / gesture closes the Filters / Adjust panel first,
+  // as Done does, instead of leaving the document. (BackHandler never fires on iOS.)
+  useEffect(() => {
+    if (editTab === null) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      flushAdjust();
+      setEditTab(null);
+      return true;
+    });
+    return () => sub.remove();
+  }, [editTab, flushAdjust]);
 
   const handleAdjust = useCallback((adj: PageAdjustment) => {
     const doc = docRef.current;
@@ -1813,6 +1826,21 @@ function ViewerContent({
             </View>
             {pdfTools.toolbar}
           </>
+        ) : Platform.OS === 'android' ? (
+          // Android has no PDF view yet (the native one is PDFKit), and its
+          // WebView can't draw a PDF: say so, and point at Share.
+          <View style={styles.pdfEmpty} accessibilityLiveRegion="polite">
+            <EmptyState
+              chrome
+              placement="center"
+              icon="document-text-outline"
+              title="PDF preview isn’t available on Android yet"
+              subtitle="Your PDF is saved in Scan Kit. Share it to open it in another app."
+              actionLabel="Share PDF"
+              actionIcon="share-outline"
+              onAction={handleSharePdf}
+            />
+          </View>
         ) : (
           // Builds without the native PDF view.
           <WebView

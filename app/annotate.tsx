@@ -7,6 +7,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  BackHandler,
   Pressable,
   StyleSheet,
   Text,
@@ -345,6 +346,22 @@ export default function AnnotateScreen() {
       { text: 'Discard', style: 'destructive', onPress: () => router.back() },
     ]);
   };
+
+  // Android's back button / gesture works like Cancel: it asks before
+  // throwing marks away, and waits while the page is being saved. (iOS has no
+  // back gesture on this full-screen modal; BackHandler never fires there.)
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (saving) return true;
+      if (!dirty) return false;
+      Alert.alert('Discard your markup?', 'The changes you made on this page will be lost.', [
+        { text: 'Keep editing', style: 'cancel' },
+        { text: 'Discard', style: 'destructive', onPress: () => router.back() },
+      ]);
+      return true;
+    });
+    return () => sub.remove();
+  }, [dirty, saving, router]);
 
   const commitText = () => {
     if (!draft) return;

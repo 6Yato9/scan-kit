@@ -40,6 +40,13 @@ import { sessionPassword, useSessionUnlocked } from '@/lib/pdf-session';
 import { Radius, Spacing, Type } from '@/lib/theme';
 import type { Document } from '@/types/document';
 import type { IoniconName } from '@/components/app-icon';
+import { unavailableCopy } from '@/lib/platform-support';
+
+/** iOS: a build older than the feature; Android: not built yet (lib/platform-support.ts). */
+const UNAVAILABLE = unavailableCopy(
+  { title: 'Update Scan Kit to unlock PDFs', text: 'This version of Scan Kit can’t remove a PDF’s restrictions. Install the latest version, then try again.' },
+  'Unlock PDF',
+);
 
 type Output = 'copy' | 'replace';
 
@@ -218,8 +225,8 @@ export default function UnrestrictScreen() {
       <ToolScreen title="Unlock PDF">
         <ToolIntro
           icon="lock-open-outline"
-          title="Update Scan Kit to unlock PDFs"
-          text="This version of Scan Kit can’t remove a PDF’s restrictions. Install the latest version, then try again."
+          title={UNAVAILABLE.title}
+          text={UNAVAILABLE.text}
         />
       </ToolScreen>
     );

@@ -19,7 +19,7 @@
 // Document settings' paper, edge to edge, as before. A scanned-document
 // result has no paper yet: its PDF options are chosen when it is shared.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { router as stackRouter, useLocalSearchParams, useRouter } from 'expo-router';
 import DraggableFlatList, { ScaleDecorator, type RenderItemParams } from 'react-native-draggable-flatlist';
 import * as ImagePicker from 'expo-image-picker';
@@ -440,7 +440,7 @@ export default function CreatePdfScreen() {
         text="Put photos, files and pages of your documents together in one new PDF, in any order."
         points={[
           { icon: 'images-outline', text: 'Photos, cropped and straightened like a scan' },
-          { icon: 'folder-open-outline', text: 'PDFs and images from the Files app' },
+          { icon: 'folder-open-outline', text: Platform.OS === 'android' ? 'PDFs and images from your files' : 'PDFs and images from the Files app' },
           { icon: 'documents-outline', text: 'Pages of your Scan Kit documents' },
         ]}
       />

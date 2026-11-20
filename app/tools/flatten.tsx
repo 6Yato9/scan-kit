@@ -36,6 +36,13 @@ import { notifyError, notifySuccess } from '@/lib/haptics';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
 import { protectedEditRefusal, withNoPasswordNote } from '@/lib/pdf-session';
 import type { Document } from '@/types/document';
+import { unavailableCopy } from '@/lib/platform-support';
+
+/** iOS: a build older than the feature; Android: not built yet (lib/platform-support.ts). */
+const UNAVAILABLE = unavailableCopy(
+  { title: 'Update Scan Kit to flatten PDFs', text: 'This version of Scan Kit can’t flatten a PDF. Install the latest version, then try again.' },
+  'Flatten PDF',
+);
 
 type Output = 'copy' | 'replace';
 
@@ -177,8 +184,8 @@ export default function FlattenScreen() {
       <ToolScreen title="Flatten PDF">
         <ToolIntro
           icon="layers-outline"
-          title="Update Scan Kit to flatten PDFs"
-          text="This version of Scan Kit can’t flatten a PDF. Install the latest version, then try again."
+          title={UNAVAILABLE.title}
+          text={UNAVAILABLE.text}
         />
       </ToolScreen>
     );
