@@ -1,7 +1,8 @@
 // components/reorder-modal.tsx
 // Drag-to-reorder sheet for the viewer. Uses the always-dark chrome like the
 // viewer it is presented over.
-import { Modal, Pressable, StyleSheet, Text } from 'react-native';
+import { Modal, Platform, Pressable, StyleSheet, Text } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useEffect, useRef, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -33,6 +34,10 @@ type Props = {
 
 export function ReorderModal({ visible, pages, cacheBust, saving, onConfirm, onCancel }: Props) {
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
+  // iOS presents a page sheet below the status bar; Android has no page
+  // sheets, so the modal is full screen, edge to edge, and pads for the bars.
+  const fullScreen = Platform.OS !== 'ios';
   const [items, setItems] = useState<PageItem[]>([]);
 
   // App lock: pushing /lock makes react-native-screens dismiss this RN Modal
@@ -105,13 +110,19 @@ export function ReorderModal({ visible, pages, cacheBust, saving, onConfirm, onC
       visible={visible && !locked}
       animationType="slide"
       presentationStyle="pageSheet"
-      onRequestClose={onCancel}
+      // iOS: the page sheet's swipe down, as before. Android's back is Cancel,
+      // except while the new order is being written.
+      onRequestClose={Platform.OS === 'ios' ? onCancel : () => {
+        if (!saving) onCancel();
+      }}
+      statusBarTranslucent
+      navigationBarTranslucent
     >
       {/* A Modal is a separate native root, so the gesture handler needs its own root inside it. */}
       <GestureHandlerRootView style={[styles.container, { backgroundColor: colors.chrome }]}>
         <ScreenHeader
           dark
-          withInset={false}
+          withInset={fullScreen}
           title="Reorder pages"
           left={<HeaderTextButton title="Cancel" color={colors.chromeText} onPress={onCancel} />}
           right={
@@ -132,7 +143,7 @@ export function ReorderModal({ visible, pages, cacheBust, saving, onConfirm, onC
           onDragEnd={({ data }) => setItems(data)}
           keyExtractor={item => String(item.index)}
           renderItem={renderItem}
-          contentContainerStyle={styles.list}
+          contentContainerStyle={[styles.list, fullScreen && { paddingBottom: Spacing.xxxl + insets.bottom }]}
         />
       </GestureHandlerRootView>
     </Modal>

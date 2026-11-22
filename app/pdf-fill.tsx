@@ -15,13 +15,11 @@
 // viewer is underneath (Done goes back to it; otherwise it opens it).
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActionSheetIOS,
   ActivityIndicator,
   Alert,
   Animated,
   Keyboard,
   PixelRatio,
-  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -98,6 +96,8 @@ import {
   type FillSession,
 } from '@/lib/pdf-fill';
 import { HIT, Radius, Spacing, Type } from '@/lib/theme';
+import { showTextPrompt } from '@/components/text-prompt';
+import { ActionSheet } from '@/components/action-sheet';
 import type { Document } from '@/types/document';
 import type { NativeFillField } from '@/modules/vision-ocr/src';
 import { isAndroid } from '@/lib/platform-support';
@@ -282,55 +282,52 @@ export default function PdfFillScreen() {
   const resume = (again = false) => {
     const d = doc;
     if (!d?.pdfUri || resumingRef.current) return;
-    Alert.prompt(
-      again ? 'Enter the password again' : 'Enter the PDF’s password',
-      `“${d.name}” is protected. What you filled in is kept.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Unlock',
-          isPreferred: true,
-          onPress: (value?: string) => {
-            resumingRef.current = true;
-            setResuming(true);
-            (async () => {
-              try {
-                await unlockForSession(d, value ?? '');
-                const fresh = await getDocument(d.id);
-                if (!fresh?.pdfUri || !storedPrintRef.current || !samePrint(filePrint(fresh.pdfUri), storedPrintRef.current)) {
-                  Alert.alert('The PDF changed', 'It was changed while you were away. Close Fill & sign and open it again.');
-                  return;
-                }
-                const src = await readablePdfUri(fresh);
-                const s2 = await openFillSession(src);
-                const before = session?.info;
-                const same = !!before && s2.info.pageCount === before.pageCount
-                  && s2.info.fields.map(f => f.id).join() === before.fields.map(f => f.id).join();
-                if (!same) {
-                  Alert.alert('The PDF changed', 'It was changed while you were away. Close Fill & sign and open it again.');
-                  return;
-                }
-                setSource(src);
-                setSession(s2);
-                setRelocked(false);
-              } catch (err) {
-                if (err instanceof PdfSessionError && err.kind === 'wrong-password') {
-                  Alert.alert('That password isn’t right', 'Check it and try again. Passwords are case-sensitive.', [
-                    { text: 'Cancel', style: 'cancel' },
-                    { text: 'Try again', onPress: () => resume(true) },
-                  ]);
-                } else {
-                  Alert.alert('Couldn’t open the PDF', 'Try again.');
-                }
-              } finally {
-                resumingRef.current = false;
-                setResuming(false);
-              }
-            })();
-          },
-        },
-      ],
-      'secure-text',
+    // Alert.prompt on iOS; Scan Kit's own prompt on Android (Alert.prompt is iOS-only).
+    showTextPrompt(
+      {
+        title: again ? 'Enter the password again' : 'Enter the PDF’s password',
+        message: `“${d.name}” is protected. What you filled in is kept.`,
+        secure: true,
+        confirmLabel: 'Unlock',
+      },
+      value => {
+        resumingRef.current = true;
+        setResuming(true);
+        (async () => {
+          try {
+            await unlockForSession(d, value);
+            const fresh = await getDocument(d.id);
+            if (!fresh?.pdfUri || !storedPrintRef.current || !samePrint(filePrint(fresh.pdfUri), storedPrintRef.current)) {
+              Alert.alert('The PDF changed', 'It was changed while you were away. Close Fill & sign and open it again.');
+              return;
+            }
+            const src = await readablePdfUri(fresh);
+            const s2 = await openFillSession(src);
+            const before = session?.info;
+            const same = !!before && s2.info.pageCount === before.pageCount
+              && s2.info.fields.map(f => f.id).join() === before.fields.map(f => f.id).join();
+            if (!same) {
+              Alert.alert('The PDF changed', 'It was changed while you were away. Close Fill & sign and open it again.');
+              return;
+            }
+            setSource(src);
+            setSession(s2);
+            setRelocked(false);
+          } catch (err) {
+            if (err instanceof PdfSessionError && err.kind === 'wrong-password') {
+              Alert.alert('That password isn’t right', 'Check it and try again. Passwords are case-sensitive.', [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Try again', onPress: () => resume(true) },
+              ]);
+            } else {
+              Alert.alert('Couldn’t open the PDF', 'Try again.');
+            }
+          } finally {
+            resumingRef.current = false;
+            setResuming(false);
+          }
+        })();
+      },
     );
   };
   const resumingRef = useRef(false);
@@ -641,17 +638,12 @@ export default function PdfFillScreen() {
         setEdits(e => setFieldText(e, f, options[i]));
       };
       const message = now && options.includes(now) && !isPlaceholderChoice(now) ? `Selected: ${now}` : undefined;
-      if (Platform.OS === 'ios') {
-        ActionSheetIOS.showActionSheetWithOptions(
-          { title: fieldLabel(f), message, options: [...options, 'Cancel'], cancelButtonIndex: options.length, userInterfaceStyle: 'dark' },
-          show,
-        );
-      } else {
-        Alert.alert(fieldLabel(f), message, [
-          ...options.map((o, i) => ({ text: o, onPress: () => show(i) })),
-          { text: 'Cancel', style: 'cancel' as const },
-        ]);
-      }
+      // ActionSheetIOS on iOS; on Android the app's bottom sheet, which lists
+      // every option (Android's dialog kept only three buttons).
+      ActionSheet.showActionSheetWithOptions(
+        { title: fieldLabel(f), message, options: [...options, 'Cancel'], cancelButtonIndex: options.length, userInterfaceStyle: 'dark' },
+        show,
+      );
       return;
     }
     // A text field. The Date tool puts today’s date in an empty one.

@@ -57,6 +57,7 @@ import { SearchField } from '@/components/search-field';
 import { useDocumentActions } from '@/components/document-actions';
 import { useToast } from '@/components/toast';
 import { useImportDocuments } from '@/components/use-import';
+import { useAndroidBack } from '@/components/use-android-back';
 import { MultiShareSheet } from '@/components/multi-share-sheet';
 import { ExportSheet } from '@/components/export-sheet';
 import { Radius, Spacing, Type } from '@/lib/theme';
@@ -140,6 +141,11 @@ export default function FilesScreen() {
   }, [navigation, selecting]);
   // Leaving the tab ends selection, so the tab bar is never left hidden.
   useFocusEffect(useCallback(() => () => exitSelect(), [exitSelect]));
+  // Android's back ends selection, as Cancel does, instead of leaving the tab.
+  useAndroidBack(() => {
+    exitSelect();
+    return true;
+  }, selecting);
 
   const load = useCallback(async () => {
     try {

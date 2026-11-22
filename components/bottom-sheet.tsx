@@ -44,12 +44,18 @@ type Props = {
    * SheetGroup cards stand out, like an iOS grouped list.
    */
   variant?: 'plain' | 'grouped';
+  /**
+   * Android's back button / gesture (Modal onRequestClose). Defaults to
+   * `onClose`; a sheet with a second panel (Export's options) steps back to
+   * its first panel instead of closing.
+   */
+  onBack?: () => void;
 };
 
 const OPEN_MS = 280;
 const CLOSE_MS = 220;
 
-export function BottomSheet({ visible: requested, onClose, children, transparentBackdrop, onDismissed, variant = 'plain' }: Props) {
+export function BottomSheet({ visible: requested, onClose, children, transparentBackdrop, onDismissed, variant = 'plain', onBack }: Props) {
   const { colors } = useTheme();
   // Step aside while the app lock is up: an open sheet would otherwise sit on
   // top of the lock screen. It comes back by itself after unlocking.
@@ -133,8 +139,6 @@ export function BottomSheet({ visible: requested, onClose, children, transparent
     }),
   ).current;
 
-  // RN Modal warns + breaks Android hardware back when onRequestClose is undefined.
-  const noop = () => {};
   const sheetBg = variant === 'grouped' ? colors.bg : colors.card;
 
   return (
@@ -142,8 +146,19 @@ export function BottomSheet({ visible: requested, onClose, children, transparent
       transparent
       visible={mounted}
       animationType="none"
-      onRequestClose={onClose ?? noop}
+      onRequestClose={() => {
+        // Not while it can't be dismissed (an export running with no Cancel).
+        if (!onClose) return;
+        Keyboard.dismiss();
+        (onBack ?? onClose)();
+      }}
       onDismiss={fireDismissed}
+      // Android: under the status and navigation bars, so the backdrop dims the
+      // whole screen and the sheet's bottom padding (the safe-area inset) sits
+      // over the navigation bar. RN forces this while the app is edge to edge;
+      // explicit so the insets never count twice if that ever changes.
+      statusBarTranslucent
+      navigationBarTranslucent
     >
       <KeyboardAvoidingView
         style={styles.container}

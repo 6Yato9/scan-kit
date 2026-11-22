@@ -9,7 +9,8 @@
 //   either side can be re-cropped later.
 import { useEffect, useRef, useState } from 'react';
 import * as FileSystem from 'expo-file-system/legacy';
-import { ActionSheetIOS, Alert, Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActionSheet } from '@/components/action-sheet';
 import { AppIcon } from '@/components/app-icon';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/contexts/theme-context';
@@ -85,18 +86,15 @@ const COMPOSE_TIMEOUT_MS = 30_000;
 
 function chooseSource(title: string): Promise<'camera' | 'photos' | null> {
   return new Promise(resolve => {
-    if (Platform.OS === 'ios') {
-      ActionSheetIOS.showActionSheetWithOptions(
-        { title, options: ['Scan with camera', 'Choose photo', 'Cancel'], cancelButtonIndex: 2 },
-        i => resolve(i === 0 ? 'camera' : i === 1 ? 'photos' : null),
-      );
-    } else {
-      Alert.alert(title, undefined, [
-        { text: 'Scan with camera', onPress: () => resolve('camera') },
-        { text: 'Choose photo', onPress: () => resolve('photos') },
-        { text: 'Cancel', style: 'cancel', onPress: () => resolve(null) },
-      ]);
-    }
+    ActionSheet.showActionSheetWithOptions(
+      {
+        title,
+        options: ['Scan with camera', 'Choose photo', 'Cancel'],
+        cancelButtonIndex: 2,
+        icons: ['camera-outline', 'images-outline'],
+      },
+      i => resolve(i === 0 ? 'camera' : i === 1 ? 'photos' : null),
+    );
   });
 }
 
@@ -307,6 +305,7 @@ export default function IdCardScreen() {
   return (
     <ToolScreen
       title="ID card"
+      confirmBack={front || back ? { title: 'Discard this ID card?', message: 'The sides you captured won’t be saved.' } : null}
       footer={
         <PrimaryButton
           title={back ? 'Save both sides' : 'Save ID card'}
@@ -328,7 +327,7 @@ export default function IdCardScreen() {
           : 'Each side is saved as its own page of one document. It stays on this device.'}
       </ToolNote>
       {layout === 'one' ? (
-        <View pointerEvents={saving ? 'none' : 'auto'}>
+        <View pointerEvents={saving ? 'none' : 'auto'} collapsable={false}>
           <MoreOptions
             open={moreOpen}
             onToggle={setMoreOpen}

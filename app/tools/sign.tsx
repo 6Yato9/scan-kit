@@ -366,6 +366,7 @@ export default function SignScreen() {
     <ToolScreen
       title="Sign"
       busy={!!progress}
+      confirmBack={sig ? { title: 'Discard your signature?', message: 'It hasn’t been added to the document.' } : null}
       scrollEnabled={!drawing && !placing}
       scrollRef={scrollRef}
       footer={

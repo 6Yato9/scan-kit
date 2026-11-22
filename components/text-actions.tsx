@@ -18,10 +18,8 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   AccessibilityInfo,
-  ActionSheetIOS,
   Alert,
   Linking,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -31,6 +29,8 @@ import {
   type ViewStyle,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
+import { ActionSheet } from '@/components/action-sheet';
+import type { AppIconName } from '@/components/app-icon';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/theme-context';
 import { notifyError, notifySuccess, tapLight } from '@/lib/haptics';
@@ -93,21 +93,26 @@ type Props = {
   style?: StyleProp<ViewStyle>;
 };
 
-/** Offers a choice of actions for one chip: an action sheet on iOS, an alert elsewhere. */
-function chooseAction(title: string, message: string | undefined, actions: { label: string; run: () => void }[]) {
-  if (Platform.OS === 'ios') {
-    ActionSheetIOS.showActionSheetWithOptions(
-      { title, message, options: [...actions.map(a => a.label), 'Cancel'], cancelButtonIndex: actions.length },
-      i => {
-        if (i >= 0 && i < actions.length) actions[i].run();
-      },
-    );
-    return;
-  }
-  Alert.alert(title, message, [
-    ...actions.map(a => ({ text: a.label, onPress: a.run })),
-    { text: 'Cancel', style: 'cancel' as const },
-  ]);
+type ChipAction = { label: string; run: () => void; icon?: AppIconName };
+
+/**
+ * Offers a choice of actions for one chip: the system action sheet on iOS,
+ * the app's own action sheet on Android (components/action-sheet.tsx; its
+ * dialogs drop every button past the third).
+ */
+function chooseAction(title: string, message: string | undefined, actions: ChipAction[]) {
+  ActionSheet.showActionSheetWithOptions(
+    {
+      title,
+      message,
+      options: [...actions.map(a => a.label), 'Cancel'],
+      cancelButtonIndex: actions.length,
+      icons: actions.map(a => a.icon),
+    },
+    i => {
+      if (i >= 0 && i < actions.length) actions[i].run();
+    },
+  );
 }
 
 export function TextActions({ text, imageUri, centered = false, bleed = 0, readAloud = true, style }: Props) {
@@ -180,12 +185,12 @@ export function TextActions({ text, imageUri, centered = false, bleed = 0, readA
   const onData = useCallback(
     (d: DetectedData, key: string) => {
       tapLight();
-      const copyIt = { label: 'Copy', run: () => { copy(key, d.type === 'date' || d.type === 'address' ? d.text : d.value); } };
+      const copyIt: ChipAction = { label: 'Copy', icon: 'copy-outline', run: () => { copy(key, d.type === 'date' || d.type === 'address' ? d.text : d.value); } };
       const label = detectionLabel(d, 60);
       switch (d.type) {
         case 'phone':
           chooseAction(label, undefined, [
-            { label: 'Call', run: () => { open(telUrl(d.value), 'Couldn’t start a call', 'This device can’t make phone calls. Copy the number instead.'); } },
+            { label: 'Call', icon: 'call-outline', run: () => { open(telUrl(d.value), 'Couldn’t start a call', 'This device can’t make phone calls. Copy the number instead.'); } },
             copyIt,
           ]);
           return;
@@ -193,6 +198,7 @@ export function TextActions({ text, imageUri, centered = false, bleed = 0, readA
           chooseAction(label, undefined, [
             {
               label: 'Write email',
+              icon: 'mail-outline',
               run: () => {
                 open(`mailto:${d.value}`, 'Couldn’t open Mail', 'Set up an email account in the Mail app, or copy the address instead.');
               },
@@ -204,6 +210,7 @@ export function TextActions({ text, imageUri, centered = false, bleed = 0, readA
           chooseAction(label, undefined, [
             {
               label: 'Open link',
+              icon: 'open-outline',
               run: () => {
                 openWebLink(d.value).then(ok => {
                   if (!ok) Alert.alert('Couldn’t open the link', 'Copy it and open it in your browser instead.');
@@ -215,15 +222,16 @@ export function TextActions({ text, imageUri, centered = false, bleed = 0, readA
           return;
         case 'address':
           chooseAction(d.text.replace(/\s+/g, ' ').trim(), undefined, [
-            { label: 'Open in Maps', run: () => { open(mapsUrl(d.text), 'Couldn’t open Maps', 'Copy the address instead.'); } },
+            { label: 'Open in Maps', icon: 'map-outline', run: () => { open(mapsUrl(d.text), 'Couldn’t open Maps', 'Copy the address instead.'); } },
             copyIt,
           ]);
           return;
         case 'date': {
-          const actions = [copyIt];
+          const actions: ChipAction[] = [copyIt];
           if (canAddToCalendar()) {
             actions.unshift({
               label: 'Add to calendar',
+              icon: 'calendar-outline',
               run: () => {
                 addDateToCalendar(d, text).then(outcome => {
                   if (outcome === 'saved') {
@@ -256,10 +264,11 @@ export function TextActions({ text, imageUri, centered = false, bleed = 0, readA
     (c: DetectedBarcode, key: string) => {
       tapLight();
       const link = webUrl(c.payload);
-      const actions = [{ label: 'Copy', run: () => { copy(key, c.payload); } }];
+      const actions: ChipAction[] = [{ label: 'Copy', icon: 'copy-outline', run: () => { copy(key, c.payload); } }];
       if (link) {
         actions.unshift({
           label: 'Open link',
+          icon: 'open-outline',
           run: () => {
             openWebLink(link).then(ok => {
               if (!ok) Alert.alert('Couldn’t open the link', 'Copy it and open it in your browser instead.');
@@ -511,6 +520,7 @@ export function RecognizedTextPanel({
           importantForAccessibility={reading ? 'no-hide-descendants' : 'auto'}
           accessibilityElementsHidden={reading}
           pointerEvents={reading ? 'none' : 'auto'}
+          collapsable={false}
         >
           <TextActions text={value} imageUri={imageUri} bleed={bleed} readAloud={false} />
           {footer}

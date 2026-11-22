@@ -14,7 +14,8 @@ import { useTheme } from '@/contexts/theme-context';
 import { useToast } from '@/components/toast';
 import { PrimaryButton } from '@/components/primary-button';
 import { HeaderIconButton } from '@/components/screen-header';
-import { RecognizedText } from '@/components/recognized-text';
+import { RecognizedText, type RecognizedTextHandle } from '@/components/recognized-text';
+import { useAndroidBack } from '@/components/use-android-back';
 import { TextActions } from '@/components/text-actions';
 import { Segmented, ToolIntro, ToolNote, ToolProgress, ToolScreen } from '@/components/tool-ui';
 import { MoreOptions } from '@/components/more-options';
@@ -59,10 +60,17 @@ export default function ExtractTextScreen() {
   const [found, setFound] = useState(false);
   const [editing, setEditing] = useState(false);
   const busyRef = useRef(false);
+  const textRef = useRef<RecognizedTextHandle>(null);
   const available = ocrAvailable();
   // Remembered; a choice made before it loads wins (components/use-remembered-prefs.ts).
   const [prefs, setPrefs, latestPrefs] = useRememberedPrefs<ExtractTextPrefs>(DEFAULT_EXTRACT_TEXT, loadExtractPrefs, saveExtractPrefs);
   const [moreOpen, setMoreOpen] = useState(false);
+  // Android's back while correcting the text ends the edit, as Done does
+  // (the keyboard closes first, by itself).
+  useAndroidBack(() => {
+    textRef.current?.finishEditing();
+    return true;
+  }, editing);
   // The text as recognized, before any formatting or edit, and the text it was formatted to.
   const rawRef = useRef({ plain: '', paragraphs: '' });
   const formattedRef = useRef('');
@@ -172,6 +180,7 @@ export default function ExtractTextScreen() {
       <ToolScreen
         title="Extract text"
         scroll={false}
+        confirmBack={found && text.trim() ? { title: 'Discard the recognized text?', message: 'It isn’t saved anywhere. Copy or share it first to keep it.' } : null}
         right={
           !empty && !editing ? <HeaderIconButton icon="refresh-outline" label="Start over" onPress={() => setText(null)} /> : undefined
         }
@@ -211,6 +220,7 @@ export default function ExtractTextScreen() {
               </View>
             )}
             <RecognizedText
+              ref={textRef}
               fill
               value={text}
               onChangeText={setText}
@@ -273,7 +283,7 @@ export default function ExtractTextScreen() {
         }
       />
       {available ? (
-        <View pointerEvents={busy ? 'none' : 'auto'}>
+        <View pointerEvents={busy ? 'none' : 'auto'} collapsable={false}>
           <MoreOptions
             open={moreOpen}
             onToggle={setMoreOpen}

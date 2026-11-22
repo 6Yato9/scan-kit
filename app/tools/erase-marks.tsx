@@ -163,7 +163,7 @@ export default function EraseMarksScreen() {
         disabled={running}
         onPick={d => setSelectedId(d.id)}
       />
-      <View pointerEvents={running ? 'none' : 'auto'}>
+      <View pointerEvents={running ? 'none' : 'auto'} collapsable={false}>
         <SectionLabel>Strength</SectionLabel>
         <OptionList options={STRENGTH_OPTIONS} value={strength} onChange={setStrength} />
       </View>

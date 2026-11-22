@@ -160,8 +160,11 @@ export default function TimestampScreen() {
   // the user has already changed by then wins. A ref, not state: the React
   // Compiler memoises, and this guard must never lag a render behind.
   const touched = useRef(false);
+  // Changed here and not applied yet: Android's back asks before dropping it.
+  const [edited, setEdited] = useState(false);
   const set = (patch: Partial<TimestampPrefs>) => {
     touched.current = true;
+    setEdited(true);
     setP(prev => ({ ...prev, ...patch }));
   };
   useEffect(() => {
@@ -313,6 +316,7 @@ export default function TimestampScreen() {
     <ToolScreen
       title="Timestamp"
       busy={!!progress}
+      confirmBack={edited && doc ? { title: 'Discard this timestamp?', message: 'It hasn’t been added to the document.' } : null}
       scrollEnabled={!placing}
       // The close-up (fourth child) stays in view while the options scroll.
       stickyHeaderIndices={[3]}

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Dark theme colours for res/values/system_chrome.xml (lib/theme.ts Colors.dark). -->
+<resources>
+  <color name="system_chrome_surface">#1E1E1E</color>
+  <color name="system_chrome_text">#F0F0F0</color>
+  <color name="system_chrome_secondary">#AAAAAA</color>
+  <color name="system_chrome_accent">#4EC6E0</color>
+</resources>

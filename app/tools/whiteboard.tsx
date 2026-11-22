@@ -108,7 +108,13 @@ export default function WhiteboardScreen() {
           { icon: 'color-filter-outline', text: 'Change the filter for one page, or all of them, later in the viewer.' },
         ]}
       />
-      <View pointerEvents={busy ? 'none' : 'auto'}>
+      {/* collapsable={false}: pointerEvents 'none' stops Fabric flattening this
+          View and 'auto' lets it, so toggling it moves the options between
+          native parents. When that happens while the screen animates out
+          (router.replace to the viewer when the save finishes), Android's
+          screen transition still holds the old parent and the app crashed with
+          "addViewAt … already has a parent". */}
+      <View pointerEvents={busy ? 'none' : 'auto'} collapsable={false}>
         <MoreOptions open={moreOpen} onToggle={setMoreOpen} changed={look === 'color' ? 0 : 1}>
           <SectionLabel>Color</SectionLabel>
           <Segmented options={LOOK_OPTIONS} value={look} onChange={setLook} />

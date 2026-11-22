@@ -277,7 +277,7 @@ export default function SplitScreen() {
       {doc ? (
         <>
           <SectionLabel>Split</SectionLabel>
-          <View pointerEvents={saving ? 'none' : 'auto'}>
+          <View pointerEvents={saving ? 'none' : 'auto'} collapsable={false}>
             <Segmented options={MODE_OPTIONS} value={mode} onChange={v => setPrefs({ mode: v })} />
           </View>
           {mode === 'every' && count > 2 ? (

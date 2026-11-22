@@ -192,6 +192,8 @@ type VisionOcrNative = {
   copyIncomingFile?: (sourceUri: string, destUri: string) => Promise<string>;
   /** Android only: the name, MIME type and size of an incoming content:// (or file://) URL, null when unknown. */
   incomingFileInfo?: (uri: string) => Promise<{ name: string | null; mimeType: string | null; size: number | null }>;
+  /** Android only (synchronous): this build's PdfDocumentView is the real (PDFium) viewer, not the phase-2 placeholder. */
+  hasPdfView?: () => boolean;
   /** Android only (synchronous): whether the device has any camera to scan with. */
   hasCamera?: () => boolean;
   /**

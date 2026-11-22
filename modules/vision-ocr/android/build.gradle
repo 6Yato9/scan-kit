@@ -13,6 +13,7 @@ android {
   defaultConfig {
     versionCode 1
     versionName '1.0.0'
+    consumerProguardFiles 'consumer-rules.pro'
   }
   buildFeatures {
     buildConfig true
@@ -42,6 +43,22 @@ dependencies {
   implementation "androidx.camera:camera-camera2:${camerax_version}"
   implementation "androidx.camera:camera-lifecycle:${camerax_version}"
   implementation "androidx.camera:camera-view:${camerax_version}"
+  // PDF reading (phase 3). Rendering: PDFium through PdfiumAndroidKt
+  // (Apache-2.0; PDFium itself BSD-3), which draws annotations and form
+  // fields (Android's PdfRenderer before API 35 draws neither) and opens
+  // encrypted files. 1.0.35 is the newest release built with Kotlin 2.2
+  // metadata (2.x needs a Kotlin 2.3+ compiler; the app builds with 2.1).
+  // Its Guava dependency only backs page-cache helpers we don't use.
+  implementation('io.legere:pdfiumandroid:1.0.35') {
+    exclude group: 'com.google.guava', module: 'guava'
+  }
+  // Structure, passwords and permissions (PdfBox-Android, Apache-2.0).
+  // BouncyCastle is only needed for public-key (certificate) encryption,
+  // which Scan Kit doesn't open; the standard password handler uses the
+  // platform's own crypto.
+  implementation('com.tom-roush:pdfbox-android:2.0.27.0') {
+    exclude group: 'org.bouncycastle'
+  }
 
   testImplementation 'junit:junit:4.13.2'
 }

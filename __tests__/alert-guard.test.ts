@@ -1,5 +1,5 @@
 import { Alert } from 'react-native';
-import { guardAlertButtons, installAlertGuard } from '../lib/alert-guard';
+import { androidDismissOptions, guardAlertButtons, installAlertGuard } from '../lib/alert-guard';
 
 describe('guardAlertButtons', () => {
   test('a button pressed while locked does nothing; after unlocking it works', () => {
@@ -75,5 +75,36 @@ describe('installAlertGuard with a hold', () => {
 
     Alert.alert('Now', 'shown');
     expect(native).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('androidDismissOptions (Android back button on alerts)', () => {
+  test('with a Cancel button, back dismisses and runs that button', () => {
+    const onCancel = jest.fn();
+    const onDiscard = jest.fn();
+    const opts = androidDismissOptions(
+      [{ text: 'Keep editing', style: 'cancel', onPress: onCancel }, { text: 'Discard', style: 'destructive', onPress: onDiscard }],
+      undefined,
+    ) as { cancelable: boolean; onDismiss: () => void };
+    expect(opts.cancelable).toBe(true);
+    opts.onDismiss();
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(onDiscard).not.toHaveBeenCalled();
+  });
+
+  test('keeps the caller\'s own onDismiss, and their explicit cancelable choice', () => {
+    const mine = jest.fn();
+    const opts = androidDismissOptions([{ text: 'Cancel', style: 'cancel' }], { onDismiss: mine }) as { onDismiss: () => void };
+    opts.onDismiss();
+    expect(mine).toHaveBeenCalledTimes(1);
+    const fixed = { cancelable: false };
+    expect(androidDismissOptions([{ text: 'Cancel', style: 'cancel' }], fixed)).toBe(fixed);
+  });
+
+  test('a lone OK is dismissable; a choice without Cancel stays as it was', () => {
+    expect(androidDismissOptions(undefined, undefined)).toEqual({ cancelable: true });
+    expect(androidDismissOptions([{ text: 'OK' }], undefined)).toEqual({ cancelable: true });
+    const choice = [{ text: 'Keep', onPress: () => {} }, { text: 'Replace', onPress: () => {} }];
+    expect(androidDismissOptions(choice, undefined)).toBeUndefined();
   });
 });

@@ -1,6 +1,6 @@
 // app/_layout.tsx
 import { useEffect, useRef, useState } from 'react';
-import { AppState, LogBox, StatusBar as RNStatusBar, useColorScheme } from 'react-native';
+import { AppState, LogBox, Platform, StatusBar as RNStatusBar, useColorScheme } from 'react-native';
 import { Stack, usePathname, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -12,9 +12,12 @@ import { FilterBaker } from '@/components/filter-baker';
 import { BakeIndicator } from '@/components/bake-indicator';
 import { LockCoverScreen, LockGate, selfLockingRoute } from '@/components/lock-gate';
 import { QuickActionsHandler } from '@/components/quick-actions-handler';
+import { TextPromptHost } from '@/components/text-prompt';
+import { ActionSheetHost } from '@/components/action-sheet';
 import { bakePage } from '@/lib/bake';
 import { reassertCalls, statusBarStyleFor } from '@/lib/status-bar-style';
 import { subscribeSystemUI } from '@/lib/system-ui';
+import { setNavigationBarStyle } from '@/modules/system-chrome/src';
 import { garbageCollectOrphans, sweepConvertLeftovers } from '@/lib/files';
 import { ensureStorageLayout } from '@/lib/storage-layout';
 import { clearLegacyOcrCache } from '@/lib/ocr-cache';
@@ -135,6 +138,15 @@ function StatusBarSync() {
 
   useEffect(() => {
     const apply = (redraw: boolean) => {
+      if (Platform.OS === 'android') {
+        // No UIKit draw to unstick on Android, and its 'default' means light
+        // icons (not "dark on a light system"): passing through it flickered
+        // the clock white on light screens. Just the target, and the
+        // navigation bar's buttons to match.
+        RNStatusBar.setBarStyle(style === 'light' ? 'light-content' : 'dark-content', false);
+        setNavigationBarStyle(style);
+        return;
+      }
       reassertCalls(style, systemDark, redraw).forEach(s => RNStatusBar.setBarStyle(s, false));
     };
     // Only a change of theme / system appearance can leave UIKit's draw stale;
@@ -145,6 +157,9 @@ function StatusBarSync() {
     lastAppearance.current = appearance;
 
     RNStatusBar.setBarStyle(style === 'light' ? 'light-content' : 'dark-content', true);
+    // Android: the navigation bar's buttons follow the same style (light over
+    // the dark viewer and camera, and under the app's own Dark setting).
+    if (Platform.OS === 'android') setNavigationBarStyle(style);
     const timers: ReturnType<typeof setTimeout>[] = [];
     const later = (ms: number, redraw: boolean) => { timers.push(setTimeout(() => apply(redraw), ms)); };
     [150, 400, 800, 1400].forEach(ms => later(ms, appearanceChanged && ms <= 400));
@@ -264,10 +279,15 @@ function ThemedStack() {
       <Stack.Screen name="tools/extract-text" options={{ headerShown: false, presentation: 'card' }} />
       <Stack.Screen name="tools/business-card" options={{ headerShown: false, presentation: 'card' }} />
     </Stack>
+    {/* Android's text prompts (components/text-prompt.tsx; iOS uses Alert.prompt).
+        Inside LockGate: it steps aside while the app is locked. */}
+    <TextPromptHost />
     </LockGate>
     {/* Home-screen quick actions (lib/quick-actions.ts). After LockGate, so App
         Lock reads its flag first; it waits for the unlock itself. */}
     <QuickActionsHandler />
+    {/* Android's action sheets (components/action-sheet.tsx); iOS uses UIKit's. */}
+    <ActionSheetHost />
     {/* After the navigator so it draws above the tab screens; clears the
         floating tab bar. Full-screen surfaces (viewer) render their own. */}
     <BakeIndicator placement="bottom" offset={TAB_BAR_CLEARANCE} />

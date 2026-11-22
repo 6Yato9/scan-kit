@@ -20,9 +20,8 @@ import java.io.File
  * checks every function, so only what exists here lights up on Android.
  *
  * Views, in the same order as iOS: PdfDocumentView FIRST (the module's
- * default view in shipped JS; a placeholder until phase 3, which JS doesn't
- * use on Android yet), then DocumentCameraView (phase 2: CameraX, page
- * detection, auto-capture).
+ * default view in shipped JS; PDFium, phase 3), then DocumentCameraView
+ * (phase 2: CameraX, page detection, auto-capture).
  *
  * Every function runs off the main thread (shareFiles presents on it), and
  * rejects with promise.reject(code, message) so JS sees the exact message,
@@ -49,7 +48,7 @@ class VisionOcrModule : Module() {
       } catch (e: QuadMath.BadQuad) {
         promise.reject("ERR_BAD_QUAD", e.message, null)
       } catch (e: OutOfMemoryError) {
-        promise.reject(fallbackCode, "Not enough memory to process the image", null)
+        promise.reject(fallbackCode, "Not enough memory to process the file", null)
       } catch (e: Throwable) {
         Log.w("VisionOcr", "$fallbackCode: ${e.message}", e)
         promise.reject(fallbackCode, e.message ?: e.javaClass.simpleName, null)
@@ -76,11 +75,13 @@ class VisionOcrModule : Module() {
 
     // Must stay the FIRST view: requireNativeView('VisionOcr') without a name
     // is the PDF viewer in shipped JS.
+    // Phase 3: PDFium pages, the same props and events as PdfDocumentView.swift.
     View(PdfDocumentView::class) {
       Events("onPageChange", "onLoadError")
       Prop("source") { view: PdfDocumentView, uri: String? -> view.setSource(uri) }
-      Prop("backgroundHex") { _: PdfDocumentView, _: String? -> }
-      Prop("initialPage") { _: PdfDocumentView, _: Int? -> }
+      Prop("backgroundHex") { view: PdfDocumentView, hex: String? -> view.setBackgroundHex(hex) }
+      Prop("initialPage") { view: PdfDocumentView, page: Int? -> view.setInitialPage(page) }
+      OnViewDestroys { view: PdfDocumentView -> view.destroy() }
     }
 
     // Scan Kit's own document camera (DocumentCameraView.kt), same contract
@@ -97,6 +98,43 @@ class VisionOcrModule : Module() {
       OnViewDestroys { view: DocumentCameraView -> view.destroy() }
       AsyncFunction("capture") { view: DocumentCameraView, promise: Promise -> view.capture(promise) }
       AsyncFunction("rearm") { view: DocumentCameraView -> view.rearm() }
+    }
+
+    // ── PDF reading (port phase 3, PdfEngine.kt). Same contracts and
+    // rejection messages as the iOS functions of the same names.
+
+    /** Android only: this build's PdfDocumentView is the real viewer (phase-2 builds registered a placeholder). */
+    Function("hasPdfView") { true }
+
+    /** { pageCount, locked, encrypted, restricted, … } without changing the file. Rejects ERR_PDF_INFO. */
+    AsyncFunction("pdfInfo") { uri: String, password: String?, promise: Promise ->
+      run(promise, "ERR_PDF_INFO") { PdfEngine.info(context, File(ImageFiles.pathOf(uri)), password) }
+    }
+
+    /** What the permissions allow, opened with `password` when it needs one; which password it was. Rejects ERR_PDF_INFO. */
+    AsyncFunction("pdfPermissions") { uri: String, password: String?, promise: Promise ->
+      run(promise, "ERR_PDF_INFO") { PdfEngine.permissions(context, File(ImageFiles.pathOf(uri)), password) }
+    }
+
+    /** An unencrypted, verified copy of a protected PDF (the session's working copy). Rejects "wrong-password". */
+    AsyncFunction("unlockPdf") { inputUri: String, outputUri: String, password: String, promise: Promise ->
+      run(promise, "ERR_PDF_UNLOCK") {
+        val out = File(ImageFiles.pathOf(outputUri))
+        PdfEngine.unlock(context, File(ImageFiles.pathOf(inputUri)), out, password)
+        ImageFiles.uriOf(out)
+      }
+    }
+
+    /** Embedded text per page, plus filled-in values; rejects "locked" when a password is needed. */
+    AsyncFunction("pdfPageTexts") { uri: String, password: String?, promise: Promise ->
+      run(promise, "ERR_PDF_TEXT") { PdfEngine.pageTexts(context, File(ImageFiles.pathOf(uri)), password) }
+    }
+
+    /** Every page as `pdfpage-%03d.jpg` in `outputDirUri` (~200 dpi, long edge ≤ maxEdge); resolves the URIs in order. */
+    AsyncFunction("renderPdfPages") { inputUri: String, outputDirUri: String, maxEdge: Double, promise: Promise ->
+      run(promise, "ERR_PDF_RENDER") {
+        PdfEngine.renderPages(context, File(ImageFiles.pathOf(inputUri)), File(ImageFiles.pathOf(outputDirUri)), maxEdge)
+      }
     }
 
     /** Whether the device has any camera to scan with (JS offers Import photos otherwise). */

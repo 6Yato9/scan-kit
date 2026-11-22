@@ -309,7 +309,18 @@ export function CropModal({ visible, docId, pageIndex, target: givenTarget, cach
   ];
 
   return (
-    <Modal key={modalKey} visible={visible && !locked} animationType="slide" onRequestClose={onCancel} transparent={false}>
+    <Modal
+      key={modalKey}
+      visible={visible && !locked}
+      animationType="slide"
+      // Android's back is Cancel, except while the crop is being applied.
+      onRequestClose={() => {
+        if (busy !== 'apply') onCancel();
+      }}
+      transparent={false}
+      statusBarTranslucent
+      navigationBarTranslucent
+    >
       <View style={[styles.container, { backgroundColor: colors.chrome }]}>
         <StatusBar style="light" />
         {/* This modal covers the viewer, whose baker can't run while buried. */}

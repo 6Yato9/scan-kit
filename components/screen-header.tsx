@@ -4,8 +4,8 @@
 // Layout: [left slot | title | right slot]. The two side slots are flex:1 and
 // equal, so the title is centred on the screen no matter what each side holds.
 // The title truncates rather than colliding with the side actions.
-import { ReactNode } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { ReactNode, useState } from 'react';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/theme-context';
@@ -70,7 +70,12 @@ export function HeaderTextButton({
       accessibilityRole="button"
       style={({ pressed }) => [styles.textBtn, (pressed || disabled) && { opacity: disabled ? 0.35 : 0.5 }]}
     >
-      <Text style={[Type.body, { color: color ?? colors.accent, fontWeight: emphasis ? '600' : '400' }]} maxFontSizeMultiplier={maxFontSizeMultiplier}>
+      <Text
+        style={[Type.body, { color: color ?? colors.accent, fontWeight: emphasis ? '600' : '400' }]}
+        maxFontSizeMultiplier={maxFontSizeMultiplier}
+        // Android: one line. The header makes room for the whole label there (below).
+        numberOfLines={Platform.OS === 'android' ? 1 : undefined}
+      >
         {title}
       </Text>
     </Pressable>
@@ -116,6 +121,18 @@ export function ScreenHeader({
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const fg = dark ? colors.chromeText : colors.text;
+  // Android: Roboto sets a label wider than SF does, and a side slot fixed at
+  // a share of the bar wrapped "Add 1 page" onto two lines. There each side
+  // is as wide as the wider side's content (measured), so the title stays
+  // centred and is what gives way (it truncates). iOS keeps the equal
+  // flex slots.
+  const fitSides = Platform.OS === 'android' && !fillLeft;
+  const [sideW, setSideW] = useState({ left: 0, right: 0 });
+  const sideMin = Math.max(sideW.left, sideW.right);
+  const measure = (side: 'left' | 'right') => (e: { nativeEvent: { layout: { width: number } } }) => {
+    const w = Math.ceil(e.nativeEvent.layout.width);
+    setSideW(prev => (prev[side] === w ? prev : { ...prev, [side]: w }));
+  };
 
   const leftContent =
     left ??
@@ -133,15 +150,24 @@ export function ScreenHeader({
   return (
     <View style={[styles.bar, { paddingTop: withInset ? insets.top : 0 }, dark && { backgroundColor: colors.chrome }]}>
       <View style={styles.row}>
-        <View style={[styles.side, styles.sideLeft]}>{leftContent}</View>
+        <View style={[styles.side, styles.sideLeft, fitSides && [styles.sideFitContent, { minWidth: sideMin }]]}>
+          {fitSides ? <View style={styles.sideContent} onLayout={measure('left')}>{leftContent}</View> : leftContent}
+        </View>
         {title ? (
-          <Text style={[Type.headline, styles.title, { color: fg }]} numberOfLines={1} accessibilityRole="header" maxFontSizeMultiplier={maxTitleScale}>
+          <Text
+            style={[Type.headline, styles.title, fitSides && styles.titleFill, { color: fg }]}
+            numberOfLines={1}
+            accessibilityRole="header"
+            maxFontSizeMultiplier={maxTitleScale}
+          >
             {title}
           </Text>
         ) : (
-          <View />
+          <View style={fitSides ? styles.titleFill : undefined} />
         )}
-        <View style={[styles.side, styles.sideRight, fillLeft && styles.sideFit]}>{right}</View>
+        <View style={[styles.side, styles.sideRight, fillLeft && styles.sideFit, fitSides && [styles.sideFitContent, { minWidth: sideMin }]]}>
+          {fitSides ? <View style={styles.sideContent} onLayout={measure('right')}>{right}</View> : right}
+        </View>
       </View>
     </View>
   );
@@ -197,7 +223,12 @@ const styles = StyleSheet.create({
   sideLeft: { justifyContent: 'flex-start' },
   sideRight: { justifyContent: 'flex-end' },
   sideFit: { flex: 0 },
+  // Android (fitSides): content-wide sides that never shrink; the title takes the rest.
+  // (`flex: 0`, not just flexBasis 'auto': Yoga reads a positive `flex` as a zero basis.)
+  sideFitContent: { flex: 0, flexGrow: 0, flexShrink: 0 },
+  sideContent: { flexDirection: 'row', alignItems: 'center' },
   title: { flexShrink: 1, textAlign: 'center', maxWidth: '60%' },
+  titleFill: { flex: 1, maxWidth: undefined },
   iconBtn: { minWidth: HIT, height: HIT, alignItems: 'center', justifyContent: 'center' },
   textBtn: { minHeight: HIT, paddingHorizontal: Spacing.sm, justifyContent: 'center' },
 });

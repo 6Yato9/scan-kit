@@ -153,6 +153,7 @@ export function ToastProvider({
       {message !== null && (
         <Animated.View
           pointerEvents={action ? 'box-none' : 'none'}
+          collapsable={false}
           style={[
             styles.wrapper,
             { bottom: bottom ?? anchor?.bottom ?? insets.bottom + offset },

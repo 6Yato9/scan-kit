@@ -1,0 +1,28 @@
+// modules/system-chrome: Android-only window chrome for Scan Kit (iOS never
+// links it: expo-module.config.json lists only android).
+//  - The navigation bar's button colour, per screen (light buttons over the
+//    always-dark viewer / camera, dark ones over light screens). React
+//    Native's edge-to-edge setup picks it once, at launch, from the system
+//    theme, and has no API to change it.
+//  - The look of the system alert dialogs (React Native's Alert): rounded,
+//    the app's accent, sentence-case buttons (res/values/system_chrome.xml).
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.systemchrome'
+version = '1.0.0'
+
+android {
+  namespace "expo.modules.systemchrome"
+  defaultConfig {
+    versionCode 1
+    versionName '1.0.0'
+  }
+}
+
+dependencies {
+  // The same versions React Native 0.81 ships (its gradle/libs.versions.toml).
+  implementation 'androidx.appcompat:appcompat:1.7.0'
+}

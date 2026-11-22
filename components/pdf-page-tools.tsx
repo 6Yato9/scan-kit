@@ -17,7 +17,8 @@
 // stay protected (lib/pdf-edit.ts rewriteStoredPdf). Splitting it says first
 // that the new documents won't need a password.
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { ActionSheetIOS, ActivityIndicator, Alert, Platform, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, StyleSheet, Text, View } from 'react-native';
+import { ActionSheet } from '@/components/action-sheet';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { useRouter } from 'expo-router';
 import type { Document } from '@/types/document';
@@ -401,28 +402,21 @@ export function usePdfPageTools({
     }`;
     const keep = 'Split and keep the original';
     const remove = 'Split and delete the original';
-    if (Platform.OS === 'ios') {
-      ActionSheetIOS.showActionSheetWithOptions(
-        {
-          title,
-          message,
-          options: [keep, remove, 'Cancel'],
-          cancelButtonIndex: 2,
-          destructiveButtonIndex: 1,
-          userInterfaceStyle: 'dark',
-        },
-        i => {
-          if (i === 0) doSplit(after, false);
-          else if (i === 1) doSplit(after, true);
-        },
-      );
-    } else {
-      Alert.alert(title, message, [
-        { text: keep, onPress: () => { doSplit(after, false); } },
-        { text: remove, style: 'destructive', onPress: () => { doSplit(after, true); } },
-        { text: 'Cancel', style: 'cancel' },
-      ]);
-    }
+    ActionSheet.showActionSheetWithOptions(
+      {
+        title,
+        message,
+        options: [keep, remove, 'Cancel'],
+        cancelButtonIndex: 2,
+        destructiveButtonIndex: 1,
+        userInterfaceStyle: 'dark',
+        icons: ['documents-outline', 'trash-outline'],
+      },
+      i => {
+        if (i === 0) doSplit(after, false);
+        else if (i === 1) doSplit(after, true);
+      },
+    );
   }, [ready, n, at, doSplit, unlockedForSession]);
 
   // ── Merge ──────────────────────────────────────────────────────────────────

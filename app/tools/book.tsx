@@ -125,7 +125,7 @@ export default function BookScreen() {
           { icon: 'documents-outline', text: 'All spreads are saved, in order, as one document.' },
         ]}
       />
-      <View pointerEvents={busy ? 'none' : 'auto'}>
+      <View pointerEvents={busy ? 'none' : 'auto'} collapsable={false}>
         <MoreOptions open={moreOpen} onToggle={setMoreOpen} changed={order === 'rtl' ? 1 : 0}>
           <SectionLabel>Reading order</SectionLabel>
           <Segmented

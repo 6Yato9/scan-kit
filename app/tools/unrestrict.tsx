@@ -41,6 +41,7 @@ import { Radius, Spacing, Type } from '@/lib/theme';
 import type { Document } from '@/types/document';
 import type { IoniconName } from '@/components/app-icon';
 import { unavailableCopy } from '@/lib/platform-support';
+import { showTextPrompt } from '@/components/text-prompt';
 
 /** iOS: a build older than the feature; Android: not built yet (lib/platform-support.ts). */
 const UNAVAILABLE = unavailableCopy(
@@ -199,14 +200,15 @@ export default function UnrestrictScreen() {
 
   /** The same prompt the viewer uses for a locked PDF. */
   const askPassword = (target: Document, again = false) => {
-    Alert.prompt(
-      again ? 'Enter the password again' : 'Enter the PDF’s password',
-      `“${target.name}” needs a password to open. The unlocked PDF won’t.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Unlock', isPreferred: true, onPress: (value?: string) => { run(target, value ?? '', true); } },
-      ],
-      'secure-text',
+    // Alert.prompt on iOS; Scan Kit's own prompt on Android (Alert.prompt is iOS-only).
+    showTextPrompt(
+      {
+        title: again ? 'Enter the password again' : 'Enter the PDF’s password',
+        message: `“${target.name}” needs a password to open. The unlocked PDF won’t.`,
+        secure: true,
+        confirmLabel: 'Unlock',
+      },
+      value => { run(target, value, true); },
     );
   };
 

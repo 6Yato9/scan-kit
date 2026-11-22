@@ -34,6 +34,7 @@ import { HIT, Radius, Spacing, Type } from '@/lib/theme';
 import type { Document } from '@/types/document';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
 import { noteNewDocument } from '@/lib/new-doc-note';
+import { confirmDiscard, useAndroidBack, type DiscardPrompt } from '@/components/use-android-back';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
@@ -98,6 +99,7 @@ export function ToolScreen({
   busy = false,
   scrollRef,
   stickyHeaderIndices,
+  confirmBack,
 }: {
   title: string;
   children: ReactNode;
@@ -121,8 +123,24 @@ export function ToolScreen({
    * a child an opaque background.
    */
   stickyHeaderIndices?: number[];
+  /**
+   * Work that leaving would throw away (a drawn signature, redaction boxes):
+   * on Android, the back button / gesture and the header's back ask with this
+   * first. iOS is unchanged (no system back button; the header goes back).
+   */
+  confirmBack?: DiscardPrompt | null;
 }) {
   const router = useRouter();
+  const askBack = Platform.OS === 'android' && !!confirmBack;
+  const goBack = () => {
+    if (askBack && confirmBack) confirmDiscard(confirmBack, () => router.back());
+    else router.back();
+  };
+  useAndroidBack(() => {
+    if (busy) return true;
+    goBack();
+    return true;
+  }, askBack);
   const navigation = useNavigation();
   useEffect(() => {
     if (!busy) return;
@@ -156,11 +174,14 @@ export function ToolScreen({
   return (
     <KeyboardAvoidingView
       style={[styles.screen, { backgroundColor: colors.bg }]}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      // Android too: the app draws edge to edge, where the window no longer
+      // shrinks for the keyboard (adjustResize), so the footer and the field
+      // being typed in would sit under it.
+      behavior="padding"
     >
       <ScreenHeader
         title={title}
-        onBack={() => router.back()}
+        onBack={goBack}
         backIcon={docId ? 'close' : 'back'}
         backDisabled={busy}
         right={right}

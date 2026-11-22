@@ -237,7 +237,7 @@ export default function LongImageScreen() {
         note="Documents with two or more pages."
         onPick={d => setDocId(d.id)}
       />
-      <View pointerEvents={working ? 'none' : 'auto'}>
+      <View pointerEvents={working ? 'none' : 'auto'} collapsable={false}>
         <SectionLabel>Space between pages</SectionLabel>
         <Segmented options={SPACE_OPTIONS} value={opts.gap} onChange={v => setOpts({ gap: v })} />
         <MoreOptions open={moreOpen} onToggle={setMoreOpen} changed={changed}>

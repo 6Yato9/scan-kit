@@ -104,8 +104,11 @@ export default function WatermarkScreen() {
   // The remembered choices arrive a moment after the screen opens; anything
   // the user has already changed by then wins.
   const touched = useRef(false);
+  // Changed here and not applied yet: Android's back asks before dropping it.
+  const [edited, setEdited] = useState(false);
   const touch = () => {
     touched.current = true;
+    setEdited(true);
   };
   useEffect(() => {
     let live = true;
@@ -228,6 +231,7 @@ export default function WatermarkScreen() {
     <ToolScreen
       title="Watermark"
       busy={!!progress}
+      confirmBack={edited && doc && label ? { title: 'Discard this watermark?', message: 'It hasn’t been added to the document.' } : null}
       // The preview (third child) stays in view while the options scroll.
       stickyHeaderIndices={[2]}
       footer={

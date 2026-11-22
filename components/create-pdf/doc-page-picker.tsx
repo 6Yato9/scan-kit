@@ -9,7 +9,8 @@
 // dismiss this RN Modal natively behind JS's back (see components/
 // reorder-modal.tsx), so it closes itself properly while locked instead.
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Modal, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Modal, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@/contexts/theme-context';
 import { HeaderIconButton, HeaderTextButton, ScreenHeader } from '@/components/screen-header';
@@ -69,6 +70,11 @@ export function DocPagePicker({
 }) {
   const { colors } = useTheme();
   const { width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  // iOS presents a page sheet below the status bar; Android has no page
+  // sheets, so the modal is full screen, edge to edge, and pads for the bars.
+  const fullScreen = Platform.OS !== 'ios';
+  const bottomPad = fullScreen ? { paddingBottom: Spacing.xxxl + insets.bottom } : null;
   const [docs, setDocs] = useState<Document[] | null>(null);
   const [chosen, setChosen] = useState<Chosen | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -142,12 +148,23 @@ export function DocPagePicker({
   const tileW = Math.floor((Math.min(width, 700) - Spacing.gutter * 2 - Spacing.md * (cols - 1)) / cols);
 
   return (
-    <Modal key={modalKey} visible={visible && !locked} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+    <Modal
+      key={modalKey}
+      visible={visible && !locked}
+      animationType="slide"
+      presentationStyle="pageSheet"
+      // iOS: the page sheet's swipe down closes it, as before. Android's back
+      // steps from a document's pages back to the list, as the chevron does;
+      // from the list it is Cancel.
+      onRequestClose={Platform.OS === 'ios' ? onClose : () => (chosen ? setChosen(null) : onClose())}
+      statusBarTranslucent
+      navigationBarTranslucent
+    >
       <View style={[styles.flex, { backgroundColor: colors.bg }]}>
         {chosen ? (
           <>
             <ScreenHeader
-              withInset={false}
+              withInset={fullScreen}
               title={chosen.doc.name}
               left={<HeaderIconButton icon="chevron-back" size={28} label="Documents" onPress={() => setChosen(null)} />}
               right={<HeaderTextButton title="Add" emphasis disabled={selected.size === 0} onPress={add} />}
@@ -166,7 +183,7 @@ export function DocPagePicker({
               keyExtractor={i => String(i)}
               numColumns={cols}
               columnWrapperStyle={styles.gridRow}
-              contentContainerStyle={styles.grid}
+              contentContainerStyle={[styles.grid, bottomPad]}
               renderItem={({ item: i }) => {
                 const on = selected.has(i);
                 const thumb = chosen.thumbs[i];
@@ -204,7 +221,7 @@ export function DocPagePicker({
           </>
         ) : (
           <>
-            <ScreenHeader withInset={false} title="Add pages from" left={<HeaderTextButton title="Cancel" onPress={onClose} />} />
+            <ScreenHeader withInset={fullScreen} title="Add pages from" left={<HeaderTextButton title="Cancel" onPress={onClose} />} />
             {docs === null ? (
               <ActivityIndicator style={styles.loading} color={colors.muted} />
             ) : docs.length === 0 ? (
@@ -217,7 +234,7 @@ export function DocPagePicker({
               <FlatList
                 data={[0]}
                 keyExtractor={() => 'docs'}
-                contentContainerStyle={styles.docs}
+                contentContainerStyle={[styles.docs, bottomPad]}
                 renderItem={() => (
                   <View>
                     <SectionLabel>Choose a document</SectionLabel>

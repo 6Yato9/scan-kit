@@ -491,7 +491,7 @@ export default function CreatePdfScreen() {
       {addingLine}
       <ToolNote>{footerNote}</ToolNote>
       {kind === 'pdf' ? (
-        <View pointerEvents={working ? 'none' : 'auto'}>
+        <View pointerEvents={working ? 'none' : 'auto'} collapsable={false}>
           <MoreOptions
             open={moreOpen}
             onToggle={setMoreOpen}
@@ -543,6 +543,10 @@ export default function CreatePdfScreen() {
       title="Create PDF"
       scroll={false}
       busy={!!building}
+      confirmBack={items.length > 0 ? {
+        title: 'Discard this PDF?',
+        message: items.length === 1 ? 'The page you added won’t be saved.' : `The ${items.length} pages you added won’t be saved.`,
+      } : null}
       footer={
         building ? (
           <>

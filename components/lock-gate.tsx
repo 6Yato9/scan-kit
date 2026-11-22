@@ -371,7 +371,7 @@ export function LockGate({ children }: { children: React.ReactNode }) {
         {enabled === null && <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.bg }]} />}
         {/* In-tree cover for a cold start, and a backstop under the /lock route. */}
         {isLocked && (
-          <View style={StyleSheet.absoluteFill} pointerEvents={routeShown ? 'none' : 'auto'}>
+          <View style={StyleSheet.absoluteFill} pointerEvents={routeShown ? 'none' : 'auto'} collapsable={false}>
             <LockScreen />
           </View>
         )}

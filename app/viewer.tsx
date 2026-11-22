@@ -2,7 +2,6 @@
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActionSheetIOS,
   ActivityIndicator,
   Alert,
   BackHandler,
@@ -100,7 +99,8 @@ import { EditTab, FILTER_LABELS, PageEditPanel } from '@/components/page-actions
 import { movedOrder, ThumbnailStrip } from '@/components/thumbnail-strip';
 import { ViewerToolbar, type ToolbarItem } from '@/components/viewer-toolbar';
 import { ViewerToolsSheet } from '@/components/viewer-tools-sheet';
-import { AppIcon } from '@/components/app-icon';
+import { AppIcon, type AppIconName } from '@/components/app-icon';
+import { ActionSheet } from '@/components/action-sheet';
 import { MoreAction, ViewerMoreSheet } from '@/components/viewer-more-sheet';
 import { ToastProvider, useToast } from '@/components/toast';
 import { ReorderModal } from '@/components/reorder-modal';
@@ -109,6 +109,7 @@ import { MoveFolderSheet } from '@/components/move-folder-sheet';
 import { CropModal } from '@/components/crop-modal';
 import { FilterBaker } from '@/components/filter-baker';
 import { EmptyState } from '@/components/empty-state';
+import { showTextPrompt } from '@/components/text-prompt';
 import { BakeIndicator } from '@/components/bake-indicator';
 import { PdfConvertBanner, useConvertBannerDismissed } from '@/components/pdf-convert-banner';
 import { PdfDocumentView } from '@/modules/vision-ocr/src/PdfDocumentView';
@@ -885,26 +886,20 @@ function ViewerContent({
   }, [adding, withPendingChoices, toast, undoAddPages, lastUndo]);
 
   const handleAddMore = useCallback(() => {
-    if (Platform.OS === 'ios') {
-      ActionSheetIOS.showActionSheetWithOptions(
-        {
-          title: 'Add pages',
-          options: ['Scan with camera', 'Choose from Photos', 'Cancel'],
-          cancelButtonIndex: 2,
-          userInterfaceStyle: 'dark',
-        },
-        index => {
-          if (index === 0) addFrom('camera');
-          else if (index === 1) addFrom('photos');
-        },
-      );
-    } else {
-      Alert.alert('Add pages', undefined, [
-        { text: 'Scan with camera', onPress: () => addFrom('camera') },
-        { text: 'Choose from Photos', onPress: () => addFrom('photos') },
-        { text: 'Cancel', style: 'cancel' },
-      ]);
-    }
+    // ActionSheetIOS on iOS; the app's bottom sheet on Android (components/action-sheet).
+    ActionSheet.showActionSheetWithOptions(
+      {
+        title: 'Add pages',
+        options: ['Scan with camera', 'Choose from Photos', 'Cancel'],
+        cancelButtonIndex: 2,
+        userInterfaceStyle: 'dark',
+        icons: ['camera-outline', 'images-outline'],
+      },
+      index => {
+        if (index === 0) addFrom('camera');
+        else if (index === 1) addFrom('photos');
+      },
+    );
   }, [addFrom]);
 
   // ── Retake page ───────────────────────────────────────────────────────────
@@ -1022,21 +1017,20 @@ function ViewerContent({
     const index = at ?? pageRef.current;
     const title = doc.pages.length > 1 ? `Retake page ${index + 1}` : 'Retake page';
     const message = 'The new page replaces this one, in the same place.';
-    if (Platform.OS === 'ios') {
-      ActionSheetIOS.showActionSheetWithOptions(
-        { title, message, options: ['Scan with camera', 'Choose from Photos', 'Cancel'], cancelButtonIndex: 2, userInterfaceStyle: 'dark' },
-        i => {
-          if (i === 0) retakeFrom('camera', index);
-          else if (i === 1) retakeFrom('photos', index);
-        },
-      );
-    } else {
-      Alert.alert(title, message, [
-        { text: 'Scan with camera', onPress: () => retakeFrom('camera', index) },
-        { text: 'Choose from Photos', onPress: () => retakeFrom('photos', index) },
-        { text: 'Cancel', style: 'cancel' },
-      ]);
-    }
+    ActionSheet.showActionSheetWithOptions(
+      {
+        title,
+        message,
+        options: ['Scan with camera', 'Choose from Photos', 'Cancel'],
+        cancelButtonIndex: 2,
+        userInterfaceStyle: 'dark',
+        icons: ['camera-outline', 'images-outline'],
+      },
+      i => {
+        if (i === 0) retakeFrom('camera', index);
+        else if (i === 1) retakeFrom('photos', index);
+      },
+    );
   }, [retakeFrom]);
 
   // ── Document actions (… menu) ─────────────────────────────────────────────
@@ -1265,14 +1259,15 @@ function ViewerContent({
         setUnlocking(false);
       }
     };
-    Alert.prompt(
-      retry ? 'Enter the password again' : 'Enter the PDF’s password',
-      `“${doc.name}” is protected. Scan Kit doesn’t save the password: you’ll need it again after you leave Scan Kit.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Unlock', isPreferred: true, onPress: (value?: string) => { unlockWith(value ?? ''); } },
-      ],
-      'secure-text',
+    // Alert.prompt on iOS; Scan Kit's own prompt on Android (Alert.prompt is iOS-only).
+    showTextPrompt(
+      {
+        title: retry ? 'Enter the password again' : 'Enter the PDF’s password',
+        message: `“${doc.name}” is protected. Scan Kit doesn’t save the password: you’ll need it again after you leave Scan Kit.`,
+        secure: true,
+        confirmLabel: 'Unlock',
+      },
+      value => { unlockWith(value); },
     );
   }, [reload, toast]);
 
@@ -1310,7 +1305,7 @@ function ViewerContent({
       if (kind === 'locked' || kind === 'unreadable') setConvertRefused(true);
       else console.error('Convert to pages failed', err);
       if (kind === 'locked') {
-        if (canUnlockForSession() && Platform.OS === 'ios') {
+        if (canUnlockForSession()) {
           Alert.alert('This PDF is password protected', 'Enter its password to open it, then convert it.', [
             { text: 'Cancel', style: 'cancel' },
             { text: 'Enter password', onPress: () => handleUnlockPdf() },
@@ -1420,36 +1415,30 @@ function ViewerContent({
     if (!doc || index < 0 || index >= doc.pages.length) return;
     handleThumbnailPress(index);
     const n = doc.pages.length;
-    const actions: { label: string; run: () => void; destructive?: boolean }[] = [
-      { label: n > 1 ? `Retake page ${index + 1}` : 'Retake page', run: () => handleRetake(index) },
+    const actions: { label: string; run: () => void; destructive?: boolean; icon: AppIconName }[] = [
+      { label: n > 1 ? `Retake page ${index + 1}` : 'Retake page', run: () => handleRetake(index), icon: 'camera-reverse-outline' },
     ];
-    if (index > 0) actions.push({ label: 'Move left', run: () => movePage(index, index - 1, index) });
-    if (index < n - 1) actions.push({ label: 'Move right', run: () => movePage(index, index + 1, index) });
-    if (n > 2) actions.push({ label: 'Reorder pages…', run: () => setReorderVisible(true) });
+    if (index > 0) actions.push({ label: 'Move left', run: () => movePage(index, index - 1, index), icon: 'arrow-back-outline' });
+    if (index < n - 1) actions.push({ label: 'Move right', run: () => movePage(index, index + 1, index), icon: 'arrow-forward-outline' });
+    if (n > 2) actions.push({ label: 'Reorder pages…', run: () => setReorderVisible(true), icon: 'swap-vertical-outline' });
     actions.push(
       n > 1
-        ? { label: `Delete page ${index + 1}`, run: () => confirmDeletePage(index), destructive: true }
-        : { label: 'Delete document', run: () => confirmDeletePage(index), destructive: true },
+        ? { label: `Delete page ${index + 1}`, run: () => confirmDeletePage(index), destructive: true, icon: 'trash-outline' }
+        : { label: 'Delete document', run: () => confirmDeletePage(index), destructive: true, icon: 'trash-outline' },
     );
     const title = n > 1 ? `Page ${index + 1} of ${n}` : undefined;
-    if (Platform.OS === 'ios') {
-      ActionSheetIOS.showActionSheetWithOptions(
-        {
-          title,
-          options: [...actions.map(a => a.label), 'Cancel'],
-          cancelButtonIndex: actions.length,
-          destructiveButtonIndex: actions.findIndex(a => a.destructive),
-          // The viewer is always dark; so are the menus it opens.
-          userInterfaceStyle: 'dark',
-        },
-        i => actions[i]?.run(),
-      );
-    } else {
-      Alert.alert(title ?? 'Page', undefined, [
-        ...actions.map(a => ({ text: a.label, style: a.destructive ? ('destructive' as const) : undefined, onPress: a.run })),
-        { text: 'Cancel', style: 'cancel' as const },
-      ]);
-    }
+    ActionSheet.showActionSheetWithOptions(
+      {
+        title,
+        options: [...actions.map(a => a.label), 'Cancel'],
+        cancelButtonIndex: actions.length,
+        destructiveButtonIndex: actions.findIndex(a => a.destructive),
+        // The viewer is always dark; so are the menus it opens.
+        userInterfaceStyle: 'dark',
+        icons: actions.map(a => a.icon),
+      },
+      i => actions[i]?.run(),
+    );
   }, [handleThumbnailPress, handleRetake, movePage, confirmDeletePage]);
 
   // Pinned at the end of the page toolbar (scanned and PDF alike): every tool
@@ -1595,8 +1584,8 @@ function ViewerContent({
     ? [{ key: 'undo', icon: 'arrow-undo-outline', label: undoOffer.label, onPress: () => { lastUndo.runCurrent(); } }]
     : [];
   const convertAvailable = !!document.pdfUri && canConvertPdf();
-  // Alert.prompt (the password field) is iOS-only.
-  const canUnlock = Platform.OS === 'ios' && canUnlockForSession();
+  // The password prompt: Alert.prompt on iOS, components/text-prompt on Android.
+  const canUnlock = canUnlockForSession();
   // A protected PDF (open this session, or asking for its password): remove
   // the password for good in Tools › Unlock PDF, which uses the session's.
   const removePasswordRow: MoreAction[] = document.pdfUri && (readablePdf.unlocked || pdfError === 'locked')
@@ -1827,14 +1816,15 @@ function ViewerContent({
             {pdfTools.toolbar}
           </>
         ) : Platform.OS === 'android' ? (
-          // Android has no PDF view yet (the native one is PDFKit), and its
-          // WebView can't draw a PDF: say so, and point at Share.
+          // A build without the native PDF view (Android builds before port
+          // phase 3), and Android's WebView can't draw a PDF: say so, and
+          // point at Share.
           <View style={styles.pdfEmpty} accessibilityLiveRegion="polite">
             <EmptyState
               chrome
               placement="center"
               icon="document-text-outline"
-              title="PDF preview isn’t available on Android yet"
+              title="Can’t preview this PDF here"
               subtitle="Your PDF is saved in Scan Kit. Share it to open it in another app."
               actionLabel="Share PDF"
               actionIcon="share-outline"

@@ -1,6 +1,6 @@
 // contexts/theme-context.tsx
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { useColorScheme } from 'react-native';
+import { Appearance, Platform, useColorScheme } from 'react-native';
 import { Colors, ThemePreference, type ThemeColors } from '@/lib/theme';
 import { getThemePreference, getThemePreferenceSync, saveThemePreference } from '@/lib/storage';
 
@@ -27,6 +27,15 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     getThemePreference().then(setPreferenceState);
   }, []);
+
+  // Android: the app's own Light / Dark choice also sets the native night
+  // mode, so what Android draws itself follows it rather than the system's:
+  // alerts, the bottom sheets' navigation-bar contrast and keyboards. iOS is
+  // unchanged (UIKit's sheets and alerts there keep following the system).
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    Appearance.setColorScheme(preference === 'system' ? null : preference);
+  }, [preference]);
 
   const isDark = preference === 'system' ? systemScheme === 'dark' : preference === 'dark';
   const colors = Colors[isDark ? 'dark' : 'light'];

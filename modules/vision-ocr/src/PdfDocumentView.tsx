@@ -1,8 +1,9 @@
-// Native PDFKit viewer for imported PDF documents (iOS). Exposes
-// `PdfDocumentView` (or null when the native view isn't in this build — the
-// caller then falls back to a WebView).
+// Native viewer for imported PDF documents: PDFKit on iOS, PDFium on Android
+// (port phase 3, PdfDocumentView.kt). Exposes `PdfDocumentView` (or null when
+// the native view isn't in this build — the caller then falls back).
 import { requireNativeView } from 'expo';
 import { Platform, type ViewProps } from 'react-native';
+import { VisionOcr } from './index';
 
 export type PdfDocumentViewProps = ViewProps & {
   /** file:// URI of the PDF. */
@@ -28,12 +29,22 @@ type ExpoGlobal = { getViewConfig?: (moduleName: string, viewName?: string) => u
 export function hasNativePdfView(
   expo: ExpoGlobal | undefined = (globalThis as { expo?: ExpoGlobal }).expo,
   os: string = Platform.OS,
+  androidViewer: boolean = androidHasPdfViewer(),
 ): boolean {
-  // Android registers a placeholder in the PDF viewer's slot (the camera view
-  // needs the second one) until its real viewer exists (port phase 3).
-  if (os === 'android') return false;
+  // Android builds of port phase 2 registered a placeholder in the PDF
+  // viewer's slot (the camera view needs the second one); phase-3 builds
+  // say they hold the real viewer (VisionOcr.hasPdfView).
+  if (os === 'android' && !androidViewer) return false;
   try {
     return !!expo?.getViewConfig?.('VisionOcr');
+  } catch {
+    return false;
+  }
+}
+
+function androidHasPdfViewer(): boolean {
+  try {
+    return typeof VisionOcr?.hasPdfView === 'function' && VisionOcr.hasPdfView() === true;
   } catch {
     return false;
   }

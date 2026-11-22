@@ -15,7 +15,8 @@
 // - Blank page: a white page the size of the page on screen, inserted after
 //   it (lib/blank-page.ts), with Undo.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActionSheetIOS, Alert, Platform } from 'react-native';
+import { Alert } from 'react-native';
+import { ActionSheet } from '@/components/action-sheet';
 import type { useRouter } from 'expo-router';
 import type { Document } from '@/types/document';
 import type { PageEdit } from '@/lib/bake';
@@ -186,21 +187,21 @@ export function useScanDocTools({ document, page, editDocument, toast, router, s
     const message = `${range(1, first)} and ${range(first + 1, n).toLowerCase()} become two new documents.`;
     const keep = 'Split and keep the original';
     const remove = 'Split and delete the original';
-    if (Platform.OS === 'ios') {
-      ActionSheetIOS.showActionSheetWithOptions(
-        { title, message, options: [keep, remove, 'Cancel'], cancelButtonIndex: 2, destructiveButtonIndex: 1, userInterfaceStyle: 'dark' },
-        i => {
-          if (i === 0) doSplit(after, false);
-          else if (i === 1) doSplit(after, true);
-        },
-      );
-    } else {
-      Alert.alert(title, message, [
-        { text: keep, onPress: () => { doSplit(after, false); } },
-        { text: remove, style: 'destructive', onPress: () => { doSplit(after, true); } },
-        { text: 'Cancel', style: 'cancel' },
-      ]);
-    }
+    ActionSheet.showActionSheetWithOptions(
+      {
+        title,
+        message,
+        options: [keep, remove, 'Cancel'],
+        cancelButtonIndex: 2,
+        destructiveButtonIndex: 1,
+        userInterfaceStyle: 'dark',
+        icons: ['documents-outline', 'trash-outline'],
+      },
+      i => {
+        if (i === 0) doSplit(after, false);
+        else if (i === 1) doSplit(after, true);
+      },
+    );
   }, [scanned, n, at, doSplit]);
 
   // ── Merge ──────────────────────────────────────────────────────────────────

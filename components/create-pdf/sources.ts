@@ -14,7 +14,7 @@
 //   it, for this session only (lib/pdf-session.ts: the stored PDF stays
 //   protected); its pages are taken from the session's decrypted copy, and
 //   the new PDF doesn't need a password.
-import { Alert } from 'react-native';
+import { showTextPrompt } from '@/components/text-prompt';
 import { File } from 'expo-file-system';
 import { VisionOcr } from '@/modules/vision-ocr/src';
 import { autoCropWithMisses } from '@/components/use-import';
@@ -70,19 +70,23 @@ export async function prepareImageItem(uri: string, origin: ImageOrigin, quality
 
 // ── Passwords ────────────────────────────────────────────────────────────────
 
-/** Asks for a PDF's password (iOS secure prompt). Null when the user cancels. */
+/**
+ * Asks for a PDF's password (iOS: Alert.prompt's secure prompt; Android:
+ * components/text-prompt). Null when the user cancels.
+ */
 export function askPassword(name: string, retry: boolean): Promise<string | null> {
   return new Promise(resolve => {
-    Alert.prompt(
-      retry ? 'That password isn’t right' : 'Enter the PDF’s password',
-      retry
-        ? 'Check it and try again. Passwords are case-sensitive.'
-        : `“${name}” is protected. Enter its password to add its pages.`,
-      [
-        { text: 'Cancel', style: 'cancel', onPress: () => resolve(null) },
-        { text: 'Unlock', isPreferred: true, onPress: (value?: string) => resolve(value ?? '') },
-      ],
-      'secure-text',
+    showTextPrompt(
+      {
+        title: retry ? 'That password isn’t right' : 'Enter the PDF’s password',
+        message: retry
+          ? 'Check it and try again. Passwords are case-sensitive.'
+          : `“${name}” is protected. Enter its password to add its pages.`,
+        secure: true,
+        confirmLabel: 'Unlock',
+      },
+      value => resolve(value),
+      () => resolve(null),
     );
   });
 }

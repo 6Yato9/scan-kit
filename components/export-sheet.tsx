@@ -596,7 +596,22 @@ export function ExportSheet({ visible, document, onClose }: Props) {
         : 'Added at the bottom of each page of a PDF or print.';
 
   return (
-    <BottomSheet visible={visible} onClose={handleClose} variant="grouped">
+    <BottomSheet
+      visible={visible}
+      onClose={handleClose}
+      variant="grouped"
+      // Android's back steps out of the password or options panel first, as
+      // their own Back / Done buttons do.
+      onBack={() => {
+        if (busy) handleClose();
+        else if (pwMode) {
+          setPwMode(false);
+          setPw('');
+          setPw2('');
+        } else if (optionsMode) setOptionsMode(false);
+        else handleClose();
+      }}
+    >
       {optionsMode && !busy ? (
         <SheetHeader title={isPdfDoc ? 'File name' : 'PDF options'} subtitle={document.name} />
       ) : (

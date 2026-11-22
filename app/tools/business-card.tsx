@@ -64,6 +64,8 @@ export default function BusinessCardScreen() {
   const [busy, setBusy] = useState<'camera' | 'photos' | null>(null);
   const [result, setResult] = useState<Result | null>(null);
   const [sharing, setSharing] = useState(false);
+  // Added to Contacts: leaving loses nothing, so Android's back doesn't ask.
+  const [contactSaved, setContactSaved] = useState(false);
   const busyRef = useRef(false);
   const available = ocrAvailable();
   const cardAspect = useImageAspect(result?.image);
@@ -136,6 +138,7 @@ export default function BusinessCardScreen() {
       }
       notifySuccess();
       setResult(next);
+      setContactSaved(false);
       const { docId, docName } = next;
       if (docId) {
         show(`Saved as “${docName}”`, {
@@ -157,6 +160,7 @@ export default function BusinessCardScreen() {
     const outcome = await presentNewContact({ ...result.fields, imageUri: result.image });
     if (outcome === 'saved') {
       notifySuccess();
+      setContactSaved(true);
       show('Contact saved');
     } else if (outcome === 'unavailable' || outcome === 'denied') {
       Alert.alert('Couldn’t open Contacts', 'Share the contact card instead, then open it in Contacts.');
@@ -193,6 +197,7 @@ export default function BusinessCardScreen() {
     return (
       <ToolScreen
         title="Business card"
+        confirmBack={contactSaved ? null : { title: 'Discard this card?', message: 'Its details haven’t been added to Contacts.' }}
         right={<HeaderIconButton icon="refresh-outline" label="Scan another card" onPress={() => setResult(null)} />}
         footer={
           <>

@@ -296,7 +296,7 @@ export default function CompressScreen() {
     <ToolScreen title="Compress" busy={progress !== null} footer={footer}>
       {/* Presented over the viewer: a baker underneath would never run (see FilterBaker). */}
       {fromViewer ? <FilterBaker /> : null}
-      <View style={styles.modes} pointerEvents={running ? 'none' : 'auto'}>
+      <View style={styles.modes} pointerEvents={running ? 'none' : 'auto'} collapsable={false}>
         <Segmented options={MODES} value={mode} onChange={setMode} />
       </View>
       <Text style={[Type.footnote, styles.lead, { color: colors.muted }]}>
@@ -342,7 +342,7 @@ export default function CompressScreen() {
               ) : null}
             </>
           ) : null}
-          <View pointerEvents={running ? 'none' : 'auto'}>
+          <View pointerEvents={running ? 'none' : 'auto'} collapsable={false}>
             <SectionLabel>Size</SectionLabel>
             <OptionList
               options={COMPRESS_PRESETS.map(p => ({

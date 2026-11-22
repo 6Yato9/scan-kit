@@ -394,6 +394,10 @@ export default function RedactScreen() {
       title="Redact"
       scroll={false}
       busy={busy}
+      confirmBack={total > 0 ? {
+        title: 'Discard your redactions?',
+        message: total === 1 ? 'The box you drew won’t be applied.' : `The ${total} boxes you drew won’t be applied.`,
+      } : null}
       right={total > 0 && !busy ? <HeaderTextButton title="Clear" onPress={clearAll} /> : undefined}
       footer={
         <>

@@ -41,6 +41,14 @@
 //  - App Lock off: when the app comes back after more than SESSION_IDLE_MS in
 //    the background (checked on 'active': iOS runs no timers in a suspended
 //    app).
+//  - Android (port phase 3: PDFium view, PdfBox unlockPdf / pdfPermissions)
+//    follows the same rules. It has no 'inactive' state, and every screen
+//    the app launches (share chooser, pickers, print) is a 'background' too:
+//    with App Lock on, LockGate locks on each of them, so the session ends
+//    with it, exactly when the app locks. Without App Lock the idle check runs
+//    on 'active' as on iOS (JS timers don't run in a stopped app either). A
+//    process the system kills in the background loses the password with it;
+//    its copies are swept on the next launch.
 //  - A document's session also ends when it is trashed or deleted, when its
 //    PDF no longer needs a password (Unlock PDF, an Undo of Protect PDF), or
 //    when the password stops opening it.

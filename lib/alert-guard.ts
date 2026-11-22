@@ -17,7 +17,7 @@
 // user has unlocked, buttons work normally again. An alert RAISED while locked
 // (work that failed behind the lock screen) is held until the app is unlocked
 // and the lock screen has gone (AlertHold), so it can't sit above the lock.
-import { Alert } from 'react-native';
+import { Alert, Platform } from 'react-native';
 
 type AnyFn = (...args: unknown[]) => unknown;
 type Button = { onPress?: AnyFn } & Record<string, unknown>;
@@ -44,6 +44,39 @@ export function guardAlertButtons(buttons: unknown, isLocked: () => boolean): un
   }
   if (Array.isArray(buttons)) return buttons.map(b => guardButton(b as Button, isLocked));
   return buttons;
+}
+
+type AlertOptions = { cancelable?: boolean; onDismiss?: () => void } & Record<string, unknown>;
+
+/**
+ * Android: React Native's alerts ignore the back button unless `cancelable`
+ * is passed, so "Discard your changes?" couldn't be backed out of the way
+ * every Android dialog can. When the alert has a Cancel-style button, the
+ * back button (or a tap outside) now counts as that button: its onPress runs
+ * through `onDismiss`. An alert with a single plain button (an error with
+ * OK) is dismissable too. One whose choice matters and offers no Cancel
+ * stays as it was. Exported for tests; iOS never calls it.
+ */
+export function androidDismissOptions(buttons: unknown, options: unknown): unknown {
+  const given = (options && typeof options === 'object' ? options : undefined) as AlertOptions | undefined;
+  if (given && 'cancelable' in given) return options;
+  const list = Array.isArray(buttons) ? (buttons as Button[]) : [];
+  const cancel = list.find(b => b && (b as { style?: unknown }).style === 'cancel');
+  if (cancel) {
+    const onDismiss = given?.onDismiss;
+    return {
+      ...given,
+      cancelable: true,
+      onDismiss: () => {
+        onDismiss?.();
+        cancel.onPress?.();
+      },
+    };
+  }
+  if (list.length <= 1 && !list.some(b => b && typeof b.onPress === 'function')) {
+    return { ...given, cancelable: true };
+  }
+  return options;
 }
 
 /**
@@ -76,7 +109,12 @@ export function installAlertGuard(isLocked: () => boolean, hold?: AlertHold): vo
   };
   const alert = target.alert.bind(Alert);
   target.alert = (title, message, buttons, ...rest) => {
-    present(() => alert(title, message, guardAlertButtons(buttons, locked), ...rest));
+    const guarded = guardAlertButtons(buttons, locked);
+    if (Platform.OS === 'android') {
+      const options = androidDismissOptions(guarded, rest[0]);
+      if (options !== rest[0]) rest = [options, ...rest.slice(1)];
+    }
+    present(() => alert(title, message, guarded, ...rest));
   };
   if (typeof target.prompt === 'function') {
     const prompt = target.prompt.bind(Alert);
