@@ -5,7 +5,7 @@
 // that still reads it keeps working.
 import { useCallback, useRef, useState } from 'react';
 import { Pressable, StyleSheet, TextInput } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useFocusEffect } from 'expo-router';
 import { getDocSettings, saveDocSettings, DocSettings } from '@/lib/storage';
 import { autoName } from '@/lib/auto-name';

@@ -9,7 +9,7 @@
 import { useEffect, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { PageThumb } from '@/components/page-thumb';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { BottomSheet, SheetHeader } from '@/components/bottom-sheet';
 import { documentMeta } from '@/components/document-card';
 import { Document } from '@/types/document';

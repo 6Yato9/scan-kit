@@ -17,7 +17,7 @@ import {
 import { WebView } from 'react-native-webview';
 import { LocalWebView } from '@/components/local-webview';
 import { AppIcon, type AppIconName } from '@/components/app-icon';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import * as FileSystem from 'expo-file-system/legacy';
 import { File } from 'expo-file-system';
 import { useLocalSearchParams, useRouter } from 'expo-router';

@@ -6,7 +6,7 @@
 // filled from the minimum like an iOS slider.
 import { useRef } from 'react';
 import { PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '@/contexts/theme-context';
 import { HIT, Radius, Spacing, Type } from '@/lib/theme';
 

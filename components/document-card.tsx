@@ -3,7 +3,7 @@
 // both tabs present a document the same way.
 import { useEffect, useRef, useState } from 'react';
 import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { Document } from '@/types/document';
 import { useTheme } from '@/contexts/theme-context';
 import { formatDocDate, formatPageCount } from '@/lib/format';

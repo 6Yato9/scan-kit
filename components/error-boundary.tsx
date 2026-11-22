@@ -5,7 +5,7 @@
 // shown to users; in development builds a "Show details" toggle reveals it.
 import { Component, ErrorInfo, ReactNode } from 'react';
 import { Appearance, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { Colors, HIT, Radius, Spacing, Type } from '@/lib/theme';
 
 type Props = { children: ReactNode };

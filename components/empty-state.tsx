@@ -1,7 +1,7 @@
 // components/empty-state.tsx
 // Every empty list uses this, with an action wherever one makes sense.
 import { StyleSheet, Text, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { AppIcon, type AppIconName } from '@/components/app-icon';
 import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';

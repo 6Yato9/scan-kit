@@ -27,7 +27,7 @@
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Image, StyleSheet, Text, View, type AccessibilityActionEvent } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '@/contexts/theme-context';
 import { selection } from '@/lib/haptics';
 import {

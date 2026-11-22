@@ -53,6 +53,19 @@
 // overlay so the snapshot iOS takes doesn't show a document. It never prompts
 // for Face ID and disappears as soon as the app is active again.
 //
+// Android: there is no 'inactive' state, and every picker, share chooser,
+// print screen, Custom Tab and calendar / contact editor is another app's
+// activity, reported as 'background' like leaving the app. So on Android the
+// gate locks when the app's activity is STOPPED (modules/system-chrome
+// onActivityVisibility), not on 'background', and not when the app opened
+// that screen itself (a tracked picker, or a hand-off marked by lib/share
+// and openWebLink); a hand-off longer than a couple of minutes locks on
+// return. The rules are lib/android-leave.ts. Nothing is presented while
+// away, so a picker's promise settles normally. The Recents card is kept
+// blank while App Lock is on (setRecentsPrivacy; FLAG_SECURE before Android
+// 13) in place of iOS's privacy cover. Builds without the native events keep
+// the 'background' rule.
+//
 // Behaviour:
 //   - Locks on a cold start and whenever the app goes to the BACKGROUND. It
 //     does not lock on 'inactive' (Face ID prompt, Control Center, app
@@ -66,17 +79,19 @@
 //   - Auth returns failure (cancel/fail) → stay locked but ALWAYS show a
 //     manual Unlock button. Never auto-loop the prompt.
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { AppState, AppStateStatus, StyleSheet, Text, View } from 'react-native';
+import { AppState, AppStateStatus, Platform, StyleSheet, Text, View } from 'react-native';
 import { usePathname, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { FullWindowOverlay } from 'react-native-screens';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';
 import { authenticate, biometricKind, BiometricKind, isAuthenticating, lockMethodLabel } from '@/lib/biometrics';
 import { getAppLockEnabled, subscribeAppLock } from '@/lib/storage';
 import { installAlertGuard } from '@/lib/alert-guard';
-import { isSystemUIOpen, subscribeSystemUI } from '@/lib/system-ui';
+import { endHandOff, isHandOffPending, isSystemUIOpen, subscribeSystemUI } from '@/lib/system-ui';
+import { decideOnReturn, decideOnStop } from '@/lib/android-leave';
+import { addActivityVisibilityListener, hasActivityVisibility, setRecentsPrivacy } from '@/modules/system-chrome/src';
 import { isAppLocked, isNavigationHeld, navigateWhenUnlocked, pickerHandoffStep, setNavLockState } from '@/lib/nav-guard';
 import { BrandMark } from '@/components/brand-mark';
 import { Spacing, Type } from '@/lib/theme';
@@ -92,6 +107,9 @@ const LOCK_SCREEN_ROUTES: readonly string[] = [LOCK_ROUTE, IMPORT_ROUTE];
 // An alert raised while locked (an export that failed behind the lock
 // screen) is held and shown once the app is unlocked.
 installAlertGuard(isAppLocked, { hold: isNavigationHeld, later: navigateWhenUnlocked });
+
+/** Android with the system-chrome events: lock on a stop, not on 'background' (see header). */
+const LOCK_ON_STOP = Platform.OS === 'android' && hasActivityVisibility();
 
 /** How long a closing picker gets to finish its dismissal before /lock is presented over it. */
 const PICKER_HANDOFF_DELAY_MS = 350;
@@ -285,9 +303,65 @@ export function LockGate({ children }: { children: React.ReactNode }) {
     };
   }, [tryUnlock, unlock, setLocked]);
 
+  // Android: keep documents out of the Recents card while App Lock is on.
+  useEffect(() => {
+    if (Platform.OS === 'android' && enabled !== null) setRecentsPrivacy(enabled);
+  }, [enabled]);
+
+  // Android (LOCK_ON_STOP): when the hand-off in progress started, and
+  // whether the next return must ask to unlock.
+  const awaySinceRef = useRef<number | null>(null);
+  const promptOnReturnRef = useRef(false);
+
+  // Android: lock when the activity is stopped (see header, lib/android-leave).
+  useEffect(() => {
+    if (!enabled || !LOCK_ON_STOP) return;
+    return addActivityVisibilityListener(visible => {
+      if (visible) return;
+      const decision = decideOnStop({
+        locked: isAppLocked(),
+        authenticating: isAuthenticating(),
+        pickerOpen: isSystemUIOpen(),
+        handOffPending: isHandOffPending(),
+      });
+      if (decision === 'handoff') {
+        awaySinceRef.current ??= Date.now();
+        return;
+      }
+      if (decision === 'none') return;
+      promptOnReturnRef.current = true;
+      if (decision === 'lock') {
+        setLocked(true);
+        if (pathnameRef.current !== LOCK_ROUTE) router.push(LOCK_ROUTE);
+      }
+    });
+  }, [enabled, router, setLocked]);
+
+  // Android (LOCK_ON_STOP): back in the app.
+  useEffect(() => {
+    if (!enabled || !LOCK_ON_STOP) return;
+    const sub = AppState.addEventListener('change', (next: AppStateStatus) => {
+      if (next !== 'active') return;
+      // Whatever was handed off is over (or the chooser was dismissed).
+      endHandOff();
+      const awaySince = awaySinceRef.current;
+      awaySinceRef.current = null;
+      // isAppLocked(): set synchronously by setLocked (lockedRef follows renders).
+      if (!isAppLocked() && decideOnReturn(awaySince, Date.now()) === 'lock') {
+        promptOnReturnRef.current = true;
+        setLocked(true);
+      }
+      if (!promptOnReturnRef.current || !isAppLocked()) return;
+      promptOnReturnRef.current = false;
+      if (pathnameRef.current !== LOCK_ROUTE && pathnameRef.current !== IMPORT_ROUTE) router.push(LOCK_ROUTE);
+      tryUnlock();
+    });
+    return () => sub.remove();
+  }, [enabled, tryUnlock, router, setLocked]);
+
   // Lock when the app is backgrounded; prompt once when it comes back.
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || LOCK_ON_STOP) return;
     const sub = AppState.addEventListener('change', (next: AppStateStatus) => {
       const prev = appStateRef.current;
       appStateRef.current = next;

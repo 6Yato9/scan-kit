@@ -33,6 +33,20 @@ module.exports = defineConfig([
       'lock-safe/navigation-after-await': 'error',
     },
   },
+  {
+    // App size: the '@expo/vector-icons' barrel pulls every icon set's font
+    // into the app (19 fonts, ~3 MB, though only Ionicons is used). Import
+    // the one set instead.
+    files: ['**/*.{ts,tsx,js,jsx}'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        paths: [{
+          name: '@expo/vector-icons',
+          message: "Import one icon set, e.g. `import Ionicons from '@expo/vector-icons/Ionicons'` (the barrel bundles every icon font).",
+        }],
+      }],
+    },
+  },
   ...Object.entries(LOCK_SAFE_ALLOWLIST).map(([rule, files]) => ({
     files,
     rules: { [`lock-safe/${rule}`]: 'off' },

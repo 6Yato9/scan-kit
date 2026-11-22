@@ -7,7 +7,7 @@
 // bring the document back.
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { BottomSheet, SheetHeader } from '@/components/bottom-sheet';
 import { PrimaryButton } from '@/components/primary-button';
 import { Document } from '@/types/document';

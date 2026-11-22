@@ -6,7 +6,7 @@ import android.os.Bundle
 import expo.modules.core.interfaces.Package
 import expo.modules.core.interfaces.ReactActivityLifecycleListener
 
-/** Found by Expo autolinking (it looks for *Package files): gives the activity the app's alert dialog look. */
+/** Found by Expo autolinking (it looks for *Package files): gives the activity the app's alert dialog look and Recents privacy. */
 class SystemChromePackage : Package {
   override fun createReactActivityLifecycleListeners(activityContext: Context?): List<ReactActivityLifecycleListener> =
     listOf(SystemChromeActivityListener())
@@ -14,7 +14,11 @@ class SystemChromePackage : Package {
 
 class SystemChromeActivityListener : ReactActivityLifecycleListener {
   override fun onCreate(activity: Activity?, savedInstanceState: Bundle?) {
-    activity?.let { applyDialogTheme(it) }
+    activity?.let {
+      applyDialogTheme(it)
+      // A recreated activity (theme change) keeps App Lock's Recents privacy.
+      RecentsPrivacy.apply(it)
+    }
   }
 
   companion object {

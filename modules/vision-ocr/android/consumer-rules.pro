@@ -7,3 +7,8 @@
 # PdfiumAndroidKt: Guava is left out (only its page caches use it, never called).
 -dontwarn com.google.common.**
 -keep class io.legere.pdfiumandroid.** { *; }
+# Tesseract4Android ships no consumer rules, and its JNI code finds Java
+# classes, fields (mNativeData, ...) and callbacks (onProgressValues) by name:
+# renamed or stripped members crash Arabic OCR with NoSuchFieldError.
+-keep class com.googlecode.tesseract.android.** { *; }
+-keep class com.googlecode.leptonica.android.** { *; }

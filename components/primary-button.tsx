@@ -2,7 +2,7 @@
 // Standard full-width buttons. Keep them mounted and use `disabled` instead of
 // conditionally rendering them, so layouts don't jump as state changes.
 import { ActivityIndicator, Pressable, StyleSheet, Text, View, ViewStyle } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '@/contexts/theme-context';
 import { Radius, Spacing, Type } from '@/lib/theme';
 

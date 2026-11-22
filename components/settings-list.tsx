@@ -3,7 +3,7 @@
 // screen, so they all share one inset, radius, row height and accessory style.
 import { ReactNode } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '@/contexts/theme-context';
 import { AppIcon, type AppIconName } from '@/components/app-icon';
 import { AppSwitch } from '@/components/app-switch';

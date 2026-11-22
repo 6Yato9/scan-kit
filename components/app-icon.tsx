@@ -28,7 +28,7 @@
 // light weight to sit with the outline icons around it.
 // Android and web fall back to the nearest Ionicon.
 import { Platform, StyleSheet, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { SymbolView, type SFSymbol, type SymbolWeight } from 'expo-symbols';
 
 export type IoniconName = React.ComponentProps<typeof Ionicons>['name'];

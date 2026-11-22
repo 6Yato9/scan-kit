@@ -32,7 +32,7 @@ import {
 import * as Clipboard from 'expo-clipboard';
 import { ActionSheet } from '@/components/action-sheet';
 import type { AppIconName } from '@/components/app-icon';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '@/contexts/theme-context';
 import { notifyError, notifySuccess, tapLight } from '@/lib/haptics';
 import { HIT, Radius, Spacing, Type } from '@/lib/theme';

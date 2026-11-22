@@ -13,7 +13,7 @@ import { useEffect, useRef, useState, type ComponentProps, type ReactNode } from
 import { Animated, Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import Reanimated, { FadeIn, FadeOut, LinearTransition } from 'react-native-reanimated';
 import { BlurView } from 'expo-blur';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';
 import { HIT, Radius, Spacing, Type } from '@/lib/theme';

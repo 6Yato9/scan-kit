@@ -21,6 +21,9 @@
 //   meanwhile (the sheet that started the export has been closed). This is the
 //   ONLY place allowed to call Sharing.shareAsync / Print.printAsync / RN
 //   Share.share (eslint-rules/lock-safe.js enforces it).
+// - Android: each of these sheets is another app's activity, so every call
+//   marks a hand-off (lib/system-ui markHandOff) right before presenting:
+//   App Lock must not take it for the user leaving the app (lib/android-leave).
 import { useCallback, useEffect, useRef } from 'react';
 import { Share } from 'react-native';
 import * as Sharing from 'expo-sharing';
@@ -28,6 +31,7 @@ import * as Print from 'expo-print';
 import * as FileSystem from 'expo-file-system/legacy';
 import { safeFileName } from './auto-name';
 import { whenUnlocked } from './nav-guard';
+import { cancelHandOff, markHandOff } from './system-ui';
 import { VisionOcr } from '../modules/vision-ocr/src';
 
 /** Strip any `?v=` cache-bust query (or other query) before handing a URI to native code. */
@@ -93,6 +97,7 @@ export async function shareFile(uri: string, options: ShareOptions = {}): Promis
   if (options.signal?.aborted) return 'skipped';
 
   let settled = false;
+  markHandOff();
   const native = Sharing.shareAsync(clean, {
     mimeType: options.mimeType,
     UTI: options.UTI,
@@ -105,6 +110,7 @@ export async function shareFile(uri: string, options: ShareOptions = {}): Promis
     },
     (err: unknown) => {
       settled = true;
+      cancelHandOff();
       options.onFinish?.();
       throw err;
     },
@@ -133,9 +139,11 @@ export async function shareFile(uri: string, options: ShareOptions = {}): Promis
  */
 export async function shareText(message: string): Promise<void> {
   await whenUnlocked();
+  markHandOff();
   try {
     await Share.share({ message });
   } catch {
+    cancelHandOff();
     // dismissed, or the sheet couldn't open: nothing to tell the user
   }
 }
@@ -180,6 +188,7 @@ export async function shareFiles(uris: string[], options: ShareOptions = {}): Pr
   if (options.signal?.aborted) return 'skipped';
 
   let settled = false;
+  markHandOff();
   const native = share(clean, options.dialogTitle ?? null).then(
     () => {
       settled = true;
@@ -188,6 +197,7 @@ export async function shareFiles(uris: string[], options: ShareOptions = {}): Pr
     },
     (err: unknown) => {
       settled = true;
+      cancelHandOff();
       options.onFinish?.();
       throw err;
     },
@@ -224,10 +234,12 @@ export async function printFile(uri: string, options: { signal?: AbortSignal } =
   const clean = cleanFileUri(uri);
   await whenUnlocked();
   if (options.signal?.aborted) return 'cancelled';
+  markHandOff();
   try {
     await Print.printAsync({ uri: clean });
     return 'printed';
   } catch (err) {
+    cancelHandOff();
     if (isCancelError(err)) return 'cancelled';
     throw new ShareError('Couldn’t print this document. Check the printer and try again.');
   }

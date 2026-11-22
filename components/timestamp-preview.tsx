@@ -14,7 +14,7 @@
 //   (fitTimestampFont) — for these previews and the saved page alike.
 import { useState } from 'react';
 import { Image, StyleSheet, Text, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '@/contexts/theme-context';
 import { anchorToOrigin, type Anchor } from '@/lib/placement';
 import type { ResolvedStamp } from '@/lib/stamp';

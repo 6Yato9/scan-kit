@@ -17,7 +17,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { Directory, File, Paths } from 'expo-file-system';
 import { useTheme } from '@/contexts/theme-context';
 import { useImportDocuments } from '@/components/use-import';

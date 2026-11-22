@@ -5,7 +5,7 @@
 import { useCallback, useRef, useState } from 'react';
 import { Alert, Platform, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '@/contexts/theme-context';
 import { getDocSettings, DocSettings } from '@/lib/storage';
 import { generateTestPagePdf } from '@/lib/pdf';

@@ -17,6 +17,8 @@ expo-env.d.ts
 *.p12
 *.key
 *.mobileprovision
+# Google Play service-account key for `eas submit` (docs/android-release.md)
+/credentials/
 
 # Metro
 .metro-health-check*

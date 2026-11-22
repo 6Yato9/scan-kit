@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { PageThumb } from '@/components/page-thumb';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { BottomSheet, SheetGroup, SheetRow } from '@/components/bottom-sheet';
 import { formatDocDate, formatPageCount } from '@/lib/format';
 import { Document } from '@/types/document';

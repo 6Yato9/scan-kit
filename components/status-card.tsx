@@ -3,7 +3,7 @@
 // PDF): a tinted 30pt icon tile beside a bold line and a muted explanation —
 // the same look as Unlock PDF's status card and the tool intro's points.
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '@/contexts/theme-context';
 import { Radius, Spacing, Type } from '@/lib/theme';
 import type { IoniconName } from '@/components/app-icon';

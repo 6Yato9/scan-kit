@@ -9,7 +9,7 @@
 // stack).
 import { useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/contexts/theme-context';
 import { PageThumb } from '@/components/page-thumb';

@@ -8,7 +8,7 @@
 // kept as a document named "Business card – <name>".
 import { useRef, useState } from 'react';
 import { Alert, Image, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/contexts/theme-context';
 import { useScan } from '@/contexts/scan-context';

@@ -29,3 +29,43 @@ test('the shortcuts start the trampoline with the type as an extra', () => {
   expect(xml).toContain('android:action="expo.modules.visionocr.QUICK_ACTION"');
   for (const s of plugin.SHORTCUTS) expect(xml).toContain(`<extra android:name="type" android:value="${s.type}" />`);
 });
+
+describe('release privacy (phase 6)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const p = require('../plugins/with-android-platform') as {
+    releaseManifestXml: () => string;
+    dataExtractionRulesXml: () => string;
+    RELEASE_BLOCKED_PERMISSIONS: string[];
+  };
+
+  test('release builds declare no network access', () => {
+    const xml = p.releaseManifestXml();
+    for (const perm of ['android.permission.INTERNET', 'android.permission.ACCESS_NETWORK_STATE', 'android.permission.SYSTEM_ALERT_WINDOW']) {
+      expect(xml).toContain(`<uses-permission android:name="${perm}" tools:node="remove" />`);
+    }
+    // Never a permission the app needs.
+    expect(p.RELEASE_BLOCKED_PERMISSIONS).not.toContain('android.permission.CAMERA');
+  });
+
+  test('no data domain goes to a cloud backup or a device-to-device copy', () => {
+    const xml = p.dataExtractionRulesXml();
+    const section = (tag: string) => xml.split(`<${tag}>`)[1].split(`</${tag}>`)[0];
+    for (const tag of ['cloud-backup', 'device-transfer']) {
+      const body = section(tag);
+      expect(body).not.toContain('<include');
+      for (const d of ['root', 'file', 'database', 'sharedpref', 'external', 'device_root', 'device_file', 'device_database', 'device_sharedpref']) {
+        expect(body).toContain(`<exclude domain="${d}" path="." />`);
+      }
+    }
+  });
+
+  test('release builds are minified and shrunk, for the two ARM ABIs only', () => {
+    const app = require('../app.json') as { expo: { plugins: unknown[] } };
+    const props = app.expo.plugins.find(pl => Array.isArray(pl) && pl[0] === 'expo-build-properties') as [string, { android: Record<string, unknown> }];
+    expect(props[1].android).toMatchObject({
+      enableMinifyInReleaseBuilds: true,
+      enableShrinkResourcesInReleaseBuilds: true,
+      buildArchs: ['arm64-v8a', 'armeabi-v7a'],
+    });
+  });
+});

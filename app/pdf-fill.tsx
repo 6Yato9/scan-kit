@@ -29,7 +29,7 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { DarkThemeScope, useTheme } from '@/contexts/theme-context';
 import { HeaderTextButton, ScreenHeader } from '@/components/screen-header';
 import { EmptyState } from '@/components/empty-state';

@@ -23,7 +23,7 @@ import {
 import { withDates } from './date-finder';
 import { whenUnlocked } from './nav-guard';
 import { sentenceAt } from './sentences';
-import { withSystemUI } from './system-ui';
+import { cancelHandOff, markHandOff, withSystemUI } from './system-ui';
 
 export type { ContactFields, DetectedBarcode, DetectedData, DetectedDataType, PresentOutcome };
 
@@ -331,6 +331,8 @@ export async function openWebLink(raw: string): Promise<boolean> {
   const url = webUrl(raw);
   if (!url) return false;
   await whenUnlocked();
+  // Android: the Custom Tab is another app's activity (lib/android-leave).
+  markHandOff();
   try {
     await WebBrowser.openBrowserAsync(url, {
       presentationStyle: WebBrowser.WebBrowserPresentationStyle.PAGE_SHEET,
@@ -338,6 +340,7 @@ export async function openWebLink(raw: string): Promise<boolean> {
     });
     return true;
   } catch {
+    cancelHandOff();
     return openExternal(url);
   }
 }

@@ -2,7 +2,7 @@
 // Search field with a leading search icon (Files, and anywhere a list is searched).
 import type { Ref } from 'react';
 import { StyleSheet, TextInput, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '@/contexts/theme-context';
 import { Radius, Spacing, Type } from '@/lib/theme';
 

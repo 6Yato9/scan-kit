@@ -11,7 +11,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, Modal, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '@/contexts/theme-context';
 import { HeaderIconButton, HeaderTextButton, ScreenHeader } from '@/components/screen-header';
 import { DocGroup, DocRow, SelectionMark } from '@/components/tool-ui';

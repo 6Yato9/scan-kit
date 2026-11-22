@@ -103,3 +103,37 @@ export function abandonSystemUI(): number {
   if (entries.length) emit();
   return entries.length;
 }
+
+// ---------------------------------------------------------------------------
+// Android hand-offs (lib/android-leave.ts)
+// ---------------------------------------------------------------------------
+// The share chooser, the print screen and the in-app browser are another
+// app's activity on Android, and they settle no promise that says when they
+// close (React Native's Share resolves at once; the chooser's target, Gmail
+// for one, opens later). So instead of tracking them like pickers, the
+// wrapper that opens one marks a hand-off just before; LockGate reads it when
+// the activity stops and clears it the next time the app is active again (the
+// user is back, or the chooser was dismissed without leaving). iOS never
+// reads it: those sheets are shown inside the app there.
+
+let handOffPending = false;
+
+/** About to open another app's screen on purpose (share, print, web page). */
+export function markHandOff(): void {
+  handOffPending = true;
+}
+
+/** The marked hand-off didn't open after all (the call failed). */
+export function cancelHandOff(): void {
+  handOffPending = false;
+}
+
+/** True between markHandOff() and the app being active again (LockGate clears it). */
+export function isHandOffPending(): boolean {
+  return handOffPending;
+}
+
+/** LockGate: the app is active again, so any hand-off is over. */
+export function endHandOff(): void {
+  handOffPending = false;
+}
