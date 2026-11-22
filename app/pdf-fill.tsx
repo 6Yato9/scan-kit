@@ -100,7 +100,6 @@ import { showTextPrompt } from '@/components/text-prompt';
 import { ActionSheet } from '@/components/action-sheet';
 import type { Document } from '@/types/document';
 import type { NativeFillField } from '@/modules/vision-ocr/src';
-import { isAndroid } from '@/lib/platform-support';
 
 type Status = 'loading' | 'ready' | 'missing' | 'locked' | 'restricted' | 'xfa' | 'unreadable' | 'unavailable' | 'owner-password';
 type Armed = { kind: FillMarkKind; signature?: Signature };
@@ -933,9 +932,7 @@ export default function PdfFillScreen() {
       },
       'owner-password': { icon: 'lock-open-outline', title: PROTECTED_EDIT_REFUSALS['owner-password'].title, subtitle: PROTECTED_EDIT_REFUSALS['owner-password'].body },
       unreadable: { icon: 'document-text-outline', title: 'Couldn’t open this PDF', subtitle: 'The file may be damaged. You can still share it, or try importing it again.' },
-      unavailable: isAndroid()
-        ? { icon: 'document-text-outline', title: 'Fill & sign isn’t available on Android yet', subtitle: 'It’s coming in a later version of Scan Kit for Android. You can still share and print the PDF.' }
-        : { icon: 'document-text-outline', title: 'Fill & sign isn’t available', subtitle: 'This version of Scan Kit can’t fill in PDFs. Update Scan Kit, then try again.' },
+      unavailable: { icon: 'document-text-outline', title: 'Fill & sign isn’t available', subtitle: 'This version of Scan Kit can’t fill in PDFs. Update Scan Kit, then try again.' },
     };
     const e = status === 'loading' || status === 'ready' ? null : empty[status];
     const openPdf = (status === 'locked' || status === 'restricted' || status === 'xfa' || status === 'unreadable') && doc && !fromViewer;

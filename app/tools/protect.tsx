@@ -45,13 +45,9 @@ import { notifyError, notifySuccess } from '@/lib/haptics';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
 import { HIT, Radius, Spacing, Type } from '@/lib/theme';
 import type { Document } from '@/types/document';
-import { unavailableCopy } from '@/lib/platform-support';
 
-/** iOS: a build older than the feature; Android: not built yet (lib/platform-support.ts). */
-const UNAVAILABLE = unavailableCopy(
-  { title: 'Update Scan Kit to protect PDFs', text: 'This version of Scan Kit can’t add a password to a PDF. Install the latest version, then try again.' },
-  'Protect PDF',
-);
+/** A build older than the feature (iOS and Android alike). */
+const UNAVAILABLE = { title: 'Update Scan Kit to protect PDFs', text: 'This version of Scan Kit can’t add a password to a PDF. Install the latest version, then try again.' };
 
 type Output = 'copy' | 'replace';
 

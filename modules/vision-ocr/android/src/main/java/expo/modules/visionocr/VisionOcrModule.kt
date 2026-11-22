@@ -45,6 +45,16 @@ class VisionOcrModule : Module() {
         promise.resolve(work())
       } catch (e: VisionFailure) {
         promise.reject(e.code, e.message, null)
+      } catch (e: PdfFail) {
+        // The messages JS matches, with the codes iOS gives them.
+        val code = when (e.message) {
+          PdfDocs.LOCKED -> "ERR_PDF_LOCKED"
+          PdfDocs.RESTRICTED -> "ERR_PDF_RESTRICTED"
+          PdfDocs.CHANGED -> "ERR_PDF_CHANGED"
+          PdfDocs.WRONG_PASSWORD -> "ERR_PDF_PASSWORD"
+          else -> fallbackCode
+        }
+        promise.reject(code, e.message, null)
       } catch (e: QuadMath.BadQuad) {
         promise.reject("ERR_BAD_QUAD", e.message, null)
       } catch (e: OutOfMemoryError) {
@@ -134,6 +144,99 @@ class VisionOcrModule : Module() {
     AsyncFunction("renderPdfPages") { inputUri: String, outputDirUri: String, maxEdge: Double, promise: Promise ->
       run(promise, "ERR_PDF_RENDER") {
         PdfEngine.renderPages(context, File(ImageFiles.pathOf(inputUri)), File(ImageFiles.pathOf(outputDirUri)), maxEdge)
+      }
+    }
+
+    // ── PDF tools (port phase 4: PdfTools.kt, PdfForms.kt). Same contracts,
+    // result shapes and rejection messages as iOS; every output is read back
+    // before it resolves.
+
+    /**
+     * Page edits that keep a PDF a PDF: rotate, delete, reorder, blank pages,
+     * split. Resolves to the page count. Rejects ERR_PDF_LOCKED ("locked"),
+     * ERR_PDF_RESTRICTED ("restricted"), ERR_PDF_EDIT otherwise.
+     */
+    AsyncFunction("pdfEditPages") { inputUri: String, outputUri: String, sources: List<Int>, rotations: List<Int>, password: String?, promise: Promise ->
+      run(promise, "ERR_PDF_EDIT") {
+        PdfTools.editPages(context, File(ImageFiles.pathOf(inputUri)), File(ImageFiles.pathOf(outputUri)), sources, rotations, password)
+      }
+    }
+
+    /** Concatenates PDFs in order. Rejects ERR_PDF_RESTRICTED ("restricted"), ERR_PDF_MERGE. */
+    AsyncFunction("mergePdfs") { inputUris: List<String>, outputUri: String, promise: Promise ->
+      run(promise, "ERR_PDF_MERGE") {
+        val out = File(ImageFiles.pathOf(outputUri))
+        PdfTools.merge(context, inputUris.map { File(ImageFiles.pathOf(it)) }, out)
+        ImageFiles.uriOf(out)
+      }
+    }
+
+    /** A password-protected copy (verified). Rejects ERR_PDF_PROTECT. */
+    AsyncFunction("protectPdf") { inputUri: String, outputUri: String, password: String, promise: Promise ->
+      run(promise, "ERR_PDF_PROTECT") {
+        val out = File(ImageFiles.pathOf(outputUri))
+        PdfTools.protect(context, File(ImageFiles.pathOf(inputUri)), out, password)
+        ImageFiles.uriOf(out)
+      }
+    }
+
+    /** Encrypts keeping a protection as it was: open password, owner password (random when null), permission bits. */
+    AsyncFunction("protectPdfKeeping") { inputUri: String, outputUri: String, userPassword: String, ownerPassword: String?, permissions: Int, promise: Promise ->
+      run(promise, "ERR_PDF_PROTECT") {
+        val out = File(ImageFiles.pathOf(outputUri))
+        PdfTools.protectKeeping(context, File(ImageFiles.pathOf(inputUri)), out, userPassword, ownerPassword, maxOf(0, permissions))
+        ImageFiles.uriOf(out)
+      }
+    }
+
+    /**
+     * An unencrypted copy with every restriction removed; resolves
+     * { pageCount, encrypted, method }. Rejects ERR_PDF_LOCKED ("locked"),
+     * ERR_PDF_PASSWORD ("wrong-password"), ERR_PDF_UNRESTRICT.
+     */
+    AsyncFunction("unrestrictPdf") { inputUri: String, outputUri: String, password: String?, promise: Promise ->
+      run(promise, "ERR_PDF_UNRESTRICT") {
+        PdfTools.unrestrict(context, File(ImageFiles.pathOf(inputUri)), File(ImageFiles.pathOf(outputUri)), password)
+      }
+    }
+
+    /** Pages, form fields and permissions for Fill & sign. Rejects ERR_PDF_LOCKED ("locked"), ERR_PDF_FILL. */
+    AsyncFunction("pdfFillInfo") { uri: String, promise: Promise ->
+      run(promise, "ERR_PDF_FILL") { PdfForms.fillInfo(context, File(ImageFiles.pathOf(uri))) }
+    }
+
+    /** One page as an upright JPEG (crop box, rotation applied), long edge maxEdge px; `hideFields` leaves the widgets out. */
+    AsyncFunction("pdfRenderPage") { uri: String, index: Int, outUri: String, maxEdge: Double, hideFields: Boolean, promise: Promise ->
+      run(promise, "ERR_PDF_RENDER") {
+        PdfForms.renderPage(context, File(ImageFiles.pathOf(uri)), index, File(ImageFiles.pathOf(outUri)), maxEdge, hideFields)
+      }
+    }
+
+    /**
+     * Fills form fields and adds marks, verified before it resolves to the
+     * page count. Rejects ERR_PDF_LOCKED, ERR_PDF_RESTRICTED, ERR_PDF_CHANGED
+     * ("changed"), ERR_PDF_FILL.
+     */
+    AsyncFunction("pdfFill") { inputUri: String, outputUri: String, fields: List<Map<String, Any?>>, marks: List<Map<String, Any?>>, promise: Promise ->
+      run(promise, "ERR_PDF_FILL") {
+        PdfForms.fill(context, File(ImageFiles.pathOf(inputUri)), File(ImageFiles.pathOf(outputUri)), fields, marks)
+      }
+    }
+
+    /** A flattened copy (verified); resolves to the page count. Rejects ERR_PDF_LOCKED, ERR_PDF_RESTRICTED, ERR_PDF_FLATTEN. */
+    AsyncFunction("pdfFlatten") { inputUri: String, outputUri: String, promise: Promise ->
+      run(promise, "ERR_PDF_FLATTEN") {
+        PdfForms.flatten(context, File(ImageFiles.pathOf(inputUri)), File(ImageFiles.pathOf(outputUri)))
+      }
+    }
+
+    /** Debug builds only: pdfFill burns its additions into the pages (its fallback). Returns whether the switch exists. */
+    Function("pdfFillForceFallback") { on: Boolean ->
+      if (BuildConfig.DEBUG) {
+        PdfForms.forceBurn = on
+        true
+      } else {
+        false
       }
     }
 

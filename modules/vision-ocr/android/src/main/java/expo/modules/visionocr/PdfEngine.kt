@@ -45,7 +45,7 @@ import kotlin.math.roundToInt
 object PdfEngine {
   private const val WHITE = Color.WHITE
   /** Key of Scan Kit's Fill & sign marks (PdfFiller.swift markKey). */
-  private val MARK_KEY: COSName = COSName.getPDFName("SKFill")
+  internal val MARK_KEY: COSName = COSName.getPDFName("SKFill")
 
   @Volatile private var core: PdfiumCore? = null
   @Volatile private var pdfBoxReady = false
@@ -53,7 +53,7 @@ object PdfEngine {
   fun pdfium(context: Context): PdfiumCore =
     core ?: synchronized(this) { core ?: PdfiumCore(context.applicationContext).also { core = it } }
 
-  private fun pdfBox(context: Context) {
+  internal fun pdfBox(context: Context) {
     if (pdfBoxReady) return
     synchronized(this) {
       if (!pdfBoxReady) {
@@ -203,13 +203,13 @@ object PdfEngine {
 
   // ── PdfBox ────────────────────────────────────────────────────────────────
 
-  private fun memory(context: Context): MemoryUsageSetting {
+  internal fun memory(context: Context): MemoryUsageSetting {
     val dir = File(context.cacheDir, "pdfbox-tmp").apply { mkdirs() }
     return MemoryUsageSetting.setupMixed(48L * 1024 * 1024).setTempDir(dir)
   }
 
   /** Loads with `password` ("" = none); null when the password doesn't open it. */
-  private fun loadBox(context: Context, file: File, password: String): PDDocument? {
+  internal fun loadBox(context: Context, file: File, password: String): PDDocument? {
     pdfBox(context)
     if (!file.exists()) throw IOException("Could not open the PDF")
     return try {
@@ -245,8 +245,9 @@ object PdfEngine {
     } else {
       val ids = doc.document.documentID
       val id = (ids?.getObject(0) as? COSString)?.bytes ?: ByteArray(0)
+      // (password, U, O, …): the user key comes first (phase 4: these were swapped).
       StandardSecurityHandler().isUserPassword(
-        password, enc.ownerKey, enc.userKey, enc.permissions, id, enc.revision, enc.length / 8, enc.isEncryptMetaData,
+        password, enc.userKey, enc.ownerKey, enc.permissions, id, enc.revision, enc.length / 8, enc.isEncryptMetaData,
       )
     }
   } catch (e: Throwable) {
@@ -302,7 +303,7 @@ object PdfEngine {
   }
 
   /** (signed, certified, xfa), as PdfStructure.formFacts. */
-  private fun formFacts(doc: PDDocument): Triple<Boolean, Boolean, Boolean> {
+  internal fun formFacts(doc: PDDocument): Triple<Boolean, Boolean, Boolean> {
     var signed = false
     var certified = false
     var xfa = false
@@ -312,7 +313,9 @@ object PdfEngine {
       certified = true
       signed = true
     }
-    val form = runCatching { catalog.acroForm }.getOrNull()
+    // Without PdfBox's fix-ups (they would build missing appearances in a
+    // document a caller may write afterwards).
+    val form = runCatching { catalog.getAcroForm(null) }.getOrNull()
     if (form != null) {
       if (form.cosObject.getDictionaryObject(COSName.XFA) != null) xfa = true
       if (!signed) {
