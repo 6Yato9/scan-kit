@@ -34,8 +34,13 @@ jest.mock('expo-file-system', () => {
 
 const mockReplace = jest.fn();
 const mockIncoming = { uri: 'file:///app/Documents/Inbox/Cafe%20receipt.jpg' };
+// The route +native-intent makes carries this runtime's secret (lib/incoming-file).
+const mockVia = () => {
+  const { routeForIncomingUrl } = require('@/lib/incoming-file');
+  return new URLSearchParams(routeForIncomingUrl('content://x/y').split('?')[1]).get('via');
+};
 jest.mock('expo-router', () => ({
-  useLocalSearchParams: () => ({ uri: mockIncoming.uri }),
+  useLocalSearchParams: () => ({ uri: mockIncoming.uri, via: mockVia() }),
   useRouter: () => ({ replace: mockReplace }),
   Stack: { Screen: () => null },
 }));
@@ -203,4 +208,16 @@ describe('the incoming file is removed only when it is our own Inbox copy', () =
     await flush();
     expect(mockFs[SPELLED]).toBeUndefined();
   });
+});
+
+test('a link someone else made (no secret on the route) imports nothing', async () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const router = require('expo-router');
+  const spy = jest.spyOn(router, 'useLocalSearchParams').mockReturnValue({ uri: INBOX, via: 'guess' });
+  render(<ImportScreen />);
+  await flush();
+  expect(mockSaveFiles).not.toHaveBeenCalled();
+  expect(staged()).toEqual([]);
+  expect(mockFs[INBOX]).toBe(true); // nothing touched
+  spy.mockRestore();
 });

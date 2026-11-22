@@ -2,6 +2,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { File } from 'expo-file-system';
 import { Document, PageAdjustment, PageFilter } from '../types/document';
+import { decodeDocRecord, encodeDocRecord } from './doc-record';
 import { deleteDocumentFiles, originalUri } from './files';
 import { rebaseStoredUri } from './storage-layout';
 
@@ -65,6 +66,48 @@ function withDocsLock<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 const docKey = (id: string) => `${DOC_PREFIX}${id}`;
+
+// Every document record is written with encodeDocRecord and read with
+// decodeDocRecord (lib/doc-record.ts): on Android a very long ocrText is kept
+// in a side file so the record stays readable; on iOS the JSON is unchanged.
+
+/** Stores one record; then the encoding may drop side files it no longer names. */
+async function storeDoc(doc: Document): Promise<void> {
+  const rec = encodeDocRecord(doc);
+  await AsyncStorage.setItem(docKey(doc.id), rec.json);
+  rec.committed();
+}
+
+/** Stores several records in one multiSet (nothing when empty). */
+async function storeDocs(docs: Document[]): Promise<void> {
+  if (!docs.length) return;
+  const recs = docs.map(d => [docKey(d.id), encodeDocRecord(d)] as const);
+  await AsyncStorage.multiSet(recs.map(([key, rec]) => [key, rec.json] as [string, string]));
+  for (const [, rec] of recs) rec.committed();
+}
+
+/**
+ * multiGet, or — when it fails as a whole (Android: one record too large for
+ * the cursor window fails the batch) — one key at a time, an unreadable one
+ * coming back as `undefined` (kept apart from a missing one, `null`).
+ */
+async function multiGetDocs(keys: readonly string[]): Promise<[string, string | null | undefined][]> {
+  try {
+    return (await AsyncStorage.multiGet(keys)) as [string, string | null][];
+  } catch (e) {
+    console.warn('storage: batch read failed, reading documents one by one', e);
+    const out: [string, string | null | undefined][] = [];
+    for (const key of keys) {
+      try {
+        out.push([key, await AsyncStorage.getItem(key)]);
+      } catch {
+        console.warn(`storage: unreadable doc ${key.slice(DOC_PREFIX.length)}`);
+        out.push([key, undefined]);
+      }
+    }
+    return out;
+  }
+}
 
 // ── Index helpers ────────────────────────────────────────────────────────────
 // Read the id index. If the index is missing or corrupt, recover it by
@@ -145,8 +188,7 @@ function ensureMigrated(): Promise<void> {
           }
 
           if (legacyDocs.length > 0) {
-            const pairs: [string, string][] = legacyDocs.map(d => [docKey(d.id), JSON.stringify(d)]);
-            await AsyncStorage.multiSet(pairs);
+            await storeDocs(legacyDocs);
             await writeIndex(legacyDocs.map(d => d.id));
           } else if ((await AsyncStorage.getItem(DOC_INDEX_KEY)) == null) {
             // Fresh install: initialise an empty index. Never overwrite one that
@@ -203,21 +245,27 @@ async function getDocumentsUnlocked(): Promise<Document[]> {
   const index = await readIndex();
   if (index.length === 0) return [];
 
-  const pairs = await AsyncStorage.multiGet(index.map(docKey));
+  const pairs = await multiGetDocs(index.map(docKey));
   const docs: Document[] = [];
   const survivors: string[] = [];
   let healed = false;
 
   // pairs are returned in the same order as the requested keys.
   for (let i = 0; i < index.length; i++) {
-    const value = pairs[i]?.[1] ?? null;
+    const value = pairs[i]?.[1];
+    if (value === undefined && pairs[i]) {
+      // Stored but unreadable right now: left out of this read, never dropped
+      // from the index (its record and files stay).
+      survivors.push(index[i]);
+      continue;
+    }
     if (value == null) {
       // Dangling index entry (data key missing) — drop it.
       healed = true;
       continue;
     }
     try {
-      docs.push(healDocPaths(JSON.parse(value) as Document));
+      docs.push(healDocPaths(decodeDocRecord(value)));
       survivors.push(index[i]);
     } catch {
       // Corrupt single doc — skip it but keep the rest of the read alive.
@@ -278,7 +326,7 @@ export function savePendingDocument(doc: Document): Promise<void> {
     await ensureMigrated();
     const pending = await readPendingUnlocked();
     if (!pending.includes(doc.id)) await writePendingUnlocked([...pending, doc.id]);
-    await AsyncStorage.setItem(docKey(doc.id), JSON.stringify(doc));
+    await storeDoc(doc);
     const index = await readIndex();
     await writeIndex([doc.id, ...index.filter(id => id !== doc.id)]);
   });
@@ -294,7 +342,7 @@ export function commitPendingDocument(id: string, patch: Partial<Document> = {})
     const raw = await AsyncStorage.getItem(docKey(id));
     if (raw == null) return false;
     try {
-      await AsyncStorage.setItem(docKey(id), JSON.stringify(healDocPaths({ ...(JSON.parse(raw) as Document), ...patch, id })));
+      await storeDoc(healDocPaths({ ...decodeDocRecord(raw), ...patch, id }));
     } catch {
       return false;
     }
@@ -323,7 +371,7 @@ export function getDocument(id: string): Promise<Document | null> {
     const raw = await AsyncStorage.getItem(docKey(id));
     if (raw == null) return null;
     try {
-      const doc = healDocPaths(JSON.parse(raw) as Document);
+      const doc = healDocPaths(decodeDocRecord(raw));
       return doc.trashedAt == null ? doc : null;
     } catch {
       console.warn(`storage: corrupt doc ${id}`);
@@ -335,7 +383,7 @@ export function getDocument(id: string): Promise<Document | null> {
 export function saveDocument(doc: Document): Promise<void> {
   return withDocsLock(async () => {
     await ensureMigrated();
-    await AsyncStorage.setItem(docKey(doc.id), JSON.stringify(healDocPaths(doc)));
+    await storeDoc(healDocPaths(doc));
     const index = await readIndex();
     // Prepend, dedupe (keep at front if it was already present).
     await writeIndex([doc.id, ...index.filter(id => id !== doc.id)]);
@@ -352,7 +400,7 @@ export function updateDocument(doc: Document): Promise<boolean> {
   return withDocsLock(async () => {
     await ensureMigrated();
     if ((await AsyncStorage.getItem(docKey(doc.id))) == null) return false;
-    await AsyncStorage.setItem(docKey(doc.id), JSON.stringify(healDocPaths(doc)));
+    await storeDoc(healDocPaths(doc));
     const index = await readIndex();
     // Ensure the id is present (append if somehow missing) without reordering.
     if (!index.includes(doc.id)) await writeIndex([...index, doc.id]);
@@ -432,7 +480,7 @@ export function updateDocumentWith(
     if (raw == null) return false; // deleted or never existed — don't resurrect
     let current: Document;
     try {
-      current = JSON.parse(raw) as Document;
+      current = decodeDocRecord(raw);
     } catch {
       console.warn(`storage: corrupt doc ${id}, skipping patch`);
       return false;
@@ -441,7 +489,7 @@ export function updateDocumentWith(
     const patch = fn(healed);
     if (!patch) return false;
     // The healed paths are written back, so the record no longer depends on healing.
-    await AsyncStorage.setItem(docKey(id), JSON.stringify(healDocPaths({ ...healed, ...patch })));
+    await storeDoc(healDocPaths({ ...healed, ...patch }));
     return true;
   }).then(written => {
     if (written) notifyDocumentChanged(id);
@@ -526,12 +574,13 @@ export function documentFileRefsForCleanup(): Promise<
     } catch {
       return null;
     }
-    const pairs = await AsyncStorage.multiGet(keys);
+    const pairs = await multiGetDocs(keys);
     const out: { id: string; pages: string[]; pdfUri?: string; updatedAt: number }[] = [];
     for (const [key, value] of pairs) {
+      if (value === undefined) return null; // unreadable: don't sweep against an incomplete picture
       if (value == null) continue;
       try {
-        const doc = healDocPaths(JSON.parse(value) as Document);
+        const doc = healDocPaths(decodeDocRecord(value, false));
         if (!doc || typeof doc.id !== 'string' || !Array.isArray(doc.pages)) continue;
         out.push({ id: doc.id, pages: doc.pages, pdfUri: doc.pdfUri, updatedAt: doc.updatedAt ?? 0 });
       } catch {
@@ -559,7 +608,7 @@ export function withDocumentFileRefs<T>(
     try {
       const raw = await AsyncStorage.getItem(docKey(id));
       if (raw != null) {
-        const doc = healDocPaths(JSON.parse(raw) as Document);
+        const doc = healDocPaths(decodeDocRecord(raw, false));
         if (doc && doc.id === id && Array.isArray(doc.pages)) {
           refs = { id: doc.id, pages: doc.pages, pdfUri: doc.pdfUri, updatedAt: doc.updatedAt ?? 0 };
         }
@@ -592,20 +641,20 @@ export function trashDocuments(ids: string[]): Promise<number> {
   return withDocsLock(async () => {
     await ensureMigrated();
     const now = Date.now();
-    const pairs = await AsyncStorage.multiGet(ids.map(docKey));
-    const changed: [string, string][] = [];
+    const pairs = await multiGetDocs(ids.map(docKey));
+    const changed: Document[] = [];
     for (const [key, raw] of pairs) {
       if (raw == null) continue;
       try {
-        const doc = JSON.parse(raw) as Document;
+        const doc = decodeDocRecord(raw);
         if (doc.trashedAt != null) continue;
-        changed.push([key, JSON.stringify(healDocPaths({ ...doc, trashedAt: now }))]);
+        changed.push(healDocPaths({ ...doc, trashedAt: now }));
       } catch {
         console.warn(`storage: corrupt doc ${key}, not trashed`);
       }
     }
-    if (changed.length) await AsyncStorage.multiSet(changed);
-    notifyDocumentsRemoved(changed.map(([key]) => key.slice(DOC_PREFIX.length)));
+    await storeDocs(changed);
+    notifyDocumentsRemoved(changed.map(d => d.id));
     return changed.length;
   });
 }
@@ -619,21 +668,21 @@ export async function trashDocument(id: string): Promise<boolean> {
 export function restoreDocuments(ids: string[]): Promise<number> {
   return withDocsLock(async () => {
     await ensureMigrated();
-    const pairs = await AsyncStorage.multiGet(ids.map(docKey));
-    const changed: [string, string][] = [];
+    const pairs = await multiGetDocs(ids.map(docKey));
+    const changed: Document[] = [];
     for (const [key, raw] of pairs) {
       if (raw == null) continue;
       try {
-        const { trashedAt, ...doc } = JSON.parse(raw) as Document;
+        const { trashedAt, ...doc } = decodeDocRecord(raw);
         if (trashedAt == null) continue;
         // Folder renames and deletions already reached it while it was in the
         // trash (they update every record), so it returns to the right place.
-        changed.push([key, JSON.stringify(healDocPaths(doc))]);
+        changed.push(healDocPaths(doc));
       } catch {
         console.warn(`storage: corrupt doc ${key}, not restored`);
       }
     }
-    if (changed.length) await AsyncStorage.multiSet(changed);
+    await storeDocs(changed);
     return changed.length;
   });
 }
@@ -751,7 +800,7 @@ export function setPageBaked(
     if (raw == null) return; // deleted or never existed — don't resurrect
     let current: Document;
     try {
-      current = JSON.parse(raw) as Document;
+      current = decodeDocRecord(raw);
     } catch {
       console.warn(`storage: corrupt doc ${id}, skipping setPageBaked`);
       return;
@@ -776,7 +825,7 @@ export function setPageBaked(
       patch.adjustments = newAdjustments;
     }
 
-    await AsyncStorage.setItem(docKey(id), JSON.stringify(healDocPaths({ ...current, ...patch })));
+    await storeDoc(healDocPaths({ ...current, ...patch }));
   });
 }
 
@@ -900,12 +949,7 @@ export function renameFolder(from: string, to: string): Promise<boolean> {
     const renamed = folders.filter(f => f !== from && f !== next);
     await AsyncStorage.setItem(FOLDERS_KEY, JSON.stringify([...renamed, next]));
     const docs = await getDocumentsUnlocked();
-    const changed: [string, string][] = [];
-    for (const d of docs) {
-      if (d.folder !== from) continue;
-      changed.push([docKey(d.id), JSON.stringify({ ...d, folder: next })]);
-    }
-    if (changed.length > 0) await AsyncStorage.multiSet(changed);
+    await storeDocs(docs.filter(d => d.folder === from).map(d => ({ ...d, folder: next })));
     return true;
   });
 }
@@ -919,13 +963,13 @@ export function deleteFolder(name: string): Promise<void> {
     // Clear the folder field on every doc that had this folder, writing only the
     // changed docs back via their per-id keys (no global rewrite).
     const docs = await getDocumentsUnlocked();
-    const changed: [string, string][] = [];
+    const changed: Document[] = [];
     for (const d of docs) {
       if (d.folder !== name) continue;
       const { folder: _removed, ...rest } = d;
-      changed.push([docKey(d.id), JSON.stringify(rest as Document)]);
+      changed.push(rest as Document);
     }
-    if (changed.length > 0) await AsyncStorage.multiSet(changed);
+    await storeDocs(changed);
   });
 }
 

@@ -82,10 +82,13 @@ class VisionOcrModule : Module() {
   /** Runs `work` on a background thread; maps failures to (code, message) rejections. */
   private fun run(promise: Promise, fallbackCode: String, work: () -> Any?) {
     scope.launch {
-      try {
-        promise.resolve(work())
+      // Resolved outside the try: a failure converting the result must not
+      // also reject the same promise.
+      val result = try {
+        work()
       } catch (e: VisionFailure) {
         promise.reject(e.code, e.message, null)
+        return@launch
       } catch (e: PdfFail) {
         // The messages JS matches, with the codes iOS gives them.
         val code = when (e.message) {
@@ -96,13 +99,24 @@ class VisionOcrModule : Module() {
           else -> fallbackCode
         }
         promise.reject(code, e.message, null)
+        return@launch
       } catch (e: QuadMath.BadQuad) {
         promise.reject("ERR_BAD_QUAD", e.message, null)
+        return@launch
       } catch (e: OutOfMemoryError) {
         promise.reject(fallbackCode, "Not enough memory to process the file", null)
+        return@launch
       } catch (e: Throwable) {
         Log.w("VisionOcr", "$fallbackCode: ${e.message}", e)
         promise.reject(fallbackCode, e.message ?: e.javaClass.simpleName, null)
+        return@launch
+      }
+      try {
+        promise.resolve(result)
+      } catch (e: Throwable) {
+        // The result couldn't be converted for JS (so the promise isn't settled yet).
+        Log.w("VisionOcr", "$fallbackCode: result not sent: ${e.message}", e)
+        runCatching { promise.reject(fallbackCode, "Could not return the result", null) }
       }
     }
   }
@@ -288,9 +302,14 @@ class VisionOcrModule : Module() {
       }
     }
 
-    /** Whether the device has any camera to scan with (JS offers Import photos otherwise). */
+    /**
+     * Whether the device has a back camera to scan with (JS offers Import
+     * photos otherwise). FEATURE_CAMERA is the back-facing one, which is the
+     * only one DocumentCameraView binds: a front-only tablet or Chromebook
+     * gets the import fallback, not a camera error.
+     */
     Function("hasCamera") {
-      context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_CAMERA_ANY)
+      context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_CAMERA)
     }
 
     /**
@@ -358,7 +377,21 @@ class VisionOcrModule : Module() {
       }
     }
 
-    /** Copies a file the system handed us (content:// or file://) into the app. */
+    /** Android 10+: adds an image file to Photos (Pictures/Scan Kit) without a permission; lib/photos.ts only. */
+    if (android.os.Build.VERSION.SDK_INT >= 29) {
+      AsyncFunction("saveImageToPhotos") { uri: String, promise: Promise ->
+        run(promise, "ERR_SAVE_PHOTO") { PhotoLibrary.save(context, ImageFiles.pathOf(uri)) }
+      }
+    }
+
+    /**
+     * Android only: the per-process key on the scankit://import?uris= link
+     * that "Share to Scan Kit" with several files becomes (IncomingFiles).
+     * JS honours that link only with this key.
+     */
+    Function("incomingShareKey") { IncomingFiles.shareKey }
+
+    /** Copies a file another app handed us (its content:// URI) into the app; refuses file:// and our own providers. */
     AsyncFunction("copyIncomingFile") { sourceUri: String, destUri: String, promise: Promise ->
       run(promise, "ERR_COPY_INCOMING") { IncomingFiles.copy(context, sourceUri, destUri) }
     }
@@ -413,13 +446,22 @@ class VisionOcrModule : Module() {
     }
 
     // Leaving the app ends reading (a document isn't read out behind App Lock), as on iOS.
+    // Fill & sign's in-memory preview of a (maybe decrypted) PDF goes too.
     OnActivityEntersBackground {
       synchronized(this@VisionOcrModule) { speech }?.stop()
+      PdfForms.dropPreview()
     }
 
-    // Back in the app with a form still unsettled (the activity was recreated
-    // and its result lost): settle it, so JS never waits forever.
+    // Back in the app with a form or share chooser still unsettled (the
+    // activity was recreated and its result lost; a result is delivered before
+    // the activity resumes): settle it, so JS never waits forever.
     OnActivityEntersForeground {
+      if (pendingShare != null) {
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+          pendingShare?.resolve(null)
+          pendingShare = null
+        }, 1500)
+      }
       if (pendingForm != null) {
         android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
           settleForm(if (pendingForm?.first == SystemForms.EVENT_REQUEST) "unknown" else "cancelled")

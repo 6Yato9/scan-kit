@@ -953,6 +953,12 @@ const TEMP_DIRS = [
   // Decrypted working copies of password-protected PDFs unlocked for a session
   // (lib/pdf-session.ts, which also clears earlier processes' on first use).
   'pdf-session',
+  // Android: widget-less Fill & sign previews earlier builds kept here
+  // (PdfForms.kt now renders them from memory; these could be decrypted).
+  'pdf-fill-preview',
+  // Android: PdfBox's spill files for large documents (PdfEngine.memory),
+  // decrypted for a protected PDF; deleted on close, but a kill leaves them.
+  'pdfbox-tmp',
 ];
 /** Open-in staging files older builds wrote straight into the Caches root. */
 const LEGACY_STAGED = /^(?:incoming|attempt)-\d+-/;

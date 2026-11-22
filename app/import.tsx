@@ -29,6 +29,7 @@ import {
   documentNameFromFileName,
   importKindOf,
   isContentUrl,
+  isTrustedImportRoute,
   parseIncomingUris,
   planIncomingImport,
   type ImportKind,
@@ -157,7 +158,7 @@ function removeInboxCopy(uri: string) {
 }
 
 export default function ImportScreen() {
-  const { uri, uris } = useLocalSearchParams<{ uri?: string; uris?: string }>();
+  const { uri, uris, via } = useLocalSearchParams<{ uri?: string; uris?: string; via?: string }>();
   const router = useRouter();
   const { colors } = useTheme();
   const { saveFiles } = useImportDocuments();
@@ -169,7 +170,7 @@ export default function ImportScreen() {
   const mounted = useRef(true);
   // What is being imported, once known (a content:// URL's name is asked for).
   const [incoming, setIncoming] = useState<{ files: IncomingFile[]; kind: ImportKind } | null>(null);
-  const sources = parseIncomingUris(uri, uris);
+  const sources = isTrustedImportRoute(via) ? parseIncomingUris(uri, uris) : [];
   const fileName = incoming
     ? (incoming.files.length > 1 ? `${incoming.files.length} files` : incoming.files[0].name)
     : sources.length > 1 ? `${sources.length} files`
@@ -248,7 +249,12 @@ export default function ImportScreen() {
   useEffect(() => {
     if (started.current) return;
     started.current = true;
-    const list = parseIncomingUris(uri, uris).map(u => (isContentUrl(u) ? u : u.split('?')[0]));
+    // Only a file the system handed over (routed by +native-intent, which
+    // signs the route): a link someone else made that lands here directly is
+    // not imported, whatever it names.
+    const list = isTrustedImportRoute(via)
+      ? parseIncomingUris(uri, uris).map(u => (isContentUrl(u) ? u : u.split('?')[0]))
+      : [];
     const cantOpen = () => setStatus({
       state: 'failed',
       title: 'Scan Kit can’t open this file',
@@ -303,7 +309,7 @@ export default function ImportScreen() {
     })();
     // `attempt` reads refs only; this runs once per incoming file.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [uri, uris, saveFiles]);
+  }, [uri, uris, via, saveFiles]);
 
   // Leaving the screen with a failed import: the staged copy goes too.
   useEffect(() => () => {

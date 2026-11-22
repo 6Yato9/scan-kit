@@ -100,14 +100,6 @@
             {
               "scheme": "content",
               "mimeType": "image/*"
-            },
-            {
-              "scheme": "file",
-              "mimeType": "application/pdf"
-            },
-            {
-              "scheme": "file",
-              "mimeType": "image/*"
             }
           ]
         },

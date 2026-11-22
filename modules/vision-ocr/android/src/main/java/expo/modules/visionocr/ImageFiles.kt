@@ -24,8 +24,8 @@ class VisionFailure(val code: String, message: String) : Exception(message)
 /**
  * File and image plumbing, the Android counterpart of DocumentGeometry.swift
  * (normalize, warp) and PdfEditor.replace. Images are never decoded at full
- * size when a smaller one will do (inSampleSize), so a 50 MP photo can't
- * exhaust the heap.
+ * size when a smaller one will do (ImageDecode), so a 50–200 MP photo can't
+ * exhaust memory.
  */
 object ImageFiles {
   // ── URIs ───────────────────────────────────────────────────────────────────
@@ -124,43 +124,12 @@ object ImageFiles {
 
   /**
    * The image upright (EXIF applied) with its long edge capped at `maxLong`
-   * (never upscaled). Decodes subsampled by a power of two first, then one
-   * filtered scale + orientation transform.
+   * (never upscaled), decoded without a full-size intermediate (ImageDecode:
+   * power-of-two subsampling, strips for large photos, one filtered scale +
+   * orientation transform).
    */
-  fun decodeUpright(path: String, maxLong: Int, info: Info = info(path)): Bitmap {
-    val long = max(info.width, info.height)
-    val target = max(1, min(maxLong, long))
-    var sample = 1
-    while (long / (sample * 2) >= target) sample *= 2
-    val opts = BitmapFactory.Options().apply {
-      inSampleSize = sample
-      inPreferredConfig = Bitmap.Config.ARGB_8888
-    }
-    val decoded = try {
-      BitmapFactory.decodeFile(path, opts)
-    } catch (e: OutOfMemoryError) {
-      throw VisionFailure("ERR_IMAGE_READ", "The image is too large to open")
-    } ?: throw VisionFailure("ERR_IMAGE_READ", "Could not decode image")
-
-    val (tw, th) = QuadMath.capped(info.width, info.height, target)
-    val sx = tw.toFloat() / decoded.width
-    val sy = th.toFloat() / decoded.height
-    val m = Matrix()
-    m.setScale(sx, sy)
-    when (info.orientation) {
-      ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> m.postScale(-1f, 1f)
-      ExifInterface.ORIENTATION_ROTATE_180 -> m.postRotate(180f)
-      ExifInterface.ORIENTATION_FLIP_VERTICAL -> { m.postRotate(180f); m.postScale(-1f, 1f) }
-      ExifInterface.ORIENTATION_TRANSPOSE -> { m.postRotate(90f); m.postScale(-1f, 1f) }
-      ExifInterface.ORIENTATION_ROTATE_90 -> m.postRotate(90f)
-      ExifInterface.ORIENTATION_TRANSVERSE -> { m.postRotate(-90f); m.postScale(-1f, 1f) }
-      ExifInterface.ORIENTATION_ROTATE_270 -> m.postRotate(-90f)
-    }
-    if (m.isIdentity) return decoded
-    val out = Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, m, true)
-    if (out !== decoded) decoded.recycle()
-    return out
-  }
+  fun decodeUpright(path: String, maxLong: Int, info: Info = info(path)): Bitmap =
+    ImageDecode.decode(EncodedImage.Path(path), info.width, info.height, info.orientation, maxLong)
 
   /** A grey copy of `bitmap` with its long edge at most `maxLong` (for page detection and signatures). */
   fun gray(bitmap: Bitmap, maxLong: Int): GrayImage {

@@ -82,12 +82,13 @@ class SpeechController(
   fun speak(text: String, language: String?, rate: Double?): Map<String, Any> {
     val engine = engine()
     val lang = language?.takeIf { it.isNotBlank() } ?: detectLanguage(text)
-    val voice = chooseVoice(engine, lang)
-    if (voice != null) {
-      engine.voice = voice
-    } else if (lang != null) {
-      engine.language = Locale.forLanguageTag(lang)
-    }
+    // Only a voice installed on the phone: letting the engine pick one for
+    // the language (engine.language = …) may choose a network voice, and
+    // nothing in Scan Kit may need the network. With the language unknown,
+    // the engine's own default voice if that one is offline.
+    val voice = (chooseVoice(engine, lang) ?: (if (lang == null) offlineDefault(engine) else null))
+      ?: throw VisionFailure(NO_VOICE, "No voice for this language is installed on this device")
+    engine.voice = voice
     // iOS: 0.1…1 of the maximum rate, the default being half of it; Android's 1.0 is normal speed.
     engine.setSpeechRate(if (rate != null && rate.isFinite()) (rate.coerceIn(0.1, 1.0) * 2).toFloat() else 1f)
     engine.setAudioAttributes(attributes)
@@ -101,7 +102,7 @@ class SpeechController(
       resumeAt = 0
       startLocked(engine, 0)
     }
-    val spoken = voice?.locale?.toLanguageTag() ?: lang ?: engine.voice?.locale?.toLanguageTag() ?: ""
+    val spoken = voice.locale?.toLanguageTag() ?: lang ?: ""
     return mapOf("id" to id, "language" to spoken)
   }
 
@@ -272,6 +273,17 @@ class SpeechController(
      * no network: the exact tag first, then the user's region, the language's
      * home region (as iOS), then quality. Null when none is installed.
      */
+    /** speak() rejects with this code when no installed (offline) voice can read the text. */
+    const val NO_VOICE = "ERR_SPEECH_NO_VOICE"
+
+    /** The engine's default voice, if it works offline and is installed. */
+    fun offlineDefault(engine: TextToSpeech): Voice? {
+      val v = try { engine.defaultVoice } catch (_: Exception) { null } ?: return null
+      if (v.isNetworkConnectionRequired) return null
+      if (v.features?.contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED) == true) return null
+      return v
+    }
+
     fun chooseVoice(engine: TextToSpeech, language: String?): Voice? {
       if (language.isNullOrBlank()) return null
       val voices = try { engine.voices } catch (_: Exception) { null } ?: return null

@@ -194,11 +194,19 @@ type VisionOcrNative = {
   shareFiles?: (uris: string[], title?: string | null) => Promise<void>;
   /** Copy a system-provided (possibly security-scoped) file into the app. Android: also content:// sources. */
   copyIncomingFile?: (sourceUri: string, destUri: string) => Promise<string>;
-  /** Android only: the name, MIME type and size of an incoming content:// (or file://) URL, null when unknown. */
+  /** Android only: the name, MIME type and size of another app's content:// URL, null when unknown (always for our own files). */
   incomingFileInfo?: (uri: string) => Promise<{ name: string | null; mimeType: string | null; size: number | null }>;
+  /** Android 10+ only: adds an image file to Photos without a permission (MediaStore). Only lib/photos.ts may call it. */
+  saveImageToPhotos?: (uri: string) => Promise<string>;
+  /**
+   * Android only (synchronous): the per-process key "Share to Scan Kit" puts on
+   * the scankit://import?uris= link it makes for several files; the link is
+   * honoured only with it (lib/incoming-file routeForIncomingUrl).
+   */
+  incomingShareKey?: () => string;
   /** Android only (synchronous): this build's PdfDocumentView is the real (PDFium) viewer, not the phase-2 placeholder. */
   hasPdfView?: () => boolean;
-  /** Android only (synchronous): whether the device has any camera to scan with. */
+  /** Android only (synchronous): whether the device has a back camera to scan with. */
   hasCamera?: () => boolean;
   /**
    * Page outline in a photo: [x0,y0, x1,y1, x2,y2, x3,y3] = top-left, top-right,

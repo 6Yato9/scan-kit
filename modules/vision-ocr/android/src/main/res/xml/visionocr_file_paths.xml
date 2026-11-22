@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- What shareFiles may hand out: the app's own files and caches, nothing else. -->
+<!--
+  What shareFiles may hand out: only the export folders lib/share.ts
+  (makeExportDir) writes the files being shared into. A URI for anything else
+  in the app (documents, sessions, caches) can't be made, so a bug can't hand
+  one out. Android has no Recovered files folder (iOS layout migration only).
+-->
 <paths>
-  <files-path name="files" path="." />
-  <cache-path name="cache" path="." />
+  <cache-path name="exports" path="exports/" />
 </paths>

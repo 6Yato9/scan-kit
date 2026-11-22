@@ -11,7 +11,13 @@
 //
 // This is the ONLY place allowed to call MediaLibrary.saveToLibraryAsync /
 // createAssetAsync (eslint-rules/lock-safe.js enforces it).
+//
+// Android 10+ saves through VisionOcr.saveImageToPhotos (MediaStore, no
+// permission): expo-media-library wants WRITE_EXTERNAL_STORAGE below Android
+// 13, which the app declares only up to Android 9.
+import { Platform } from 'react-native';
 import * as MediaLibrary from 'expo-media-library';
+import { VisionOcr } from '../modules/vision-ocr/src';
 import { whenUnlocked } from './nav-guard';
 
 export type PhotosOutcome = 'saved' | 'denied' | 'cancelled';
@@ -31,6 +37,18 @@ export async function savePagesToPhotos(uris: string[], options: SaveToPhotosOpt
   const { signal, onProgress } = options;
   await whenUnlocked();
   if (signal?.aborted) return 'cancelled';
+  const native = Platform.OS === 'android' && typeof VisionOcr?.saveImageToPhotos === 'function'
+    ? VisionOcr.saveImageToPhotos
+    : null;
+  if (native) {
+    for (let i = 0; i < uris.length; i++) {
+      await whenUnlocked();
+      if (signal?.aborted) return 'cancelled';
+      onProgress?.(i, uris.length);
+      await native(uris[i].split('?')[0]);
+    }
+    return 'saved';
+  }
   let perm = await MediaLibrary.getPermissionsAsync(true);
   if (!perm.granted && perm.canAskAgain) {
     await whenUnlocked();

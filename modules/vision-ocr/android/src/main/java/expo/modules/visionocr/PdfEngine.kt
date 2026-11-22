@@ -83,6 +83,15 @@ object PdfEngine {
     }
   }
 
+  /** Opens a PDF held in memory (no password: callers pass unprotected bytes). */
+  fun openPdfium(context: Context, bytes: ByteArray): PdfDocument = try {
+    pdfium(context).newDocument(bytes, null)
+  } catch (e: PdfPasswordException) {
+    throw Locked()
+  } catch (e: Exception) {
+    throw IOException("Could not open the PDF")
+  }
+
   /** Page sizes in points as displayed (rotation applied): w0, h0, w1, h1, … */
   fun pageSizes(doc: PdfDocument): FloatArray {
     val n = doc.getPageCount()

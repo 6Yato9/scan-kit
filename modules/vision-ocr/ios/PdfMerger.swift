@@ -17,6 +17,13 @@ import PDFKit
 /// "<name>_2", "<name>_3"…, checked against every top-level name already in
 /// the result and in that part (parts in order, then fields in page and
 /// annotation order). Widgets of one field within a part stay one field.
+///
+/// Radio groups keep their choice: PDFKit, moving a page into another
+/// document, rebuilds each radio group from its first button and writes the
+/// whole group as off when the chosen button is a later one (seen on iOS 26).
+/// The chosen buttons are noted before the move and switched on again after
+/// it, which also makes PDFKit write the group as one field with its buttons
+/// as kids, as in the source.
 enum PdfMerger {
   static func merge(inputPaths: [String], outputPath: String) throws {
     guard !inputPaths.isEmpty else {
@@ -28,6 +35,8 @@ enum PdfMerger {
     var sources: [PDFDocument] = []
     // Top-level field names already in the merged document.
     var usedNames = Set<String>()
+    // Radio buttons that are on in their part (see the header).
+    var chosen: [PDFAnnotation] = []
     for path in inputPaths {
       guard let doc = PDFDocument(url: URL(fileURLWithPath: path)) else {
         throw NSError(domain: "PdfMerger", code: 2,
@@ -42,10 +51,12 @@ enum PdfMerger {
         sources.append(doc)
       }
       renameClashingFields(doc, used: &usedNames)
+      chosen += widgets(doc).filter { $0.widgetControlType == .radioButtonControl && $0.buttonWidgetState == .onState }
       for i in 0..<doc.pageCount {
         if let page = doc.page(at: i) { out.insert(page, at: out.pageCount) }
       }
     }
+    for button in chosen { button.buttonWidgetState = .onState }
     let url = URL(fileURLWithPath: outputPath)
     try? FileManager.default.removeItem(at: url)
     let options = shared.map { PdfEditor.protectionOptions(permissions: $0) } ?? [:]

@@ -6,7 +6,6 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.Matrix
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -57,8 +56,11 @@ import expo.modules.kotlin.viewevent.EventDispatcher
 import expo.modules.kotlin.views.ExpoView
 import expo.modules.visionocr.QuadMath.Pt
 import java.io.File
+import java.util.concurrent.Executor
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.atan
 import kotlin.math.ln
@@ -154,6 +156,21 @@ class DocumentCameraView(context: Context, appContext: AppContext) :
   private val analysisThread = HandlerThread("scankit-camera-analysis").apply { start() }
   private val analysisHandler = Handler(analysisThread.looper)
   private val work: ExecutorService = Executors.newSingleThreadExecutor { r -> Thread(r, "scankit-camera-work") }
+  /**
+   * CameraX's callback executor: the work thread while it runs; after the
+   * view is torn down (work shut down) CameraX may still deliver an aborted
+   * shot's onError, which then runs inline instead of throwing
+   * RejectedExecutionException on a CameraX thread.
+   */
+  private val cameraCallbacks = Executor { r ->
+    try {
+      work.execute(r)
+    } catch (_: RejectedExecutionException) {
+      r.run()
+    }
+  }
+  /** Settles the manual capture in flight (any thread, once); destroy() ends it as not-running. */
+  @Volatile private var pendingSettle: ((VisionFailure?) -> Unit)? = null
 
   private enum class Mode { IDLE, CAMERA, STILL }
 
@@ -305,7 +322,7 @@ class DocumentCameraView(context: Context, appContext: AppContext) :
     }
   }
 
-  private fun hasBackCamera() = context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
+  private fun hasBackCamera() = context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA)
 
   private fun stopEverything() {
     stopSensors()
@@ -326,6 +343,10 @@ class DocumentCameraView(context: Context, appContext: AppContext) :
   fun destroy() {
     if (destroyed) return
     destroyed = true
+    // A shot in flight can't come back to a closed view: its capture() promise
+    // is settled now (its result, if CameraX still delivers one, is dropped).
+    pendingSettle?.invoke(VisionFailure("not-running", "The camera was closed"))
+    pendingSettle = null
     stopEverything()
     hostLifecycle?.removeObserver(hostObserver)
     hostLifecycle = null
@@ -340,6 +361,8 @@ class DocumentCameraView(context: Context, appContext: AppContext) :
       stillBitmap = null
       stillGray = null
     }
+    // Last: messages already queued still run (quitSafely), and anything
+    // posted later is refused and handled where it is posted.
     analysisThread.quitSafely()
     work.shutdown()
   }
@@ -468,14 +491,20 @@ class DocumentCameraView(context: Context, appContext: AppContext) :
       .setResolutionSelector(
         ResolutionSelector.Builder()
           .setAspectRatioStrategy(fourThree)
-          .setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
+          // At most ~12 MP: a larger frame (50–200 MP sensors list them) is
+          // only scaled down to CAPTURE_MAX_EDGE afterwards, at the cost of
+          // a 200+ MB decode. Lower first, so a binned 4080x3060 is chosen.
+          .setResolutionStrategy(ResolutionStrategy(Size(4096, 3072), ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER))
           .build(),
       )
       .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
       .setFlashMode(flashMode)
       .build()
     return try {
-      p.unbindAll()
+      // Only our own use cases (an earlier bind's): unbindAll would also
+      // stop any other CameraX user in the process (expo-camera's QR scanner).
+      val earlier = listOfNotNull(preview, analysis, imageCapture)
+      if (earlier.isNotEmpty()) p.unbind(*earlier.toTypedArray())
       val cam = p.bindToLifecycle(this, selector, pv, an, ic)
       camera = cam
       preview = pv
@@ -830,11 +859,22 @@ class DocumentCameraView(context: Context, appContext: AppContext) :
     tracker.didCapture(fallback, now(), if (fallback == null) null else lastSignature)
     val still = if (mode == Mode.STILL) stillSourcePath else null
     main.post { if (!destroyed) onCaptureStart(emptyMap()) }
+    // The completion runs exactly once, whichever of the result, the
+    // watchdog or destroy() comes first.
+    val settled = AtomicBoolean(false)
+    lateinit var settle: (VisionFailure?) -> Unit
+    settle = { failure ->
+      if (settled.compareAndSet(false, true)) {
+        if (pendingSettle === settle) pendingSettle = null
+        completion?.invoke(failure)
+      }
+    }
+    if (completion != null) pendingSettle = settle
 
     // Settles this shot exactly once: the photo, a failure, or the watchdog.
     // A result for a shot already given up is thrown away (its file deleted).
     val finish: (Result<Shot>) -> Unit = { result ->
-      analysisHandler.post {
+      val posted = analysisHandler.post {
         if (!captureInFlight || captureToken != token) {
           result.getOrNull()?.let { File(it.path).delete() }
           return@post
@@ -847,20 +887,28 @@ class DocumentCameraView(context: Context, appContext: AppContext) :
         val running = mode != Mode.IDLE
         main.post {
           val shot = result.getOrNull()
-          if (shot != null) {
-            if (!destroyed) onCapture(payload(shot, shot.quad ?: fallback))
-            completion?.invoke(null)
+          if (shot != null && destroyed) {
+            File(shot.path).delete()
+            settle(VisionFailure("not-running", "The camera was closed"))
+          } else if (shot != null) {
+            onCapture(payload(shot, shot.quad ?: fallback))
+            settle(null)
           } else {
             val e = result.exceptionOrNull()
             val message = (e as? VisionFailure)?.message ?: e?.message ?: "The photo could not be taken"
-            if (running) {
-              if (!destroyed) onCameraError(mapOf("code" to "failed", "message" to message, "capture" to true))
-              completion?.invoke(VisionFailure("failed", message))
+            if (running && !destroyed) {
+              onCameraError(mapOf("code" to "failed", "message" to message, "capture" to true))
+              settle(VisionFailure("failed", message))
             } else {
-              completion?.invoke(VisionFailure("not-running", message))
+              settle(VisionFailure("not-running", message))
             }
           }
         }
+      }
+      // The analysis thread is gone (the view was torn down): settle here.
+      if (!posted) {
+        result.getOrNull()?.let { File(it.path).delete() }
+        main.post { settle(VisionFailure("not-running", "The camera was closed")) }
       }
     }
     analysisHandler.postDelayed({
@@ -868,8 +916,12 @@ class DocumentCameraView(context: Context, appContext: AppContext) :
     }, CAPTURE_TIMEOUT_MS)
 
     if (still != null) {
-      work.execute {
-        finish(runCatching { saveCapture(ImageFiles.decodeUpright(still, CAPTURE_MAX_EDGE)) })
+      try {
+        work.execute {
+          finish(runCatching { saveCapture(ImageFiles.decodeUpright(still, CAPTURE_MAX_EDGE)) })
+        }
+      } catch (_: RejectedExecutionException) {
+        finish(Result.failure(VisionFailure("not-running", "The camera is not running")))
       }
       return
     }
@@ -882,8 +934,13 @@ class DocumentCameraView(context: Context, appContext: AppContext) :
       }
       ic.flashMode = flashMode
       try {
-        ic.takePicture(work, object : ImageCapture.OnImageCapturedCallback() {
+        ic.takePicture(cameraCallbacks, object : ImageCapture.OnImageCapturedCallback() {
           override fun onCaptureSuccess(image: ImageProxy) {
+            if (destroyed) {
+              image.close()
+              finish(Result.failure(VisionFailure("not-running", "The camera was closed")))
+              return
+            }
             val result = runCatching {
               val rotation = image.imageInfo.rotationDegrees
               val buffer = image.planes[0].buffer
@@ -937,39 +994,15 @@ class DocumentCameraView(context: Context, appContext: AppContext) :
     }
   }
 
-  /** The photo upright (rotationDegrees applied), long edge capped at CAPTURE_MAX_EDGE, decoded subsampled. */
+  /** The photo upright (rotationDegrees applied), long edge capped at CAPTURE_MAX_EDGE, never decoded at full size (ImageDecode). */
   private fun decodeJpeg(bytes: ByteArray, rotation: Int): Bitmap {
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-    val long = max(bounds.outWidth, bounds.outHeight)
-    if (long <= 0) throw VisionFailure("failed", "Could not read the photo")
-    var sample = 1
-    while (long / (sample * 2) >= CAPTURE_MAX_EDGE) sample *= 2
-    val opts = BitmapFactory.Options().apply {
-      inSampleSize = sample
-      inPreferredConfig = Bitmap.Config.ARGB_8888
-    }
-    val decoded = try {
-      BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
-    } catch (e: OutOfMemoryError) {
-      throw VisionFailure("failed", "Not enough memory for the photo")
-    } ?: throw VisionFailure("failed", "Could not read the photo")
-    val m = Matrix()
-    val dl = max(decoded.width, decoded.height)
-    if (dl > CAPTURE_MAX_EDGE) {
-      val s = CAPTURE_MAX_EDGE.toFloat() / dl
-      m.postScale(s, s)
-    }
-    if (rotation != 0) m.postRotate(rotation.toFloat())
-    if (m.isIdentity) return decoded
-    return try {
-      val out = Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, m, true)
-      if (out !== decoded) decoded.recycle()
-      out
-    } catch (e: OutOfMemoryError) {
-      decoded.recycle()
-      throw VisionFailure("failed", "Not enough memory for the photo")
-    }
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) throw VisionFailure("failed", "Could not read the photo")
+    return ImageDecode.decode(
+      EncodedImage.Bytes(bytes), bounds.outWidth, bounds.outHeight,
+      DecodePlan.orientationForRotation(rotation), CAPTURE_MAX_EDGE, failCode = "failed",
+    )
   }
 
   companion object {

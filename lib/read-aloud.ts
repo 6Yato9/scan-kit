@@ -7,7 +7,7 @@
 // the app leaves the foreground (here and natively), so a document is never
 // read out behind the App Lock.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AppState } from 'react-native';
+import { Alert, AppState } from 'react-native';
 import { VisionOcr, type SpeechProgressEvent, type SpeechStateEvent } from '../modules/vision-ocr/src';
 
 export type ReadAloudState = 'idle' | 'starting' | 'speaking' | 'paused';
@@ -131,9 +131,17 @@ export function useReadAloud(text: string) {
         setState(before === 'paused' ? 'paused' : 'speaking');
       }
       return true;
-    } catch {
+    } catch (err) {
       if (activeOwner === owner) activeOwner = null;
       reset();
+      // Android reads only with a voice installed on the phone (never a
+      // network one): say why nothing happens.
+      if ((err as { code?: string } | null)?.code === 'ERR_SPEECH_NO_VOICE') {
+        Alert.alert(
+          'No voice for this language',
+          'Install one in your phone’s text-to-speech settings (Settings › System › Languages › Text-to-speech output), then try again.',
+        );
+      }
       return false;
     }
   }, [owner, reset, text]);

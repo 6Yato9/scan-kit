@@ -1002,6 +1002,21 @@ describe('Open-in staging is swept (r7 #3)', () => {
     expect(attempt.exists).toBe(false);
   });
 
+  test('Android PDF scratch folders (decrypted leftovers) are swept once settled', () => {
+    const preview: any = new MockFile(`${CACHES}/pdf-fill-preview/nofields-1a2b.pdf`);
+    const spill: any = new MockFile(`${CACHES}/pdfbox-tmp/PDFBox123.tmp`);
+    const fresh: any = new MockFile(`${CACHES}/pdfbox-tmp/PDFBox456.tmp`);
+    mockMtimes[preview.uri] = now - 60 * 60 * 1000;
+    mockMtimes[spill.uri] = now - 60 * 60 * 1000;
+    mockMtimes[fresh.uri] = now - 1000;
+    new MockDirectory({ uri: CACHES }, 'pdf-fill-preview').list = jest.fn(() => [preview]);
+    new MockDirectory({ uri: CACHES }, 'pdfbox-tmp').list = jest.fn(() => [spill, fresh]);
+    expect(sweepTempLeftovers(now)).toBe(2);
+    expect(preview.exists).toBe(false);
+    expect(spill.exists).toBe(false);
+    expect(fresh.exists).toBe(true);
+  });
+
   test('a recent mtime still keeps a file without a stamp in Caches/incoming', () => {
     const odd: any = new MockFile(`${CACHES}/incoming/contract.pdf`);
     mockMtimes[odd.uri] = now - 1000;

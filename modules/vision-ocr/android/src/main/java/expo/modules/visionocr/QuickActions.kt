@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import expo.modules.core.interfaces.ReactActivityLifecycleListener
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.modules.Module
@@ -71,31 +72,97 @@ class QuickActionTrampolineActivity : Activity() {
   }
 }
 
+/**
+ * The incoming-file launches already handled, as (task id, intent
+ * fingerprint), kept across process death in private SharedPreferences. A
+ * task keeps its id for its whole life, Recents relaunches included; a new
+ * share that starts the app makes a new task.
+ */
+internal object LaunchMemory {
+  private const val PREFS = "scankit.launch-memory"
+  private const val KEY = "handled"
+  private const val MAX = 8
+
+  /** True when this task already handled this intent; else remembers it. */
+  fun seenBefore(activity: Activity, intent: Intent): Boolean {
+    val entry = "${activity.taskId}|${fingerprint(intent)}"
+    val prefs = activity.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+    val list = prefs.getString(KEY, "")!!.split('\n').filter { it.isNotEmpty() }
+    if (entry in list) return true
+    prefs.edit().putString(KEY, (list + entry).takeLast(MAX).joinToString("\n")).apply()
+    return false
+  }
+
+  /** Action, type, data and every URI it carries (never the contents), hashed. */
+  fun fingerprint(intent: Intent): String {
+    val parts = ArrayList<String>()
+    parts.add(intent.action.orEmpty())
+    parts.add(intent.type.orEmpty())
+    parts.add(intent.dataString.orEmpty())
+    intent.clipData?.let { clip -> for (i in 0 until clip.itemCount) parts.add(clip.getItemAt(i).uri?.toString().orEmpty()) }
+    val digest = java.security.MessageDigest.getInstance("SHA-256").digest(parts.joinToString("\u0000").toByteArray())
+    return digest.take(12).joinToString("") { "%02x".format(it) }
+  }
+}
+
 /** Activity hooks: quick actions and "Share to Scan Kit" intents. */
 class VisionOcrActivityListener : ReactActivityLifecycleListener {
   override fun onCreate(activity: Activity?, savedInstanceState: Bundle?) {
-    val intent = activity?.intent ?: return
-    // A recreated activity (or one reopened from Recents) carries the
-    // intent it was first started with: don't run that action again.
-    val replayed = savedInstanceState != null ||
-      (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0
-    if (intent.action == QUICK_ACTION) {
-      val type = intent.getStringExtra(QUICK_ACTION_TYPE)
-      if (type != null && !replayed) QuickActionCenter.launched(type)
-      intent.removeExtra(QUICK_ACTION_TYPE)
-      return
+    // Runs before React Native starts: nothing here may crash the launch.
+    try {
+      appContext = activity?.applicationContext
+      val intent = activity?.intent ?: return
+      // A recreated activity (or one reopened from Recents, also after the
+      // process was killed) carries the intent it was first started with:
+      // don't run that action, or import those files, again. Expo's
+      // MainActivity passes a null state to super.onCreate (react-native-
+      // screens), so listeners never see savedInstanceState, and Android
+      // relaunches a killed task's activity without LAUNCHED_FROM_HISTORY:
+      // LaunchMemory recognises the same task's same intent instead.
+      val replayed = savedInstanceState != null ||
+        (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0 ||
+        (isIncoming(intent) && LaunchMemory.seenBefore(activity, intent))
+      if (intent.action == QUICK_ACTION) {
+        val type = intent.getStringExtra(QUICK_ACTION_TYPE)
+        if (type != null && !replayed) QuickActionCenter.launched(type)
+        intent.removeExtra(QUICK_ACTION_TYPE)
+        return
+      }
+      if (replayed && isIncoming(intent)) {
+        IncomingFiles.neutralize(intent)
+        return
+      }
+      IncomingFiles.rewriteShareIntent(activity, intent)
+    } catch (e: Throwable) {
+      Log.w("VisionOcr", "launch intent", e)
+      activity?.intent?.let { IncomingFiles.neutralize(it) }
     }
-    IncomingFiles.rewriteShareIntent(intent)
   }
 
   override fun onNewIntent(intent: Intent?): Boolean {
-    if (intent?.action == QUICK_ACTION) {
-      intent.getStringExtra(QUICK_ACTION_TYPE)?.let { QuickActionCenter.perform(it) }
-      return false
+    try {
+      if (intent?.action == QUICK_ACTION) {
+        intent.getStringExtra(QUICK_ACTION_TYPE)?.let { QuickActionCenter.perform(it) }
+        return false
+      }
+      val context = appContext ?: return false
+      IncomingFiles.rewriteShareIntent(context, intent)
+    } catch (e: Throwable) {
+      Log.w("VisionOcr", "new intent", e)
+      intent?.let { IncomingFiles.neutralize(it) }
     }
-    IncomingFiles.rewriteShareIntent(intent)
     return false
   }
+
+  /** "Open with" / "Share to": files Linking would hand to JS. Deep links (scankit://) are not files. */
+  private fun isIncoming(intent: Intent): Boolean = when (intent.action) {
+    Intent.ACTION_SEND, Intent.ACTION_SEND_MULTIPLE -> true
+    Intent.ACTION_VIEW -> !intent.data?.scheme.equals("scankit", ignoreCase = true)
+    else -> false
+  }
+
+  /** The application, remembered from onCreate (onNewIntent gets no activity). */
+  private var appContext: android.content.Context? = null
 }
 
 /** JS: lib/quick-actions.ts (requireOptionalNativeModule('ScanKitQuickActions')). */

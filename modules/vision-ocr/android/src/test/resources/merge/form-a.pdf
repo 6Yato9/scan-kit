@@ -1,0 +1,279 @@
+%PDF-1.3
+%‚„œ”
+1 0 obj
+<<
+/Producer (pypdf)
+>>
+endobj
+2 0 obj
+<<
+/Type /Pages
+/Count 1
+/Kids [ 4 0 R ]
+>>
+endobj
+3 0 obj
+<<
+/Type /Catalog
+/Pages 2 0 R
+/AcroForm 23 0 R
+>>
+endobj
+4 0 obj
+<<
+/Type /Page
+/Resources <<
+>>
+/MediaBox [ 0.0 0.0 612 792 ]
+/Parent 2 0 R
+/Annots [ 5 0 R 10 0 R 12 0 R 14 0 R 16 0 R 17 0 R 20 0 R ]
+>>
+endobj
+5 0 obj
+<<
+/Type /Annot
+/Subtype /Widget
+/P 4 0 R
+/F 4
+/T (name)
+/FT /Tx
+/V (Alice)
+/Rect [ 50 700 200 720 ]
+>>
+endobj
+6 0 obj
+<<
+/Type /XObject
+/Subtype /Form
+/BBox [ 0.0 0.0 20 20 ]
+/Length 23
+>>
+stream
+0 0 1 rg 5 5 10 10 re f
+endstream
+endobj
+7 0 obj
+<<
+/Type /XObject
+/Subtype /Form
+/BBox [ 0.0 0.0 20 20 ]
+/Length 0
+>>
+stream
+
+endstream
+endobj
+8 0 obj
+<<
+/T (choice)
+/FT /Btn
+/Ff 49152
+/V /B
+/Kids [ 10 0 R 12 0 R ]
+>>
+endobj
+9 0 obj
+<<
+/Type /XObject
+/Subtype /Form
+/BBox [ 0.0 0.0 20 20 ]
+/Length 23
+>>
+stream
+0 0 1 rg 5 5 10 10 re f
+endstream
+endobj
+10 0 obj
+<<
+/Type /Annot
+/Subtype /Widget
+/P 4 0 R
+/F 4
+/Parent 8 0 R
+/Rect [ 50 650 70 670 ]
+/AS /Off
+/AP <<
+/N <<
+/A 9 0 R
+/Off 7 0 R
+>>
+>>
+>>
+endobj
+11 0 obj
+<<
+/Type /XObject
+/Subtype /Form
+/BBox [ 0.0 0.0 20 20 ]
+/Length 23
+>>
+stream
+0 0 1 rg 5 5 10 10 re f
+endstream
+endobj
+12 0 obj
+<<
+/Type /Annot
+/Subtype /Widget
+/P 4 0 R
+/F 4
+/Parent 8 0 R
+/Rect [ 80 650 100 670 ]
+/AS /B
+/AP <<
+/N <<
+/B 11 0 R
+/Off 7 0 R
+>>
+>>
+>>
+endobj
+13 0 obj
+<<
+/T (a)
+/Kids [ 14 0 R ]
+>>
+endobj
+14 0 obj
+<<
+/Type /Annot
+/Subtype /Widget
+/P 4 0 R
+/F 4
+/T (b)
+/FT /Tx
+/V (inner)
+/Parent 13 0 R
+/Rect [ 50 600 200 620 ]
+>>
+endobj
+15 0 obj
+<<
+/T (c)
+/FT /Tx
+/V (twice)
+/Kids [ 16 0 R 17 0 R ]
+>>
+endobj
+16 0 obj
+<<
+/Type /Annot
+/Subtype /Widget
+/P 4 0 R
+/F 4
+/Parent 15 0 R
+/Rect [ 50 550 200 570 ]
+>>
+endobj
+17 0 obj
+<<
+/Type /Annot
+/Subtype /Widget
+/P 4 0 R
+/F 4
+/Parent 15 0 R
+/Rect [ 50 520 200 540 ]
+>>
+endobj
+18 0 obj
+<<
+/Type /XObject
+/Subtype /Form
+/BBox [ 0.0 0.0 20 20 ]
+/Length 23
+>>
+stream
+0 0 0 rg 5 5 10 10 re f
+endstream
+endobj
+19 0 obj
+<<
+/Type /XObject
+/Subtype /Form
+/BBox [ 0.0 0.0 20 20 ]
+/Length 0
+>>
+stream
+
+endstream
+endobj
+20 0 obj
+<<
+/Type /Annot
+/Subtype /Widget
+/P 4 0 R
+/F 4
+/T (agree)
+/FT /Btn
+/V /Yes
+/AS /Yes
+/Rect [ 300 650 320 670 ]
+/AP <<
+/N <<
+/Yes 18 0 R
+/Off 19 0 R
+>>
+>>
+>>
+endobj
+21 0 obj
+<<
+/Type /Font
+/Subtype /Type1
+/BaseFont /Helvetica
+>>
+endobj
+22 0 obj
+<<
+/Type /Font
+/Subtype /Type1
+/BaseFont /ZapfDingbats
+>>
+endobj
+23 0 obj
+<<
+/Fields [ 5 0 R 8 0 R 13 0 R 15 0 R 20 0 R ]
+/DA (\057Helv 0 Tf 0 g)
+/DR <<
+/Font <<
+/Helv 21 0 R
+/ZaDb 22 0 R
+>>
+>>
+>>
+endobj
+xref
+0 24
+0000000000 65535 f 
+0000000015 00000 n 
+0000000054 00000 n 
+0000000113 00000 n 
+0000000179 00000 n 
+0000000333 00000 n 
+0000000452 00000 n 
+0000000579 00000 n 
+0000000682 00000 n 
+0000000764 00000 n 
+0000000891 00000 n 
+0000001043 00000 n 
+0000001171 00000 n 
+0000001323 00000 n 
+0000001369 00000 n 
+0000001501 00000 n 
+0000001573 00000 n 
+0000001679 00000 n 
+0000001785 00000 n 
+0000001913 00000 n 
+0000002017 00000 n 
+0000002189 00000 n 
+0000002260 00000 n 
+0000002334 00000 n 
+trailer
+<<
+/Size 24
+/Root 3 0 R
+/Info 1 0 R
+>>
+startxref
+2473
+%%EOF

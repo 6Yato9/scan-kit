@@ -78,7 +78,7 @@
 //     hardware) or auth throws → FAIL OPEN (unlock).
 //   - Auth returns failure (cancel/fail) → stay locked but ALWAYS show a
 //     manual Unlock button. Never auto-loop the prompt.
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { AppState, AppStateStatus, Platform, StyleSheet, Text, View } from 'react-native';
 import { usePathname, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -364,6 +364,13 @@ export function LockGate({ children }: { children: React.ReactNode }) {
     if (!enabled || LOCK_ON_STOP) return;
     const sub = AppState.addEventListener('change', (next: AppStateStatus) => {
       const prev = appStateRef.current;
+      if (next === 'background' && Platform.OS === 'android' && isAuthenticating()) {
+        // Android without the stop events (an older dev client): our own
+        // unlock prompt's screen-lock fallback is an activity of its own
+        // (API 26-29), which reports 'background'. Not a leave: locking and
+        // prompting again on the way back would loop.
+        return;
+      }
       appStateRef.current = next;
       if (next === 'inactive') {
         // Snapshot cover only; an already-locked app is covered by the lock,
@@ -453,12 +460,29 @@ export function LockGate({ children }: { children: React.ReactNode }) {
             privacy cover stays through the trip to the background, until the
             /lock route it hides has been presented and the app is active. */}
         {enabled === true && ((isLocked && overPicker) || privacy) && (
-          <FullWindowOverlay>
+          <WindowOverlay>
             {isLocked && overPicker ? <LockScreen /> : <PrivacyCover />}
-          </FullWindowOverlay>
+          </WindowOverlay>
         )}
       </View>
     </LockContext.Provider>
+  );
+}
+
+/**
+ * iOS: FullWindowOverlay, a window above everything, presented pickers
+ * included. Android: react-native-screens renders FullWindowOverlay as a
+ * plain View in the layout flow, which would split the root column under the
+ * navigator; the pickers there are other apps' activities anyway, so the
+ * overlay only has to cover our own screens: an absolute-fill view, last in
+ * the tree.
+ */
+function WindowOverlay({ children }: { children: ReactNode }) {
+  if (Platform.OS === 'ios') return <FullWindowOverlay>{children}</FullWindowOverlay>;
+  return (
+    <View style={StyleSheet.absoluteFill} collapsable={false}>
+      {children}
+    </View>
   );
 }
 

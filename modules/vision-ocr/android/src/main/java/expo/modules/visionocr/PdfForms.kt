@@ -35,6 +35,7 @@ import com.tom_roush.pdfbox.pdmodel.interactive.form.PDTerminalField
 import com.tom_roush.pdfbox.pdmodel.interactive.form.PDTextField
 import com.tom_roush.pdfbox.pdmodel.interactive.form.PDVariableText
 import com.tom_roush.pdfbox.util.Matrix
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.IdentityHashMap
 import java.util.UUID
@@ -200,45 +201,56 @@ object PdfForms {
   // ── pdfRenderPage ────────────────────────────────────────────────────────
 
   /**
-   * A copy of the PDF with every form widget hidden (so the fill screen can
-   * draw the fields itself), kept in Caches for the pages that follow; other
-   * annotations (earlier notes and signatures) still draw.
+   * The PDF with every form widget hidden (so the fill screen can draw the
+   * fields itself), as bytes in memory for the pages that follow; other
+   * annotations (earlier notes and signatures) still draw. Never a file: the
+   * copy has its security removed, and for a session-unlocked PDF it is the
+   * decrypted document, which must not outlive the session copy it came from
+   * (lib/pdf-session.ts: nothing decrypted is persisted). Only the last
+   * document is kept, and only while the app is in front ([dropPreview] runs
+   * when it leaves); the cached entry also spares the full PdfBox parse each
+   * page's lock check used to cost.
    */
-  private fun withoutFields(context: Context, file: File): File {
-    val dir = File(context.cacheDir, "pdf-fill-preview").apply { mkdirs() }
-    val key = Integer.toHexString("${file.absolutePath}|${file.length()}|${file.lastModified()}".hashCode())
-    val out = File(dir, "nofields-$key.pdf")
-    if (out.exists()) return out
-    // Only the newest two copies are kept.
-    dir.listFiles()?.sortedByDescending { it.lastModified() }?.drop(1)?.forEach { it.delete() }
+  private class Preview(val key: String, val bytes: ByteArray?)
+
+  @Volatile private var preview: Preview? = null
+
+  private fun previewKey(file: File) = "${file.absolutePath}|${file.length()}|${file.lastModified()}"
+
+  /** The lock check (and, with `hideFields`, the widget-less bytes) for `file`, cached for the next page. */
+  @Synchronized
+  private fun prepared(context: Context, file: File, hideFields: Boolean): Preview {
+    val key = previewKey(file)
+    val cached = preview
+    if (cached != null && cached.key == key && (!hideFields || cached.bytes != null)) return cached
+    // Locked or unreadable files are refused the way pdfFillInfo refuses them.
     val doc = PdfDocs.openUnlocked(context, file)
-    val tmp = File(dir, ".nofields-${UUID.randomUUID()}.pdf")
-    try {
-      doc.use {
-        for (page in doc.pages) {
-          val list = annots(page) ?: continue
-          for (k in 0 until list.size()) {
-            val a = list.getObject(k) as? COSDictionary ?: continue
-            if (a.getCOSName(COSName.SUBTYPE) == COSName.WIDGET) a.setInt(COSName.F, a.getInt(COSName.F, 0) or 2)
-          }
+    val bytes = doc.use {
+      if (!hideFields) return@use null
+      for (page in doc.pages) {
+        val list = annots(page) ?: continue
+        for (k in 0 until list.size()) {
+          val a = list.getObject(k) as? COSDictionary ?: continue
+          if (a.getCOSName(COSName.SUBTYPE) == COSName.WIDGET) a.setInt(COSName.F, a.getInt(COSName.F, 0) or 2)
         }
-        doc.isAllSecurityToBeRemoved = true
-        doc.save(tmp)
       }
-      android.system.Os.rename(tmp.path, out.path)
-    } finally {
-      tmp.delete()
+      doc.isAllSecurityToBeRemoved = true
+      ByteArrayOutputStream().also { doc.save(it) }.toByteArray()
     }
-    return out
+    return Preview(key, bytes).also { preview = it }
+  }
+
+  /** Forgets the cached preview (VisionOcrModule calls it when the app leaves the foreground). */
+  fun dropPreview() {
+    preview = null
   }
 
   /** pdfRenderPage (PdfFiller.renderPage): page `index` as an upright JPEG q 0.88, long edge `maxEdge`, on white. */
   fun renderPage(context: Context, file: File, index: Int, out: File, maxEdge: Double, hideFields: Boolean): Map<String, Any> {
-    // Locked or unreadable files are refused the way pdfFillInfo refuses them.
-    PdfDocs.openUnlocked(context, file).close()
-    val source = if (hideFields) withoutFields(context, file) else file
+    val prepared = prepared(context, file, hideFields)
     val doc = try {
-      PdfEngine.openPdfium(context, source, null)
+      val bytes = prepared.bytes
+      if (hideFields && bytes != null) PdfEngine.openPdfium(context, bytes) else PdfEngine.openPdfium(context, file, null)
     } catch (e: PdfEngine.Locked) {
       throw PdfFail(PdfDocs.LOCKED)
     }

@@ -7,8 +7,10 @@ import android.os.Build
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
+import android.util.Log
 import org.json.JSONArray
 import java.io.File
+import java.security.SecureRandom
 
 /** FileProvider of shareFiles (its own subclass, so it never clashes with another library's). */
 class VisionOcrFileProvider : FileProvider()
@@ -19,20 +21,24 @@ class VisionOcrFileProvider : FileProvider()
  */
 object IncomingFiles {
   /**
-   * Copies a system-provided file into the app: content:// (another app's
-   * provider: Files, Gmail, WhatsApp…) or file://. The read grant of a
-   * content URI only lasts while our activity lives, so callers copy at once.
+   * Copies a system-provided file into the app: content:// from another
+   * app's provider (Files, Gmail, WhatsApp…). The read grant of a content URI
+   * only lasts while our activity lives, so callers copy at once.
+   *
+   * Never a file:// path or one of Scan Kit's own providers: any app (or a
+   * web page, through the scankit:// link) can hand us a URL, and Scan Kit
+   * can always read its own files, so those would make it import its own
+   * private data without the user asking. Other apps' files can't arrive as
+   * paths anyway (FileUriExposedException; no storage permission here).
    */
   fun copy(context: Context, sourceUri: String, destUri: String): String {
     val dest = File(ImageFiles.pathOf(destUri))
     val src = resolve(sourceUri)
+    if (!isForeignContent(context, src)) throw VisionFailure("ERR_COPY_INCOMING", "Scan Kit can't open this file")
     try {
       ImageFiles.writeAtomically(dest) { out ->
-        val input = when (src.scheme?.lowercase()) {
-          "content" -> context.contentResolver.openInputStream(src)
-          "file", null -> File(ImageFiles.pathOf(sourceUri)).inputStream()
-          else -> null
-        } ?: throw VisionFailure("ERR_COPY_INCOMING", "Bad file URL")
+        val input = context.contentResolver.openInputStream(src)
+          ?: throw VisionFailure("ERR_COPY_INCOMING", "Bad file URL")
         input.use { it.copyTo(out) }
       }
     } catch (e: VisionFailure) {
@@ -45,9 +51,29 @@ object IncomingFiles {
     return ImageFiles.uriOf(dest)
   }
 
-  /** { name, mimeType, size } of an incoming content:// or file:// URI (null fields when unknown). */
+  /**
+   * True for a content:// URI served by another app's provider. Ours (the
+   * share FileProvider, expo-file-system's, any other in this package) are
+   * refused like file:// paths (see [copy]). An authority no provider
+   * claims is left to the open, which fails.
+   */
+  fun isForeignContent(context: Context, uri: Uri): Boolean {
+    if (!uri.scheme.equals("content", ignoreCase = true)) return false
+    val authority = uri.authority ?: return false
+    val own = context.packageName
+    if (authority == own || authority.startsWith("$own.")) return false
+    val owner = try {
+      context.packageManager.resolveContentProvider(authority, 0)?.packageName
+    } catch (_: Exception) {
+      null
+    }
+    return owner != own
+  }
+
+  /** { name, mimeType, size } of an incoming content:// URI (null fields when unknown); nothing for our own files. */
   fun info(context: Context, uri: String): Map<String, Any?> {
     val u = resolve(uri)
+    if (!isForeignContent(context, u)) return mapOf("name" to null, "mimeType" to null, "size" to null)
     var name: String? = null
     var size: Long? = null
     var mime: String? = null
@@ -65,10 +91,6 @@ object IncomingFiles {
       }
       mime = try { context.contentResolver.getType(u) } catch (_: Exception) { null }
       if (name == null) name = u.lastPathSegment?.substringAfterLast('/')
-    } else {
-      val f = File(ImageFiles.pathOf(uri))
-      name = f.name
-      if (f.isFile) size = f.length()
     }
     if (mime == null || mime == "application/octet-stream") {
       val ext = name?.substringAfterLast('.', "")?.lowercase().orEmpty()
@@ -108,8 +130,7 @@ object IncomingFiles {
 
   private fun sniff(context: Context, u: Uri): String? = try {
     val head = ByteArray(12)
-    val n = (if (u.scheme.equals("content", true)) context.contentResolver.openInputStream(u) else File(ImageFiles.pathOf(u.toString())).inputStream())
-      ?.use { it.read(head) } ?: 0
+    val n = context.contentResolver.openInputStream(u)?.use { it.read(head) } ?: 0
     when {
       n >= 4 && head[0] == '%'.code.toByte() && head[1] == 'P'.code.toByte() && head[2] == 'D'.code.toByte() && head[3] == 'F'.code.toByte() -> "application/pdf"
       n >= 3 && head[0] == 0xFF.toByte() && head[1] == 0xD8.toByte() && head[2] == 0xFF.toByte() -> "image/jpeg"
@@ -153,28 +174,72 @@ object IncomingFiles {
   // ── Share to Scan Kit ──────────────────────────────────────────────────────
 
   /**
+   * Per-process key on the multi-file link [rewriteShareIntent] makes. JS
+   * (lib/incoming-file routeForIncomingUrl) honours scankit://import?uris=
+   * only with it, so another app or a web page can't send that link itself
+   * and have Scan Kit import files without the user sharing them.
+   */
+  val shareKey: String by lazy {
+    val bytes = ByteArray(16).also { SecureRandom().nextBytes(it) }
+    bytes.joinToString("") { "%02x".format(it) }
+  }
+
+  /**
    * Turns "Share to Scan Kit" (ACTION_SEND / SEND_MULTIPLE, files in
    * EXTRA_STREAM) into the VIEW intent React Native's Linking reports, so it
    * reaches expo-router's +native-intent like "Open with" does:
    *  - one file  -> VIEW <content://…> (app/import.tsx imports it);
-   *  - several   -> VIEW scankit://import?uris=<JSON array> (imported together).
+   *  - several   -> VIEW scankit://import?uris=<JSON array>&k=<shareKey>.
    * Called before React Native reads the intent (ReactActivityLifecycleListener
    * runs ahead of the delegate). The read grants stay with the activity.
+   *
+   * Only other apps' content:// URIs are kept (see [copy]). Never throws: a
+   * malformed intent (a sender's ArrayList<String>, a custom Parcelable that
+   * can't be unparcelled) must not crash the app before it starts; such an
+   * intent is turned into a plain launch.
    */
-  fun rewriteShareIntent(intent: Intent?) {
+  fun rewriteShareIntent(context: Context, intent: Intent?) {
     if (intent == null) return
+    try {
+      rewrite(context, intent)
+    } catch (e: Throwable) {
+      Log.w("IncomingFiles", "Ignoring a malformed incoming intent", e)
+      neutralize(intent)
+    }
+  }
+
+  /** The intent becomes a plain launch: nothing in it is imported. */
+  fun neutralize(intent: Intent) {
+    try {
+      intent.action = Intent.ACTION_MAIN
+      intent.data = null
+      intent.clipData = null
+      intent.replaceExtras(null as android.os.Bundle?)
+    } catch (_: Throwable) {
+    }
+  }
+
+  private fun rewrite(context: Context, intent: Intent) {
     if (intent.action == Intent.ACTION_VIEW) {
-      val data = intent.data
-      val type = intent.type
-      if (data != null && !data.scheme.equals("scankit", true)) remember(data, type)
+      val data = intent.data ?: return
+      if (data.scheme.equals("scankit", true)) return
+      if (!isForeignContent(context, data)) {
+        // A file:// path or one of our own providers: not opened (see copy).
+        neutralize(intent)
+        return
+      }
+      remember(data, intent.type)
       return
     }
     val streams: List<Uri> = when (intent.action) {
       Intent.ACTION_SEND -> listOfNotNull(streamExtra(intent))
       Intent.ACTION_SEND_MULTIPLE -> streamListExtra(intent)
       else -> return
-    }.filter { it.scheme.equals("content", true) || it.scheme.equals("file", true) }
-    if (streams.isEmpty()) return
+    }.filter { isForeignContent(context, it) }.distinct()
+    if (streams.isEmpty()) {
+      neutralize(intent)
+      return
+    }
     streams.forEach { remember(it, intent.type) }
     intent.action = Intent.ACTION_VIEW
     if (streams.size == 1) {
@@ -182,17 +247,19 @@ object IncomingFiles {
     } else {
       val list = JSONArray()
       streams.forEach { list.put(it.toString()) }
-      intent.data = Uri.parse("scankit://import?uris=" + Uri.encode(list.toString()))
+      intent.data = Uri.parse("scankit://import?uris=" + Uri.encode(list.toString()) + "&k=" + shareKey)
     }
   }
 
   @Suppress("DEPRECATION")
   private fun streamExtra(intent: Intent): Uri? =
     if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
-    else intent.getParcelableExtra(Intent.EXTRA_STREAM) as? Uri
+    else intent.getParcelableExtra<android.os.Parcelable>(Intent.EXTRA_STREAM) as? Uri
 
+  /** Uris only: below Android 13 the list is whatever the sender put there (some send path strings). */
   @Suppress("DEPRECATION")
   private fun streamListExtra(intent: Intent): List<Uri> =
     (if (Build.VERSION.SDK_INT >= 33) intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
-    else intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)) ?: emptyList()
+    else intent.getParcelableArrayListExtra<android.os.Parcelable>(Intent.EXTRA_STREAM))
+      ?.filterIsInstance<Uri>() ?: emptyList()
 }
