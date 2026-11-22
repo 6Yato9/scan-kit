@@ -33,6 +33,47 @@ class VisionOcrModule : Module() {
     get() = appContext.reactContext ?: throw Exceptions.ReactContextLost()
   private var reader: TextReader? = null
   private var pendingShare: Promise? = null
+  /** A Calendar or Contacts screen we started, waiting for its result: (request code, promise). */
+  private var pendingForm: Pair<Int, Promise>? = null
+  private var speech: SpeechController? = null
+
+  /** Read aloud (Speech.kt); created on first use. */
+  private fun speech(): SpeechController = synchronized(this) {
+    speech ?: SpeechController(
+      context,
+      { name, body -> sendEvent(name, body) },
+      { text -> try { textReader().dominantLanguage(text) } catch (_: Exception) { null } },
+    ).also { speech = it }
+  }
+
+  /** Settles the open system form (once). */
+  private fun settleForm(outcome: String) {
+    val pending = pendingForm ?: return
+    pendingForm = null
+    pending.second.resolve(outcome)
+  }
+
+  /** Starts a Calendar/Contacts screen for a result; "unavailable" when no app handles it. */
+  private fun presentForm(request: Int, intent: android.content.Intent, promise: Promise) {
+    val activity = appContext.currentActivity
+    if (activity == null) {
+      promise.resolve("unavailable")
+      return
+    }
+    // A form still open from before (its result never came) ends as cancelled.
+    settleForm("cancelled")
+    try {
+      pendingForm = request to promise
+      activity.startActivityForResult(intent, request)
+    } catch (e: android.content.ActivityNotFoundException) {
+      pendingForm = null
+      promise.resolve("unavailable")
+    } catch (e: Exception) {
+      pendingForm = null
+      Log.w("VisionOcr", "presentForm failed", e)
+      promise.resolve("unavailable")
+    }
+  }
 
   private fun textReader(): TextReader = synchronized(this) {
     reader ?: TextReader(context.applicationContext).also { reader = it }
@@ -75,7 +116,14 @@ class VisionOcrModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("VisionOcr")
 
+    // Read aloud progress (SpeechController), as on iOS.
+    Events("onSpeechProgress", "onSpeechState")
+
     OnDestroy {
+      synchronized(this@VisionOcrModule) {
+        speech?.shutdown()
+        speech = null
+      }
       scope.cancel()
       synchronized(this@VisionOcrModule) {
         reader?.close()
@@ -354,6 +402,87 @@ class VisionOcrModule : Module() {
       if (payload.requestCode == SHARE_REQUEST) {
         pendingShare?.resolve(null)
         pendingShare = null
+      }
+      val form = pendingForm
+      if (form != null && payload.requestCode == form.first) {
+        settleForm(
+          if (form.first == SystemForms.EVENT_REQUEST) SystemForms.eventOutcome(payload.resultCode)
+          else SystemForms.contactOutcome(payload.resultCode),
+        )
+      }
+    }
+
+    // Leaving the app ends reading (a document isn't read out behind App Lock), as on iOS.
+    OnActivityEntersBackground {
+      synchronized(this@VisionOcrModule) { speech }?.stop()
+    }
+
+    // Back in the app with a form still unsettled (the activity was recreated
+    // and its result lost): settle it, so JS never waits forever.
+    OnActivityEntersForeground {
+      if (pendingForm != null) {
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+          settleForm(if (pendingForm?.first == SystemForms.EVENT_REQUEST) "unknown" else "cancelled")
+        }, 1500)
+      }
+    }
+
+    // ── Acting on recognised text (phase 5: TextData.kt, Barcodes.kt,
+    // Speech.kt, SystemForms.kt, VCard.kt). Same contracts as iOS.
+
+    /** Phone numbers, emails, links and (where the system classifier finds them) addresses. */
+    AsyncFunction("detectData") { text: String, promise: Promise ->
+      run(promise, "ERR_DETECT_DATA") { TextData.detect(context, text) }
+    }
+
+    /** QR codes and barcodes in an image file, top to bottom. Rejects ERR_BARCODES for an unreadable file. */
+    AsyncFunction("detectBarcodes") { uri: String, promise: Promise ->
+      run(promise, "ERR_BARCODES") { Barcodes.detect(ImageFiles.pathOf(uri)) }
+    }
+
+    /** Reads `text` aloud (stopping anything being read); resolves { id, language }. */
+    AsyncFunction("speak") { text: String, language: String?, rate: Double?, promise: Promise ->
+      run(promise, "ERR_SPEECH") { speech().speak(text, language, rate) }
+    }
+
+    AsyncFunction("pauseSpeaking") { promise: Promise ->
+      run(promise, "ERR_SPEECH") { speech().pause(); null }
+    }
+
+    AsyncFunction("resumeSpeaking") { promise: Promise ->
+      run(promise, "ERR_SPEECH") { speech().resume(); null }
+    }
+
+    AsyncFunction("stopSpeaking") { promise: Promise ->
+      run(promise, "ERR_SPEECH") { synchronized(this@VisionOcrModule) { speech }?.stop(); null }
+    }
+
+    /** The calendar app's new-event screen, prefilled. Resolves saved | unknown | unavailable. */
+    AsyncFunction("presentEventEditor") { title: String, startMs: Double, endMs: Double, allDay: Boolean, notes: String?, location: String?, promise: Promise ->
+      presentForm(SystemForms.EVENT_REQUEST, SystemForms.eventIntent(title, startMs, endMs, allDay, notes, location), promise)
+    }.runOnQueue(expo.modules.kotlin.functions.Queues.MAIN)
+
+    /** The contacts app's new-contact screen, prefilled (photo included). Resolves saved | cancelled | unavailable. */
+    AsyncFunction("presentNewContact") { fields: Map<String, Any?>, promise: Promise ->
+      scope.launch {
+        val intent = try {
+          SystemForms.contactIntent(fields, VCard.photoJpeg(fields))
+        } catch (e: Exception) {
+          Log.w("VisionOcr", "presentNewContact", e)
+          null
+        }
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+          if (intent == null) promise.resolve("unavailable") else presentForm(SystemForms.CONTACT_REQUEST, intent, promise)
+        }
+      }
+    }
+
+    /** Writes a vCard 3.0 (.vcf) of the contact, the same text as iOS; resolves its file:// URI. */
+    AsyncFunction("writeVCard") { fields: Map<String, Any?>, outputUri: String, promise: Promise ->
+      run(promise, "ERR_VCARD") {
+        val out = File(ImageFiles.pathOf(outputUri))
+        VCard.write(fields, out)
+        ImageFiles.uriOf(out)
       }
     }
   }

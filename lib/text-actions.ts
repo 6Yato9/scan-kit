@@ -20,6 +20,7 @@ import {
   type DetectedDataType,
   type PresentOutcome,
 } from '../modules/vision-ocr/src';
+import { withDates } from './date-finder';
 import { whenUnlocked } from './nav-guard';
 import { sentenceAt } from './sentences';
 import { withSystemUI } from './system-ui';
@@ -42,12 +43,38 @@ export async function detectData(text: string): Promise<DetectedData[]> {
   if (!text.trim()) return [];
   let found: DetectedData[];
   const native = VisionOcr?.detectData;
+  // NSDataDetector (iOS) finds dates itself; Android's detector (Linkify and
+  // the system text classifier) and the JS fallback don't: lib/date-finder.
+  let nativeDates = false;
   try {
     found = typeof native === 'function' ? await native(text) : detectDataFallback(text);
+    nativeDates = typeof native === 'function' && Platform.OS === 'ios';
   } catch {
     found = detectDataFallback(text);
   }
-  return tidyDetections(checkDetections(found, text));
+  if (!nativeDates) found = withDates(found, text);
+  return tidyDetections(checkDetections(withSpacedEmails(found, text), text));
+}
+
+// "sarah @acme.com", "sarah@ acme.com": text recognition (ML Kit especially)
+// often puts a space beside the @ of a small-print address. Detectors then see
+// no email, only a link to the domain.
+const SPACED_EMAIL = /(?<![\w.%+-])([A-Z0-9._%+-]+) ?@ ?([A-Z0-9-]+(?:\.[A-Z0-9-]+)*\.[A-Z]{2,})(?![\w-])/gi;
+
+/**
+ * Adds the email addresses written with a space beside the @ (the value
+ * without it), replacing whatever was found inside them (the domain as a
+ * link). Addresses written normally are left to the detector.
+ */
+export function withSpacedEmails(found: DetectedData[], text: string): DetectedData[] {
+  const extra: DetectedData[] = [];
+  for (const m of text.matchAll(SPACED_EMAIL)) {
+    if (!/ @|@ /.test(m[0])) continue;
+    extra.push({ type: 'email', text: m[0], range: [m.index, m[0].length], value: `${m[1]}@${m[2]}` });
+  }
+  if (!extra.length) return found;
+  const inside = (d: DetectedData) => extra.some(e => d.range[0] < e.range[0] + e.range[1] && d.range[0] + d.range[1] > e.range[0]);
+  return [...found.filter(d => !inside(d)), ...extra].sort((a, b) => a.range[0] - b.range[0]);
 }
 
 /** Words that make NSDataDetector report a span from NOW to the date ("before 30 November"). */
@@ -150,9 +177,10 @@ const URL_RE = /\b(?:https?:\/\/|www\.)[^\s<>"']+|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\
 const PHONE_RE = /(?<![\w+])(?:\+\d{1,3}[\s.-]?)?(?:\(\d{1,4}\)[\s.-]?)?\d{1,4}(?:[\s.-]?\d{2,4}){2,4}(?![\w])/g;
 
 /**
- * Plain-JS detection for builds without the native detector (Android, older
- * dev clients): emails, links and phone numbers only. Addresses and dates
- * need NSDataDetector's grammar and are left out rather than guessed.
+ * Plain-JS detection for builds without the native detector (older dev
+ * clients): emails, links and phone numbers (dates are added by
+ * lib/date-finder, as on Android). Addresses need a real grammar and are
+ * left out rather than guessed.
  */
 export function detectDataFallback(text: string): DetectedData[] {
   const out: DetectedData[] = [];
@@ -381,6 +409,7 @@ export function barcodeTypeLabel(type: string): string {
     upc_e: 'UPC-E',
     itf14: 'ITF-14',
     itf: 'ITF',
+    codabar: 'Codabar',
   };
   return map[type] ?? 'Barcode';
 }

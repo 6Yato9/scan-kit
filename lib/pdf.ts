@@ -915,6 +915,24 @@ export class PdfProtectError extends Error {}
 /** Shortest password the export sheet accepts. */
 export const MIN_PDF_PASSWORD = 4;
 
+/**
+ * Passwords for a new protection are limited to printable ASCII (letters
+ * A–Z, digits, symbols, spaces). Owner decision, the same on iOS and Android:
+ * Apple's PDFKit (Files, Mail, Preview, Scan Kit on iPhone) can't open an
+ * AES-protected PDF whose password has other characters (é, ü, ß, Ł, emoji),
+ * and on iOS it can't even write one. Allowing them on Android would make
+ * files an iPhone can't open, so they're refused with an explanation rather
+ * than merely warned about. Existing protections (a PDF opened for the
+ * session, re-protected with its own password) are not affected.
+ */
+export const PASSWORD_CHARACTERS_HINT =
+  'Use only letters without accents, digits and symbols: iPhones, iPads and Macs can’t open a PDF whose password has characters like é, ß or emoji.';
+
+/** True when `password` has a character outside printable ASCII (see PASSWORD_CHARACTERS_HINT). */
+export function hasUnsupportedPasswordCharacters(password: string): boolean {
+  return /[^\x20-\x7E]/.test(password);
+}
+
 /** True when this build can write password-protected PDFs (iOS, PDFKit). */
 export function canProtectPdf(): boolean {
   return typeof VisionOcr?.protectPdf === 'function';
@@ -929,6 +947,7 @@ export async function protectPdf(inputUri: string, outputUri: string, password: 
   const native = VisionOcr?.protectPdf;
   if (!native) throw new PdfProtectError('Password protection isn’t available on this device.');
   if (password.length < MIN_PDF_PASSWORD) throw new PdfProtectError('The password is too short.');
+  if (hasUnsupportedPasswordCharacters(password)) throw new PdfProtectError(PASSWORD_CHARACTERS_HINT);
   try {
     return await native(inputUri.split('?')[0], outputUri.split('?')[0], password);
   } catch {

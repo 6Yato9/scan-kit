@@ -157,8 +157,12 @@ export type NativePdfPermissionsInfo = {
   /** Round 14: the author's exact permissions as PDFAccessPermissions bits (for protectPdfKeeping). */
   permissionBits?: number;
 };
-/** How a system form presented by the module ended. */
-export type PresentOutcome = 'saved' | 'cancelled' | 'denied' | 'unavailable';
+/**
+ * How a system form presented by the module ended. 'unknown' (Android's
+ * calendar): the form was shown, but the app that showed it doesn't say
+ * whether it was saved.
+ */
+export type PresentOutcome = 'saved' | 'cancelled' | 'denied' | 'unavailable' | 'unknown';
 
 type VisionOcrNative = {
   /**
@@ -245,13 +249,17 @@ type VisionOcrNative = {
   normalizeImage?: (srcUri: string, outUri: string, maxEdge: number, quality: number) => Promise<ImageResult>;
   // ── Acting on recognised text (round 12). Call through lib/text-actions.ts, which
   // checks presence and keeps the system forms behind App Lock.
-  /** Phone numbers, emails, links, addresses and dates in `text` (NSDataDetector). */
+  /**
+   * Phone numbers, emails, links, addresses and dates in `text` (iOS:
+   * NSDataDetector). Android: Linkify (phones, emails, links) and the system
+   * text classifier (addresses, no parts); no dates (lib/date-finder adds them).
+   */
   detectData?: (text: string) => Promise<DetectedData[]>;
-  /** QR codes and barcodes in an image file (Vision). Rejects ERR_BARCODES for an unreadable file. */
+  /** QR codes and barcodes in an image file (Vision; Android: bundled ML Kit). Rejects ERR_BARCODES for an unreadable file. */
   detectBarcodes?: (uri: string) => Promise<DetectedBarcode[]>;
   /** Dominant language of `text` as a BCP-47 code ("en", "fr"), or null (NLLanguageRecognizer). */
   detectLanguage?: (text: string) => Promise<string | null>;
-  /** People's, organisations' and places' names in `text` (NLTagger). */
+  /** People's, organisations' and places' names in `text` (NLTagger). iOS only: Android has no offline name tagger. */
   nameEntities?: (text: string) => Promise<{ people: string[]; organizations: string[]; places: string[] }>;
   /** Reads `text` aloud (stopping anything already being read). `rate` 0.1..1 of the maximum. */
   speak?: (text: string, language?: string | null, rate?: number | null) => Promise<{ id: number; language: string }>;

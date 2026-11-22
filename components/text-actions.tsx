@@ -20,6 +20,7 @@ import {
   AccessibilityInfo,
   Alert,
   Linking,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -247,8 +248,13 @@ export function TextActions({ text, imageUri, centered = false, bleed = 0, readA
                       ],
                     );
                   } else if (outcome === 'unavailable') {
-                    Alert.alert('Couldn’t open Calendar', 'Try again in a moment.');
+                    // Android: no calendar app is installed to add events with.
+                    Alert.alert(
+                      'Couldn’t open Calendar',
+                      Platform.OS === 'android' ? 'No app on this device can add calendar events. Copy the date instead.' : 'Try again in a moment.',
+                    );
                   }
+                  // 'unknown' (Android): the calendar app doesn't say whether it was added, so nothing is claimed.
                 });
               },
             });

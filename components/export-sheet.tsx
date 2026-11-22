@@ -12,6 +12,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   canProtectPdf,
   estimatePdfBytes,
+  hasUnsupportedPasswordCharacters,
+  PASSWORD_CHARACTERS_HINT,
   MIN_PDF_PASSWORD,
   PageSize,
   PageStat,
@@ -561,8 +563,12 @@ export function ExportSheet({ visible, document, onClose }: Props) {
   ]);
   const pwTooShort = pw.length > 0 && pw.length < MIN_PDF_PASSWORD;
   const pwMismatch = pw2.length > 0 && pw2 !== pw;
-  const pwReady = pw.length >= MIN_PDF_PASSWORD && pw2 === pw;
-  const pwHint = pwTooShort
+  // Accented letters or emoji: refused, as in Protect PDF (lib/pdf PASSWORD_CHARACTERS_HINT).
+  const pwBadChars = hasUnsupportedPasswordCharacters(pw);
+  const pwReady = pw.length >= MIN_PDF_PASSWORD && pw2 === pw && !pwBadChars;
+  const pwHint = pwBadChars
+    ? PASSWORD_CHARACTERS_HINT
+    : pwTooShort
     ? `Use at least ${MIN_PDF_PASSWORD} characters.`
     : pwMismatch
       ? 'The passwords don’t match.'
@@ -678,7 +684,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
             />
           </SheetGroup>
           <Text
-            style={[Type.footnote, styles.pwHint, { color: pwTooShort || pwMismatch ? colors.danger : colors.muted }]}
+            style={[Type.footnote, styles.pwHint, { color: pwTooShort || pwMismatch || pwBadChars ? colors.danger : colors.muted }]}
             accessibilityLiveRegion="polite"
           >
             {pwHint}

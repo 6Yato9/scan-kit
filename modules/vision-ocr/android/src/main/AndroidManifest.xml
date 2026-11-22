@@ -41,6 +41,10 @@
   </application>
 
   <queries>
+    <!-- Read aloud: Android 11+ only lets an app bind the text-to-speech engines it declares here. -->
+    <intent>
+      <action android:name="android.intent.action.TTS_SERVICE" />
+    </intent>
     <intent>
       <action android:name="android.intent.action.SEND_MULTIPLE" />
       <data android:mimeType="*/*" />

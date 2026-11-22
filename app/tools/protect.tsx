@@ -38,6 +38,7 @@ import {
   type ProtectProgress,
   type ProtectState,
 } from '@/lib/pdf-protect';
+import { hasUnsupportedPasswordCharacters, PASSWORD_CHARACTERS_HINT } from '@/lib/pdf';
 import { discardPdfEditUndo, holdPdfEditUndo, PdfEditError, undoPdfEdit } from '@/lib/pdf-edit';
 import { openNewCopy } from '@/lib/copy-undo';
 import { postViewerNotice } from '@/lib/viewer-notice';
@@ -117,7 +118,9 @@ export default function ProtectScreen() {
   const isPdf = state?.kind === 'pdf';
   const strength = passwordStrength(pw);
   const mismatch = pw2.length > 0 && pw2 !== pw;
-  const ready = protectable && strength !== 'short' && pw2 === pw;
+  // Accented letters or emoji: refused (lib/pdf PASSWORD_CHARACTERS_HINT).
+  const badChars = hasUnsupportedPasswordCharacters(pw);
+  const ready = protectable && strength !== 'short' && pw2 === pw && !badChars;
 
   const explain = (err: unknown) => {
     const kind = err instanceof PdfProtectToolError ? err.kind : 'failed';
@@ -250,9 +253,15 @@ export default function ProtectScreen() {
   }
 
   const bars = STRENGTH_BARS[strength];
-  const barColor = strength === 'weak' ? colors.danger : colors.accentFill;
-  const hint = mismatch ? 'The passwords don’t match.' : pw.length === 0 ? `At least ${MIN_PDF_PASSWORD} characters.` : passwordHint(strength);
-  const hintColor = mismatch ? colors.danger : colors.muted;
+  const barColor = strength === 'weak' || badChars ? colors.danger : colors.accentFill;
+  const hint = badChars
+    ? PASSWORD_CHARACTERS_HINT
+    : mismatch
+      ? 'The passwords don’t match.'
+      : pw.length === 0
+        ? `At least ${MIN_PDF_PASSWORD} characters.`
+        : passwordHint(strength);
+  const hintColor = mismatch || badChars ? colors.danger : colors.muted;
   const inputStyle = [Type.body, styles.input, { color: colors.text }];
 
   return (

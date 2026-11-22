@@ -30,6 +30,10 @@ dependencies {
   implementation 'com.google.mlkit:text-recognition:16.0.1'
   // Language identification, bundled model (not play-services-mlkit-language-id).
   implementation 'com.google.mlkit:language-id:17.0.6'
+  // QR codes and barcodes in a photo (detectBarcodes), bundled model: the
+  // same artifact and version expo-camera ships for the QR tool's live
+  // scanner, so the APK carries one copy (no size added).
+  implementation 'com.google.mlkit:barcode-scanning:17.3.0'
   // Arabic text recognition: Tesseract 5 (Apache-2.0) with tessdata_fast
   // ara.traineddata in src/main/assets/tessdata. Published on JitPack only
   // (the root project lists https://www.jitpack.io).

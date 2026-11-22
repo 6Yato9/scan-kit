@@ -169,7 +169,11 @@ object PdfTools {
 
   /**
    * Concatenates PDFs in order; pages keep their size, text, links and form
-   * fields (clashing field names are renamed). A part whose permissions don't
+   * fields. Fields are never linked across parts (the same rule as iOS's
+   * PdfMerger): a later part's top-level field whose name is already taken is
+   * renamed to the first free "<name>_2", "<name>_3"… (PdfMergeNames), so
+   * PDFMergerUtility finds no clash to join or to call "dummyFieldNameN".
+   * A part whose permissions don't
    * allow assembly is refused ("restricted"); parts with an owner password
    * pass their restrictions on: the result allows only what every one of them
    * allows. Verified before it is put at `output`.
@@ -181,6 +185,7 @@ object PdfTools {
     val protections = ArrayList<Pair<Int, Int>>()
     var pages = 0
     var shared: Int? = null
+    val usedNames = HashSet<String>()
     try {
       val dest = PDDocument(PdfEngine.memory(context))
       parts.add(dest)
@@ -201,6 +206,7 @@ object PdfTools {
           }
         }
         pages += part.numberOfPages
+        PdfMergeNames.renameClashing(part, usedNames)
         merger.appendDocument(dest, part)
       }
       shared?.let { dest.protect(PdfDocs.policy(PdfDocs.randomOwnerPassword(), "", it)) }

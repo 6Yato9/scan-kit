@@ -4,8 +4,19 @@ import Foundation
 import PDFKit
 
 /// Writes a password-protected copy of a PDF with PDFKit (AES encryption, iOS
-/// handles the cipher). The same password is used for opening and for owner
-/// permissions, so nobody can strip the protection without it.
+/// handles the cipher). For a PDF without protection (scans, plain PDFs) the
+/// same password is used for opening and for owner permissions, so nobody can
+/// strip the protection without it.
+///
+/// A PDF that already has an owner password with restrictions (it opens
+/// without a password but limits printing, copying or changes: a bank
+/// statement) keeps them (owner decision, round 15; Android does the same):
+/// writing user = owner = password would hand whoever knows the new open
+/// password every right the author withheld. Its exact permissions
+/// (PdfPasswordCheck.permissionBits, read from /P) are written under a new
+/// random owner password with `password` to open it, through
+/// `protectKeeping`, which reads the result back and refuses it if the open
+/// password became an owner password or any permission widened.
 enum PdfProtector {
   static func protect(inputPath: String, outputPath: String, password: String) throws {
     guard !password.isEmpty else {
@@ -16,13 +27,24 @@ enum PdfProtector {
       throw NSError(domain: "PdfProtector", code: 2,
                     userInfo: [NSLocalizedDescriptionKey: "Could not open the PDF"])
     }
+    if doc.isEncrypted && !doc.isLocked {
+      // Owner-password restrictions: keep the author's exact permissions.
+      let bits = PdfPasswordCheck.standard(path: inputPath).map(PdfPasswordCheck.permissionBits)
+        ?? doc.accessPermissions.rawValue
+      try protectKeeping(inputPath: inputPath, outputPath: outputPath,
+                         userPassword: password, ownerPassword: nil, permissions: bits)
+      return
+    }
     let options: [PDFDocumentWriteOption: Any] = [
       .userPasswordOption: password,
       .ownerPasswordOption: password,
     ]
     let out = URL(fileURLWithPath: outputPath)
     try? FileManager.default.removeItem(at: out)
+    // PDFKit's write fails (leaving an empty file) for a password it can't
+    // encode: anything outside ASCII (measured: "Café", "Łódź", emoji).
     guard doc.write(to: out, withOptions: options) else {
+      try? FileManager.default.removeItem(at: out)
       throw NSError(domain: "PdfProtector", code: 3,
                     userInfo: [NSLocalizedDescriptionKey: "Could not write the protected PDF"])
     }
@@ -72,7 +94,10 @@ extension PdfProtector {
     options[.userPasswordOption] = userPassword
     let out = URL(fileURLWithPath: outputPath)
     try? FileManager.default.removeItem(at: out)
-    guard doc.write(to: out, withOptions: options) else { throw fail(13, "Could not write the protected PDF") }
+    guard doc.write(to: out, withOptions: options) else {
+      try? FileManager.default.removeItem(at: out)
+      throw fail(13, "Could not write the protected PDF")
+    }
     guard let check = PDFDocument(url: out), check.isEncrypted, check.isLocked,
           check.unlock(withPassword: userPassword), check.pageCount == doc.pageCount else {
       try? FileManager.default.removeItem(at: out)
