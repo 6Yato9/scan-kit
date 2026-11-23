@@ -34,7 +34,7 @@ import { VisionOcr } from '../modules/vision-ocr/src';
 /**
  * 'Auto' shapes the paper like the scanned pages (a receipt gets a tall,
  * narrow page). 'Legal' (US Legal, 8.5 × 14 in) was added in round 16 for the
- * export options; Document settings still store only Auto / A4 / Letter.
+ * export options, and to Document settings in the UI pass (2026-11).
  */
 export type PageSize = 'Auto' | 'A4' | 'Letter' | 'Legal';
 /** A fixed paper size (everything but 'Auto'). */

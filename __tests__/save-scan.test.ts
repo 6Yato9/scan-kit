@@ -195,6 +195,16 @@ describe('indexDocText', () => {
     expect(mockApplied).toEqual([]);
   });
 
+  test('a new document still on its automatic name is marked read when no text is found', async () => {
+    mockStored = { id: 'fixed-id', name: 'Scan 1', defaultName: 'Scan 1', pages: [] };
+    (extractDocText as jest.Mock).mockResolvedValueOnce('');
+
+    await indexDocText('fixed-id', ['p0']);
+
+    expect(mockApplied).toEqual([{ ocrText: '' }]);
+    expect(mockStored.name).toBe('Scan 1');
+  });
+
   // r6 code review #6: replacing the only text page with a blank one left the
   // old text in the index, so search still found the document by those words.
   test('clears the old text when the newest pass finds none', async () => {

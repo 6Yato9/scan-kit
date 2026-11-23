@@ -111,7 +111,7 @@ export default function QrScreen() {
     if (!result) return;
     await Clipboard.setStringAsync(result.data);
     tapLight();
-    show('Copied to clipboard');
+    show('Copied');
   };
 
   const handleOpen = () => {

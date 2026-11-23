@@ -26,7 +26,7 @@ import {
 import { notifyError, notifySuccess } from '@/lib/haptics';
 import { isSessionUnlocked } from '@/lib/pdf-session';
 import { parsePageParam } from '@/lib/tool-catalog';
-import { HIT, Radius, Spacing, Type } from '@/lib/theme';
+import { HIT, Radius, Spacing, TextScale, Type } from '@/lib/theme';
 import type { Document } from '@/types/document';
 
 /** Imported PDFs: a page tool can't edit them until they are converted to pages. */
@@ -221,7 +221,7 @@ export function ToolDocPicker({
         <ActivityIndicator color={colors.accent} />
       </View>
       <View style={styles.text}>
-        <Text style={[Type.subhead, styles.name, { color: colors.text }]} numberOfLines={1}>
+        <Text style={[Type.subhead, styles.name, { color: colors.text }]} numberOfLines={2} maxFontSizeMultiplier={TextScale.row}>
           {converting.doc.name}
         </Text>
         <Text style={[Type.footnote, { color: colors.muted }]}>
@@ -235,13 +235,13 @@ export function ToolDocPicker({
     <>
       <DocThumb doc={doc} width={34} height={44} />
       <View style={styles.text}>
-        <Text style={[Type.subhead, styles.name, { color: colors.text }]} numberOfLines={1}>
+        <Text style={[Type.subhead, styles.name, { color: colors.text }]} numberOfLines={2} maxFontSizeMultiplier={TextScale.row}>
           {doc.name}
         </Text>
-        <Text style={[Type.footnote, { color: colors.muted }]}>{docMeta(doc)}</Text>
+        <Text style={[Type.footnote, { color: colors.muted }]} numberOfLines={1} maxFontSizeMultiplier={TextScale.label}>{docMeta(doc)}</Text>
       </View>
       {fixed ? null : (
-        <Text style={[Type.subhead, { color: disabled ? colors.faint : colors.accent }]}>Change</Text>
+        <Text style={[Type.subhead, { color: disabled ? colors.faint : colors.accent }]} maxFontSizeMultiplier={TextScale.label}>Change</Text>
       )}
     </>
   ) : (
@@ -250,7 +250,7 @@ export function ToolDocPicker({
         <Ionicons name="document-outline" size={20} color={colors.accent} />
       </View>
       <View style={styles.text}>
-        <Text style={[Type.body, { color: colors.accent, fontWeight: '600' }]}>Choose a document</Text>
+        <Text style={[Type.body, { color: colors.accent, fontWeight: '600' }]} maxFontSizeMultiplier={TextScale.row}>Choose a document</Text>
         <Text style={[Type.footnote, { color: colors.muted }]}>
           {total === 1 ? '1 document' : `${total} documents`}
         </Text>
@@ -377,10 +377,10 @@ function ConvertRow({
         <DocThumb doc={doc} />
       </View>
       <View style={[styles.text, blocked ? styles.dimmed : null]}>
-        <Text style={[Type.body, { color: colors.text }]} numberOfLines={1}>
+        <Text style={[Type.body, { color: colors.text }]} numberOfLines={2} maxFontSizeMultiplier={TextScale.row}>
           {doc.name}
         </Text>
-        <Text style={[Type.footnote, styles.meta, { color: colors.muted }]} numberOfLines={2}>
+        <Text style={[Type.footnote, styles.meta, { color: colors.muted }]} numberOfLines={2} maxFontSizeMultiplier={TextScale.row}>
           {blocked ? `PDF · ${blocked}` : 'PDF'}
         </Text>
       </View>
@@ -389,7 +389,7 @@ function ConvertRow({
       ) : opens ? (
         <Ionicons name="chevron-forward" size={18} color={colors.faint} />
       ) : (
-        <Text style={[Type.subhead, styles.convertAction, { color: colors.accent }]}>{action}</Text>
+        <Text style={[Type.subhead, styles.convertAction, { color: colors.accent }]} maxFontSizeMultiplier={TextScale.label}>{action}</Text>
       )}
     </Pressable>
   );
@@ -409,8 +409,8 @@ export function ToolDocHeader({ doc, flush }: { doc: Document; flush?: boolean }
     >
       <DocThumb doc={doc} width={34} height={44} />
       <View style={styles.text}>
-        <Text style={[Type.subhead, styles.name, { color: colors.text }]} numberOfLines={1}>{doc.name}</Text>
-        <Text style={[Type.footnote, { color: colors.muted }]}>{docMeta(doc)}</Text>
+        <Text style={[Type.subhead, styles.name, { color: colors.text }]} numberOfLines={2} maxFontSizeMultiplier={TextScale.row}>{doc.name}</Text>
+        <Text style={[Type.footnote, { color: colors.muted }]} numberOfLines={1} maxFontSizeMultiplier={TextScale.label}>{docMeta(doc)}</Text>
       </View>
     </View>
   );

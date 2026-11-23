@@ -73,7 +73,7 @@ import { indexDocText } from '@/lib/save-scan';
 import { indexPdfText, needsPdfText, pdfFileGeneration } from '@/lib/pdf-text';
 import { canUnlockForSession, PdfSessionError, readablePdfUri, unlockForSession, useReadablePdfUri } from '@/lib/pdf-session';
 import { subscribeViewerNotices, takeViewerNotice } from '@/lib/viewer-notice';
-import { takeNewDocumentNote, uncroppedMessage } from '@/lib/new-doc-note';
+import { AUTO_TITLE_WAIT_MS, awaitingAutoTitle, takeNewDocumentNote, uncroppedMessage } from '@/lib/new-doc-note';
 import { alertScanError, deleteTempFiles, pickPhotos, scanPagesWithCamera, ToolScanError } from '@/lib/tool-scan';
 import { withSystemUI } from '@/lib/system-ui';
 import { insertAt, restoreStashedPage, stashPage } from '@/lib/page-undo';
@@ -334,6 +334,22 @@ function ViewerContent({
     toast.show(notice);
   }, [notice, status, toast]);
 
+  // "Saved as …" for a just-created document, once, with its current name.
+  const savedToastDue = useRef(0);
+  const savedToastShown = useRef(false);
+  const savedToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (savedToastTimer.current) clearTimeout(savedToastTimer.current); }, []);
+  const showSavedToast = useCallback(() => {
+    const doc = docRef.current;
+    if (savedToastShown.current || !doc) return;
+    savedToastShown.current = true;
+    toast.show(`Saved as “${doc.name}”`, { action: { label: 'Rename', onPress: () => setRenameVisible(true) } });
+  }, [toast]);
+  // The title (or no title) arrived before the wait ran out: say it now.
+  useEffect(() => {
+    if (document && savedToastDue.current > Date.now() && !awaitingAutoTitle(document)) showSavedToast();
+  }, [document, showSavedToast]);
+
   // A document just created (a scan, imported photos or a file) is confirmed
   // by name, with Rename; a photo whose page edges auto-crop couldn't find is
   // said so instead, with Crop on that page (lib/new-doc-note). Once.
@@ -356,10 +372,16 @@ function ViewerContent({
           },
         },
       });
+    } else if (ocrAvailable() && awaitingAutoTitle(doc)) {
+      // Its title may be read from the page in a moment: say the name then.
+      savedToastDue.current = Date.now() + AUTO_TITLE_WAIT_MS;
+      savedToastTimer.current = setTimeout(showSavedToast, AUTO_TITLE_WAIT_MS);
     } else {
-      toast.show(`Saved as “${doc.name}”`, { action: { label: 'Rename', onPress: () => setRenameVisible(true) } });
+      savedToastDue.current = 0;
+      showSavedToast();
     }
-  }, [status, id, toast, screenWidth]);
+  }, [status, id, toast, screenWidth, showSavedToast]);
+
 
   // The page a notice asked for, while the pager may not have laid out yet.
   const jumpTo = useRef<number | null>(null);
@@ -480,7 +502,7 @@ function ViewerContent({
     } catch (err) {
       console.error('Rotate failed', err);
       notifyError();
-      Alert.alert("Couldn't rotate the page", 'Try again.');
+      Alert.alert("Couldn’t rotate the page", 'Try again.');
     } finally {
       rotatingRef.current = false;
       setRotating(false);
@@ -526,7 +548,7 @@ function ViewerContent({
     promise.catch(err => {
       console.error('Bake failed', err);
       notifyError();
-      Alert.alert("Couldn't apply the filter", 'Try again, or choose a different filter.');
+      Alert.alert("Couldn’t apply the filter", 'Try again, or choose a different filter.');
       reload().catch(() => {});
     });
   }, [withPendingChoices, reload, lastUndo]);
@@ -561,7 +583,7 @@ function ViewerContent({
       notifySuccess();
       Promise.all(back).catch(err => {
         console.error('Undo apply to all failed', err);
-        Alert.alert("Couldn't put the filters back", 'Try again.');
+        Alert.alert("Couldn’t put the filters back", 'Try again.');
         reload().catch(() => {});
       });
     };
@@ -573,7 +595,7 @@ function ViewerContent({
     Promise.all(jobs).catch(err => {
       console.error('Apply to all failed', err);
       notifyError();
-      Alert.alert("Couldn't apply the filter to every page", 'Try again.');
+      Alert.alert("Couldn’t apply the filter to every page", 'Try again.');
       reload().catch(() => {});
     });
   }, [withPendingChoices, reload, toast, lastUndo]);
@@ -640,7 +662,7 @@ function ViewerContent({
               .then(() => bumpLastSaved())
               .catch(err => {
                 console.error('Restore failed', err);
-                Alert.alert("Couldn't restore the document", 'Find it in Settings, Recently deleted.');
+                Alert.alert("Couldn’t restore the document", 'Find it in Settings, Recently deleted.');
               });
           },
         },
@@ -648,7 +670,7 @@ function ViewerContent({
     } catch (err) {
       console.error('Delete document failed', err);
       notifyError();
-      Alert.alert("Couldn't delete the document", 'Try again.');
+      Alert.alert("Couldn’t delete the document", 'Try again.');
     }
   }, [id, router, rootToast, bumpLastSaved, flushAdjust]);
 
@@ -675,7 +697,7 @@ function ViewerContent({
     } catch (err) {
       console.error('Restore page failed', err);
       notifyError();
-      Alert.alert("Couldn't restore the page", 'Try again.');
+      Alert.alert("Couldn’t restore the page", 'Try again.');
       reload().catch(() => {});
     }
   }, [editDocument, reload, screenWidth]);
@@ -728,7 +750,7 @@ function ViewerContent({
     } catch (err) {
       console.error('Delete page failed', err);
       notifyError();
-      Alert.alert("Couldn't delete the page", 'Try again.');
+      Alert.alert("Couldn’t delete the page", 'Try again.');
       reload().catch(() => {});
     }
   }, [editDocument, deleteDocAndExit, reload, screenWidth, toast, restorePage]);
@@ -756,7 +778,7 @@ function ViewerContent({
     } catch (err) {
       console.error('Reorder failed', err);
       notifyError();
-      Alert.alert("Couldn't reorder the pages", 'Your pages are unchanged. Try again.');
+      Alert.alert("Couldn’t reorder the pages", 'Your pages are unchanged. Try again.');
       reload().catch(() => {});
       return false;
     }
@@ -1073,7 +1095,7 @@ function ViewerContent({
     } catch (err) {
       console.error('Duplicate failed', err);
       notifyError();
-      Alert.alert("Couldn't duplicate the document", 'There may not be enough free space. Try again.');
+      Alert.alert("Couldn’t duplicate the document", 'There may not be enough free space. Try again.');
     }
   }, [flushAdjust, bumpLastSaved, toast, router]);
 
@@ -1094,7 +1116,7 @@ function ViewerContent({
       toast.show(folder ? `Moved to “${folder}”` : 'Removed from folder');
     } catch (err) {
       console.error('Move to folder failed', err);
-      Alert.alert("Couldn't move the document", 'Try again.');
+      Alert.alert("Couldn’t move the document", 'Try again.');
     }
   }, [bumpLastSaved, toast]);
 
@@ -1538,7 +1560,14 @@ function ViewerContent({
         accessibilityLabel={document.name}
         accessibilityHint="Double-tap to rename"
       >
-        <Text style={[Type.headline, styles.titleText, { color: colors.chromeText }]} numberOfLines={1}>
+        <Text
+          style={[Type.headline, styles.titleText, { color: colors.chromeText }]}
+          numberOfLines={1}
+          // Cut in the middle: the end tells related documents apart
+          // ("… (pages 2–3)", "… (signed)"), and a tail cut hid it.
+          ellipsizeMode="middle"
+          maxFontSizeMultiplier={1.3}
+        >
           {document.name}
         </Text>
         {/* 16pt at the regular weight, a step brighter than muted text: at
@@ -1933,7 +1962,7 @@ function ViewerContent({
         <BakeIndicator placement="inline" />
         {pageCount > 1 ? (
           <View style={[styles.counter, { backgroundColor: colors.chromeRaised }]}>
-            <Text style={[Type.footnote, styles.counterText, { color: colors.chromeText }]}>
+            <Text style={[Type.footnote, styles.counterText, { color: colors.chromeText }]} maxFontSizeMultiplier={1.3}>
               {page + 1} / {pageCount}
             </Text>
           </View>

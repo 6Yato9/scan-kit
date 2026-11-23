@@ -8,7 +8,7 @@ import { useTheme } from '@/contexts/theme-context';
 import { AppIcon, type AppIconName } from '@/components/app-icon';
 import { AppSwitch } from '@/components/app-switch';
 import { SectionLabel } from '@/components/section-label';
-import { HIT, Radius, Spacing, Type } from '@/lib/theme';
+import { HIT, Radius, Spacing, TextScale, Type } from '@/lib/theme';
 
 /** Line height of a row's label; the icon rule below is computed from it. */
 const LABEL_LINE = 22;
@@ -62,9 +62,9 @@ export function SettingsRow({
       ) : null}
       <View style={[styles.inner, description ? styles.innerTall : null, !last && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }]}>
         <View style={styles.text}>
-          <Text style={[Type.body, styles.label, { color: colors.text }]}>{label}</Text>
+          <Text style={[Type.body, styles.label, { color: colors.text }]} maxFontSizeMultiplier={TextScale.row}>{label}</Text>
           {description ? (
-            <Text style={[Type.footnote, styles.desc, { color: colors.muted }]}>{description}</Text>
+            <Text style={[Type.footnote, styles.desc, { color: colors.muted }]} maxFontSizeMultiplier={TextScale.row}>{description}</Text>
           ) : null}
         </View>
         {accessory.type === 'chevron' && <Ionicons name="chevron-forward" size={18} color={colors.muted} />}
@@ -73,7 +73,7 @@ export function SettingsRow({
           (accessory.text === null ? (
             <ActivityIndicator size="small" color={colors.muted} accessibilityLabel="Calculating" />
           ) : (
-            <Text style={[Type.body, !onPress && styles.valueAlone, { color: colors.muted }]}>{accessory.text}</Text>
+            <Text style={[Type.body, styles.value, !onPress && styles.valueAlone, { color: colors.muted }]} numberOfLines={1} maxFontSizeMultiplier={TextScale.row}>{accessory.text}</Text>
           ))}
         {accessory.type === 'value' && onPress && <Ionicons name="chevron-forward" size={18} color={colors.muted} />}
         {isSwitch && (
@@ -148,6 +148,8 @@ const styles = StyleSheet.create({
   // A value with no chevron after it ends where the chevrons above and below
   // visibly end (the chevron glyph is inset in its box).
   valueAlone: { marginRight: 4 },
+  // The label keeps at least most of the row: a long value gives way first.
+  value: { flexShrink: 1, maxWidth: '45%', textAlign: 'right' },
   text: { flex: 1 },
   label: { lineHeight: LABEL_LINE },
   desc: { marginTop: 2, lineHeight: 18 },

@@ -66,3 +66,21 @@ export function looksLikeFlatPage(width: number, height: number): boolean {
 export function resetNewDocNotesForTests(): void {
   notes.clear();
 }
+
+/**
+ * True while a new document still carries its automatic name ("Scan 23 Nov
+ * 2026 at 01:08") and text recognition hasn't reported yet: it may soon be
+ * renamed after the page's title (lib/save-scan indexDocText). The viewer
+ * holds its "Saved as …" toast until then, so the toast never names a title
+ * the header has already replaced. Pure.
+ */
+export function awaitingAutoTitle(doc: { name: string; defaultName?: string; ocrText?: string; ocrTextFile?: string }): boolean {
+  return !!doc.defaultName && doc.name === doc.defaultName && doc.ocrText === undefined && !doc.ocrTextFile;
+}
+
+/**
+ * How long the viewer waits for that title at most before saying the name it
+ * has (a long document, or recognition that never reports). Recognition
+ * usually reports well before this, and the toast follows it at once.
+ */
+export const AUTO_TITLE_WAIT_MS = 10_000;

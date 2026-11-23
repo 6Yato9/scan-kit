@@ -26,7 +26,7 @@ import { SectionLabel } from '@/components/section-label';
 import { useDocumentActions } from '@/components/document-actions';
 import { useImportDocuments } from '@/components/use-import';
 import { sortDocuments } from '@/lib/doc-list';
-import { HIT, Radius, Spacing, TAB_BAR_CLEARANCE, Type } from '@/lib/theme';
+import { HIT, Radius, Spacing, TAB_BAR_CLEARANCE, TextScale, Type } from '@/lib/theme';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
@@ -38,8 +38,11 @@ const SHELF_LIMIT = 8;
  * continues past the edge.
  */
 function shelfTileWidth(screenW: number): number {
-  return Math.floor((screenW - Spacing.gutter - Spacing.sm * 2) / 2.6);
+  // Capped so an iPad shows more tiles instead of a few giant ones.
+  return Math.min(SHELF_TILE_MAX, Math.floor((screenW - Spacing.gutter - Spacing.sm * 2) / 2.6));
 }
+const SHELF_TILE_MAX = 180;
+const FOLDER_CARD_MAX = 220;
 
 /**
  * Folder card width when folders scroll (three or more): two whole cards and
@@ -48,7 +51,7 @@ function shelfTileWidth(screenW: number): number {
  */
 function folderCardWidth(screenW: number): number {
   const visible = screenW - Spacing.gutter; // the row bleeds off the right edge
-  return Math.floor((visible - Spacing.sm * 2) / 2.35);
+  return Math.min(FOLDER_CARD_MAX, Math.floor((visible - Spacing.sm * 2) / 2.35));
 }
 
 export default function HomeScreen() {
@@ -133,7 +136,7 @@ export default function HomeScreen() {
         </View>
         <View style={styles.folderText}>
           <Text style={[Type.subhead, { color: colors.text, fontWeight: '600' }]} numberOfLines={1}>{f}</Text>
-          <Text style={[Type.caption, { color: colors.muted }]}>{n === 0 ? 'Empty' : `${n} ${n === 1 ? 'document' : 'documents'}`}</Text>
+          <Text style={[Type.caption, { color: colors.muted }]} numberOfLines={1} maxFontSizeMultiplier={TextScale.label}>{n === 0 ? 'Empty' : `${n} ${n === 1 ? 'document' : 'documents'}`}</Text>
         </View>
       </Pressable>
     );
@@ -169,7 +172,7 @@ export default function HomeScreen() {
           accessibilityRole="button"
           accessibilityLabel={`See all ${documents.length} ${documents.length === 1 ? 'document' : 'documents'} in Files`}
         >
-          <Text style={[Type.subhead, { color: colors.accent }]}>See all</Text>
+          <Text style={[Type.subhead, { color: colors.accent }]} numberOfLines={1} maxFontSizeMultiplier={TextScale.label}>See all</Text>
         </Pressable>
       </View>
       <ScrollView
@@ -202,7 +205,7 @@ export default function HomeScreen() {
           accessibilityRole="button"
           accessibilityLabel="All tools"
         >
-          <Text style={[Type.subhead, { color: colors.accent }]}>All tools</Text>
+          <Text style={[Type.subhead, { color: colors.accent }]} numberOfLines={1} maxFontSizeMultiplier={TextScale.label}>All tools</Text>
         </Pressable>
       </View>
       <View style={[styles.toolCard, { backgroundColor: colors.card }]}>
@@ -283,10 +286,10 @@ function QuickAction({
         <Ionicons name={icon} size={20} color={colors.accent} />
       </View>
       <View style={styles.quickText}>
-        <Text style={[Type.subhead, styles.quickLabel, { color: colors.text }]} numberOfLines={1} maxFontSizeMultiplier={1.3}>
+        <Text style={[Type.subhead, styles.quickLabel, { color: colors.text }]} numberOfLines={2} maxFontSizeMultiplier={1.3}>
           {label}
         </Text>
-        <Text style={[Type.caption, { color: colors.muted }]} numberOfLines={1} maxFontSizeMultiplier={1.3}>
+        <Text style={[Type.caption, { color: colors.muted }]} numberOfLines={2} maxFontSizeMultiplier={1.3}>
           {detail}
         </Text>
       </View>
@@ -317,7 +320,7 @@ const styles = StyleSheet.create({
   quickText: { flex: 1, minWidth: 0, gap: 1 },
   quickLabel: { fontWeight: '600' },
   sectionRow: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' },
-  sectionLabel: { marginTop: Spacing.xl },
+  sectionLabel: { marginTop: Spacing.xl, flexShrink: 1 },
   seeAll: { minHeight: HIT / 2, justifyContent: 'flex-end', marginBottom: Spacing.sm, marginRight: Spacing.xs },
   // Bleeds to the screen edges so folders scroll out from under the gutter.
   edgeScroll: { marginHorizontal: -Spacing.gutter },

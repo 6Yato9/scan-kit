@@ -18,6 +18,7 @@ const PAGE_SIZE_OPTIONS: { label: string; desc: string; value: DocSettings['pdfP
   { label: 'Auto (match page)', desc: 'Receipts and cards fill the page', value: 'Auto' },
   { label: 'A4', desc: '210 × 297 mm', value: 'A4' },
   { label: 'US Letter', desc: '8.5 × 11 in', value: 'Letter' },
+  { label: 'US Legal', desc: '8.5 × 14 in', value: 'Legal' },
 ];
 
 export default function DocumentSettingsScreen() {

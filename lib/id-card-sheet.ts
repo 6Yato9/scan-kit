@@ -33,7 +33,8 @@ const MM_PER_INCH = 25.4;
 
 /** The paper for the one-page layout, from Document settings' PDF page size. */
 export function sheetPaperFor(pdfPageSize: string | null | undefined): SheetPaper {
-  return pdfPageSize === 'Letter' ? 'Letter' : 'A4';
+  // An ID card sheet is A4 or US Letter; US Legal paper is Letter-wide, so it prints on Letter.
+  return pdfPageSize === 'Letter' || pdfPageSize === 'Legal' ? 'Letter' : 'A4';
 }
 
 export type CardBox = { x: number; y: number; width: number; height: number; rotate: boolean };

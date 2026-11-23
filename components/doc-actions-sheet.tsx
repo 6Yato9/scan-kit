@@ -81,6 +81,7 @@ export function DocActionsSheet({
       visible={visible}
       onClose={() => { pending.current = null; onClose(); }}
       variant="grouped"
+      scroll
       onDismissed={() => {
         const next = pending.current;
         pending.current = null;

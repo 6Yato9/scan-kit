@@ -74,8 +74,8 @@ const STYLES: { value: WatermarkStyle; label: string }[] = [
 ];
 const COLORS = INK_PALETTE.map(p => ({ value: p.id, label: p.label, color: p.hex }));
 const WEIGHTS: { value: 'bold' | 'regular'; label: string }[] = [
-  { value: 'bold', label: 'Bold' },
   { value: 'regular', label: 'Regular' },
+  { value: 'bold', label: 'Bold' },
 ];
 
 /** The canvas draws in Helvetica (lib/stamp.ts STAMP_FONT), bold or regular; so does the preview. */

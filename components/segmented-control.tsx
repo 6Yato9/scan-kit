@@ -38,6 +38,7 @@ export function SegmentedControl<T extends string>({
             <Text
               style={[Type.subhead, { color: on ? colors.text : colors.muted, fontWeight: on ? '600' : '500' }]}
               numberOfLines={1}
+              maxFontSizeMultiplier={1.3}
             >
               {opt.label}
             </Text>

@@ -119,35 +119,38 @@ export function TimestampCloseUp({
   const offX = Math.min(0, Math.max(w - pageW, w / 2 - (origin.x + bw / 2)));
   const offY = Math.min(0, Math.max(height - pageH, height / 2 - (origin.y + bh / 2)));
   return (
-    <View
-      style={[styles.window, { height, borderColor: colors.thumbBorder, backgroundColor: colors.input }]}
-      onLayout={e => {
-        const lw = Math.round(e.nativeEvent.layout.width);
-        if (Math.abs(lw - w) > 0.5) setW(lw);
-      }}
-      accessible
-      accessibilityLabel={`Close-up of the timestamp: ${r.text}`}
-    >
-      {pageW > 0 ? (
-        <View style={{ position: 'absolute', left: offX, top: offY, width: pageW, height: pageH }} pointerEvents="none">
-          <Image source={{ uri }} style={{ width: pageW, height: pageH }} resizeMode="stretch" />
-          <View
-            style={{ position: 'absolute', left: origin.x, top: origin.y, opacity: box ? 1 : 0 }}
-            onLayout={e => {
-              const { width: lw, height: lh } = e.nativeEvent.layout;
-              if (!box || Math.abs(box.w - lw) > 0.5 || Math.abs(box.h - lh) > 0.5) setBox({ w: lw, h: lh });
-            }}
-          >
-            <TimestampBox r={r} fontSize={fontSize} />
-          </View>
-        </View>
-      ) : null}
-      {/* Says what this is: the page, magnified. */}
-      <View style={[styles.tag, { backgroundColor: colors.bg }]} pointerEvents="none">
+    <View>
+      {/* Says what this is: the page, magnified. Above the window, not on it:
+          a large stamp fills the window and a tag inside sat on top of it. */}
+      <View style={styles.tag} pointerEvents="none">
         <Ionicons name="search" size={11} color={colors.muted} />
         <Text style={[Type.caption, { color: colors.muted }]} maxFontSizeMultiplier={1.2}>
           Close-up
         </Text>
+      </View>
+      <View
+        style={[styles.window, { height, borderColor: colors.thumbBorder, backgroundColor: colors.input }]}
+        onLayout={e => {
+          const lw = Math.round(e.nativeEvent.layout.width);
+          if (Math.abs(lw - w) > 0.5) setW(lw);
+        }}
+        accessible
+        accessibilityLabel={`Close-up of the timestamp: ${r.text}`}
+      >
+        {pageW > 0 ? (
+          <View style={{ position: 'absolute', left: offX, top: offY, width: pageW, height: pageH }} pointerEvents="none">
+            <Image source={{ uri }} style={{ width: pageW, height: pageH }} resizeMode="stretch" />
+            <View
+              style={{ position: 'absolute', left: origin.x, top: origin.y, opacity: box ? 1 : 0 }}
+              onLayout={e => {
+                const { width: lw, height: lh } = e.nativeEvent.layout;
+                if (!box || Math.abs(box.w - lw) > 0.5 || Math.abs(box.h - lh) > 0.5) setBox({ w: lw, h: lh });
+              }}
+            >
+              <TimestampBox r={r} fontSize={fontSize} />
+            </View>
+          </View>
+        ) : null}
       </View>
     </View>
   );
@@ -158,15 +161,10 @@ const styles = StyleSheet.create({
   measureHost: { position: 'absolute', left: -20000, top: 0, width: 10000, opacity: 0, alignItems: 'flex-start' },
   window: { borderRadius: Radius.md, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
   tag: {
-    position: 'absolute',
-    left: Spacing.sm,
-    top: Spacing.sm,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 3,
-    paddingHorizontal: Spacing.sm - 2,
-    paddingVertical: 2,
-    borderRadius: Radius.pill,
-    opacity: 0.92,
+    paddingHorizontal: Spacing.xs,
+    paddingBottom: Spacing.xs,
   },
 });

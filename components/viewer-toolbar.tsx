@@ -26,7 +26,7 @@ const MIN_ITEM = 64;
 const LABEL_MAX_SCALE = 1.3;
 /** The fade at the row's scrolling end: thin opaque-ramping slices (no gradient library in the app). */
 const FADE_STEPS = [0.08, 0.18, 0.3, 0.42, 0.55, 0.67, 0.78, 0.88];
-const FADE_STEP_W = 2.5;
+const FADE_STEP_W = 4; // 32 pt: a 20 pt fade still read as a clipped label ("Sp")
 
 export type ToolbarItem = {
   key: string;

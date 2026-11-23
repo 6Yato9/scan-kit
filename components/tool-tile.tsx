@@ -52,7 +52,13 @@ export function ToolTile({
       accessibilityLabel={text}
     >
       <ToolIcon id={id} size={size} />
-      <Text style={[styles.label, { color: colors.text }]} numberOfLines={1} maxFontSizeMultiplier={1.2}>
+      <Text
+        style={[styles.label, { color: colors.text }]}
+        // Two lines, like the Home Screen: "Extract pages" and "Business card"
+        // were cut off a quarter of the row wide at large text sizes.
+        numberOfLines={2}
+        maxFontSizeMultiplier={1.2}
+      >
         {text}
       </Text>
     </Pressable>

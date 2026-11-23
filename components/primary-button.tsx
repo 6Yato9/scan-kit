@@ -58,7 +58,9 @@ export function PrimaryButton({
       ) : (
         <View style={styles.content}>
           {icon && <Ionicons name={icon} size={20} color={fg} />}
-          <Text style={[Type.headline, { color: fg }]} numberOfLines={1}>
+          {/* Two lines before it truncates: two buttons side by side ("Save as a
+              copy" | "Add timestamp") were cut off at large text sizes. */}
+          <Text style={[Type.headline, styles.label, { color: fg }]} numberOfLines={2} maxFontSizeMultiplier={BUTTON_TEXT_MAX_SCALE}>
             {title}
           </Text>
         </View>
@@ -67,14 +69,23 @@ export function PrimaryButton({
   );
 }
 
+/**
+ * How far the label grows with Dynamic Type. Uncapped, the largest
+ * accessibility sizes made the label taller than the button; capped (like
+ * UIKit's own filled buttons) it stays legible and the button grows to fit.
+ */
+const BUTTON_TEXT_MAX_SCALE = 1.6;
+
 const styles = StyleSheet.create({
   btn: {
-    height: 50,
+    minHeight: 50,
+    paddingVertical: Spacing.sm,
     borderRadius: Radius.md,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: Spacing.lg,
   },
-  content: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  content: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, maxWidth: '100%' },
+  label: { flexShrink: 1, textAlign: 'center' },
   pressed: { opacity: 0.8 },
 });

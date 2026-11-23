@@ -187,7 +187,7 @@ export function DocumentCard({
           </View>
           <View style={styles.info}>
             <WordClampText style={[Type.footnote, styles.name, { color: colors.text }]} numberOfLines={2} maxFontSizeMultiplier={1.3}>{document.name}</WordClampText>
-            <Text style={[Type.caption, { color: colors.muted }]} numberOfLines={1}>
+            <Text style={[Type.caption, { color: colors.muted }]} numberOfLines={1} maxFontSizeMultiplier={1.3}>
               {columns >= 3 ? compactMeta(document) : documentMeta(document)}
             </Text>
             {snippet ? <Snippet text={snippet} query={snippetQuery} /> : null}
@@ -200,7 +200,7 @@ export function DocumentCard({
               styles.checkbox,
               isSelected
                 ? { backgroundColor: colors.accentFill, borderColor: colors.accentFill }
-                : { backgroundColor: colors.scrimSoft, borderColor: colors.onScrim },
+                : { backgroundColor: colors.scrimSoft, borderColor: colors.onScrim, shadowColor: colors.shadow },
             ]}
           >
             {isSelected && <Ionicons name="checkmark" size={15} color={colors.onAccent} />}
@@ -227,7 +227,7 @@ export function DocumentRow({ document, onPress, onLongPress, isSelected, isMult
       <Thumb document={document} iconSize={24} style={styles.rowThumb} />
       <View style={styles.rowInfo}>
         <WordClampText style={[Type.subhead, styles.rowName, { color: colors.text }]} numberOfLines={2} maxFontSizeMultiplier={1.4}>{document.name}</WordClampText>
-        <Text style={[Type.footnote, styles.rowMeta, { color: colors.muted }]} numberOfLines={1}>{documentMeta(document)}</Text>
+        <Text style={[Type.footnote, styles.rowMeta, { color: colors.muted }]} numberOfLines={1} maxFontSizeMultiplier={1.3}>{documentMeta(document)}</Text>
         {snippet ? <Snippet text={snippet} query={snippetQuery} style={Type.footnote} /> : null}
       </View>
       {isMultiSelectMode ? (
@@ -294,7 +294,9 @@ function MoreChip({ name, onPress }: { name: string; onPress: () => void }) {
       hitSlop={9}
       accessibilityRole="button"
       accessibilityLabel={`More actions for ${name}`}
-      style={({ pressed }) => [styles.moreChip, { backgroundColor: colors.scrimSoft }, pressed && { opacity: 0.6 }]}
+      // The darker scrim: the soft one left white dots on a light grey disc
+      // over a white page, hard to see.
+      style={({ pressed }) => [styles.moreChip, { backgroundColor: colors.scrim }, pressed && { opacity: 0.6 }]}
     >
       <Ionicons name="ellipsis-horizontal" size={16} color={colors.onScrim} />
     </Pressable>
@@ -409,6 +411,11 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     alignItems: 'center',
     justifyContent: 'center',
+    // Lifts the white ring off a white page (as Photos does), so an empty
+    // circle reads the same on light and dark thumbnails.
+    shadowOpacity: 0.35,
+    shadowRadius: 2,
+    shadowOffset: { width: 0, height: 0 },
   },
   row: {
     flexDirection: 'row',

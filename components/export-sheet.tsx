@@ -823,10 +823,13 @@ export function ExportSheet({ visible, document, onClose }: Props) {
           </ScrollView>
           <View style={styles.optionsActions}>
             <PrimaryButton title="Done" onPress={() => setOptionsMode(false)} />
-            {!isPdfDoc && !isDefaultLayout(layout) ? (
+            {/* Mounted whenever the layout options exist, disabled at the
+                defaults, so the sheet doesn't change height as you edit. */}
+            {!isPdfDoc ? (
               <PrimaryButton
                 title="Restore defaults"
                 variant="secondary"
+                disabled={isDefaultLayout(layout)}
                 onPress={() => updateLayout(DEFAULT_EXPORT_LAYOUT)}
               />
             ) : null}

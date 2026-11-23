@@ -63,7 +63,7 @@ const SPACE_OPTIONS: { value: LongImageSpace; label: string }[] = [
 ];
 const BACKGROUND_OPTIONS: { value: LongImageBackground; label: string; color: string }[] = [
   { value: 'white', label: 'White', color: BACKGROUND_HEX.white },
-  { value: 'grey', label: 'Grey', color: BACKGROUND_HEX.grey },
+  { value: 'grey', label: 'Gray', color: BACKGROUND_HEX.grey },
   { value: 'black', label: 'Black', color: BACKGROUND_HEX.black },
 ];
 const QUALITY_OPTIONS: { value: LongImageQuality; label: string }[] = [

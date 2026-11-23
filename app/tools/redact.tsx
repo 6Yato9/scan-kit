@@ -393,6 +393,7 @@ export default function RedactScreen() {
     <ToolScreen
       title="Redact"
       scroll={false}
+      footerHidesForKeyboard
       busy={busy}
       confirmBack={total > 0 ? {
         title: 'Discard your redactions?',
@@ -473,6 +474,7 @@ export default function RedactScreen() {
               key={p.kind}
               onPress={() => { void runFind({ kind: p.kind }, p.kind); }}
               disabled={!doc || !canFind || busy || !!finding}
+              hitSlop={CHIP_SLOP}
               accessibilityRole="button"
               accessibilityLabel={`Find all ${p.spoken}`}
               style={({ pressed }) => [
@@ -492,10 +494,11 @@ export default function RedactScreen() {
           <Pressable
             onPress={() => setStyling(true)}
             disabled={busy}
+            hitSlop={CHIP_SLOP}
             accessibilityRole="button"
             accessibilityLabel="Box style"
             accessibilityValue={{ text: `${inkLabel(look.color)}${look.label ? ', labeled' : ''}` }}
-            style={({ pressed }) => [styles.chip, styles.styleChip, { backgroundColor: colors.card }, pressed && { opacity: 0.6 }]}
+            style={({ pressed }) => [styles.chip, styles.styleChip, { backgroundColor: colors.card, borderColor: colors.border }, pressed && { opacity: 0.6 }]}
           >
             <View style={[styles.styleDot, { backgroundColor: fill, borderColor: colors.ring }]} />
             <Text style={[Type.footnote, styles.chipText, { color: colors.text }]} numberOfLines={1} maxFontSizeMultiplier={1.4}>
@@ -590,6 +593,9 @@ export default function RedactScreen() {
   );
 }
 
+/** The chips are 34 pt tall: the slop makes their touch area 44 pt. */
+const CHIP_SLOP = { top: 5, bottom: 5 };
+
 const styles = StyleSheet.create({
   top: { flexGrow: 0 },
   topBody: { paddingHorizontal: Spacing.gutter },
@@ -616,7 +622,8 @@ const styles = StyleSheet.create({
     minHeight: 34,
   },
   chipText: { fontWeight: '600' },
-  styleChip: { marginLeft: 'auto' },
+  // A setting, not a search: card-coloured, outlined so it still reads as a pill.
+  styleChip: { marginLeft: 'auto', borderWidth: StyleSheet.hairlineWidth },
   styleDot: { width: 14, height: 14, borderRadius: 7, borderWidth: StyleSheet.hairlineWidth },
   flex: { flex: 1 },
   sheetBody: { gap: Spacing.md, paddingHorizontal: Spacing.lg, paddingBottom: Spacing.sm },

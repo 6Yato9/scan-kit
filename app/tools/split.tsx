@@ -346,7 +346,7 @@ export default function SplitScreen() {
                     >
                       <PageThumb uri={uri} style={styles.pageImg} />
                       <View style={[styles.badge, { backgroundColor: first ? colors.accentFill : colors.scrim }]}>
-                        <Text style={[styles.badgeText, { color: colors.onAccent }]}>{i + 1}</Text>
+                        <Text style={[styles.badgeText, { color: colors.onAccent }]} allowFontScaling={false}>{i + 1}</Text>
                       </View>
                     </View>
                     {cutAfter.has(i) ? (

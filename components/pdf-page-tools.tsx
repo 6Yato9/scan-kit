@@ -573,7 +573,7 @@ export function usePdfPageTools({
     : null;
 
   const busyOverlay: ReactNode = busy === 'split' || busy === 'merge' || busy === 'undo' ? (
-    <View style={styles.overlay} pointerEvents="auto" accessibilityViewIsModal>
+    <View style={[styles.overlay, { backgroundColor: colors.backdrop }]} pointerEvents="auto" accessibilityViewIsModal>
       <View style={[styles.busyCard, { backgroundColor: colors.chromeRaised, borderColor: colors.chromeBorder }]}>
         <ActivityIndicator color={colors.chromeText} />
         <Text style={[Type.subhead, { color: colors.chromeText }]} accessibilityLiveRegion="polite">
@@ -633,7 +633,6 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.35)',
   },
   busyCard: {
     flexDirection: 'row',

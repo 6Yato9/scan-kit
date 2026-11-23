@@ -28,6 +28,7 @@ import { originalSideUri, originalUri, pageSideUri, promoteOriginalSide, promote
 import { pageFileUri } from '@/lib/image';
 import { bakePage, runPageEdit } from '@/lib/bake';
 import { buildMarkupHtml, type MarkupConfig } from '@/lib/markup-html';
+import { luminance } from '@/lib/stamp-colors';
 import { Highlight, HIT, Ink, Radius, Spacing, Type } from '@/lib/theme';
 import { DarkThemeScope, useTheme } from '@/contexts/theme-context';
 import { HeaderTextButton, ScreenHeader } from '@/components/screen-header';
@@ -257,7 +258,7 @@ export default function AnnotateScreen() {
       return;
     }
     if (data === 'LOAD_ERROR') {
-      Alert.alert('Couldn’t open this page for markup', 'Close Markup and try again.', [
+      Alert.alert('Couldn’t open this page in Mark up', 'Go back to the page and try again.', [
         { text: 'Close', onPress: () => router.back() },
       ]);
       return;
@@ -422,8 +423,11 @@ export default function AnnotateScreen() {
   const dots = (list: { size: number; label: string }[], value: number, onPick: (n: number) => void, color: string, scale: (n: number) => number) =>
     group('Size', list.map(({ size, label }) => {
       const d = scale(size);
+      // The dots show the ink, but a near-black ink vanished on the dark
+      // toolbar: those are drawn in the toolbar's text colour instead.
+      const fill = color.startsWith('#') && luminance(color) < 0.05 ? colors.chromeText : color;
       return option(String(size), value === size, label, () => onPick(size), (
-        <View style={{ width: d, height: d, borderRadius: d / 2, backgroundColor: color, borderWidth: 1, borderColor: colors.chromeMuted }} />
+        <View style={{ width: d, height: d, borderRadius: d / 2, backgroundColor: fill, borderWidth: 1, borderColor: colors.chromeMuted }} />
       ));
     }));
 
@@ -464,7 +468,7 @@ export default function AnnotateScreen() {
                 accessibilityState={{ disabled: !dirty }}
               >
                 <Ionicons name="trash-outline" size={20} color={colors.chromeText} />
-                <Text allowFontScaling={false} style={[Type.subhead, { color: colors.chromeText }]}>Erase all</Text>
+                <Text maxFontSizeMultiplier={1.3} numberOfLines={1} style={[Type.subhead, { color: colors.chromeText }]}>Erase all</Text>
               </Pressable>
             </View>
             {divider}
@@ -531,7 +535,7 @@ export default function AnnotateScreen() {
             onContentProcessDidTerminate={onPageDied}
             onRenderProcessGone={onPageDied}
             onError={() => {
-              Alert.alert('Couldn’t open this page for markup', 'Close Markup and try again.', [
+              Alert.alert('Couldn’t open this page in Mark up', 'Go back to the page and try again.', [
                 { text: 'Close', onPress: () => router.back() },
               ]);
             }}
@@ -544,7 +548,7 @@ export default function AnnotateScreen() {
         ) : hint ? (
           <View style={styles.hintWrap} pointerEvents="none">
             <View style={[styles.hint, { backgroundColor: colors.chromeRaised, borderColor: colors.chromeBorder }]}>
-              <Text allowFontScaling={false} numberOfLines={1} style={[Type.footnote, { color: colors.chromeText }]}>{hint}</Text>
+              <Text maxFontSizeMultiplier={1.4} numberOfLines={2} style={[Type.footnote, styles.hintText, { color: colors.chromeText }]}>{hint}</Text>
             </View>
           </View>
         ) : null}
@@ -570,7 +574,13 @@ export default function AnnotateScreen() {
                 <View style={[styles.toolIcon, { backgroundColor: active ? colors.chromeBorder : 'transparent' }]}>
                   <AppIcon name={t.icon} size={22} color={active ? colors.chromeAccent : colors.chromeText} />
                 </View>
-                <Text allowFontScaling={false} style={[styles.toolLabel, { color: active ? colors.chromeAccent : colors.chromeMuted }]}>
+                <Text
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.75}
+                  maxFontSizeMultiplier={1.3}
+                  style={[styles.toolLabel, { color: active ? colors.chromeAccent : colors.chromeMuted }]}
+                >
                   {t.label}
                 </Text>
               </Pressable>
@@ -751,6 +761,7 @@ const styles = StyleSheet.create({
   labelSpacer: { opacity: 0 },
   toolIcon: { width: 40, height: 30, borderRadius: Radius.sm + 2, alignItems: 'center', justifyContent: 'center' },
   toolLabel: { fontSize: 11, fontWeight: '500' },
+  hintText: { textAlign: 'center' },
   textInput: {
     minHeight: 88,
     maxHeight: 160,

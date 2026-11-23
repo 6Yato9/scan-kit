@@ -240,7 +240,7 @@ export function MultiShareSheet({ visible, documents, onClose, exportAll = false
         err instanceof ShareError
           ? err.message
           : err instanceof ExportSpaceError
-            ? 'There isn’t enough free space on this iPhone to create the file. Free up some space and try again.'
+            ? 'There isn’t enough free space on this device to create the file. Free up some space and try again.'
             : err instanceof ZipLimitError
               ? 'These documents are too large for one ZIP file. Select fewer in Files and share them in groups.'
               : err instanceof PdfError && err.kind === 'timeout'
@@ -259,7 +259,7 @@ export function MultiShareSheet({ visible, documents, onClose, exportAll = false
   const subtitle = `${n} ${n === 1 ? 'document' : 'documents'}${size ? `, ${formatBytes(size)}` : ''}`;
 
   return (
-    <BottomSheet visible={visible} onClose={() => { cancel(); onClose(); }} variant="grouped">
+    <BottomSheet visible={visible} onClose={() => { cancel(); onClose(); }} variant="grouped" scroll>
       <SheetHeader title={exportAll ? 'Export all documents' : 'Share'} subtitle={subtitle} />
       {busy ? (
         <SheetGroup style={styles.lastGroup}>

@@ -435,7 +435,13 @@ export function CropModal({ visible, docId, pageIndex, target: givenTarget, cach
           {fromOriginal && !message && !crossed && (
             <Ionicons name="alert-circle-outline" size={16} color={hintColor} style={styles.hintIcon} />
           )}
-          <Text style={[Type.footnote, styles.hint, { color: hintColor }]} accessibilityLiveRegion="polite">
+          <Text
+            style={[Type.footnote, styles.hint, { color: hintColor }]}
+            accessibilityLiveRegion="polite"
+            // Capped: uncapped, the largest text sizes made this a five-line
+            // block that took a third of the screen from the crop area.
+            maxFontSizeMultiplier={1.3}
+          >
             {hint}
           </Text>
         </View>

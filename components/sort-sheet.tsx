@@ -17,7 +17,7 @@ const OPTIONS: { key: SortKey; label: string; sub: string; icon: 'calendar-outli
 
 export function SortSheet({ visible, current, onSort, onClose }: Props) {
   return (
-    <BottomSheet visible={visible} onClose={onClose} variant="grouped">
+    <BottomSheet visible={visible} onClose={onClose} variant="grouped" scroll>
       <SheetHeader title="Sort by" />
       <SheetGroup style={{ marginBottom: 0 }}>
         {OPTIONS.map(({ key, label, sub, icon }, i) => (

@@ -93,16 +93,16 @@ export default function OnboardingScreen() {
         style={styles.pager}
       >
         {/* Slide 1 — Welcome */}
-        <View style={[styles.slide, { width }]}>
+        <Slide width={width}>
           <BrandMark size={128} />
           <Text style={[styles.appName, { color: colors.text }]} accessibilityRole="header">Scan Kit</Text>
           <Text style={[styles.tagline, { color: colors.subtext }]}>
-            Scan, organize, and share your documents, right from your phone.
+            Scan, organize, and share your documents, all on your device.
           </Text>
-        </View>
+        </Slide>
 
         {/* Slide 2 — Features */}
-        <View style={[styles.slide, { width }]}>
+        <Slide width={width}>
           <Text style={[styles.slideHeading, { color: colors.text }]} accessibilityRole="header">Everything in one place</Text>
           <View style={[styles.featureCard, { backgroundColor: colors.card }]}>
             {FEATURES.map((f, i) => (
@@ -123,10 +123,10 @@ export default function OnboardingScreen() {
               </View>
             ))}
           </View>
-        </View>
+        </Slide>
 
         {/* Slide 3 — Camera priming */}
-        <View style={[styles.slide, { width }]}>
+        <Slide width={width}>
           <View style={[styles.iconCircle, { backgroundColor: colors.accentLight }]}>
             <Ionicons name="camera-outline" size={56} color={colors.accent} />
           </View>
@@ -134,7 +134,7 @@ export default function OnboardingScreen() {
           <Text style={[styles.tagline, { color: colors.subtext }]}>
             Scan Kit uses the camera only to scan documents. Your scans never leave your device.
           </Text>
-        </View>
+        </Slide>
       </ScrollView>
 
       {/* Page dots */}
@@ -151,27 +151,35 @@ export default function OnboardingScreen() {
       </View>
 
       <View style={[styles.controls, { paddingBottom: insets.bottom + Spacing.sm }]}>
-        {isLast ? (
-          <>
-            <PrimaryButton title="Continue" icon="camera-outline" onPress={() => finish(true)} loading={finishing} />
-            <Pressable
-              onPress={() => finish(false)}
-              disabled={finishing}
-              style={styles.notNow}
-              accessibilityRole="button"
-            >
-              <Text style={[Type.body, { color: colors.accent, fontWeight: '500' }]}>Not now</Text>
-            </Pressable>
-          </>
-        ) : (
-          <>
-            <PrimaryButton title="Next" onPress={() => goTo(page + 1)} />
-            {/* Keeps the button at the same height on every slide. */}
-            <View style={styles.notNow} />
-          </>
-        )}
+        {/* The camera slide offers only Continue, which shows the system
+            prompt: App Review (guideline 5.1.1) rejects a priming screen with a
+            way out before the prompt. The prompt itself has Don't Allow. */}
+        <PrimaryButton
+          title={isLast ? 'Continue' : 'Next'}
+          icon={isLast ? 'camera-outline' : undefined}
+          onPress={isLast ? () => finish(true) : () => goTo(page + 1)}
+          loading={isLast && finishing}
+        />
+        {/* Keeps the button at the same height as before the camera slide lost "Not now". */}
+        <View style={styles.notNow} />
       </View>
     </View>
+  );
+}
+
+/** Content wider than this reads as a stretched phone layout on iPad. */
+const READABLE_WIDTH = 520;
+
+/**
+ * One page of the pager. It scrolls vertically when its content is taller
+ * than the screen (small phones, large text) and keeps a readable width on
+ * iPad, centred.
+ */
+function Slide({ width, children }: { width: number; children: React.ReactNode }) {
+  return (
+    <ScrollView style={{ width }} contentContainerStyle={styles.slide} showsVerticalScrollIndicator={false}>
+      <View style={styles.slideInner}>{children}</View>
+    </ScrollView>
   );
 }
 
@@ -187,11 +195,13 @@ const styles = StyleSheet.create({
   skipBtn: { minHeight: HIT, minWidth: HIT, paddingHorizontal: Spacing.md, justifyContent: 'center', alignItems: 'center' },
   pager: { flex: 1 },
   slide: {
-    flex: 1,
+    flexGrow: 1,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: Spacing.xxxl,
+    paddingVertical: Spacing.lg,
   },
+  slideInner: { width: '100%', maxWidth: READABLE_WIDTH, alignItems: 'center' },
   iconCircle: {
     width: 128,
     height: 128,
@@ -230,6 +240,6 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.xl,
   },
   dot: { height: 8, borderRadius: 4 },
-  controls: { paddingHorizontal: Spacing.xxl },
+  controls: { paddingHorizontal: Spacing.xxl, width: '100%', maxWidth: READABLE_WIDTH + 2 * Spacing.xxl, alignSelf: 'center' },
   notNow: { height: HIT, alignItems: 'center', justifyContent: 'center', marginTop: Spacing.xs },
 });

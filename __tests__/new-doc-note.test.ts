@@ -2,6 +2,7 @@
 // The viewer's greeting for a document just created: "Saved as …" or, when
 // auto-crop found no page edges in an imported photo, which page to crop.
 import {
+  awaitingAutoTitle,
   noteNewDocument,
   resetNewDocNotesForTests,
   takeNewDocumentNote,
@@ -64,5 +65,18 @@ describe('looksLikeFlatPage', () => {
     expect(looksLikeFlatPage(1080, 1920)).toBe(false); // 16:9
     expect(looksLikeFlatPage(1206, 2622)).toBe(false); // phone screenshot
     expect(looksLikeFlatPage(0, 100)).toBe(false);
+  });
+});
+
+describe('awaitingAutoTitle', () => {
+  it('waits while the automatic name is unchanged and no text has been read', () => {
+    expect(awaitingAutoTitle({ name: 'Scan 1', defaultName: 'Scan 1' })).toBe(true);
+  });
+  it('stops waiting once text recognition has reported (even with no title)', () => {
+    expect(awaitingAutoTitle({ name: 'Scan 1', defaultName: 'Scan 1', ocrText: '' })).toBe(false);
+  });
+  it('stops waiting once the document has a real name', () => {
+    expect(awaitingAutoTitle({ name: 'Invoice 2026-118' })).toBe(false);
+    expect(awaitingAutoTitle({ name: 'My notes', defaultName: 'Scan 1' })).toBe(false);
   });
 });

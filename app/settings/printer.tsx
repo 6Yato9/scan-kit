@@ -19,7 +19,7 @@ import { Radius, Spacing, Type } from '@/lib/theme';
 
 type PageSize = DocSettings['pdfPageSize'];
 
-const PAPER_LABEL: Record<PageSize, string> = { Auto: 'Auto', A4: 'A4', Letter: 'US Letter' };
+const PAPER_LABEL: Record<PageSize, string> = { Auto: 'Auto', A4: 'A4', Letter: 'US Letter', Legal: 'US Legal' };
 
 export default function PrinterScreen() {
   const router = useRouter();

@@ -55,7 +55,7 @@ export const RESTRICTION_LABELS: Record<Restriction, string> = {
   edit: 'Changing its content',
   comment: 'Adding comments, text and signatures',
   forms: 'Filling in forms',
-  accessibility: 'Reading aloud with VoiceOver',
+  accessibility: 'Reading aloud with a screen reader',
 };
 
 /**

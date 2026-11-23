@@ -45,6 +45,7 @@ test('an upright capture is turned to lie landscape, still at real size', () => 
 test('paper comes from Document settings; Auto and unknown mean A4', () => {
   expect(sheetPaperFor('Letter')).toBe('Letter');
   expect(sheetPaperFor('A4')).toBe('A4');
+  expect(sheetPaperFor('Legal')).toBe('Letter');
   expect(sheetPaperFor('Auto')).toBe('A4');
   expect(sheetPaperFor(undefined)).toBe('A4');
 });

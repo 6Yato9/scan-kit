@@ -19,6 +19,7 @@ import {
   PanResponder,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -29,7 +30,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/contexts/theme-context';
 import { useAppLocked } from '@/components/lock-gate';
 import { AppIcon, type AppIconName } from '@/components/app-icon';
-import { HIT, Radius, Spacing, Type } from '@/lib/theme';
+import { HIT, Radius, SHEET_MAX_WIDTH, Spacing, TextScale, Type } from '@/lib/theme';
 
 type Props = {
   visible: boolean;
@@ -50,12 +51,18 @@ type Props = {
    * its first panel instead of closing.
    */
   onBack?: () => void;
+  /**
+   * Scroll the content when it is taller than the sheet may be (large text,
+   * small phones). For sheets of plain rows; a sheet that holds its own
+   * ScrollView or list leaves this off.
+   */
+  scroll?: boolean;
 };
 
 const OPEN_MS = 280;
 const CLOSE_MS = 220;
 
-export function BottomSheet({ visible: requested, onClose, children, transparentBackdrop, onDismissed, variant = 'plain', onBack }: Props) {
+export function BottomSheet({ visible: requested, onClose, children, transparentBackdrop, onDismissed, variant = 'plain', onBack, scroll = false }: Props) {
   const { colors } = useTheme();
   // Step aside while the app lock is up: an open sheet would otherwise sit on
   // top of the lock screen. It comes back by itself after unlocking.
@@ -197,7 +204,17 @@ export function BottomSheet({ visible: requested, onClose, children, transparent
           <View {...pan.panHandlers} style={styles.handleArea}>
             <View style={[styles.handle, { backgroundColor: colors.handle }]} />
           </View>
-          <View style={styles.content}>{children}</View>
+          {scroll ? (
+            <ScrollView
+              style={styles.content}
+              alwaysBounceVertical={false}
+              keyboardShouldPersistTaps="handled"
+            >
+              {children}
+            </ScrollView>
+          ) : (
+            <View style={styles.content}>{children}</View>
+          )}
         </Animated.View>
       </KeyboardAvoidingView>
     </Modal>
@@ -211,11 +228,11 @@ export function SheetHeader({ title, subtitle }: { title: string; subtitle?: str
   const { colors } = useTheme();
   return (
     <View style={styles.header}>
-      <Text style={[Type.headline, { color: colors.text }]} numberOfLines={2} accessibilityRole="header">
+      <Text style={[Type.headline, { color: colors.text }]} numberOfLines={2} accessibilityRole="header" maxFontSizeMultiplier={1.4}>
         {title}
       </Text>
       {subtitle ? (
-        <Text style={[Type.footnote, styles.headerSub, { color: colors.muted }]} numberOfLines={2}>
+        <Text style={[Type.footnote, styles.headerSub, { color: colors.muted }]} numberOfLines={2} maxFontSizeMultiplier={TextScale.row}>
           {subtitle}
         </Text>
       ) : null}
@@ -274,9 +291,9 @@ export function SheetRow({
       ) : null}
       <View style={[styles.rowBody, !last && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }]}>
         <View style={styles.rowText}>
-          <Text style={[Type.body, { color: fg }]} numberOfLines={1}>{label}</Text>
+          <Text style={[Type.body, { color: fg }]} numberOfLines={2} maxFontSizeMultiplier={TextScale.row}>{label}</Text>
           {/* Two lines at most, so a long detail (or large text) wraps instead of losing its end. */}
-          {detail ? <Text style={[Type.footnote, styles.rowDetail, { color: colors.muted }]} numberOfLines={2}>{detail}</Text> : null}
+          {detail ? <Text style={[Type.footnote, styles.rowDetail, { color: colors.muted }]} numberOfLines={2} maxFontSizeMultiplier={TextScale.row}>{detail}</Text> : null}
         </View>
         {selected ? <Ionicons name="checkmark" size={20} color={colors.accent} /> : null}
         {chevron ? <Ionicons name="chevron-forward" size={18} color={colors.muted} /> : null}
@@ -287,7 +304,11 @@ export function SheetRow({
 
 const styles = StyleSheet.create({
   container: { flex: 1, justifyContent: 'flex-end' },
+  // iPad: a centred sheet no wider than a form sheet (a phone is narrower anyway).
   sheet: {
+    width: '100%',
+    maxWidth: SHEET_MAX_WIDTH,
+    alignSelf: 'center',
     borderTopLeftRadius: Radius.xl,
     borderTopRightRadius: Radius.xl,
     shadowOpacity: 0.15,

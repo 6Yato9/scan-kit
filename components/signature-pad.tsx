@@ -276,7 +276,7 @@ export function SignatureSheet({
           ) : null}
         </View>
         <Text style={[Type.footnote, styles.note, { color: colors.muted }]}>
-          {initials ? 'Your last two sets of initials are kept on this iPhone only.' : 'Your last two signatures are kept on this iPhone only.'}
+          {initials ? 'Your last two sets of initials are kept on this device only.' : 'Your last two signatures are kept on this device only.'}
         </Text>
         <PrimaryButton
           title={initials ? 'Add initials' : 'Add signature'}

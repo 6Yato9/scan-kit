@@ -89,7 +89,7 @@ const WORDS: { value: StampWord; label: string }[] = [
   { value: 'custom', label: 'Custom' },
 ];
 const DATE_STYLE_NAMES: Record<DateStyle, string> = {
-  device: 'As on this iPhone',
+  device: 'As on this device',
   dmy: 'Day/month/year',
   mdy: 'Month/day/year',
   iso: 'Year-month-day (ISO)',

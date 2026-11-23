@@ -3,7 +3,7 @@
 // (header + scroll body + pinned action bar), the document picker rows, the
 // option list, the empty state and a progress line. Keeping them here is what
 // makes the tools look like one product instead of fifteen.
-import { Children, createContext, Fragment, ReactNode, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { Children, createContext, Fragment, ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BackHandler,
   Image,
@@ -13,7 +13,9 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  Keyboard,
   View,
+  useWindowDimensions,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
@@ -30,7 +32,7 @@ import { HeroIcon } from '@/components/empty-state';
 import { useToastAnchor } from '@/components/toast';
 import { getDocuments } from '@/lib/storage';
 import { usePdfThumbnail } from '@/lib/pdf-thumb';
-import { HIT, Radius, Spacing, Type } from '@/lib/theme';
+import { HIT, Radius, Spacing, TextScale, Type, readableInset } from '@/lib/theme';
 import type { Document } from '@/types/document';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
 import { noteNewDocument } from '@/lib/new-doc-note';
@@ -89,6 +91,30 @@ export function pageCountLabel(n: number): string {
  * home indicator (keep the PrimaryButton in it mounted and toggle `disabled`,
  * so the layout never jumps).
  */
+/**
+ * Lets content inside a ToolScreen bring a just-expanded block into view
+ * (MoreOptions). `reveal(top, bottom)` takes the block's window coordinates
+ * (measureInWindow) and scrolls just enough to show its bottom above the
+ * footer, never so far that the block's own top (the row that opened it)
+ * leaves the upper part of the screen, where a pinned preview may sit.
+ */
+export const ToolScrollContext = createContext<{ reveal: (top: number, bottom: number) => void } | null>(null);
+
+/** Whether the keyboard is showing (tracked only while `enabled`). */
+function useKeyboardVisible(enabled: boolean): boolean {
+  const [up, setUp] = useState(false);
+  useEffect(() => {
+    if (!enabled) return;
+    // iOS: the "will" events, so the footer goes as the keyboard starts to move.
+    const show = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hide = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const a = Keyboard.addListener(show, () => setUp(true));
+    const b = Keyboard.addListener(hide, () => setUp(false));
+    return () => { a.remove(); b.remove(); };
+  }, [enabled]);
+  return enabled && up;
+}
+
 export function ToolScreen({
   title,
   children,
@@ -100,6 +126,7 @@ export function ToolScreen({
   scrollRef,
   stickyHeaderIndices,
   confirmBack,
+  footerHidesForKeyboard = false,
 }: {
   title: string;
   children: ReactNode;
@@ -129,8 +156,36 @@ export function ToolScreen({
    * first. iOS is unchanged (no system back button; the header goes back).
    */
   confirmBack?: DiscardPrompt | null;
+  /**
+   * Hide the footer while the keyboard is up, for a screen whose typing has
+   * nothing to do with its footer's actions (Redact's search): the footer
+   * would otherwise sit on the keyboard and squeeze the page out of view.
+   */
+  footerHidesForKeyboard?: boolean;
 }) {
   const router = useRouter();
+  const keyboardUp = useKeyboardVisible(footerHidesForKeyboard);
+  // For ToolScrollContext: the body's scroll view, its offset and its frame on screen.
+  const bodyRef = useRef<ScrollView | null>(null);
+  const setBodyRef = useCallback((r: ScrollView | null) => {
+    bodyRef.current = r;
+    if (typeof scrollRef === 'function') scrollRef(r);
+    else if (scrollRef) (scrollRef as React.MutableRefObject<ScrollView | null>).current = r;
+  }, [scrollRef]);
+  const scrollY = useRef(0);
+  const reveal = useCallback((top: number, bottom: number) => {
+    const view = bodyRef.current;
+    if (!view) return;
+    // The scroll view's frame on screen (it ends where the footer begins).
+    (view as unknown as View).measureInWindow((_x, vy, _w, vh) => {
+      const visBottom = vy + vh - Spacing.md;
+      if (bottom <= visBottom) return;
+      const maxShift = top - (vy + vh * 0.35);
+      const shift = Math.min(bottom - visBottom, maxShift);
+      if (shift > 0) view.scrollTo({ y: scrollY.current + shift, animated: true });
+    });
+  }, []);
+  const scrollCtx = useMemo(() => ({ reveal }), [reveal]);
   const askBack = Platform.OS === 'android' && !!confirmBack;
   const goBack = () => {
     if (askBack && confirmBack) confirmDiscard(confirmBack, () => router.back());
@@ -152,6 +207,8 @@ export function ToolScreen({
     };
   }, [busy, navigation]);
   const insets = useSafeAreaInsets();
+  // iPad: the body and footer keep a readable centred column (a phone is unchanged).
+  const sideInset = readableInset(useWindowDimensions().width);
   const { colors } = useTheme();
   // Opened on a specific document from the viewer, a tool is presented as a
   // full-screen modal (see toolOptions in app/_layout.tsx), so it closes with
@@ -188,24 +245,26 @@ export function ToolScreen({
       />
       {scroll ? (
         <ScrollView
-          ref={scrollRef}
+          ref={setBodyRef}
+          onScroll={e => { scrollY.current = e.nativeEvent.contentOffset.y; }}
+          scrollEventThrottle={32}
           stickyHeaderIndices={stickyHeaderIndices}
           style={styles.flex}
-          contentContainerStyle={[styles.body, !footer && { paddingBottom: insets.bottom + Spacing.xxl }]}
+          contentContainerStyle={[styles.body, { paddingHorizontal: sideInset }, !footer && { paddingBottom: insets.bottom + Spacing.xxl }]}
           scrollEnabled={scrollEnabled}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
         >
-          {children}
+          <ToolScrollContext.Provider value={scrollCtx}>{children}</ToolScrollContext.Provider>
         </ScrollView>
       ) : (
         <View style={styles.flex}>{children}</View>
       )}
-      {footer ? (
+      {footer && !keyboardUp ? (
         <View
           style={[
             styles.footer,
-            { paddingBottom: insets.bottom + Spacing.md, borderTopColor: colors.border, backgroundColor: colors.bg },
+            { paddingHorizontal: sideInset, paddingBottom: insets.bottom + Spacing.md, borderTopColor: colors.border, backgroundColor: colors.bg },
           ]}
           onLayout={e => setFooterH(Math.round(e.nativeEvent.layout.height))}
         >
@@ -435,7 +494,7 @@ export function SelectionMark({ selected, order }: { selected: boolean; order?: 
   return (
     <View style={[styles.mark, { backgroundColor: colors.accentFill }]}>
       {order ? (
-        <Text style={[styles.badgeText, { color: colors.onAccent }]}>{order}</Text>
+        <Text style={[styles.badgeText, { color: colors.onAccent }]} allowFontScaling={false}>{order}</Text>
       ) : (
         <Ionicons name="checkmark" size={16} color={colors.onAccent} />
       )}
@@ -509,10 +568,10 @@ export function DocRow({
     >
       <DocThumb doc={doc} />
       <View style={styles.flex}>
-        <Text style={[Type.body, { color: colors.text }]} numberOfLines={1}>
+        <Text style={[Type.body, { color: colors.text }]} numberOfLines={2} maxFontSizeMultiplier={TextScale.row}>
           {doc.name}
         </Text>
-        <Text style={[Type.footnote, styles.meta, { color: colors.muted }]}>{meta}</Text>
+        <Text style={[Type.footnote, styles.meta, { color: colors.muted }]} numberOfLines={2} maxFontSizeMultiplier={TextScale.row}>{meta}</Text>
       </View>
       {multi || order ? <SelectionMark selected={selected} order={order} /> : <RadioMark selected={selected} />}
     </Pressable>

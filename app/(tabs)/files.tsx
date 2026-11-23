@@ -250,7 +250,7 @@ export default function FilesScreen() {
       setFolderPrompt(null);
     } catch (err) {
       console.error('Folder update failed', err);
-      Alert.alert(folderPrompt.mode === 'create' ? "Couldn't create folder" : "Couldn't rename folder", 'Please try again.');
+      Alert.alert(folderPrompt.mode === 'create' ? "Couldn’t create folder" : "Couldn’t rename folder", 'Try again.');
     }
   }, [folderPrompt, activeFolder]);
 
@@ -275,7 +275,7 @@ export default function FilesScreen() {
               toast.show('Folder deleted');
             } catch (err) {
               console.error('Delete folder failed', err);
-              Alert.alert("Couldn't delete folder", 'Please try again.');
+              Alert.alert("Couldn’t delete folder", 'Try again.');
             }
           },
         },
@@ -341,14 +341,14 @@ export default function FilesScreen() {
                       .then(() => load())
                       .catch(err => {
                         console.error('Restore failed', err);
-                        Alert.alert("Couldn't restore the documents", 'Find them in Settings, Recently deleted.');
+                        Alert.alert("Couldn’t restore the documents", 'Find them in Settings, Recently deleted.');
                       });
                   },
                 },
               });
             } catch (err) {
               console.error('Batch delete failed', err);
-              Alert.alert("Couldn't delete the documents", 'Try again.');
+              Alert.alert("Couldn’t delete the documents", 'Try again.');
             }
           },
         },
@@ -373,7 +373,7 @@ export default function FilesScreen() {
       toast.show(folder ? `Moved to “${folder}”` : 'Removed from folder');
     } catch (err) {
       console.error('Batch move failed', err);
-      Alert.alert("Couldn't move documents", 'Please try again.');
+      Alert.alert("Couldn’t move documents", 'Try again.');
     }
   }, [exitSelect, toast]);
 
@@ -590,7 +590,7 @@ export default function FilesScreen() {
       )}
 
       {/* View and sort in one menu. */}
-      <BottomSheet visible={viewSheetVisible} onClose={() => setViewSheetVisible(false)} variant="grouped">
+      <BottomSheet visible={viewSheetVisible} onClose={() => setViewSheetVisible(false)} variant="grouped" scroll>
         <SheetHeader title="View and sort" />
         <SectionLabel style={styles.sheetLabel}>View as</SectionLabel>
         <SheetGroup>
@@ -755,7 +755,7 @@ function FolderChip({
       ]}
     >
       <Ionicons name={icon} size={16} color={active ? colors.onAccent : colors.muted} />
-      <Text style={[Type.subhead, { color: active ? colors.onAccent : colors.text }]} numberOfLines={1}>{label}</Text>
+      <Text style={[Type.subhead, { color: active ? colors.onAccent : colors.text }]} numberOfLines={1} maxFontSizeMultiplier={1.4}>{label}</Text>
     </Pressable>
   );
 }
@@ -785,7 +785,7 @@ function BarButton({
       style={({ pressed }) => [styles.barBtn, (pressed || disabled) && { opacity: disabled ? 0.35 : 0.6 }]}
     >
       <Ionicons name={icon} size={22} color={color} />
-      <Text style={[Type.caption, { color, fontWeight: '600' }]}>{label}</Text>
+      <Text style={[Type.caption, { color, fontWeight: '600' }]} numberOfLines={1} maxFontSizeMultiplier={1.2}>{label}</Text>
     </Pressable>
   );
 }
@@ -799,7 +799,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    height: 36,
+    minHeight: 36,
     paddingHorizontal: Spacing.md + 2,
     borderRadius: Radius.pill,
     borderWidth: StyleSheet.hairlineWidth,

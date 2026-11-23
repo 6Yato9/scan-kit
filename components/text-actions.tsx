@@ -304,7 +304,7 @@ export function TextActions({ text, imageUri, centered = false, bleed = 0, readA
         style={({ pressed }) => [styles.chip, { backgroundColor: colors.accentLight }, pressed && styles.pressed]}
       >
         <Ionicons name={confirmed ? 'checkmark' : icon} size={16} color={colors.accent} />
-        <Text style={[Type.footnote, styles.chipText, { color: colors.accent }]} numberOfLines={1}>
+        <Text style={[Type.footnote, styles.chipText, { color: colors.accent }]} numberOfLines={1} maxFontSizeMultiplier={1.4}>
           {confirmed ? done.label : label}
         </Text>
       </Pressable>
@@ -550,7 +550,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.xs + 2,
-    height: 36,
+    minHeight: 36,
     maxWidth: 260,
     paddingHorizontal: Spacing.md,
     borderRadius: Radius.pill,

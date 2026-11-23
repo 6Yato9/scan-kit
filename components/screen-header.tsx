@@ -13,6 +13,12 @@ import { HIT, Spacing, Type } from '@/lib/theme';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
+// The bar is a fixed 52 pt row, like UIKit's navigation bar, so its text is
+// capped the way UIKit caps it: uncapped, the largest text sizes made the
+// title and text buttons taller than the bar (clipped).
+const HEADER_TITLE_MAX_SCALE = 1.3;
+const HEADER_BUTTON_MAX_SCALE = 1.4;
+
 export function HeaderIconButton({
   icon,
   onPress,
@@ -51,14 +57,14 @@ export function HeaderTextButton({
   disabled,
   color,
   emphasis = false,
-  maxFontSizeMultiplier,
+  maxFontSizeMultiplier = HEADER_BUTTON_MAX_SCALE,
 }: {
   title: string;
   onPress: () => void;
   disabled?: boolean;
   color?: string;
   emphasis?: boolean;
-  /** Caps how far the label grows with Dynamic Type (like a UIKit bar button); default: uncapped. */
+  /** Caps how far the label grows with Dynamic Type (like a UIKit bar button). */
   maxFontSizeMultiplier?: number;
 }) {
   const { colors } = useTheme();
@@ -93,7 +99,7 @@ export function ScreenHeader({
   withInset = true,
   fillLeft = false,
   backDisabled = false,
-  maxTitleScale,
+  maxTitleScale = HEADER_TITLE_MAX_SCALE,
 }: {
   title?: string;
   /** Renders a back (or close) button in the left slot. */
@@ -115,7 +121,7 @@ export function ScreenHeader({
   fillLeft?: boolean;
   /** Show the back/close button dimmed and inert (e.g. while a change is being written). */
   backDisabled?: boolean;
-  /** Caps how far the title grows with Dynamic Type (like a UIKit navigation bar); default: uncapped. */
+  /** Caps how far the title grows with Dynamic Type (like a UIKit navigation bar). */
   maxTitleScale?: number;
 }) {
   const { colors } = useTheme();

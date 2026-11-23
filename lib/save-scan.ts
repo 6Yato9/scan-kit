@@ -160,7 +160,14 @@ export async function indexDocText(id: string, pages: string[]): Promise<void> {
     // The newest pass found no text at all (the only text page was replaced by
     // a blank one): clear the old text, or search would keep finding the
     // document by words it no longer contains. Nothing to clear: no write.
-    if (!text) return current.ocrText ? { ocrText: '' } : null;
+    if (!text) {
+      if (current.ocrText) return { ocrText: '' };
+      // A new document still on its automatic name: record that the page was
+      // read and had no title, so the viewer stops waiting to say its name
+      // (lib/new-doc-note awaitingAutoTitle). Otherwise nothing to write.
+      const awaiting = !!current.defaultName && current.name === current.defaultName && current.ocrText === undefined;
+      return awaiting ? { ocrText: '' } : null;
+    }
     const patch: Partial<Document> = { ocrText: text };
     if (current.defaultName && current.name === current.defaultName) {
       const title = titleFromText(text);

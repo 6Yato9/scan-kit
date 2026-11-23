@@ -253,6 +253,39 @@ export const Radius = {
 export const HIT = 44;
 
 /**
+ * How far text may grow with Dynamic Type (maxFontSizeMultiplier), by role.
+ * Body text grows freely; the caps are for text in places that can't grow
+ * with it — rows beside an icon and a value, section labels, meta lines,
+ * hints over an image — where the largest accessibility sizes cut words
+ * mid-word or pushed actions off screen. Up to about 1.6 is XXXL, the largest
+ * standard size, so most large-text users see these at full size.
+ */
+export const TextScale = {
+  /** A list or sheet row's label and detail. */
+  row: 1.6,
+  /** Small caps section labels, meta lines, counters, badges. */
+  label: 1.3,
+  /** One-line hints and captions over the page or camera. */
+  hint: 1.3,
+} as const;
+
+/**
+ * Widest a column of controls/text gets (iPad). Past this a phone layout
+ * just looks stretched; wider screens keep the column centred.
+ */
+export const READABLE_WIDTH = 640;
+/** Widest a bottom sheet gets (iPad), centred like a UIKit form sheet. */
+export const SHEET_MAX_WIDTH = 560;
+
+/**
+ * Horizontal padding that keeps content in a centred READABLE_WIDTH column
+ * on a wide screen, and is the normal gutter on a phone. Pure.
+ */
+export function readableInset(screenW: number, gutter: number = Spacing.gutter): number {
+  return Math.max(gutter, Math.round((screenW - READABLE_WIDTH) / 2));
+}
+
+/**
  * Bottom padding a tab screen's scroll content needs so its last row can
  * scroll fully clear of the floating tab bar (and its raised scan button).
  * Add the bottom safe-area inset on top of this.

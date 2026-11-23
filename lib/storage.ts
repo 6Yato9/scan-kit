@@ -53,7 +53,8 @@ export type ScanSettings = {
 export type DocSettings = {
   namePrefix: string;
   /** 'Auto' sizes PDF pages to match the scans (see lib/pdf.ts autoPaperSize). */
-  pdfPageSize: 'Auto' | 'A4' | 'Letter';
+  /** 'Legal' since the UI pass (2026-11): additive, older values read as before. */
+  pdfPageSize: 'Auto' | 'A4' | 'Letter' | 'Legal';
   pdfQuality: 'standard' | 'high';
 };
 

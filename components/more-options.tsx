@@ -3,11 +3,12 @@
 // stay on the screen, the rest sit behind one "More options" row that opens
 // them in place. The row says how many of the hidden options differ from the
 // default ("2 changed") while closed, so nothing changes the stamp unseen.
-import { type ReactNode } from 'react';
+import { useContext, useRef, type ReactNode } from 'react';
 import { LayoutAnimation, Pressable, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '@/contexts/theme-context';
 import { HIT, Radius, Spacing, Type } from '@/lib/theme';
+import { ToolScrollContext } from '@/components/tool-ui';
 
 export function MoreOptions({
   open,
@@ -22,11 +23,24 @@ export function MoreOptions({
   children: ReactNode;
 }) {
   const { colors } = useTheme();
+  const scroller = useContext(ToolScrollContext);
+  const box = useRef<View>(null);
+  // Opened near the bottom, the options appeared under the footer: once they
+  // are laid out, scroll just enough to show them.
+  const revealWhenLaidOut = useRef(false);
   return (
-    <View>
+    <View
+      ref={box}
+      onLayout={() => {
+        if (!revealWhenLaidOut.current) return;
+        revealWhenLaidOut.current = false;
+        box.current?.measureInWindow((_x, y, _w, h) => scroller?.reveal(y, y + h));
+      }}
+    >
       <Pressable
         onPress={() => {
           LayoutAnimation.configureNext(LayoutAnimation.create(200, 'easeInEaseOut', 'opacity'));
+          revealWhenLaidOut.current = !open;
           onToggle(!open);
         }}
         accessibilityRole="button"

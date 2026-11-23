@@ -153,7 +153,7 @@ export default function ExtractTextScreen() {
     if (!text?.trim()) return;
     await Clipboard.setStringAsync(text);
     tapLight();
-    show('Text copied');
+    show('Copied');
   };
 
   const handleShare = async () => {

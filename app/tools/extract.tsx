@@ -166,7 +166,7 @@ export default function ExtractScreen() {
                 >
                   <PageThumb uri={`${uri}?v=${doc.updatedAt}`} style={styles.pageImg} />
                   <View style={[styles.pageNum, { backgroundColor: on ? colors.accentFill : colors.scrim }]}>
-                    <Text style={[styles.pageNumText, { color: colors.onAccent }]}>{i + 1}</Text>
+                    <Text style={[styles.pageNumText, { color: colors.onAccent }]} allowFontScaling={false}>{i + 1}</Text>
                   </View>
                   {on ? (
                     <View style={[styles.check, { backgroundColor: colors.accentFill }]}>
@@ -206,6 +206,8 @@ export default function ExtractScreen() {
                   key={which}
                   onPress={() => select(new Set(oddEvenPages(doc.pages.length, which)))}
                   disabled={saving}
+                  // 36 pt chips: the slop gives them a 44 pt touch area.
+                  hitSlop={{ top: 4, bottom: 4 }}
                   accessibilityRole="button"
                   accessibilityLabel={which === 'odd' ? 'Select odd pages' : 'Select even pages'}
                   style={({ pressed }) => [styles.chip, { backgroundColor: colors.card }, pressed && styles.pressed]}
