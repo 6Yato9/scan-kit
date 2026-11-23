@@ -10,7 +10,7 @@
   <color name="system_chrome_surface">#FFFFFF</color>
   <color name="system_chrome_text">#1A1A1A</color>
   <color name="system_chrome_secondary">#555555</color>
-  <color name="system_chrome_accent">#0A7EA4</color>
+  <color name="system_chrome_accent">#0A8A9C</color>
 
   <style name="SystemChromeOverlay">
     <item name="alertDialogTheme">@style/SystemChromeAlertDialog</item>

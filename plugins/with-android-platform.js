@@ -71,8 +71,8 @@ const GLYPHS = {
 };
 
 // lib/theme.ts light accent and accentLight.
-const ICON_BACKGROUND = '#E8F5FA';
-const ICON_GLYPH = '#0A7EA4';
+const ICON_BACKGROUND = '#E6F5F7';
+const ICON_GLYPH = '#0A8A9C';
 
 const DB_SIZE_MB = 512;
 
