@@ -27,6 +27,7 @@ import { SectionLabel } from '@/components/section-label';
 import { HeaderTextButton, ScreenHeader } from '@/components/screen-header';
 import { BottomSheet, SheetHeader } from '@/components/bottom-sheet';
 import { PrimaryButton } from '@/components/primary-button';
+import { ActionSheetHost } from '@/components/action-sheet';
 import type { AppIconName } from '@/components/app-icon';
 import { HeroIcon } from '@/components/empty-state';
 import { useToastAnchor } from '@/components/toast';
@@ -99,6 +100,43 @@ export function pageCountLabel(n: number): string {
  * leaves the upper part of the screen, where a pinned preview may sit.
  */
 export const ToolScrollContext = createContext<{ reveal: (top: number, bottom: number) => void } | null>(null);
+
+/**
+ * A block of text fields that stays in view while the keyboard is up (an iPad
+ * in landscape leaves only a strip between the header and the footer). Its
+ * fields call `onFieldFocus` from onFocus; once the keyboard has settled, the
+ * whole block is scrolled into view above the footer.
+ */
+export function KeepInView({ children }: { children: (onFieldFocus: () => void) => ReactNode }) {
+  const scroller = useContext(ToolScrollContext);
+  const box = useRef<View>(null);
+  const pending = useRef(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showSoon = useCallback(() => {
+    if (timer.current) clearTimeout(timer.current);
+    // After the keyboard avoider has resized the body.
+    timer.current = setTimeout(() => {
+      box.current?.measureInWindow((_x, y, _w, h) => scroller?.reveal(y, y + h));
+    }, 80);
+  }, [scroller]);
+  useEffect(() => {
+    const sub = Keyboard.addListener('keyboardDidShow', () => {
+      if (!pending.current) return;
+      pending.current = false;
+      showSoon();
+    });
+    return () => {
+      sub.remove();
+      if (timer.current) clearTimeout(timer.current);
+    };
+  }, [showSoon]);
+  const onFieldFocus = useCallback(() => {
+    // Moving between fields keeps the keyboard up: no new keyboard event comes.
+    if (Keyboard.isVisible()) showSoon();
+    else pending.current = true;
+  }, [showSoon]);
+  return <View ref={box}>{children(onFieldFocus)}</View>;
+}
 
 /** Whether the keyboard is showing (tracked only while `enabled`). */
 function useKeyboardVisible(enabled: boolean): boolean {
@@ -258,7 +296,9 @@ export function ToolScreen({
           <ToolScrollContext.Provider value={scrollCtx}>{children}</ToolScrollContext.Provider>
         </ScrollView>
       ) : (
-        <View style={styles.flex}>{children}</View>
+        // Fixed-layout tools pad their own content by the gutter; on an iPad the
+        // rest of the side inset goes here, so they line up with the footer.
+        <View style={[styles.flex, { paddingHorizontal: sideInset - Spacing.gutter }]}>{children}</View>
       )}
       {footer && !keyboardUp ? (
         <View
@@ -274,6 +314,8 @@ export function ToolScreen({
           {footer}
         </View>
       ) : null}
+      {/* Tools opened from the viewer are full-screen modals (components/action-sheet.tsx). */}
+      <ActionSheetHost />
     </KeyboardAvoidingView>
   );
 }

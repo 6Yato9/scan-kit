@@ -138,7 +138,7 @@ export default function ExtractScreen() {
         doc={doc}
         fixed={fixed}
         disabled={saving}
-        note="Documents with two or more pages. Imported PDFs can’t be split."
+        note="Scanned documents with two or more pages. For an imported PDF, use Split."
         onPick={pick}
       />
 

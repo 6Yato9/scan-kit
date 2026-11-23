@@ -1,8 +1,9 @@
 // components/action-sheet.tsx
 // A list of choices, as ActionSheetIOS shows it, on every platform.
 //
-// iOS keeps the system action sheet exactly as before: the call goes straight
-// to ActionSheetIOS.showActionSheetWithOptions. Android has no action sheet,
+// An iPhone keeps the system action sheet exactly as before: the call goes
+// straight to ActionSheetIOS.showActionSheetWithOptions (an iPad too, when the
+// call names an anchor view; without one it gets the sheet below). Android has no action sheet,
 // and its native dialog shows at most three buttons (neutral, negative,
 // positive), so a fourth choice was silently dropped and `destructive` was
 // ignored. There the same call opens one of the app's own bottom sheets
@@ -23,8 +24,9 @@
 // without one) when it was dismissed. Anything native the choice presents
 // (a share sheet, an alert, another sheet) can open straight from it.
 //
-// <ActionSheetHost /> is mounted once in app/_layout.tsx. Its sheet is an RN
-// Modal, so it opens above whatever is showing, another sheet included.
+// <ActionSheetHost /> is mounted in app/_layout.tsx and inside the full-screen
+// modals (see Hosts below). Its sheet is an RN Modal, so it opens above
+// whatever is showing, another sheet included.
 // Requests made while one is open wait their turn.
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { ActionSheetIOS, Platform, Pressable, ScrollView, StyleSheet, Text, View, type ActionSheetIOSOptions } from 'react-native';
@@ -82,7 +84,7 @@ export function actionSheetDismissIndex(o: ActionSheetOptions): number {
   return i === undefined || i === null ? -1 : i;
 }
 
-// ── Request queue (Android) ─────────────────────────────────────────────────
+// ── Request queue (Android, iPad) ─────────────────────────────────────────────────
 
 type Request = { id: number; options: ActionSheetOptions; callback: (index: number) => void };
 
@@ -105,7 +107,10 @@ function finish(id: number, index: number) {
 }
 
 function showActionSheetWithOptions(options: ActionSheetOptions, callback: (buttonIndex: number) => void): void {
-  if (Platform.OS === 'ios') {
+  // On an iPad, UIKit shows an action sheet as a popover, and without an
+  // anchor view it floats in the middle of the screen with no arrow: there
+  // the app's own sheet is used, docked at the bottom like its other sheets.
+  if (Platform.OS === 'ios' && !(Platform.isPad && options.anchor == null)) {
     // Exactly what the call sites passed before (icons are ours, not UIKit's).
     const { icons: _icons, ...native } = options;
     ActionSheetIOS.showActionSheetWithOptions(native, callback);
@@ -120,10 +125,35 @@ export const ActionSheet = { showActionSheetWithOptions };
 
 // ── The sheet ───────────────────────────────────────────────────────────────
 
-/** Mounted once, after the navigator (app/_layout.tsx). Renders nothing on iOS. */
+// ── Hosts ───────────────────────────────────────────────────────────────────
+// On iOS an RN Modal presents from its own screen, and a screen covered by a
+// full-screen modal (the viewer, a tool opened from it, Fill & sign) can't
+// present anything: a sheet from the root host stayed hidden until the user
+// went back to Home. So those screens mount a host of their own, and only the
+// most recently mounted host (the top screen's) shows the sheet.
+
+let hosts: number[] = [];
+let nextHostId = 1;
+const topHost = () => hosts[hosts.length - 1] ?? 0;
+
+/**
+ * Shows the app's action sheets. Mounted after the navigator (app/_layout.tsx)
+ * and again inside every full-screen modal that raises one. Renders nothing
+ * on an iPhone.
+ */
 export function ActionSheetHost() {
+  const [id] = useState(() => nextHostId++);
+  useEffect(() => {
+    hosts = [...hosts, id];
+    emit();
+    return () => {
+      hosts = hosts.filter(h => h !== id);
+      emit();
+    };
+  }, [id]);
+  const top = useSyncExternalStore(subscribe, topHost, topHost);
   const req = useSyncExternalStore(subscribe, current, current);
-  if (Platform.OS === 'ios' || !req) return null;
+  if (!req || top !== id) return null;
   // A sheet raised over the always-dark screens (viewer, camera review) asks
   // for the dark look, as it did from UIKit.
   const sheet = <RequestSheet key={req.id} req={req} />;

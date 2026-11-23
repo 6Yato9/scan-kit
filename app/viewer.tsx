@@ -100,7 +100,7 @@ import { movedOrder, ThumbnailStrip } from '@/components/thumbnail-strip';
 import { ViewerToolbar, type ToolbarItem } from '@/components/viewer-toolbar';
 import { ViewerToolsSheet } from '@/components/viewer-tools-sheet';
 import { AppIcon, type AppIconName } from '@/components/app-icon';
-import { ActionSheet } from '@/components/action-sheet';
+import { ActionSheet, ActionSheetHost } from '@/components/action-sheet';
 import { MoreAction, ViewerMoreSheet } from '@/components/viewer-more-sheet';
 import { ToastProvider, useToast } from '@/components/toast';
 import { ReorderModal } from '@/components/reorder-modal';
@@ -1869,6 +1869,7 @@ function ViewerContent({
           />
         )}
         {renameSheet}
+        <ActionSheetHost />
         {moreSheet}
         {toolsSheet}
         {moveSheet}
@@ -2051,6 +2052,7 @@ function ViewerContent({
       />
 
       {renameSheet}
+      <ActionSheetHost />
 
       <ReorderModal
         visible={reorderVisible}

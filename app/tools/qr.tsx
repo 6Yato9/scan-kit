@@ -21,7 +21,7 @@ import { ScreenHeader } from '@/components/screen-header';
 import { PrimaryButton } from '@/components/primary-button';
 import { RecognizedText } from '@/components/recognized-text';
 import { notifyError, notifySuccess, tapLight } from '@/lib/haptics';
-import { HIT, Radius, Spacing, Type } from '@/lib/theme';
+import { HIT, Radius, SHEET_MAX_WIDTH, Spacing, Type } from '@/lib/theme';
 import { barcodeTypeLabel, canDetectBarcodes, detectBarcodes, openWebLink } from '@/lib/text-actions';
 import { deleteTempFiles, pickPhotos } from '@/lib/tool-scan';
 
@@ -161,46 +161,49 @@ export default function QrScreen() {
     if (!result) return null;
     const many = photoCodes.length > 1 && photoIndex >= 0;
     return (
-      <View style={[styles.resultSheet, { backgroundColor: colors.card, paddingBottom: insets.bottom + Spacing.lg }]}>
-        <View style={styles.resultHead}>
-          <Text style={[Type.sectionLabel, styles.flex, { color: colors.muted }]}>
-            {many ? `${formatType(result.type)} · ${photoIndex + 1} of ${photoCodes.length}` : formatType(result.type)}
-          </Text>
-          {many ? (
-            <Pressable
-              onPress={handleNextCode}
-              hitSlop={8}
-              accessibilityRole="button"
-              accessibilityLabel="Next code in this photo"
-              style={({ pressed }) => [styles.nextBtn, pressed && { opacity: 0.5 }]}
-            >
-              <Text style={[Type.subhead, { color: colors.accent }]}>Next</Text>
-              <Ionicons name="chevron-forward" size={16} color={colors.accent} />
-            </Pressable>
-          ) : null}
-        </View>
-        {/* Selectable range by range (touch and hold), not only as a whole. */}
-        <RecognizedText value={result.data} onChangeText={() => {}} readOnly maxHeight={132} />
+      // Docked at the bottom, as wide as the app's other sheets (centred on an iPad).
+      <View style={styles.resultDock} pointerEvents="box-none">
+        <View style={[styles.resultSheet, { backgroundColor: colors.card, paddingBottom: insets.bottom + Spacing.lg }]}>
+          <View style={styles.resultHead}>
+            <Text style={[Type.sectionLabel, styles.flex, { color: colors.muted }]}>
+              {many ? `${formatType(result.type)} · ${photoIndex + 1} of ${photoCodes.length}` : formatType(result.type)}
+            </Text>
+            {many ? (
+              <Pressable
+                onPress={handleNextCode}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Next code in this photo"
+                style={({ pressed }) => [styles.nextBtn, pressed && { opacity: 0.5 }]}
+              >
+                <Text style={[Type.subhead, { color: colors.accent }]}>Next</Text>
+                <Ionicons name="chevron-forward" size={16} color={colors.accent} />
+              </Pressable>
+            ) : null}
+          </View>
+          {/* Selectable range by range (touch and hold), not only as a whole. */}
+          <RecognizedText value={result.data} onChangeText={() => {}} readOnly maxHeight={132} />
 
-        {isUrl(result.data) ? (
-          <PrimaryButton title="Open link" icon="open-outline" onPress={handleOpen} />
-        ) : null}
-        <View style={styles.resultActions}>
-          <PrimaryButton
-            title="Copy"
-            icon="copy-outline"
-            variant={isUrl(result.data) ? 'secondary' : 'primary'}
-            onPress={handleCopy}
-            style={styles.flex}
-          />
-          <PrimaryButton
-            title={fromPhoto ? 'Another photo' : 'Scan again'}
-            icon={fromPhoto ? 'images-outline' : 'scan-outline'}
-            variant="secondary"
-            onPress={fromPhoto ? handleChoosePhoto : handleRescan}
-            loading={fromPhoto && picking}
-            style={styles.flex}
-          />
+          {isUrl(result.data) ? (
+            <PrimaryButton title="Open link" icon="open-outline" onPress={handleOpen} />
+          ) : null}
+          <View style={styles.resultActions}>
+            <PrimaryButton
+              title="Copy"
+              icon="copy-outline"
+              variant={isUrl(result.data) ? 'secondary' : 'primary'}
+              onPress={handleCopy}
+              style={styles.flex}
+            />
+            <PrimaryButton
+              title={fromPhoto ? 'Another photo' : 'Scan again'}
+              icon={fromPhoto ? 'images-outline' : 'scan-outline'}
+              variant="secondary"
+              onPress={fromPhoto ? handleChoosePhoto : handleRescan}
+              loading={fromPhoto && picking}
+              style={styles.flex}
+            />
+          </View>
         </View>
       </View>
     );
@@ -319,11 +322,10 @@ const styles = StyleSheet.create({
   cornerTR: { top: 0, right: 0, borderTopWidth: BORDER, borderRightWidth: BORDER },
   cornerBL: { bottom: 0, left: 0, borderBottomWidth: BORDER, borderLeftWidth: BORDER },
   cornerBR: { bottom: 0, right: 0, borderBottomWidth: BORDER, borderRightWidth: BORDER },
+  resultDock: { position: 'absolute', left: 0, right: 0, bottom: 0, alignItems: 'center' },
   resultSheet: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
+    width: '100%',
+    maxWidth: SHEET_MAX_WIDTH,
     borderTopLeftRadius: Radius.xl,
     borderTopRightRadius: Radius.xl,
     padding: Spacing.xl,

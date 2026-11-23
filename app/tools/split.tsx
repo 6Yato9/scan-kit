@@ -270,7 +270,7 @@ export default function SplitScreen() {
         fixed={fixed}
         disabled={saving}
         autoOpen
-        note={pdfSplit ? 'Documents and PDFs with two or more pages.' : 'Documents with two or more pages.'}
+        note={pdfSplit ? 'Scanned documents with two or more pages, and imported PDFs.' : 'Documents with two or more pages.'}
         onPick={pick}
       />
 

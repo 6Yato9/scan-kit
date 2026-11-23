@@ -97,7 +97,7 @@ import {
 } from '@/lib/pdf-fill';
 import { HIT, Radius, Spacing, Type } from '@/lib/theme';
 import { showTextPrompt } from '@/components/text-prompt';
-import { ActionSheet } from '@/components/action-sheet';
+import { ActionSheet, ActionSheetHost } from '@/components/action-sheet';
 import type { Document } from '@/types/document';
 import type { NativeFillField } from '@/modules/vision-ocr/src';
 
@@ -1314,6 +1314,7 @@ export default function PdfFillScreen() {
           </View>
         </View>
       ) : null}
+      <ActionSheetHost />
     </View>
   );
 }

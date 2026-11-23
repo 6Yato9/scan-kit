@@ -29,7 +29,7 @@ import { pageFileUri } from '@/lib/image';
 import { bakePage, runPageEdit } from '@/lib/bake';
 import { buildMarkupHtml, type MarkupConfig } from '@/lib/markup-html';
 import { luminance } from '@/lib/stamp-colors';
-import { Highlight, HIT, Ink, Radius, Spacing, Type } from '@/lib/theme';
+import { Highlight, HIT, Ink, Radius, SHEET_MAX_WIDTH, Spacing, Type } from '@/lib/theme';
 import { DarkThemeScope, useTheme } from '@/contexts/theme-context';
 import { HeaderTextButton, ScreenHeader } from '@/components/screen-header';
 import { BottomSheet, SheetHeader } from '@/components/bottom-sheet';
@@ -722,7 +722,12 @@ const styles = StyleSheet.create({
     paddingTop: Spacing.xs,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
+  // Both rows keep a sheet's width on an iPad, so the swatches and tools stay
+  // grouped instead of spreading across the screen (a phone is unchanged).
   optionsRow: {
+    width: '100%',
+    maxWidth: SHEET_MAX_WIDTH,
+    alignSelf: 'center',
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: Spacing.sm,
@@ -750,6 +755,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.md,
   },
   toolsRow: {
+    width: '100%',
+    maxWidth: SHEET_MAX_WIDTH,
+    alignSelf: 'center',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',

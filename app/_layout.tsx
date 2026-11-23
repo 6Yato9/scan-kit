@@ -286,7 +286,7 @@ function ThemedStack() {
     {/* Home-screen quick actions (lib/quick-actions.ts). After LockGate, so App
         Lock reads its flag first; it waits for the unlock itself. */}
     <QuickActionsHandler />
-    {/* Android's action sheets (components/action-sheet.tsx); iOS uses UIKit's. */}
+    {/* The app's own action sheets (Android, iPad; components/action-sheet.tsx). Full-screen modals mount their own. */}
     <ActionSheetHost />
     {/* After the navigator so it draws above the tab screens; clears the
         floating tab bar. Full-screen surfaces (viewer) render their own. */}

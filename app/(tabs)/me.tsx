@@ -1,7 +1,7 @@
 // app/(tabs)/me.tsx
 // Settings tab.
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, InteractionManager, Platform, ScrollView, StyleSheet, View } from 'react-native';
+import { Alert, InteractionManager, Platform, ScrollView, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Directory, File } from 'expo-file-system';
@@ -18,7 +18,7 @@ import { getRecoveredGroups } from '@/lib/recovered-files';
 import { useTheme } from '@/contexts/theme-context';
 import { LargeTitle } from '@/components/screen-header';
 import { SectionLabel } from '@/components/section-label';
-import { Spacing, TAB_BAR_CLEARANCE } from '@/lib/theme';
+import { Spacing, TAB_BAR_CLEARANCE, readableInset } from '@/lib/theme';
 
 /** Recursively sums the byte size of every file under a directory. */
 function dirSize(dir: Directory): number {
@@ -48,6 +48,7 @@ function formatBytes(bytes: number): string {
 
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
+  const { width: screenW } = useWindowDimensions();
   const router = useRouter();
   const [storageUsed, setStorageUsed] = useState<string | null>(null);
   const [appLock, setAppLock] = useState(false);
@@ -163,7 +164,12 @@ export default function SettingsScreen() {
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
       <ScrollView
         style={styles.container}
-        contentContainerStyle={{ paddingTop: insets.top, paddingBottom: insets.bottom + TAB_BAR_CLEARANCE }}
+        // iPad: the same readable centred column as the settings screens it opens.
+        contentContainerStyle={{
+          paddingTop: insets.top,
+          paddingBottom: insets.bottom + TAB_BAR_CLEARANCE,
+          paddingHorizontal: readableInset(screenW) - Spacing.gutter,
+        }}
       >
         <LargeTitle title="Settings" />
         <View style={styles.content}>

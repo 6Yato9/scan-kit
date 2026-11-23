@@ -64,7 +64,7 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useIsFocused } from '@react-navigation/native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaProvider, useSafeAreaFrame, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { Directory, File, Paths } from 'expo-file-system';
 import { useTheme } from '@/contexts/theme-context';
@@ -169,7 +169,26 @@ function devLog(entry: string): void {
   g.__camLog = [...(g.__camLog ?? []).slice(-80), `${Date.now() % 100000}:${entry}`];
 }
 
-export default function CameraScreen() {
+/**
+ * The camera is a full-screen modal, and while it is up iOS takes the screens
+ * under it out of the window, so the app's root SafeAreaProvider stops hearing
+ * about changes. The status bar hides over the live camera and comes back for
+ * the review: on an iPad (or a Home-button iPhone) that changes the top inset,
+ * and the stale root value put the review's header under the clock. This
+ * provider measures the modal's own view instead, starting from the root's
+ * values so the first frame lays out at once.
+ */
+export default function CameraRoute() {
+  const insets = useSafeAreaInsets();
+  const frame = useSafeAreaFrame();
+  return (
+    <SafeAreaProvider initialMetrics={{ insets, frame }}>
+      <CameraScreen />
+    </SafeAreaProvider>
+  );
+}
+
+function CameraScreen() {
   const { session } = useLocalSearchParams<{ session?: string }>();
   const sessionId = typeof session === 'string' ? session : '';
   const router = useRouter();

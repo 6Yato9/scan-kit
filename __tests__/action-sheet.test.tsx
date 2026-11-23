@@ -1,8 +1,8 @@
 // components/action-sheet.tsx: ActionSheetIOS on iOS (unchanged), the app's
 // own sheet on Android, where the native dialog dropped every option past
 // the third.
-import { ActionSheetIOS, Platform } from 'react-native';
-import { act, fireEvent, render, screen } from '@testing-library/react-native';
+import { ActionSheetIOS, Platform, View } from 'react-native';
+import { act, fireEvent, render, screen, within } from '@testing-library/react-native';
 import {
   ActionSheet,
   ActionSheetHost,
@@ -84,6 +84,70 @@ describe('showActionSheetWithOptions', () => {
     expect(native).toHaveBeenCalledWith(FIVE, cb);
     render(<ActionSheetHost />);
     expect(screen.queryByText('Rotate')).toBeNull();
+  });
+
+  it('on an iPad without an anchor view shows the app sheet instead of a floating popover', () => {
+    jest.useFakeTimers();
+    Platform.OS = 'ios';
+    const pad = Object.getOwnPropertyDescriptor(Platform, 'isPad');
+    Object.defineProperty(Platform, 'isPad', { configurable: true, get: () => true });
+    try {
+      const native = jest.spyOn(ActionSheetIOS, 'showActionSheetWithOptions').mockImplementation(() => {});
+      const cb = jest.fn();
+      // With an anchor, UIKit's popover points at it: kept.
+      ActionSheet.showActionSheetWithOptions({ ...FIVE, anchor: 42 }, cb);
+      expect(native).toHaveBeenCalledTimes(1);
+      render(<ActionSheetHost />);
+      act(() => {
+        ActionSheet.showActionSheetWithOptions(FIVE, cb);
+      });
+      act(() => {
+        jest.runAllTimers();
+      });
+      expect(native).toHaveBeenCalledTimes(1);
+      fireEvent.press(screen.getByText('Rotate'));
+      act(() => {
+        jest.runAllTimers();
+      });
+      expect(cb).toHaveBeenCalledWith(0);
+    } finally {
+      if (pad) Object.defineProperty(Platform, 'isPad', pad);
+      else delete (Platform as { isPad?: boolean }).isPad;
+      jest.useRealTimers();
+    }
+  });
+
+  it('shows the sheet in the most recently mounted host only (a full-screen modal over the root)', () => {
+    jest.useFakeTimers();
+    Platform.OS = 'android';
+    const cb = jest.fn();
+    const Tree = ({ modal }: { modal: boolean }) => (
+      <>
+        <View testID="root"><ActionSheetHost /></View>
+        {modal ? <View testID="modal"><ActionSheetHost /></View> : null}
+      </>
+    );
+    const { rerender } = render(<Tree modal />);
+    act(() => {
+      ActionSheet.showActionSheetWithOptions(FIVE, cb);
+    });
+    act(() => {
+      jest.runAllTimers();
+    });
+    expect(screen.getAllByText('Rotate')).toHaveLength(1);
+    expect(within(screen.getByTestId('modal')).queryByText('Rotate')).toBeTruthy();
+    // The modal closes: the root host takes over the open request.
+    rerender(<Tree modal={false} />);
+    act(() => {
+      jest.runAllTimers();
+    });
+    expect(within(screen.getByTestId('root')).queryByText('Rotate')).toBeTruthy();
+    fireEvent.press(screen.getByText('Cancel'));
+    act(() => {
+      jest.runAllTimers();
+    });
+    expect(cb).toHaveBeenCalledWith(5);
+    jest.useRealTimers();
   });
 
   it('on Android shows every option and answers the chosen index once the sheet has gone', () => {

@@ -113,6 +113,10 @@ export function ZoomablePage({ uri, cacheKey, width, height, inset, resetKey, on
 
   return (
     <ScrollView
+      // A fresh scroll view for each page size. On an iPad rotation the frame
+      // and the content resize in separate steps, and centerContent leaves the
+      // offset it set in between (the page sat far down, its bottom cut off).
+      key={`${width}x${height}`}
       ref={scrollRef}
       style={{ width, height }}
       contentContainerStyle={{ width, height }}

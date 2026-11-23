@@ -5,7 +5,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { AppIcon, type AppIconName } from '@/components/app-icon';
 import { useTheme } from '@/contexts/theme-context';
 import { PrimaryButton } from '@/components/primary-button';
-import { Colors, Spacing, Type } from '@/lib/theme';
+import { Colors, READABLE_WIDTH, Spacing, Type } from '@/lib/theme';
 
 type Variant = 'no-docs' | 'empty-folder' | 'no-search-results';
 type IconName = keyof typeof Ionicons.glyphMap;
@@ -42,6 +42,8 @@ type Props = {
 /** The one hero size: a 72pt tinted disc with a 32pt glyph (EmptyState, ToolIntro). */
 export const HERO_DISC = 72;
 const HERO_GLYPH = 32;
+/** A comfortable line length for the title and text on a wide screen. */
+const TEXT_MAX_WIDTH = 520;
 
 /** The tinted disc and glyph that heads every empty state and tool intro. */
 export function HeroIcon({ name, tint, color }: { name: AppIconName; tint: string; color: string }) {
@@ -124,7 +126,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: Spacing.xl,
   },
-  title: { marginBottom: Spacing.sm, textAlign: 'center', paddingHorizontal: Spacing.xxl },
-  subtitle: { textAlign: 'center', lineHeight: 21, paddingHorizontal: Spacing.xxl },
-  actions: { marginTop: Spacing.xxl, alignSelf: 'stretch', gap: Spacing.sm },
+  // On an iPad the text keeps a readable measure and the buttons the same
+  // column as the tool screens' (a phone is unchanged).
+  title: { marginBottom: Spacing.sm, textAlign: 'center', paddingHorizontal: Spacing.xxl, maxWidth: TEXT_MAX_WIDTH },
+  subtitle: { textAlign: 'center', lineHeight: 21, paddingHorizontal: Spacing.xxl, maxWidth: TEXT_MAX_WIDTH },
+  actions: { marginTop: Spacing.xxl, width: '100%', maxWidth: READABLE_WIDTH, gap: Spacing.sm },
 });

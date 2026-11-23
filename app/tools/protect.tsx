@@ -20,7 +20,7 @@ import { useScan } from '@/contexts/scan-context';
 import { PrimaryButton } from '@/components/primary-button';
 import { SectionLabel } from '@/components/section-label';
 import { useToast } from '@/components/toast';
-import { OptionList, ToolIntro, ToolNote, ToolProgress, ToolScreen, useToolDocuments } from '@/components/tool-ui';
+import { KeepInView, OptionList, ToolIntro, ToolNote, ToolProgress, ToolScreen, useToolDocuments } from '@/components/tool-ui';
 import { ToolDocPicker, useToolDoc } from '@/components/tool-doc';
 import { StatusCard, StatusLoading } from '@/components/status-card';
 import {
@@ -318,68 +318,76 @@ export default function ProtectScreen() {
         ) : (
           <>
             <SectionLabel>Password</SectionLabel>
-            <View style={[styles.card, { backgroundColor: colors.card }]}>
-              <View style={[styles.row, styles.divider, { borderBottomColor: colors.border }]}>
-                <TextInput
-                  style={inputStyle}
-                  value={pw}
-                  onChangeText={setPw}
-                  placeholder="Password"
-                  placeholderTextColor={colors.muted}
-                  secureTextEntry={!shown}
-                  editable={!working}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  autoComplete="off"
-                  textContentType="none"
-                  spellCheck={false}
-                  keyboardAppearance={isDark ? 'dark' : 'light'}
-                  returnKeyType="next"
-                  submitBehavior="submit"
-                  onSubmitEditing={() => confirmRef.current?.focus()}
-                  accessibilityLabel="Password"
-                  accessibilityHint={passwordHint(strength)}
-                />
-                <Pressable
-                  onPress={() => setShown(v => !v)}
-                  style={({ pressed }) => [styles.eye, pressed && { opacity: 0.5 }]}
-                  hitSlop={4}
-                  accessibilityRole="button"
-                  accessibilityLabel={shown ? 'Hide password' : 'Show password'}
-                >
-                  <Ionicons name={shown ? 'eye-off-outline' : 'eye-outline'} size={22} color={colors.muted} />
-                </Pressable>
-              </View>
-              <View style={styles.row}>
-                <TextInput
-                  ref={confirmRef}
-                  style={inputStyle}
-                  value={pw2}
-                  onChangeText={setPw2}
-                  placeholder="Enter it again"
-                  placeholderTextColor={colors.muted}
-                  secureTextEntry={!shown}
-                  editable={!working}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  autoComplete="off"
-                  textContentType="none"
-                  spellCheck={false}
-                  keyboardAppearance={isDark ? 'dark' : 'light'}
-                  returnKeyType="done"
-                  onSubmitEditing={start}
-                  accessibilityLabel="Enter the password again"
-                />
-              </View>
-            </View>
-            <View style={styles.hintRow} accessibilityLiveRegion="polite">
-              <View style={styles.meter} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
-                {[1, 2, 3].map(i => (
-                  <View key={i} style={[styles.bar, { backgroundColor: i <= bars ? barColor : colors.border }]} />
-                ))}
-              </View>
-              <Text style={[Type.footnote, styles.hint, { color: hintColor }]}>{hint}</Text>
-            </View>
+            <KeepInView>
+              {onFieldFocus => (
+                <>
+                  <View style={[styles.card, { backgroundColor: colors.card }]}>
+                    <View style={[styles.row, styles.divider, { borderBottomColor: colors.border }]}>
+                      <TextInput
+                        style={inputStyle}
+                        value={pw}
+                        onChangeText={setPw}
+                        placeholder="Password"
+                        placeholderTextColor={colors.muted}
+                        secureTextEntry={!shown}
+                        editable={!working}
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        autoComplete="off"
+                        textContentType="none"
+                        spellCheck={false}
+                        keyboardAppearance={isDark ? 'dark' : 'light'}
+                        returnKeyType="next"
+                        submitBehavior="submit"
+                        onSubmitEditing={() => confirmRef.current?.focus()}
+                        onFocus={onFieldFocus}
+                        accessibilityLabel="Password"
+                        accessibilityHint={passwordHint(strength)}
+                      />
+                      <Pressable
+                        onPress={() => setShown(v => !v)}
+                        style={({ pressed }) => [styles.eye, pressed && { opacity: 0.5 }]}
+                        hitSlop={4}
+                        accessibilityRole="button"
+                        accessibilityLabel={shown ? 'Hide password' : 'Show password'}
+                      >
+                        <Ionicons name={shown ? 'eye-off-outline' : 'eye-outline'} size={22} color={colors.muted} />
+                      </Pressable>
+                    </View>
+                    <View style={styles.row}>
+                      <TextInput
+                        ref={confirmRef}
+                        style={inputStyle}
+                        value={pw2}
+                        onChangeText={setPw2}
+                        placeholder="Enter it again"
+                        placeholderTextColor={colors.muted}
+                        secureTextEntry={!shown}
+                        editable={!working}
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        autoComplete="off"
+                        textContentType="none"
+                        spellCheck={false}
+                        keyboardAppearance={isDark ? 'dark' : 'light'}
+                        returnKeyType="done"
+                        onSubmitEditing={start}
+                        onFocus={onFieldFocus}
+                        accessibilityLabel="Enter the password again"
+                      />
+                    </View>
+                  </View>
+                  <View style={styles.hintRow} accessibilityLiveRegion="polite">
+                    <View style={styles.meter} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
+                      {[1, 2, 3].map(i => (
+                        <View key={i} style={[styles.bar, { backgroundColor: i <= bars ? barColor : colors.border }]} />
+                      ))}
+                    </View>
+                    <Text style={[Type.footnote, styles.hint, { color: hintColor }]}>{hint}</Text>
+                  </View>
+                </>
+              )}
+            </KeepInView>
 
             <View style={styles.gap} />
             <StatusCard
