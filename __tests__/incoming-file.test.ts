@@ -132,7 +132,7 @@ describe('Android: content:// and several shared files', () => {
 
 describe('only files the user handed over are imported (review M7)', () => {
   const ROOT = 'file:///var/mobile/Containers/Data/Application/ABC/';
-  const PKG = 'com.sixyato9.scankit';
+  const PKG = 'com.zerohorizon.scan';
   const C1 = 'content://com.android.providers.media.documents/document/image%3A1000000034';
   const own = `${ROOT}Documents/doc-1/document.pdf`;
   const ios = { fileUrls: true, isOwn: (u: string) => isOwnFileUrl(u, ROOT) };
@@ -143,7 +143,7 @@ describe('only files the user handed over are imported (review M7)', () => {
     expect(isOwnFileUrl(`${ROOT}Library/Caches/pdf-session/x.pdf`, ROOT)).toBe(true);
     expect(isOwnFileUrl(`${ROOT}Documents/Inbox/Invoice.pdf`, ROOT)).toBe(false);
     expect(isOwnFileUrl(`${INBOX}/Invoice%202026.pdf`, ROOT)).toBe(false); // the /private/var spelling
-    expect(isOwnFileUrl(`${ROOT}tmp/com.6yato9.scan-kit-Inbox/a.pdf`, ROOT)).toBe(false);
+    expect(isOwnFileUrl(`${ROOT}tmp/com.zerohorizon.scan-Inbox/a.pdf`, ROOT)).toBe(false);
     // Tricks that still point inside: a nested Inbox path, dot segments, escapes.
     expect(isOwnFileUrl(`${ROOT}Documents/Inbox/../doc-1/document.pdf`, ROOT)).toBe(true);
     expect(isOwnFileUrl(`${ROOT}Documents/Inbox/sub/a.pdf`, ROOT)).toBe(true);
@@ -164,7 +164,7 @@ describe('only files the user handed over are imported (review M7)', () => {
     expect(isOwnContentUrl(`content://${PKG}x.provider/a.pdf`, PKG)).toBe(false);
     expect(isOwnContentUrl(C1, PKG)).toBe(false);
     expect(routeForIncomingUrl(`content://${PKG}.visionocr.fileprovider/cache/a.pdf`, android)).toBe('/');
-    expect(routeForIncomingUrl('file:///data/user/0/com.sixyato9.scankit/files/doc-1/document.pdf', android)).toBe('/');
+    expect(routeForIncomingUrl('file:///data/user/0/com.zerohorizon.scan/files/doc-1/document.pdf', android)).toBe('/');
     expect(params(routeForIncomingUrl(C1, android)).trusted).toBe(true);
   });
 

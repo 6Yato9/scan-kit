@@ -18,7 +18,7 @@ import expo.modules.kotlin.modules.ModuleDefinition
 //
 // The shortcuts are static (res/xml/scankit_shortcuts.xml, written by
 // plugins/with-android-platform.js); each starts QuickActionTrampolineActivity
-// with extra "type" = the iOS item type ("com.6yato9.scan-kit.scan" …), so the
+// with extra "type" = the iOS item type ("com.zerohorizon.scan.scan" …), so the
 // JS map is shared. No dynamic shortcuts, on purpose: a "recent document"
 // shortcut would put a document's name on the home screen (App Lock).
 

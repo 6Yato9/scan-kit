@@ -52,10 +52,10 @@ const fs = require('fs');
 const path = require('path');
 
 const SHORTCUTS = [
-  { id: 'scan', type: 'com.6yato9.scan-kit.scan', short: 'Scan', long: 'Scan document', icon: 'camera' },
-  { id: 'import_photos', type: 'com.6yato9.scan-kit.import-photos', short: 'Import photos', long: 'Import photos', icon: 'photos' },
-  { id: 'import_file', type: 'com.6yato9.scan-kit.import-file', short: 'Import file', long: 'Import file', icon: 'folder' },
-  { id: 'search', type: 'com.6yato9.scan-kit.search', short: 'Search', long: 'Search documents', icon: 'search' },
+  { id: 'scan', type: 'com.zerohorizon.scan.scan', short: 'Scan', long: 'Scan document', icon: 'camera' },
+  { id: 'import_photos', type: 'com.zerohorizon.scan.import-photos', short: 'Import photos', long: 'Import photos', icon: 'photos' },
+  { id: 'import_file', type: 'com.zerohorizon.scan.import-file', short: 'Import file', long: 'Import file', icon: 'folder' },
+  { id: 'search', type: 'com.zerohorizon.scan.search', short: 'Search', long: 'Search documents', icon: 'search' },
 ];
 
 // Material Symbols glyphs (Apache-2.0), 24-unit viewport.

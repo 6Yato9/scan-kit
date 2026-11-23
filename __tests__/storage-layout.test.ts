@@ -284,7 +284,7 @@ describe('moving the app data out of Documents', () => {
   });
 
   test('Android / unknown containers keep the Documents layout and move nothing', () => {
-    const A = 'file:///data/user/0/com.sixyato9.scankit';
+    const A = 'file:///data/user/0/com.zerohorizon.scan';
     mockState.docs = `${A}/files`;
     mockState.cache = `${A}/cache`;
     put(`${A}/files/scan-kit/doc-a/page-0.jpg`, 'A0');

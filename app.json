@@ -41,31 +41,31 @@
         "UIFileSharingEnabled": false,
         "UIApplicationShortcutItems": [
           {
-            "UIApplicationShortcutItemType": "com.6yato9.scan-kit.scan",
+            "UIApplicationShortcutItemType": "com.zerohorizon.scan.scan",
             "UIApplicationShortcutItemTitle": "Scan document",
             "UIApplicationShortcutItemIconSymbolName": "camera"
           },
           {
-            "UIApplicationShortcutItemType": "com.6yato9.scan-kit.import-photos",
+            "UIApplicationShortcutItemType": "com.zerohorizon.scan.import-photos",
             "UIApplicationShortcutItemTitle": "Import photos",
             "UIApplicationShortcutItemIconSymbolName": "photo.on.rectangle"
           },
           {
-            "UIApplicationShortcutItemType": "com.6yato9.scan-kit.import-file",
+            "UIApplicationShortcutItemType": "com.zerohorizon.scan.import-file",
             "UIApplicationShortcutItemTitle": "Import file",
             "UIApplicationShortcutItemIconSymbolName": "folder"
           },
           {
-            "UIApplicationShortcutItemType": "com.6yato9.scan-kit.search",
+            "UIApplicationShortcutItemType": "com.zerohorizon.scan.search",
             "UIApplicationShortcutItemTitle": "Search",
             "UIApplicationShortcutItemIconSymbolName": "magnifyingglass"
           }
         ]
       },
-      "bundleIdentifier": "com.6yato9.scan-kit"
+      "bundleIdentifier": "com.zerohorizon.scan"
     },
     "android": {
-      "package": "com.sixyato9.scankit",
+      "package": "com.zerohorizon.scan",
       "adaptiveIcon": {
         "backgroundColor": "#000000",
         "foregroundImage": "./assets/images/android-icon-foreground.png",

@@ -50,11 +50,11 @@ describe('shortcut items', () => {
   });
 
   test('parses known types and ignores anything else', () => {
-    expect(parseQuickActionType('com.6yato9.scan-kit.scan')).toBe('scan');
-    expect(parseQuickActionType('com.6yato9.scan-kit.import-photos')).toBe('import-photos');
-    expect(parseQuickActionType('com.6yato9.scan-kit.import-file')).toBe('import-file');
-    expect(parseQuickActionType('com.6yato9.scan-kit.search')).toBe('search');
-    expect(parseQuickActionType('com.6yato9.scan-kit.recent')).toBeNull();
+    expect(parseQuickActionType('com.zerohorizon.scan.scan')).toBe('scan');
+    expect(parseQuickActionType('com.zerohorizon.scan.import-photos')).toBe('import-photos');
+    expect(parseQuickActionType('com.zerohorizon.scan.import-file')).toBe('import-file');
+    expect(parseQuickActionType('com.zerohorizon.scan.search')).toBe('search');
+    expect(parseQuickActionType('com.zerohorizon.scan.recent')).toBeNull();
     expect(parseQuickActionType('toString')).toBeNull();
     expect(parseQuickActionType(undefined)).toBeNull();
     expect(parseQuickActionType(42)).toBeNull();
@@ -215,7 +215,7 @@ describe('native module', () => {
   });
 
   test('cold launch: the launch action is delivered once, then warm ones as they come', () => {
-    const n = fakeNative('com.6yato9.scan-kit.scan');
+    const n = fakeNative('com.zerohorizon.scan.scan');
     setQuickActionsNativeForTests(n.mod);
     const got: QuickActionId[] = [];
     const stop = listenForQuickActions(a => got.push(a));
@@ -223,8 +223,8 @@ describe('native module', () => {
     expect(n.mod.addListener.mock.invocationCallOrder[0]).toBeLessThan(n.mod.takePendingQuickAction.mock.invocationCallOrder[0]);
     expect(got).toEqual(['scan']);
     expect(takePendingQuickAction()).toBeNull();
-    n.emit('com.6yato9.scan-kit.search');
-    n.emit('com.6yato9.scan-kit.unknown');
+    n.emit('com.zerohorizon.scan.search');
+    n.emit('com.zerohorizon.scan.unknown');
     expect(got).toEqual(['scan', 'search']);
     stop();
     expect(n.removed).toHaveBeenCalled();
@@ -237,7 +237,7 @@ describe('native module', () => {
     const got: QuickActionId[] = [];
     const stop = listenForQuickActions(a => got.push(a));
     const handler = spy.mock.calls[spy.mock.calls.length - 1][1] as (s: string) => void;
-    n.queue('com.6yato9.scan-kit.import-file');
+    n.queue('com.zerohorizon.scan.import-file');
     handler('background');
     expect(got).toEqual([]);
     handler('active');

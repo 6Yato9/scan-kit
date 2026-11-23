@@ -46,10 +46,10 @@ export type QuickActionId = 'scan' | 'import-photos' | 'import-file' | 'search';
 
 /** UIApplicationShortcutItemType of each item (app.json). Never rename one: iOS keeps them across updates. */
 export const QUICK_ACTION_TYPES: Readonly<Record<string, QuickActionId>> = {
-  'com.6yato9.scan-kit.scan': 'scan',
-  'com.6yato9.scan-kit.import-photos': 'import-photos',
-  'com.6yato9.scan-kit.import-file': 'import-file',
-  'com.6yato9.scan-kit.search': 'search',
+  'com.zerohorizon.scan.scan': 'scan',
+  'com.zerohorizon.scan.import-photos': 'import-photos',
+  'com.zerohorizon.scan.import-file': 'import-file',
+  'com.zerohorizon.scan.search': 'search',
 };
 
 /** The action for a shortcut item type, or null for one this version doesn't know. */
@@ -254,7 +254,7 @@ export function listenForQuickActions(onAction: (action: QuickActionId) => void)
   }
   deliver(takePendingQuickAction());
   // Development only: lets a test drive an action through the same path
-  // (`globalThis.__skQuickAction('com.6yato9.scan-kit.search')`).
+  // (`globalThis.__skQuickAction('com.zerohorizon.scan.search')`).
   const g = globalThis as { __skQuickAction?: (type: string) => void };
   if (__DEV__) g.__skQuickAction = type => deliver(parseQuickActionType(type));
   const appState = AppState.addEventListener('change', state => {

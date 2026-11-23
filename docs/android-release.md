@@ -65,7 +65,7 @@ debug overlay), `RECORD_AUDIO`, every `READ_MEDIA_*` / `READ_EXTERNAL_STORAGE`
 (photos come through the system photo picker, which needs no permission). Debug
 builds keep `INTERNET` because they load JavaScript from Metro.
 
-The one extra entry, `com.sixyato9.scankit.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`,
+The one extra entry, `com.zerohorizon.scan.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`,
 is an app-private signature permission AndroidX adds; it grants nothing.
 
 ---
