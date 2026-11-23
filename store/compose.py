@@ -16,6 +16,8 @@ HEAVY = "/Library/Fonts/SF-Pro-Display-Heavy.otf"
 SPECS = {
     # canvas, verb size, desc size, text top, device width, bezel, corner radius
     "iphone": dict(W=1320, H=2868, verb=250, desc=96, top=170, dev_w=1060, bezel=26, radius=150),
+    "play":   dict(W=1440, H=2560, verb=230, desc=88, top=150, dev_w=1080, bezel=26, radius=150),
+    "tablet": dict(W=1620, H=2880, verb=240, desc=96, top=170, dev_w=1500, bezel=30, radius=64),
     "ipad":   dict(W=2048, H=2732, verb=250, desc=104, top=150, dev_w=1640, bezel=34, radius=70),
 }
 
@@ -79,20 +81,23 @@ def compose(kind, verb, desc, shot_path, out_path):
     # soft shadow
     shadow = Image.new("L", (W, H), 0)
     ImageDraw.Draw(shadow).rounded_rectangle(
-        [dev_x, dev_y + 30, dev_x + dev_w, H + 400], radius=s["radius"], fill=90)
+        [dev_x, dev_y + 30, dev_x + dev_w, (H + 400) if dev_y + bezel + scr_h >= H else dev_y + 2 * bezel + scr_h + 30], radius=s["radius"], fill=90)
     from PIL import ImageFilter
     shadow = shadow.filter(ImageFilter.GaussianBlur(40))
     img.paste((0, 40, 50), (0, 0), shadow)
 
+    # The device runs off the bottom edge, or ends with rounded corners when
+    # its screen is shorter than the space left (a 3:4 iPad on a 9:16 canvas).
+    dev_bottom = H + 400 if dev_y + bezel + scr_h >= H else dev_y + 2 * bezel + scr_h
     body = Image.new("L", (W, H), 0)
     ImageDraw.Draw(body).rounded_rectangle(
-        [dev_x, dev_y, dev_x + dev_w, H + 400], radius=s["radius"], fill=255)
+        [dev_x, dev_y, dev_x + dev_w, dev_bottom], radius=s["radius"], fill=255)
     img.paste((18, 18, 20), (0, 0), body)
 
     scr_x, scr_y = dev_x + bezel, dev_y + bezel
     mask = Image.new("L", (scr_w, scr_h), 0)
     ImageDraw.Draw(mask).rounded_rectangle(
-        [0, 0, scr_w, scr_h + 400], radius=s["radius"] - bezel, fill=255)
+        [0, 0, scr_w - 1, (scr_h + 400) if dev_y + bezel + scr_h >= H else scr_h - 1], radius=s["radius"] - bezel, fill=255)
     img.paste(shot, (scr_x, scr_y), mask)
 
     img.save(out_path, "PNG")

@@ -70,3 +70,22 @@ def search(out):
 if __name__ == "__main__":
     header("final/header-3840x1646.png")
     search("final/search-results-3840x2560.png")
+
+
+def feature(out):
+    """Google Play feature graphic, 1024 x 500."""
+    W, H = 1024, 500
+    c = Image.new("RGB", (W, H), BG)
+    d = ImageDraw.Draw(c)
+    d.text((60, 150), "Scan Kit", font=ImageFont.truetype(BLACK, 92), fill="white", anchor="lt")
+    f2 = ImageFont.truetype(HEAVY, 36)
+    d.text((62, 268), "Scan, find and sign PDFs.", font=f2, fill="white", anchor="lt")
+    d.text((62, 314), "All on your phone.", font=f2, fill="white", anchor="lt")
+    place(c, phone("raw/iphone/07-find.png", 190), 700, 120)
+    place(c, phone("raw/iphone/04-viewer.png", 210), 880, 70)
+    c.save(out)
+    print(out, c.size)
+
+
+if __name__ == "__main__" and "feature" in __import__("sys").argv:
+    feature("final/play/feature-1024x500.png")
