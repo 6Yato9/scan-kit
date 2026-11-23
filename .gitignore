@@ -48,3 +48,7 @@ app-example
 # Gradle output of local native modules
 modules/*/android/build/
 modules/*/android/.cxx/
+
+# Claude Code local settings and session worktrees
+.claude/settings.local.json
+.claude/worktrees/
