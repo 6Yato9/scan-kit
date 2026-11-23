@@ -276,6 +276,7 @@ function ThemedStack() {
       <Stack.Screen name="tools/whiteboard" options={{ headerShown: false, presentation: 'card' }} />
       <Stack.Screen name="tools/erase-marks" options={toolOptions} />
       <Stack.Screen name="tools/redact" options={toolOptions} />
+      <Stack.Screen name="tools/find-text" options={toolOptions} />
       <Stack.Screen name="tools/extract-text" options={{ headerShown: false, presentation: 'card' }} />
       <Stack.Screen name="tools/business-card" options={{ headerShown: false, presentation: 'card' }} />
     </Stack>

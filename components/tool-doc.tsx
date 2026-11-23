@@ -91,6 +91,56 @@ export function useToolDoc(docs: Document[]) {
   };
 }
 
+/**
+ * Just the "Choose a document" sheet, for a screen with no room for the
+ * picker row (QR code's camera). `onPick` runs once the sheet has fully gone,
+ * so whatever the pick starts (an alert, a result panel) shows.
+ */
+export function DocChooserSheet({
+  visible,
+  docs,
+  note,
+  onPick,
+  onClose,
+}: {
+  visible: boolean;
+  docs: Document[];
+  note?: string;
+  onPick: (doc: Document) => void;
+  onClose: () => void;
+}) {
+  const picked = useRef<Document | null>(null);
+  return (
+    <BottomSheet
+      visible={visible}
+      onClose={onClose}
+      variant="grouped"
+      onDismissed={() => {
+        const d = picked.current;
+        picked.current = null;
+        if (d) onPick(d);
+      }}
+    >
+      <SheetHeader title="Choose a document" subtitle={note} />
+      <ScrollView style={styles.list} showsVerticalScrollIndicator={false} bounces={false}>
+        <DocGroup>
+          {docs.map(d => (
+            <DocRow
+              key={d.id}
+              doc={d}
+              selected={false}
+              onPress={() => {
+                picked.current = d;
+                onClose();
+              }}
+            />
+          ))}
+        </DocGroup>
+      </ScrollView>
+    </BottomSheet>
+  );
+}
+
 const docMeta = (d: Document) => (d.pdfUri ? 'PDF' : pageCountLabel(d.pages.length));
 
 /**
@@ -108,6 +158,8 @@ export function ToolDocPicker({
   note,
   autoOpen = false,
   convert,
+  label = 'Document',
+  pickAfterClose = false,
 }: {
   docs: Document[];
   doc: Document | null;
@@ -128,6 +180,14 @@ export function ToolDocPicker({
    * sheet offers to turn one into pages, in place, with Undo.
    */
   convert?: PickerConvert;
+  /** The section label above the row. */
+  label?: string;
+  /**
+   * The pick starts something at once (Extract text reads the document): call
+   * onPick only once the sheet has fully gone, so an alert it raises is
+   * shown, and call it again for the document already chosen.
+   */
+  pickAfterClose?: boolean;
 }) {
   const { colors } = useTheme();
   const toast = useToast();
@@ -138,6 +198,7 @@ export function ToolDocPicker({
   // A PDF tapped in the sheet: asked about once the sheet has fully closed (an
   // alert presented while the sheet's modal is still dismissing never shows).
   const pendingConvert = useRef<Document | null>(null);
+  const pendingPick = useRef<Document | null>(null);
   const [converting, setConverting] = useState<{ doc: Document; progress: ConvertProgress } | null>(null);
   const convertingRef = useRef(false);
   const convertRef = useRef(convert);
@@ -261,7 +322,7 @@ export function ToolDocPicker({
 
   return (
     <>
-      <SectionLabel>Document</SectionLabel>
+      <SectionLabel>{label}</SectionLabel>
       {tappable ? (
         <Pressable
           onPress={() => setOpen(true)}
@@ -287,6 +348,9 @@ export function ToolDocPicker({
         onClose={() => setOpen(false)}
         variant="grouped"
         onDismissed={() => {
+          const picked = pendingPick.current;
+          pendingPick.current = null;
+          if (picked) onPick(picked);
           const pdf = pendingConvert.current;
           pendingConvert.current = null;
           if (!pdf) return;
@@ -305,7 +369,8 @@ export function ToolDocPicker({
                   selected={d.id === doc?.id}
                   onPress={() => {
                     setOpen(false);
-                    if (d.id !== doc?.id) onPick(d);
+                    if (pickAfterClose) pendingPick.current = d;
+                    else if (d.id !== doc?.id) onPick(d);
                   }}
                 />
               ))}

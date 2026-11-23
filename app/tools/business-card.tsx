@@ -7,7 +7,7 @@
 // save. The card can also go out as a contact card (.vcf), and the scan is
 // kept as a document named "Business card – <name>".
 import { useRef, useState } from 'react';
-import { Alert, Image, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, Alert, Image, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/contexts/theme-context';
@@ -15,7 +15,10 @@ import { useScan } from '@/contexts/scan-context';
 import { useToast } from '@/components/toast';
 import { PrimaryButton } from '@/components/primary-button';
 import { HeaderIconButton } from '@/components/screen-header';
-import { ToolIntro, ToolScreen, useImageAspect } from '@/components/tool-ui';
+import { ToolIntro, ToolScreen, useImageAspect, useToolDocuments } from '@/components/tool-ui';
+import { ToolDocPicker } from '@/components/tool-doc';
+import { documentReadPages, docReadErrorText } from '@/lib/doc-read';
+import type { Document } from '@/types/document';
 import { SectionLabel } from '@/components/section-label';
 import { VisionOcr } from '@/modules/vision-ocr/src';
 import { businessCardDocName, hasContactData, parseBusinessCard, type ParsedCard } from '@/lib/business-card';
@@ -33,6 +36,9 @@ import { HIT, Radius, Spacing, Type } from '@/lib/theme';
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
 const QUALITY = { low: 0.5, medium: 0.75, high: 0.9 } as const;
+
+/** Every saved document can hold a card: scans, and imported PDFs (rendered). */
+const anyDoc = (d: Document) => d.pages.length > 0 || !!d.pdfUri;
 
 type Result = ParsedCard & { image: string; docId: string | null; docName: string };
 
@@ -61,7 +67,9 @@ export default function BusinessCardScreen() {
   const { show } = useToast();
   const { bumpLastSaved } = useScan();
   const { width: windowW } = useWindowDimensions();
-  const [busy, setBusy] = useState<'camera' | 'photos' | null>(null);
+  const [busy, setBusy] = useState<'camera' | 'photos' | 'doc' | null>(null);
+  // A card already scanned: read from its document, which is kept as it is.
+  const { docs } = useToolDocuments(anyDoc);
   const [result, setResult] = useState<Result | null>(null);
   const [sharing, setSharing] = useState(false);
   // Added to Contacts: leaving loses nothing, so Android's back doesn't ask.
@@ -70,10 +78,10 @@ export default function BusinessCardScreen() {
   const available = ocrAvailable();
   const cardAspect = useImageAspect(result?.image);
 
-  const read = async (page: ScanPageInput): Promise<Result | null> => {
+  const read = async (page: ScanPageInput, existing?: Document): Promise<Result | null> => {
     // The finished card image to read: rendered from a camera photo, or the picked image.
     const image = isSourceInput(page) ? await renderSourcePage(page, 0.9) : page;
-    const temp = image !== page ? image : null;
+    const temp = image !== page && !existing ? image : null;
     try {
       const { text, lines } = await recognizeLines(image);
       const found = await detectData(text);
@@ -85,6 +93,8 @@ export default function BusinessCardScreen() {
       }
       const parsed = parseBusinessCard(lines, found, entities);
       if (!hasContactData(parsed.fields)) return null;
+      // A saved document: it already is the scan, so nothing new is kept.
+      if (existing) return { ...parsed, image, docId: existing.id, docName: existing.name };
 
       // Keep the card as a document (camera captures keep their photo, so the crop can be widened later).
       const settings = await getScanSettings();
@@ -107,27 +117,40 @@ export default function BusinessCardScreen() {
     }
   };
 
-  const run = async (source: 'camera' | 'photos') => {
+  const run = async (source: 'camera' | 'photos' | Document) => {
     if (busyRef.current) return;
     busyRef.current = true;
-    setBusy(source);
+    const existing = typeof source === 'object' ? source : undefined;
+    setBusy(existing ? 'doc' : (source as 'camera' | 'photos'));
     let picked: string[] = [];
     try {
       let pages: ScanPageInput[] | null;
-      try {
-        pages =
-          source === 'camera'
-            ? await scanPagesWithCamera({ title: 'Business card', maxPages: 1, doneLabel: 'Read card', guidance: 'Fit the whole card in the frame' })
-            : await pickPhotos(false);
-      } catch (err) {
-        alertScanError(err);
-        return;
+      if (existing) {
+        // Its first page (a card is one page), read where it is.
+        try {
+          pages = (await documentReadPages(existing)).slice(0, 1);
+        } catch (err) {
+          notifyError();
+          const [title, message] = docReadErrorText(err);
+          Alert.alert(title, message);
+          return;
+        }
+      } else {
+        try {
+          pages =
+            source === 'camera'
+              ? await scanPagesWithCamera({ title: 'Business card', maxPages: 1, doneLabel: 'Read card', guidance: 'Fit the whole card in the frame' })
+              : await pickPhotos(false);
+        } catch (err) {
+          alertScanError(err);
+          return;
+        }
       }
       if (!pages?.length) return;
       if (source === 'photos') picked = pages as string[];
       let next: Result | null = null;
       try {
-        next = await read(pages[0]);
+        next = await read(pages[0], existing);
       } catch (err) {
         console.error('Business card read failed', err);
       }
@@ -140,7 +163,9 @@ export default function BusinessCardScreen() {
       setResult(next);
       setContactSaved(false);
       const { docId, docName } = next;
-      if (docId) {
+      if (existing) {
+        // Nothing was saved: the card was already a document.
+      } else if (docId) {
         show(`Saved as “${docName}”`, {
           action: { label: 'Open', onPress: () => router.push({ pathname: '/viewer', params: { id: docId } }) },
         });
@@ -298,6 +323,26 @@ export default function BusinessCardScreen() {
             : undefined
         }
       />
+      {available && docs.length ? (
+        <>
+          {/* A card scanned before: read from its document, which stays as it is. */}
+          <ToolDocPicker
+            docs={docs}
+            doc={null}
+            disabled={busy !== null}
+            label="Or read a saved card"
+            pickAfterClose
+            onPick={d => { void run(d); }}
+            note="Its first page is read. The document stays as it is."
+          />
+          {busy === 'doc' ? (
+            <View style={styles.reading} accessibilityLiveRegion="polite">
+              <ActivityIndicator color={colors.muted} />
+              <Text style={[Type.footnote, { color: colors.muted }]}>Reading the card…</Text>
+            </View>
+          ) : null}
+        </>
+      ) : null}
     </ToolScreen>
   );
 }
@@ -311,4 +356,5 @@ const styles = StyleSheet.create({
   rowIcon: { width: 30, height: 30, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   rowBody: { flex: 1, marginLeft: Spacing.md, paddingVertical: Spacing.sm + 2, paddingRight: Spacing.lg, gap: 1 },
   note: { marginTop: Spacing.md, marginHorizontal: Spacing.xs, lineHeight: 18 },
+  reading: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginTop: Spacing.md, marginHorizontal: Spacing.xs },
 });

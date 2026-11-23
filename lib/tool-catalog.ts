@@ -112,6 +112,7 @@ export type ToolId =
   | 'protect'
   | 'flatten'
   | 'extract-text'
+  | 'find-text'
   | 'qr'
   | 'long-image'
   | 'erase-marks'
@@ -158,6 +159,8 @@ export const TOOLS: Record<ToolId, ToolEntry> = {
   flatten: { id: 'flatten', label: 'Flatten PDF', icon: 'layers-outline', hue: 'brown', route: { pathname: '/tools/flatten' } },
 
   'extract-text': { id: 'extract-text', label: 'Extract text', icon: 'reader-outline', hue: 'green', route: { pathname: '/tools/extract-text' } },
+  // Amber: the yellow of its highlights.
+  'find-text': { id: 'find-text', label: 'Find text', icon: 'search-outline', hue: 'amber', route: { pathname: '/tools/find-text' } },
   qr: { id: 'qr', label: 'QR code', icon: 'qr-code-outline', hue: 'graphite', route: { pathname: '/tools/qr' } },
   'long-image': { id: 'long-image', label: 'Long image', icon: 'long-image', hue: 'amber', route: { pathname: '/tools/long-image' } },
   'erase-marks': { id: 'erase-marks', label: 'Erase marks', icon: 'color-wand-outline', hue: 'purple', route: { pathname: '/tools/erase-marks' } },
@@ -172,17 +175,17 @@ export type ToolSection = { title: string; tools: ToolId[] };
 
 // The Tools tab. Genuine tools only: anything the core screens already do
 // lives there instead — import (Files "+"), reorder / rotate / text (viewer),
-// print / save as images (Export). Every section is one full row of four, so
-// icons line up down the screen. Pages holds what makes or takes apart
-// documents; PDF what changes the file itself. QR code sits in Convert beside
-// Extract text: both read what is printed on a page or photo, while Scan
-// holds the capture modes.
+// print / save as images (Export). Sections are rows of four (Convert runs on
+// to a second row), so icons line up down the screen. Pages holds what makes
+// or takes apart documents; PDF what changes the file itself. Find text and QR
+// code sit in Convert beside Extract text: all three read what is printed on
+// a page or photo, while Scan holds the capture modes.
 export const TOOL_SECTIONS: ToolSection[] = [
   { title: 'Scan', tools: ['whiteboard', 'book', 'id-card', 'business-card'] },
   { title: 'Edit', tools: ['sign', 'redact', 'watermark', 'timestamp'] },
   { title: 'Pages', tools: ['merge', 'create-pdf', 'split', 'extract'] },
   { title: 'PDF', tools: ['compress', 'unrestrict', 'protect', 'flatten'] },
-  { title: 'Convert', tools: ['extract-text', 'qr', 'long-image', 'erase-marks'] },
+  { title: 'Convert', tools: ['extract-text', 'find-text', 'qr', 'long-image', 'erase-marks'] },
 ];
 
 /** Home's Tools row: everyday tools, one tap away (every tool is in the Tools tab). */
@@ -268,7 +271,10 @@ export function documentToolSections(ctx: DocToolContext): ToolSection[] {
       ? [
           { title: 'Edit', tools: ['sign', 'redact', 'watermark', 'timestamp'] },
           { title: 'Pages', tools: pick([['merge', true], ['split', multi], ['extract', multi], ['long-image', multi]]) },
-          { title: 'Convert', tools: pick([['extract-text', can.ocr], ['erase-marks', true], ['compress', true], ['protect', can.protect]]) },
+          {
+            title: 'Convert',
+            tools: pick([['extract-text', can.ocr], ['find-text', can.ocr], ['erase-marks', true], ['compress', true], ['protect', can.protect]]),
+          },
         ]
       : ctx.unreadable
         ? // A PDF that won't open: Unlock PDF removes its password for good (it asks for it).
@@ -291,6 +297,8 @@ export function documentToolSections(ctx: DocToolContext): ToolSection[] {
                 ['protect', can.protect && !ctx.passwordProtected],
                 ['unrestrict', can.unrestrict],
                 ['flatten', can.flatten],
+                // Searches the PDF's pages as they are (it reads them; nothing changes).
+                ['find-text', can.ocr],
               ]),
             },
           ];

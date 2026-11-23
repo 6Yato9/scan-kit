@@ -7,7 +7,7 @@ import { Directory, Paths } from 'expo-file-system';
 import { recognizeLines, ocrAvailable, OcrAbortedError, type OcrLine } from './ocr';
 import { getImageSize } from './image-size';
 import { CONVERT_DIR } from './convert-pdf';
-import { findOnPage, leftoverMatches, type Finder, type RedactRect } from './redact';
+import { findOnPage, leftoverMatches, MATCH_PAD_REDACT, type Finder, type MatchPad, type RedactRect } from './redact';
 
 export { ocrAvailable };
 
@@ -27,7 +27,7 @@ async function readPage(uri: string, signal?: AbortSignal): Promise<PageText> {
 export async function findInDocument(
   pages: readonly string[],
   finder: Finder,
-  options: { signal?: AbortSignal; onPage?: (done: number, total: number) => void } = {},
+  options: { signal?: AbortSignal; onPage?: (done: number, total: number) => void; pad?: MatchPad } = {},
 ): Promise<RedactRect[][]> {
   const out: RedactRect[][] = [];
   for (let i = 0; i < pages.length; i++) {
@@ -35,7 +35,7 @@ export async function findInDocument(
     options.onPage?.(i, pages.length);
     try {
       const { lines, size } = await readPage(pages[i], options.signal);
-      out.push(findOnPage(lines, size, finder));
+      out.push(findOnPage(lines, size, finder, options.pad ?? MATCH_PAD_REDACT));
     } catch (err) {
       if (err instanceof OcrAbortedError) throw err;
       out.push([]);

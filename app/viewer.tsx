@@ -1703,6 +1703,7 @@ function ViewerContent({
             unrestrict: canUnrestrictPdf(),
             flatten: canFlattenDocuments(),
             convertPdf: convertAvailable && !converting,
+            ocr: ocrAvailable(),
           },
         }
       : { kind: 'scan', pageCount, can: { ocr: ocrAvailable(), protect: canProtectDocuments() } },

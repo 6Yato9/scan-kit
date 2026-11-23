@@ -1,12 +1,14 @@
 // app/tools/extract-text.tsx
-// Recognise text from a fresh scan or from photos, then copy or share it.
+// Recognise text from a fresh scan, from photos, or from a document already
+// in Scan Kit (its pages are read as they are: nothing changes), then copy or
+// share it.
 // OCR goes through lib/ocr (Apple Vision on iOS, ML Kit on Android).
 //
 // Round 16 (lib/text-format.ts, remembered in lib/tool-prefs.ts): line breaks
 // as on the page (the default, as before) or joined into paragraphs — chosen
 // before reading under More options, or switched on the result — and Share
 // as plain text (as before) or as a .txt file.
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Alert, StyleSheet, View } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Clipboard from 'expo-clipboard';
@@ -17,7 +19,10 @@ import { HeaderIconButton } from '@/components/screen-header';
 import { RecognizedText, type RecognizedTextHandle } from '@/components/recognized-text';
 import { useAndroidBack } from '@/components/use-android-back';
 import { TextActions } from '@/components/text-actions';
-import { Segmented, ToolIntro, ToolNote, ToolProgress, ToolScreen } from '@/components/tool-ui';
+import { Segmented, ToolIntro, ToolNote, ToolProgress, ToolScreen, useToolDocuments } from '@/components/tool-ui';
+import { ToolDocPicker, useToolDoc } from '@/components/tool-doc';
+import { documentReadPages, docReadErrorText } from '@/lib/doc-read';
+import type { Document } from '@/types/document';
 import { MoreOptions } from '@/components/more-options';
 import { SectionLabel } from '@/components/section-label';
 import {
@@ -47,6 +52,9 @@ const SHARE_OPTIONS: { value: TextShareAs; label: string }[] = [
   { value: 'file', label: '.txt file' },
 ];
 
+/** Every saved document has pages to read: scans, and imported PDFs (rendered). */
+const anyDoc = (d: Document) => d.pages.length > 0 || !!d.pdfUri;
+
 const loadExtractPrefs = () => readToolPrefs(TOOL_PREF_KEYS.extractText, parseExtractTextPrefs);
 const saveExtractPrefs = (p: ExtractTextPrefs) => writeToolPrefs(TOOL_PREF_KEYS.extractText, p);
 
@@ -62,6 +70,18 @@ export default function ExtractTextScreen() {
   const busyRef = useRef(false);
   const textRef = useRef<RecognizedTextHandle>(null);
   const available = ocrAvailable();
+  // A document already in Scan Kit, read as it is (opened from the viewer: that one).
+  const { docs } = useToolDocuments(anyDoc);
+  const { doc, setDocId, fixed } = useToolDoc(docs);
+  const [readingDoc, setReadingDoc] = useState(false);
+  // Opened on a document (a docId route param): read it straight away, once.
+  const autoRead = useRef(false);
+  useEffect(() => {
+    if (!fixed || !doc || !available || autoRead.current) return;
+    autoRead.current = true;
+    void run(doc);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fixed, doc, available]);
   // Remembered; a choice made before it loads wins (components/use-remembered-prefs.ts).
   const [prefs, setPrefs, latestPrefs] = useRememberedPrefs<ExtractTextPrefs>(DEFAULT_EXTRACT_TEXT, loadExtractPrefs, saveExtractPrefs);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -110,27 +130,42 @@ export default function ExtractTextScreen() {
   const formatted = (lineBreaks: LineBreaks) =>
     lineBreaks === 'join' ? formatRecognized(rawRef.current.paragraphs, 'join') : rawRef.current.plain;
 
-  const run = async (source: 'camera' | 'photos') => {
+  const run = async (source: 'camera' | 'photos' | Document) => {
     if (busyRef.current) return;
     busyRef.current = true;
     setBusy(true);
+    setReadingDoc(typeof source === 'object');
     let temp: string[] = [];
     try {
-      let uris: string[] | null = null;
-      if (source === 'camera') {
+      if (typeof source === 'object') {
+        // The document's own pages (or a PDF's renders, kept in Caches): never temporary.
+        let pages: string[];
         try {
-          // Finished pages (the photos aren't kept: nothing is saved here).
-          uris = await scanWithCamera({ title: 'Extract text', doneLabel: 'Read text' });
+          pages = await documentReadPages(source);
         } catch (err) {
-          alertScanError(err);
+          notifyError();
+          const [title, message] = docReadErrorText(err);
+          Alert.alert(title, message);
           return;
         }
+        rawRef.current = await recognize(pages);
       } else {
-        uris = await pickPhotos(true);
+        let uris: string[] | null = null;
+        if (source === 'camera') {
+          try {
+            // Finished pages (the photos aren't kept: nothing is saved here).
+            uris = await scanWithCamera({ title: 'Extract text', doneLabel: 'Read text' });
+          } catch (err) {
+            alertScanError(err);
+            return;
+          }
+        } else {
+          uris = await pickPhotos(true);
+        }
+        if (!uris?.length) return;
+        temp = uris;
+        rawRef.current = await recognize(uris);
       }
-      if (!uris?.length) return;
-      temp = uris;
-      rawRef.current = await recognize(uris);
       const result = formatted(latestPrefs().lineBreaks);
       formattedRef.current = result;
       setText(result);
@@ -243,7 +278,11 @@ export default function ExtractTextScreen() {
         <>
           {progress ? (
             <ToolProgress
-              label={progress.total > 1 ? `Reading image ${Math.min(progress.current + 1, progress.total)} of ${progress.total}…` : 'Reading text…'}
+              label={
+                progress.total > 1
+                  ? `Reading ${readingDoc ? 'page' : 'image'} ${Math.min(progress.current + 1, progress.total)} of ${progress.total}…`
+                  : 'Reading text…'
+              }
               current={progress.current}
               total={progress.total}
             />
@@ -270,7 +309,7 @@ export default function ExtractTextScreen() {
         title="Turn a page into text"
         text={
           available
-            ? 'Scan a page or pick photos. The text is recognized on your device, ready to copy or\u00A0share.'
+            ? 'Scan a page, pick photos, or choose a document you already have. The text is recognized on your device, ready to copy or\u00A0share.'
             : 'Text recognition isn’t available on this device.'
         }
         points={
@@ -282,6 +321,22 @@ export default function ExtractTextScreen() {
             : undefined
         }
       />
+      {available && (docs.length > 0 || fixed) ? (
+        // A document already in Scan Kit: picking one reads it straight away.
+        <ToolDocPicker
+          docs={docs}
+          doc={doc}
+          fixed={fixed}
+          disabled={busy}
+          label="Or read a document"
+          pickAfterClose
+          onPick={d => {
+            setDocId(d.id);
+            void run(d);
+          }}
+          note="Scanned documents and imported PDFs. Nothing in them changes."
+        />
+      ) : null}
       {available ? (
         <View pointerEvents={busy ? 'none' : 'auto'} collapsable={false}>
           <MoreOptions

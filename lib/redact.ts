@@ -245,10 +245,18 @@ const PAD_CHARS = 0.6;
 const PAD_V = 0.18;
 
 /**
+ * The padding around a match: Redact's errs wide, so nothing of the word
+ * peeks out of the box; Find text's highlight hugs the word (MATCH_PAD_TIGHT).
+ */
+export type MatchPad = { chars: number; v: number };
+export const MATCH_PAD_REDACT: MatchPad = { chars: PAD_CHARS, v: PAD_V };
+export const MATCH_PAD_TIGHT: MatchPad = { chars: 0.1, v: 0.02 };
+
+/**
  * The span [from, to) of the line's width that characters [start, end) of
  * `text` cover, as fractions 0..1, padded by about half a character a side.
  */
-export function spanOfLine(text: string, start: number, end: number): { from: number; to: number } {
+export function spanOfLine(text: string, start: number, end: number, padChars: number = PAD_CHARS): { from: number; to: number } {
   const chars = Array.from(text);
   if (chars.length === 0) return { from: 0, to: 1 };
   const weights = chars.map(charWeight);
@@ -257,16 +265,22 @@ export function spanOfLine(text: string, start: number, end: number): { from: nu
   for (let i = 0; i < Math.max(0, start); i++) before += weights[i] ?? 0;
   let inside = 0;
   for (let i = Math.max(0, start); i < Math.min(chars.length, end); i++) inside += weights[i];
-  const pad = (PAD_CHARS * total) / chars.length;
+  const pad = (padChars * total) / chars.length;
   const from = start <= 0 ? 0 : Math.max(0, (before - pad) / total);
   const to = end >= chars.length ? 1 : Math.min(1, (before + inside + pad) / total);
   return { from, to };
 }
 
 /** The page-fraction box for characters [start, end) of an OCR line on an image `img` pixels in size. */
-export function matchBox(line: OcrLine, start: number, end: number, img: { width: number; height: number }): RedactRect {
-  const { from, to } = spanOfLine(line.text, start, end);
-  const padY = line.height * PAD_V;
+export function matchBox(
+  line: OcrLine,
+  start: number,
+  end: number,
+  img: { width: number; height: number },
+  pad: MatchPad = MATCH_PAD_REDACT,
+): RedactRect {
+  const { from, to } = spanOfLine(line.text, start, end, pad.chars);
+  const padY = line.height * pad.v;
   const x0 = (line.left + from * line.width) / img.width;
   const x1 = (line.left + to * line.width) / img.width;
   const y0 = (line.top - padY) / img.height;
@@ -279,13 +293,18 @@ export function matchBox(line: OcrLine, start: number, end: number, img: { width
 export type Finder = { kind: 'term'; term: string } | { kind: RedactPattern };
 
 /** Every match of `finder` on one page, as boxes. Lines without a usable box are skipped. */
-export function findOnPage(lines: readonly OcrLine[], img: { width: number; height: number } | null, finder: Finder): RedactRect[] {
+export function findOnPage(
+  lines: readonly OcrLine[],
+  img: { width: number; height: number } | null,
+  finder: Finder,
+  pad: MatchPad = MATCH_PAD_REDACT,
+): RedactRect[] {
   if (!img || !(img.width > 0) || !(img.height > 0)) return [];
   const out: RedactRect[] = [];
   for (const line of lines) {
     if (!line.text || !(line.width > 0) || !(line.height > 0)) continue;
     const hits = finder.kind === 'term' ? findInText(line.text, finder.term) : findPattern(line.text, finder.kind);
-    for (const h of hits) out.push(matchBox(line, h.start, h.end, img));
+    for (const h of hits) out.push(matchBox(line, h.start, h.end, img, pad));
   }
   return out;
 }

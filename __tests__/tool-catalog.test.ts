@@ -71,8 +71,8 @@ describe('tool colours', () => {
 });
 
 describe('catalogue', () => {
-  test('every Tools tab section is one full row of four, each tool once', () => {
-    for (const s of TOOL_SECTIONS) expect(s.tools).toHaveLength(4);
+  test('every Tools tab section fills rows of four (only Convert runs on), each tool once', () => {
+    for (const s of TOOL_SECTIONS) expect(s.tools).toHaveLength(s.title === 'Convert' ? 5 : 4);
     const all = ids(TOOL_SECTIONS);
     expect(new Set(all).size).toBe(all.length);
   });
@@ -136,7 +136,7 @@ describe('tools for an open document', () => {
     expect(ids(sections)).toEqual([
       'sign', 'redact', 'watermark', 'timestamp',
       'merge', 'split', 'extract', 'long-image',
-      'extract-text', 'erase-marks', 'compress', 'protect',
+      'extract-text', 'find-text', 'erase-marks', 'compress', 'protect',
     ]);
   });
 
@@ -151,6 +151,7 @@ describe('tools for an open document', () => {
   test('what the build lacks is left out', () => {
     const all = ids(scan(2, {}));
     expect(all).not.toContain('extract-text');
+    expect(all).not.toContain('find-text');
     expect(all).not.toContain('protect');
   });
 
@@ -158,6 +159,8 @@ describe('tools for an open document', () => {
     const sections = pdf();
     expect(sections.map(s => s.title)).toEqual(['Edit', 'PDF']);
     expect(ids(sections)).toEqual(['fill', 'convert-pages', 'merge', 'split', 'protect', 'unrestrict', 'flatten']);
+    // With text recognition, Find text too: it only reads the pages.
+    expect(ids(pdf({}, { ocr: true }))).toContain('find-text');
     // Never the image-only tools: they would have to convert it first.
     for (const id of ['sign', 'redact', 'watermark', 'timestamp', 'erase-marks', 'compress', 'long-image'] as ToolId[]) {
       expect(ids(sections)).not.toContain(id);

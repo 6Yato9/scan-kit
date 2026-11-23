@@ -15,7 +15,11 @@ import * as Clipboard from 'expo-clipboard';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useTheme } from '@/contexts/theme-context';
+import { DarkThemeScope, useTheme } from '@/contexts/theme-context';
+import { DocChooserSheet } from '@/components/tool-doc';
+import { useToolDocuments } from '@/components/tool-ui';
+import { documentReadPages, docReadErrorText } from '@/lib/doc-read';
+import type { Document } from '@/types/document';
 import { useToast } from '@/components/toast';
 import { ScreenHeader } from '@/components/screen-header';
 import { PrimaryButton } from '@/components/primary-button';
@@ -38,6 +42,8 @@ function isUrl(text: string): boolean {
   return /^https?:\/\//i.test(text) || /^www\./i.test(text);
 }
 
+const anyDoc = (d: Document) => d.pages.length > 0 || !!d.pdfUri;
+
 export default function QrScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -50,6 +56,10 @@ export default function QrScreen() {
   const [picking, setPicking] = useState(false);
   const scanned = useRef(false);
   const pickingRef = useRef(false);
+  // A document already in Scan Kit, read page by page for its codes.
+  const { docs } = useToolDocuments(anyDoc);
+  const [choosingDoc, setChoosingDoc] = useState(false);
+  const [codesFrom, setCodesFrom] = useState<'photo' | 'doc'>('photo');
 
   const handleBarcode = useCallback(({ type, data }: BarcodeResult) => {
     if (scanned.current) return;
@@ -85,6 +95,7 @@ export default function QrScreen() {
       }
       notifySuccess();
       const list = codes.map(c => ({ type: c.symbology, data: c.payload }));
+      setCodesFrom('photo');
       setPhotoCodes(list);
       setResult(list[0]);
     } catch {
@@ -98,9 +109,52 @@ export default function QrScreen() {
     }
   };
 
+  /** Every code on every page of a saved document (the same code twice counts once). */
+  const handleDocument = async (doc: Document) => {
+    if (pickingRef.current) return;
+    pickingRef.current = true;
+    scanned.current = true;
+    setPicking(true);
+    try {
+      let pages: string[];
+      try {
+        pages = await documentReadPages(doc);
+      } catch (err) {
+        scanned.current = result !== null;
+        notifyError();
+        const [title, message] = docReadErrorText(err);
+        Alert.alert(title, message);
+        return;
+      }
+      const list: BarcodeResult[] = [];
+      for (const page of pages) {
+        try {
+          for (const c of await detectBarcodes(page)) {
+            if (!list.some(x => x.data === c.payload && x.type === c.symbology)) list.push({ type: c.symbology, data: c.payload });
+          }
+        } catch {
+          // a page that can't be read has no codes
+        }
+      }
+      if (!list.length) {
+        scanned.current = result !== null;
+        notifyError();
+        Alert.alert('No code found', `There’s no QR code or barcode Scan Kit can read in “${doc.name}”.`);
+        return;
+      }
+      notifySuccess();
+      setCodesFrom('doc');
+      setPhotoCodes(list);
+      setResult(list[0]);
+    } finally {
+      pickingRef.current = false;
+      setPicking(false);
+    }
+  };
+
   const photoIndex = result ? photoCodes.indexOf(result) : -1;
   // The result came from a chosen photo (not the camera): "Another photo" instead of "Scan again".
-  const fromPhoto = photoIndex >= 0;
+  const fromPhoto = photoIndex >= 0 && codesFrom === 'photo';
   const handleNextCode = () => {
     if (photoCodes.length < 2) return;
     tapLight();
@@ -209,6 +263,19 @@ export default function QrScreen() {
     );
   }
 
+  // Over the always-dark camera, in the dark look like the screen's other sheets.
+  const docSheet = (
+    <DarkThemeScope>
+      <DocChooserSheet
+        visible={choosingDoc}
+        docs={docs}
+        note="Every QR code and barcode on its pages is read."
+        onClose={() => setChoosingDoc(false)}
+        onPick={d => { void handleDocument(d); }}
+      />
+    </DarkThemeScope>
+  );
+
   // The whole QR screen is camera chrome, always dark (the status bar is light
   // here too — see lib/status-bar-style.ts), including the permission step.
   if (!permission) return <View style={[styles.container, { backgroundColor: colors.chrome }]} />;
@@ -247,8 +314,19 @@ export default function QrScreen() {
               style={styles.permSecondary}
             />
           ) : null}
+          {canDetectBarcodes() && docs.length ? (
+            <PrimaryButton
+              title="From a document"
+              icon="document-outline"
+              variant="secondary"
+              onPress={() => setChoosingDoc(true)}
+              disabled={picking}
+              style={styles.permSecondary}
+            />
+          ) : null}
         </View>
         {result ? renderResult() : null}
+        {docSheet}
       </View>
     );
   }
@@ -297,12 +375,30 @@ export default function QrScreen() {
             ]}
           >
             <Ionicons name="images-outline" size={20} color={colors.chromeText} />
-            <Text style={[Type.subhead, { color: colors.chromeText }]}>{picking ? 'Reading photo…' : 'Choose photo'}</Text>
+            <Text style={[Type.subhead, { color: colors.chromeText }]}>{picking ? 'Reading…' : 'Choose photo'}</Text>
           </Pressable>
+          {docs.length ? (
+            <Pressable
+              onPress={() => setChoosingDoc(true)}
+              disabled={picking}
+              accessibilityRole="button"
+              accessibilityLabel="From a document"
+              accessibilityHint="Reads the QR codes and barcodes in a saved document"
+              style={({ pressed }) => [
+                styles.photoBtn,
+                { backgroundColor: colors.chromeRaised, borderColor: colors.chromeBorder },
+                (pressed || picking) && { opacity: 0.6 },
+              ]}
+            >
+              <Ionicons name="document-outline" size={20} color={colors.chromeText} />
+              <Text style={[Type.subhead, { color: colors.chromeText }]}>Document</Text>
+            </Pressable>
+          ) : null}
         </View>
       ) : null}
 
       {result ? renderResult() : null}
+      {docSheet}
     </View>
   );
 }
@@ -333,7 +429,7 @@ const styles = StyleSheet.create({
   },
   resultHead: { flexDirection: 'row', alignItems: 'center', minHeight: 22 },
   nextBtn: { flexDirection: 'row', alignItems: 'center', gap: 2, minHeight: HIT, marginVertical: -11 },
-  photoBar: { position: 'absolute', left: 0, right: 0, bottom: 0, alignItems: 'center' },
+  photoBar: { position: 'absolute', left: 0, right: 0, bottom: 0, flexDirection: 'row', justifyContent: 'center', gap: Spacing.md },
   photoBtn: {
     flexDirection: 'row',
     alignItems: 'center',

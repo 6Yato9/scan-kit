@@ -207,11 +207,38 @@ export async function pdfPageThumbnails(docId: string, pdfUri: string): Promise<
   return renderPageSet(renderPages, pdfUri, dir);
 }
 
+/** Long edge of a page rendered to be read (Find text, Extract text): small print stays legible to OCR. */
+const READ_EDGE = 2000;
+
+/**
+ * Every page of a PDF document as an image large enough to read its text,
+ * for the tools that read or search what is printed (Find text, Extract
+ * text). Kept like the page thumbnails (Caches/pdf-thumbs/pages-<key>-read,
+ * or a session copy's scratch folder) and removed with them, so the OCR cache
+ * answers a second search at once. Rejects when the PDF can't be rendered
+ * (locked, damaged, a build without the rasterizer).
+ */
+export async function pdfPageImages(docId: string, pdfUri: string): Promise<string[]> {
+  const renderPages = VisionOcr?.renderPdfPages;
+  if (typeof renderPages !== 'function') throw new Error('renderPdfPages missing');
+  const key = keyFor(docId, pdfUri);
+  if (!key) throw new Error('PDF missing');
+  const scratch = sessionScratchDir(pdfUri);
+  if (scratch) return renderPageSet(renderPages, pdfUri, new Directory(scratch, 'pages-read'), READ_EDGE);
+  for (const item of thumbDir().exists ? thumbDir().list() : []) {
+    if (item instanceof Directory && item.name.startsWith(`pages-${docId}-`) && item.name.endsWith('-read') && item.name !== `pages-${key}-read`) {
+      try { item.delete(); } catch {}
+    }
+  }
+  return renderPageSet(renderPages, pdfUri, new Directory(thumbDir(), `pages-${key}-read`), READ_EDGE);
+}
+
 /** Renders every page of `pdfUri` into `dir` (marked done), or reuses a finished set there. */
 async function renderPageSet(
   renderPages: (inputUri: string, outputDirUri: string, maxEdge: number) => Promise<string[]>,
   pdfUri: string,
   dir: Directory,
+  edge: number = PAGE_THUMB_EDGE,
 ): Promise<string[]> {
   const done = new File(dir, 'done');
   if (dir.exists && done.exists) {
@@ -224,7 +251,7 @@ async function renderPageSet(
   }
   dir.create({ intermediates: true, idempotent: true });
   try {
-    const pages = await renderPages(pdfUri.split('?')[0], dir.uri, PAGE_THUMB_EDGE);
+    const pages = await renderPages(pdfUri.split('?')[0], dir.uri, edge);
     done.create();
     return pages;
   } catch (err) {
