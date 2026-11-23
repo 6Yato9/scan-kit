@@ -9,6 +9,7 @@ import { AppIcon, type AppIconName } from '@/components/app-icon';
 import { AppSwitch } from '@/components/app-switch';
 import { SectionLabel } from '@/components/section-label';
 import { HIT, Radius, Spacing, TextScale, Type } from '@/lib/theme';
+import { toolSwatch, type ToolHue } from '@/lib/tool-catalog';
 
 /** Line height of a row's label; the icon rule below is computed from it. */
 const LABEL_LINE = 22;
@@ -34,6 +35,7 @@ type Accessory =
 
 export function SettingsRow({
   icon,
+  hue,
   label,
   description,
   accessory = { type: 'none' },
@@ -42,6 +44,8 @@ export function SettingsRow({
   accessibilityLabel,
 }: {
   icon?: AppIconName;
+  /** The icon tile's colour, from the same palette as the Tools tab. The app's accent when left out. */
+  hue?: ToolHue;
   label: string;
   description?: string;
   accessory?: Accessory;
@@ -49,15 +53,16 @@ export function SettingsRow({
   last?: boolean;
   accessibilityLabel?: string;
 }) {
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
+  const swatch = hue ? toolSwatch(hue, isDark) : { fg: colors.accent, bg: colors.accentLight };
   const isSwitch = accessory.type === 'switch';
   const isCheck = accessory.type === 'check';
 
   const body = (
     <>
       {icon ? (
-        <View style={[styles.iconTile, description ? styles.iconTileTop : null, { backgroundColor: colors.accentLight }]}>
-          <AppIcon name={icon} size={18} color={colors.accent} />
+        <View style={[styles.iconTile, description ? styles.iconTileTop : null, { backgroundColor: swatch.bg }]}>
+          <AppIcon name={icon} size={18} color={swatch.fg} />
         </View>
       ) : null}
       <View style={[styles.inner, description ? styles.innerTall : null, !last && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }]}>

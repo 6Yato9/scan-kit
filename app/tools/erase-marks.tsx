@@ -8,8 +8,14 @@
 // white filter Brightness moves the threshold (brighter = fewer dark pixels,
 // so fainter marks go) and Contrast sets how hard edges are (lib/filters.ts);
 // Standard is the +30 / +30 this tool always used.
-import { useState } from 'react';
-import { Alert, View } from 'react-native';
+//
+// Before / After: a preview of a page as it is and as it will be, rendered
+// with the same bake as Apply (lib/bake.ts bakeFilterPreview) for the chosen
+// strength, so the result can be judged before anything changes.
+import { useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image } from 'expo-image';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useRouter } from 'expo-router';
 import { PrimaryButton } from '@/components/primary-button';
 import {
@@ -20,8 +26,12 @@ import {
   ToolProgress,
   ToolScreen,
   pageCountLabel,
+  useImageAspect,
   useToolDocuments,
 } from '@/components/tool-ui';
+import { SegmentedControl } from '@/components/segmented-control';
+import { useTheme } from '@/contexts/theme-context';
+import { HIT, Radius, Spacing, Type } from '@/lib/theme';
 import { ToolDocPicker, useToolDoc } from '@/components/tool-doc';
 import { SectionLabel } from '@/components/section-label';
 
@@ -29,8 +39,8 @@ import { eraseAdjustment, parseEraseStrength, type EraseStrength } from '@/lib/e
 import { readToolPrefs, TOOL_PREF_KEYS, writeToolPrefs } from '@/lib/tool-prefs';
 import { useRememberedPrefs } from '@/components/use-remembered-prefs';
 import { FilterBaker } from '@/components/filter-baker';
-import { bakePage, invalidateDocPreviews } from '@/lib/bake';
-import { notifyError, notifySuccess } from '@/lib/haptics';
+import { bakeFilterPreview, bakePage, invalidateDocPreviews } from '@/lib/bake';
+import { notifyError, notifySuccess, selection } from '@/lib/haptics';
 import type { Document, PageAdjustment, PageFilter } from '@/types/document';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
 import { postViewerNotice } from '@/lib/viewer-notice';
@@ -53,6 +63,128 @@ async function undoErase(docId: string, before: { filter: PageFilter; adjustment
     return;
   }
   postViewerNotice({ docId, message: 'Pages restored' });
+}
+
+/** Rendered previews, newest last: switching strength back and forth shows them at once. */
+const previewCache = new Map<string, string>();
+const PREVIEW_CACHE_SIZE = 6;
+function rememberPreview(key: string, uri: string) {
+  previewCache.delete(key);
+  previewCache.set(key, uri);
+  while (previewCache.size > PREVIEW_CACHE_SIZE) previewCache.delete(previewCache.keys().next().value!);
+}
+
+/** Tallest the preview may be, so the strength options stay in reach below it. */
+const PREVIEW_MAX_H = 380;
+
+/** A page as it is (Before) and as Erase marks would leave it (After). */
+function ErasePreview({ doc, strength }: { doc: Document; strength: EraseStrength }) {
+  const { colors } = useTheme();
+  const pageCount = doc.pages.length;
+  const [pageIndex, setPageIndex] = useState(0);
+  const page = Math.min(pageIndex, Math.max(0, pageCount - 1));
+  const [side, setSide] = useState<'before' | 'after'>('after');
+  const [width, setWidth] = useState(0);
+  const key = `${doc.id}:${doc.updatedAt}:${page}:${strength}`;
+  const [after, setAfter] = useState<{ key: string; uri: string } | null>(null);
+  const [failedKey, setFailedKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    const hit = previewCache.get(key);
+    if (hit) {
+      setAfter({ key, uri: hit });
+      return;
+    }
+    let live = true;
+    bakeFilterPreview(doc.id, page, ERASE_FILTER, eraseAdjustment(strength))
+      .then(uri => {
+        rememberPreview(key, uri);
+        if (live) setAfter({ key, uri });
+      })
+      .catch(() => { if (live) setFailedKey(key); });
+    return () => { live = false; };
+  }, [key, doc.id, page, strength]);
+
+  const beforeUri = doc.pages[page] ? `${doc.pages[page].split('?')[0]}?v=${doc.updatedAt}` : null;
+  const aspect = useImageAspect(beforeUri);
+  const afterUri = after?.key === key ? after.uri : null;
+  const failed = failedKey === key;
+  const h = Math.min(PREVIEW_MAX_H, Math.round(width * aspect));
+  const w = Math.round(h / aspect);
+  const shown = side === 'before' ? beforeUri : afterUri;
+
+  const goTo = (i: number) => {
+    if (i < 0 || i >= pageCount || i === page) return;
+    setPageIndex(i);
+    selection();
+  };
+
+  return (
+    <View>
+      <SectionLabel>Preview</SectionLabel>
+      <SegmentedControl
+        value={side}
+        onChange={v => { setSide(v); selection(); }}
+        options={[
+          { value: 'before', label: 'Before' },
+          { value: 'after', label: 'After' },
+        ]}
+      />
+      <View
+        style={[styles.previewArea, { backgroundColor: colors.card }]}
+        onLayout={e => setWidth(Math.max(0, e.nativeEvent.layout.width - Spacing.md * 2))}
+      >
+        {width > 0 ? (
+          <View style={[styles.previewPage, { width: w, height: h, backgroundColor: colors.paper, borderColor: colors.thumbBorder }]}>
+            {shown ? (
+              <Image
+                source={{ uri: shown }}
+                style={StyleSheet.absoluteFill}
+                contentFit="fill"
+                transition={0}
+                accessibilityLabel={`Page ${page + 1}, ${side === 'before' ? 'as it is now' : 'with marks erased'}`}
+              />
+            ) : (
+              <View style={[StyleSheet.absoluteFill, styles.center]}>
+                {failed ? (
+                  <Text style={[Type.footnote, styles.failed, { color: colors.muted }]}>Couldn’t make a preview. Erase marks still works.</Text>
+                ) : (
+                  <ActivityIndicator color={colors.muted} accessibilityLabel="Making the preview" />
+                )}
+              </View>
+            )}
+          </View>
+        ) : null}
+        {pageCount > 1 ? (
+          <View style={styles.pager}>
+            <Pressable
+              onPress={() => goTo(page - 1)}
+              disabled={page === 0}
+              hitSlop={6}
+              accessibilityRole="button"
+              accessibilityLabel="Previous page"
+              style={({ pressed }) => [styles.pageBtn, pressed && { opacity: 0.5 }]}
+            >
+              <Ionicons name="chevron-back" size={20} color={page === 0 ? colors.faint : colors.accent} />
+            </Pressable>
+            <Text style={[Type.subhead, { color: colors.text }]} accessibilityLiveRegion="polite">
+              {`Page ${page + 1} of ${pageCount}`}
+            </Text>
+            <Pressable
+              onPress={() => goTo(page + 1)}
+              disabled={page >= pageCount - 1}
+              hitSlop={6}
+              accessibilityRole="button"
+              accessibilityLabel="Next page"
+              style={({ pressed }) => [styles.pageBtn, pressed && { opacity: 0.5 }]}
+            >
+              <Ionicons name="chevron-forward" size={20} color={page >= pageCount - 1 ? colors.faint : colors.accent} />
+            </Pressable>
+          </View>
+        ) : null}
+      </View>
+    </View>
+  );
 }
 
 type ErasePrefs = { strength: EraseStrength };
@@ -164,12 +296,22 @@ export default function EraseMarksScreen() {
         onPick={d => setSelectedId(d.id)}
       />
       <View pointerEvents={running ? 'none' : 'auto'} collapsable={false}>
+        {selected && selected.pages.length > 0 ? <ErasePreview doc={selected} strength={strength} /> : null}
         <SectionLabel>Strength</SectionLabel>
         <OptionList options={STRENGTH_OPTIONS} value={strength} onChange={setStrength} />
       </View>
       <ToolNote>
-        {'This changes the document itself, replacing any filters its pages have. You can undo it right\u00A0after.'}
+        {'This changes the document itself, replacing any filters its pages have. Compare Before and After first; you can also undo it right\u00A0after.'}
       </ToolNote>
     </ToolScreen>
   );
 }
+
+const styles = StyleSheet.create({
+  previewArea: { marginTop: Spacing.md, borderRadius: Radius.md, padding: Spacing.md, alignItems: 'center' },
+  previewPage: { borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
+  center: { alignItems: 'center', justifyContent: 'center', padding: Spacing.lg },
+  failed: { textAlign: 'center' },
+  pager: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.md, marginTop: Spacing.sm },
+  pageBtn: { width: HIT, height: HIT, alignItems: 'center', justifyContent: 'center' },
+});

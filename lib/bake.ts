@@ -27,6 +27,8 @@
 // older one, so the user's latest choice always wins.
 import { docDir } from './storage-layout';
 import { writeAsStringAsync } from 'expo-file-system/legacy';
+import { File } from 'expo-file-system';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { PageAdjustment, PageFilter } from '../types/document';
 import { BakeCancelled, cancelJob, EnqueueOptions, enqueueBake, enqueueBakeWithId } from './bake-queue';
 import { ensureOriginal, pageSideUri, promotePageSide } from './files';
@@ -408,4 +410,36 @@ export async function bakePreviews(docId: string, pageIndex: number): Promise<st
   // An edit landed while this rendered: the result may describe another page.
   if ((docVersions.get(docId) ?? 0) === version) previewCache.set(key, urls);
   return urls;
+}
+
+/** Width the full-page "what it will look like" preview is rendered at (sharp on a phone, light to make). */
+export const FILTER_PREVIEW_WIDTH = 1200;
+
+/**
+ * What `filter` + `adjustment` would make of one page, without changing it:
+ * a data URL of the whole page, rendered by the same bake canvas as bakePage
+ * (so it is exactly what Apply saves), from the page's pristine original
+ * shrunk to FILTER_PREVIEW_WIDTH first so it renders quickly. Erase marks'
+ * Before / After uses it.
+ */
+export async function bakeFilterPreview(
+  docId: string,
+  pageIndex: number,
+  filter: PageFilter,
+  adjustment: PageAdjustment | undefined,
+): Promise<string> {
+  const orig = await withDocLock(docId, () => ensureOriginal(docId, pageIndex));
+  const small = await manipulateAsync(orig, [{ resize: { width: FILTER_PREVIEW_WIDTH } }], {
+    compress: 0.9,
+    format: SaveFormat.JPEG,
+  });
+  try {
+    const ops = combinedFilterRN(filter, adjustment) ?? [];
+    return await enqueueBake({ docId, pageIndex, src: small.uri, ops, silent: true }, { priority: 'high' });
+  } finally {
+    try {
+      const f = new File(small.uri);
+      if (f.exists) f.delete();
+    } catch {}
+  }
 }

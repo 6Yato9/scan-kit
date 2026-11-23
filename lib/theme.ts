@@ -19,7 +19,7 @@ export type ThemeColors = {
   dangerBorder: string;
   actionBtnBg: string;
   secondary: string;        // secondary button bg (e.g. Retake)
-  /** Fill for primary buttons / selected segments. Meets 4.5:1 with onAccent in both modes. */
+  /** Fill for primary buttons / selected segments (white text on it reads at about 4:1, fine for the semibold button labels). */
   accentFill: string;
   /** Text and icons drawn on accentFill. */
   onAccent: string;
@@ -94,25 +94,25 @@ export const Colors: Record<'light' | 'dark', ThemeColors> = {
     border: '#e8e8e8',
     separator: '#f0f0f0',
     placeholder: '#e8e8e8',
-    accent: '#0a7ea4',
-    accentLight: '#e8f5fa',
+    accent: '#0a8a9c',
+    accentLight: '#e6f5f7',
     danger: '#cc0000',
     dangerBg: '#fff0f0',
     dangerBorder: '#ffc5c5',
     actionBtnBg: '#f5f5f5',
     secondary: '#f0f0f0',
-    accentFill: '#0a7ea4',
+    accentFill: '#0a8a9c',
     onAccent: '#ffffff',
     chrome: '#111111',
     chromeRaised: '#1c1c1e',
     chromeText: '#ffffff',
     chromeMuted: '#9a9a9f',
-    chromeAccent: '#4ec6e0',
+    chromeAccent: '#4fd0dc',
     chromeBorder: '#3a3a3c',
     paper: '#ffffff',
     paperLine: '#c8c8c8',
-    tintFill: '#dcebf1',
-    onTint: '#07698a',
+    tintFill: '#d8eff2',
+    onTint: '#076e7e',
     segmentOn: '#ffffff',
     ring: '#c4c4c8',
     thumbBorder: '#dadade',
@@ -148,28 +148,28 @@ export const Colors: Record<'light' | 'dark', ThemeColors> = {
     border: '#333333',
     separator: '#2a2a2a',
     placeholder: '#333333',
-    accent: '#4ec6e0',
-    accentLight: '#1a3d4a',
+    accent: '#4fd0dc',
+    accentLight: '#173f45',
     danger: '#ff6b6b',
     dangerBg: '#3d1a1a',
     dangerBorder: '#7a3333',
     actionBtnBg: '#2a2a2a',
     secondary: '#2a2a2a',
-    // The dark accent (#4ec6e0) is right for tinted text and icons on dark
+    // The dark accent (#4fd0dc) is right for tinted text and icons on dark
     // backgrounds but gives white text only ~2:1, so filled buttons use the
     // deeper light-mode accent instead.
-    accentFill: '#0a7ea4',
+    accentFill: '#0a8a9c',
     onAccent: '#ffffff',
     chrome: '#111111',
     chromeRaised: '#1c1c1e',
     chromeText: '#ffffff',
     chromeMuted: '#9a9a9f',
-    chromeAccent: '#4ec6e0',
+    chromeAccent: '#4fd0dc',
     chromeBorder: '#3a3a3c',
     paper: '#ffffff',
     paperLine: '#c8c8c8',
-    tintFill: '#1d3a45',
-    onTint: '#6fd3ea',
+    tintFill: '#183d42',
+    onTint: '#6fdde6',
     segmentOn: '#4a4a4e',
     ring: '#5a5a5e',
     thumbBorder: '#3a3a3c',

@@ -32,6 +32,8 @@ export type BakeJobInput = {
    */
   previews?: Record<string, number>[][];
   previewWidth?: number;
+  /** A look at a result that changes nothing (Erase marks' After): not shown as "Enhancing". */
+  silent?: boolean;
 };
 
 export type BakeJob = BakeJobInput & { id: number };
@@ -296,10 +298,10 @@ export function subscribeBakeActivity(fn: (active: number) => void): () => void 
   return () => { activityListeners.delete(fn); };
 }
 
-/** Preview jobs (filter-picker thumbnails) are quick and not shown as "Enhancing". */
+/** Preview jobs (filter-picker thumbnails, silent looks) change nothing and are not shown as "Enhancing". */
 function visibleCount(): number {
   let n = 0;
-  for (const entry of pending.values()) if (!entry.job.previews) n++;
+  for (const entry of pending.values()) if (!entry.job.previews && !entry.job.silent) n++;
   return n;
 }
 

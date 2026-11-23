@@ -609,11 +609,26 @@ function CameraScreen() {
     setMode('camera');
   };
 
+  // Deleting a captured page can't be undone (the photo is gone), so it asks first.
   const handleDelete = (i: number) => {
-    const list = pagesRef.current;
-    const page = list[i];
+    const page = pagesRef.current[i];
     if (!page) return;
     tapLight();
+    Alert.alert(
+      'Delete this page?',
+      'The photo of this page will be removed from the scan.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Delete', style: 'destructive', onPress: () => deletePage(page.key) },
+      ],
+    );
+  };
+
+  const deletePage = (key: string) => {
+    const list = pagesRef.current;
+    const i = list.findIndex(p => p.key === key);
+    const page = list[i];
+    if (!page) return;
     discardPage(page);
     const next = list.filter((_, j) => j !== i);
     setPages(next);

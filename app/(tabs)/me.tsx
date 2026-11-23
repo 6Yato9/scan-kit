@@ -186,7 +186,7 @@ export default function SettingsScreen() {
 
           <SettingsGroup title="Security">
             <SettingsRow
-              icon="lock-closed-outline"
+              icon="lock-closed-outline" hue="green"
               label="App lock"
               description={`Ask for ${lockMethodLabel(lockKind)} on return`}
               accessory={{ type: 'switch', value: appLock, onChange: handleToggleAppLock }}
@@ -195,9 +195,9 @@ export default function SettingsScreen() {
           </SettingsGroup>
 
           <SettingsGroup title="Scanning and documents">
-            <SettingsRow icon="camera-outline" label="Scan settings" accessory={{ type: 'chevron' }} onPress={() => router.push('/settings/scan-settings')} />
-            <SettingsRow icon="document-text-outline" label="Document settings" accessory={{ type: 'chevron' }} onPress={() => router.push('/settings/document-settings')} />
-            <SettingsRow icon="print-outline" label="Printing" accessory={{ type: 'chevron' }} onPress={() => router.push('/settings/printer')} last />
+            <SettingsRow icon="camera-outline" hue="blue" label="Scan settings" accessory={{ type: 'chevron' }} onPress={() => router.push('/settings/scan-settings')} />
+            <SettingsRow icon="document-text-outline" hue="orange" label="Document settings" accessory={{ type: 'chevron' }} onPress={() => router.push('/settings/document-settings')} />
+            <SettingsRow icon="print-outline" hue="graphite" label="Printing" accessory={{ type: 'chevron' }} onPress={() => router.push('/settings/printer')} last />
           </SettingsGroup>
 
           {/* No loose footers: at rest the floating tab bar sits over the end
@@ -205,26 +205,26 @@ export default function SettingsScreen() {
               The notes live in the rows instead. */}
           <SettingsGroup title="Storage">
             <SettingsRow
-              icon="server-outline"
+              icon="server-outline" hue="graphite"
               label="Space used on this device"
               accessory={{ type: 'value', text: storageUsed }}
             />
             <SettingsRow
-              icon="contract-outline"
+              icon="contract-outline" hue="green"
               label="Free up space"
               description="Shrink the pages of a scanned document"
               accessory={{ type: 'chevron' }}
               onPress={() => router.push('/tools/compress')}
             />
             <SettingsRow
-              icon="archive-outline"
+              icon="archive-outline" hue="purple"
               label="Export all documents"
               description="Searchable PDFs in one ZIP file"
               accessory={{ type: 'chevron' }}
               onPress={openExportAll}
             />
             {filesCopyAvailable() && <SettingsRow
-              icon="copy-outline"
+              icon="copy-outline" hue="blue"
               label="Keep a copy in Files"
               description={
                 appLock
@@ -234,7 +234,7 @@ export default function SettingsScreen() {
               accessory={{ type: 'switch', value: filesCopy, onChange: handleToggleFilesCopy }}
             />}
             <SettingsRow
-              icon="trash-outline"
+              icon="trash-outline" hue="red"
               label="Recently deleted"
               description={`Restore deleted documents for ${TRASH_RETENTION_DAYS} days`}
               accessory={{ type: 'chevron' }}
@@ -242,7 +242,7 @@ export default function SettingsScreen() {
               last={recoveredCount === 0}
             />
             {recoveredCount > 0 && <SettingsRow
-              icon="file-tray-full-outline"
+              icon="file-tray-full-outline" hue="amber"
               label="Recovered files"
               description="Pages an update set aside"
               accessory={{ type: 'chevron' }}
@@ -252,8 +252,8 @@ export default function SettingsScreen() {
           </SettingsGroup>
 
           <SettingsGroup>
-            <SettingsRow icon="help-circle-outline" label="Help" accessory={{ type: 'chevron' }} onPress={() => router.push('/settings/help')} />
-            <SettingsRow icon="information-circle-outline" label="About Scan Kit" accessory={{ type: 'chevron' }} onPress={() => router.push('/settings/about')} last />
+            <SettingsRow icon="help-circle-outline" hue="indigo" label="Help" accessory={{ type: 'chevron' }} onPress={() => router.push('/settings/help')} />
+            <SettingsRow icon="information-circle-outline" hue="graphite" label="About Scan Kit" accessory={{ type: 'chevron' }} onPress={() => router.push('/settings/about')} last />
           </SettingsGroup>
         </View>
       </ScrollView>

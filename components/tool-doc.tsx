@@ -100,12 +100,15 @@ export function DocChooserSheet({
   visible,
   docs,
   note,
+  selectedId,
   onPick,
   onClose,
 }: {
   visible: boolean;
   docs: Document[];
   note?: string;
+  /** The document already in use, ticked in the list. */
+  selectedId?: string | null;
   onPick: (doc: Document) => void;
   onClose: () => void;
 }) {
@@ -128,7 +131,7 @@ export function DocChooserSheet({
             <DocRow
               key={d.id}
               doc={d}
-              selected={false}
+              selected={d.id === selectedId}
               onPress={() => {
                 picked.current = d;
                 onClose();

@@ -8,13 +8,21 @@
 // Redact's wide margin.
 //
 // Opened from the viewer's Tools sheet it starts on that document and page.
+//
+// Once a document is chosen the page gets the room (the document row goes;
+// the header's documents button changes it). The page can be pinched and
+// double-tapped to zoom (components/zoom-frame.tsx), highlights included. The
+// arrows by the search field step through the matches one by one — the
+// current one in orange, zoomed to — and the pager below turns pages.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Keyboard, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Image } from 'expo-image';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '@/contexts/theme-context';
 import { NoDocumentsScreen, ToolScreen, useImageAspect, useToolDocuments } from '@/components/tool-ui';
-import { ToolDocPicker, useToolDoc } from '@/components/tool-doc';
+import { DocChooserSheet, ToolDocPicker, useToolDoc } from '@/components/tool-doc';
+import { HeaderIconButton } from '@/components/screen-header';
+import { ZoomFrame, type ZoomFocus } from '@/components/zoom-frame';
 import { notifySuccess, selection } from '@/lib/haptics';
 import { OcrAbortedError } from '@/lib/ocr';
 import { findInDocument, ocrAvailable } from '@/lib/redact-run';
@@ -25,6 +33,10 @@ import { foundSummary } from '@/lib/find-text';
 import type { Document } from '@/types/document';
 
 type Found = { docId: string; term: string; pages: RedactRect[][] };
+
+/** The match being looked at: a stronger highlighter colour than the rest. */
+const CURRENT_MARK = '#ffb02e';
+const NOTE = 'Scanned documents and imported PDFs.';
 
 const anyDoc = (d: Document) => d.pages.length > 0 || !!d.pdfUri;
 
@@ -42,6 +54,11 @@ export default function FindTextScreen() {
   const [found, setFound] = useState<Found | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [area, setArea] = useState<{ width: number; height: number } | null>(null);
+  /** Index into `matches` of the match being looked at. */
+  const [current, setCurrent] = useState(0);
+  /** Where the page should zoom to (a match); null shows the whole page. */
+  const [focus, setFocus] = useState<ZoomFocus | null>(null);
+  const [choosing, setChoosing] = useState(false);
   const findAbort = useRef<AbortController | null>(null);
   useEffect(() => () => findAbort.current?.abort(), []);
 
@@ -59,6 +76,8 @@ export default function FindTextScreen() {
     findAbort.current?.abort();
     setFound(null);
     setStatus(null);
+    setFocus(null);
+    setCurrent(0);
     setPagesError(null);
     setPageIndex(routePage ?? 0);
     setPages(doc.pdfUri ? null : { docId: doc.id, uris: doc.pages.map(p => `${p.split('?')[0]}?v=${doc.updatedAt}`) });
@@ -77,8 +96,14 @@ export default function FindTextScreen() {
   const pageUri = pageUris[page] ?? null;
   const aspect = useImageAspect(pageUri);
   const results = found && doc && found.docId === doc.id ? found : null;
-  const perPage = useMemo(() => (results ? results.pages.map(p => p.length) : []), [results]);
   const boxes = results?.pages[page] ?? [];
+  /** Every match in the document, in page order. */
+  const matches = useMemo(
+    () => (results ? results.pages.flatMap((p, pi) => p.map((box, i) => ({ page: pi, i, box }))) : []),
+    [results],
+  );
+  const currentMatch = matches[current] ?? null;
+  const onCurrentPage = currentMatch && currentMatch.page === page ? currentMatch.i : -1;
 
   /** `typed`: the field's text as submitted (the state can lag a keystroke behind). */
   const runFind = async (typed?: string) => {
@@ -103,11 +128,17 @@ export default function FindTextScreen() {
       setFound({ docId: doc.id, term: t, pages: hits });
       const counts = hits.map(h => h.length);
       setStatus(foundSummary(t, counts));
+      setFocus(null);
       const first = counts.findIndex(c => c > 0);
       if (first >= 0) {
         notifySuccess();
-        // Show where the matches are when this page has none of them.
-        if (!counts[page]) setPageIndex(first);
+        // Start on this page's first match, or show where the matches are
+        // when this page has none of them.
+        const startPage = counts[page] ? page : first;
+        setPageIndex(startPage);
+        setCurrent(counts.slice(0, startPage).reduce((a, b) => a + b, 0));
+      } else {
+        setCurrent(0);
       }
     } catch (err) {
       if (err instanceof OcrAbortedError || controller.signal.aborted) return;
@@ -120,22 +151,36 @@ export default function FindTextScreen() {
     }
   };
 
+  /** Turns to page `i`, showing the whole page; its first match becomes the current one. */
   const goTo = (i: number) => {
     const next = Math.min(Math.max(0, i), pageCount - 1);
     if (next === page) return;
     setPageIndex(next);
+    setFocus(null);
+    const first = matches.findIndex(m => m.page === next);
+    if (first >= 0) setCurrent(first);
     selection();
   };
-  /** The next (dir 1) or previous (-1) page with a match, wrapping round. */
-  const nextMatchPage = (dir: 1 | -1): number | null => {
-    if (!results) return null;
-    for (let step = 1; step <= pageCount; step++) {
-      const i = (page + dir * step + pageCount) % pageCount;
-      if (perPage[i] > 0 && i !== page) return i;
+  /** The next (dir 1) or previous (-1) match, wrapping round, zoomed to. */
+  const stepMatch = (dir: 1 | -1) => {
+    if (!matches.length) return;
+    // Away from the current match's page, start from this page instead.
+    let next: number;
+    if (currentMatch && currentMatch.page === page) {
+      next = (current + dir + matches.length) % matches.length;
+    } else {
+      const ahead = matches.findIndex(m => m.page >= page);
+      next = dir === 1
+        ? (ahead >= 0 ? ahead : 0)
+        : ((ahead >= 0 ? ahead : matches.length) - 1 + matches.length) % matches.length;
     }
-    return null;
+    const m = matches[next];
+    setCurrent(next);
+    setPageIndex(m.page);
+    setFocus(f => ({ key: (f?.key ?? 0) + 1, ...m.box }));
+    selection();
   };
-  const matchPages = perPage.filter(c => c > 0).length;
+  const showingResults = !!results && normalizeTerm(term) === normalizeTerm(results.term) && !finding;
 
   if (loaded && docs.length === 0) {
     return (
@@ -163,22 +208,33 @@ export default function FindTextScreen() {
           ? 'Getting the pages ready…'
           : finding
             ? `Reading page ${Math.min(finding.done + 1, finding.total)} of ${finding.total}…`
-            : status ?? 'Every match is highlighted in yellow. Nothing in the document changes.';
+            : status ?? 'Every match is highlighted in yellow. Pinch or double-tap the page to zoom.';
 
   return (
-    <ToolScreen title="Find text" scroll={false}>
+    <ToolScreen
+      title="Find text"
+      scroll={false}
+      right={
+        doc && !fixed && docs.length > 1 ? (
+          <HeaderIconButton icon="documents-outline" label="Choose another document" disabled={!!finding} onPress={() => setChoosing(true)} />
+        ) : undefined
+      }
+    >
       <View style={styles.top}>
-        <ToolDocPicker
-          docs={docs}
-          doc={doc}
-          fixed={fixed}
-          disabled={!!finding}
-          onPick={d => setDocId(d.id)}
-          autoOpen={loaded && !fromViewer}
-          note="Scanned documents and imported PDFs."
-        />
+        {/* Once chosen, the page gets this room: the header button changes it. */}
+        {!doc ? (
+          <ToolDocPicker
+            docs={docs}
+            doc={doc}
+            fixed={fixed}
+            disabled={!!finding}
+            onPick={d => setDocId(d.id)}
+            autoOpen={loaded && !fromViewer}
+            note={NOTE}
+          />
+        ) : null}
 
-        <View style={[styles.search, { backgroundColor: colors.card }, (!ready || !canFind) && styles.dim]}>
+        <View style={[styles.search, !doc && styles.searchBelowPicker, { backgroundColor: colors.card }, (!ready || !canFind) && styles.dim]}>
           <Ionicons name="search" size={18} color={colors.muted} />
           <TextInput
             style={[Type.body, styles.searchInput, { color: colors.text }]}
@@ -196,7 +252,31 @@ export default function FindTextScreen() {
           />
           {finding ? (
             <ActivityIndicator color={colors.muted} />
-          ) : term.trim() ? (
+          ) : showingResults && matches.length > 0 ? (
+            <View style={styles.stepper}>
+              <Text style={[Type.footnote, styles.count, { color: colors.muted }]} maxFontSizeMultiplier={1.4} accessibilityLabel={`Match ${current + 1} of ${matches.length}`}>
+                {`${current + 1}/${matches.length}`}
+              </Text>
+              <Pressable
+                onPress={() => stepMatch(-1)}
+                hitSlop={4}
+                accessibilityRole="button"
+                accessibilityLabel="Previous match"
+                style={({ pressed }) => [styles.stepBtn, pressed && { opacity: 0.5 }]}
+              >
+                <Ionicons name="chevron-up" size={22} color={colors.accent} />
+              </Pressable>
+              <Pressable
+                onPress={() => stepMatch(1)}
+                hitSlop={4}
+                accessibilityRole="button"
+                accessibilityLabel="Next match"
+                style={({ pressed }) => [styles.stepBtn, pressed && { opacity: 0.5 }]}
+              >
+                <Ionicons name="chevron-down" size={22} color={colors.accent} />
+              </Pressable>
+            </View>
+          ) : term.trim() && !showingResults ? (
             <Pressable
               onPress={() => { void runFind(); }}
               hitSlop={8}
@@ -223,12 +303,14 @@ export default function FindTextScreen() {
       >
         {pageUri && pageW > 0 ? (
           <View style={[styles.frame, { backgroundColor: colors.input }]}>
-            <View style={{ width: pageW, height: pageH }}>
+            <ZoomFrame width={pageW} height={pageH} focus={focus} resetKey={`${doc?.id}:${page}`}>
               <Image
                 source={{ uri: pageUri }}
                 style={StyleSheet.absoluteFill}
                 contentFit="fill"
                 transition={0}
+                // Zoomed in, the page is drawn from the full picture, not a screen-sized copy.
+                allowDownscaling={false}
                 accessibilityLabel={`Page ${page + 1} of ${pageCount}${boxes.length ? `, ${boxes.length} ${boxes.length === 1 ? 'match' : 'matches'}` : ''}`}
               />
               <View style={[StyleSheet.absoluteFill, styles.edge, { borderColor: colors.thumbBorder }]} pointerEvents="none" />
@@ -243,12 +325,12 @@ export default function FindTextScreen() {
                       top: b.y * pageH,
                       width: Math.max(4, b.w * pageW),
                       height: Math.max(4, b.h * pageH),
-                      backgroundColor: Highlight.yellow,
+                      backgroundColor: i === onCurrentPage && boxes.length > 0 && matches.length > 1 ? CURRENT_MARK : Highlight.yellow,
                     },
                   ]}
                 />
               ))}
-            </View>
+            </ZoomFrame>
           </View>
         ) : (
           <View style={[styles.placeholder, { borderColor: colors.border, width: pageW + pad, height: pageH + pad }]}>
@@ -261,18 +343,8 @@ export default function FindTextScreen() {
         )}
       </View>
 
-      {/* Pages: back / forward, and how many matches this page has. With
-          matches on several pages, the outer buttons jump between them. */}
+      {/* Pages: back / forward, and how many matches this page has. */}
       <View style={styles.pager}>
-        <Pressable
-          onPress={() => { const i = nextMatchPage(-1); if (i != null) goTo(i); }}
-          disabled={matchPages < 2}
-          accessibilityRole="button"
-          accessibilityLabel="Previous page with a match"
-          style={({ pressed }) => [styles.pageBtn, matchPages < 2 && styles.hidden, pressed && { opacity: 0.5 }]}
-        >
-          <Ionicons name="play-skip-back-outline" size={20} color={colors.accent} />
-        </Pressable>
         <Pressable
           onPress={() => goTo(page - 1)}
           disabled={!ready || page === 0}
@@ -299,16 +371,15 @@ export default function FindTextScreen() {
         >
           <Ionicons name="chevron-forward" size={22} color={!ready || page >= pageCount - 1 ? colors.faint : colors.accent} />
         </Pressable>
-        <Pressable
-          onPress={() => { const i = nextMatchPage(1); if (i != null) goTo(i); }}
-          disabled={matchPages < 2}
-          accessibilityRole="button"
-          accessibilityLabel="Next page with a match"
-          style={({ pressed }) => [styles.pageBtn, matchPages < 2 && styles.hidden, pressed && { opacity: 0.5 }]}
-        >
-          <Ionicons name="play-skip-forward-outline" size={20} color={colors.accent} />
-        </Pressable>
       </View>
+      <DocChooserSheet
+        visible={choosing}
+        docs={docs}
+        note={NOTE}
+        selectedId={doc?.id}
+        onPick={d => setDocId(d.id)}
+        onClose={() => setChoosing(false)}
+      />
     </ToolScreen>
   );
 }
@@ -323,12 +394,15 @@ const styles = StyleSheet.create({
     paddingLeft: Spacing.md,
     paddingRight: Spacing.xs + 2,
     minHeight: HIT,
-    marginTop: Spacing.md,
   },
+  searchBelowPicker: { marginTop: Spacing.md },
+  stepper: { flexDirection: 'row', alignItems: 'center' },
+  count: { marginRight: Spacing.xs, fontVariant: ['tabular-nums'] },
+  stepBtn: { width: 36, height: HIT, alignItems: 'center', justifyContent: 'center' },
   searchInput: { flex: 1, paddingVertical: Spacing.sm + 2 },
   findBtn: { borderRadius: Radius.sm, paddingHorizontal: Spacing.md, paddingVertical: 6 },
   dim: { opacity: 0.5 },
-  hint: { marginTop: Spacing.sm, marginHorizontal: Spacing.xs, lineHeight: 18, minHeight: 36 },
+  hint: { marginTop: Spacing.sm, marginHorizontal: Spacing.xs, lineHeight: 18 },
   pageArea: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: Spacing.gutter, paddingTop: Spacing.sm },
   frame: { padding: Spacing.sm, borderRadius: Radius.md },
   edge: { borderWidth: StyleSheet.hairlineWidth },
@@ -342,8 +416,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  pager: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: Spacing.sm, paddingVertical: Spacing.xs },
+  pager: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: Spacing.gutter, paddingVertical: Spacing.xs },
   pageBtn: { width: HIT, height: HIT, alignItems: 'center', justifyContent: 'center' },
-  hidden: { opacity: 0 },
   pagerText: { flex: 1, alignItems: 'center' },
 });
