@@ -26,8 +26,9 @@ export function setNavigationBarStyle(style: 'light' | 'dark'): boolean {
 }
 
 /**
- * App Lock is on: keep documents out of the Recents card (Android 13+), or
- * out of every snapshot, screenshot and recording below that (FLAG_SECURE).
+ * App Lock is on: keep documents out of the Recents card (Android 13+; older
+ * versions have no way that doesn't also block screenshots, so nothing).
+ * Screenshots of the app are never blocked.
  * Returns false when this build can't (iOS, an older Android build).
  */
 export function setRecentsPrivacy(on: boolean): boolean {

@@ -4,7 +4,6 @@ import android.app.Activity
 import android.app.Application
 import android.os.Build
 import android.os.Bundle
-import android.view.WindowManager
 import androidx.core.view.WindowInsetsControllerCompat
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -23,9 +22,9 @@ import expo.modules.kotlin.modules.ModuleDefinition
  * shows no document (iOS draws a privacy cover when the app goes inactive;
  * Android has no inactive state and takes its snapshot itself). Android 13+:
  * `setRecentsScreenshotEnabled(false)`, which only blanks the Recents card.
- * Older versions have no such switch, so FLAG_SECURE, which also blocks
- * screenshots and screen recording of the app (owner decision: only while
- * App Lock is on).
+ * Older versions have no such switch; there the card can show the last
+ * screen. FLAG_SECURE would hide it but also blocks screenshots and screen
+ * recording of the app, and the owner decided screenshots are never blocked.
  *
  * `onActivityVisibility {visible}`: the app's own activity was stopped (no
  * longer visible at all) or started again. React Native's AppState reports
@@ -98,12 +97,10 @@ object RecentsPrivacy {
 
   /** Main thread only. */
   fun apply(activity: Activity) {
+    // Android 13+ only. No FLAG_SECURE below that: it would block the user's
+    // own screenshots (owner decision 2026-11-23: never block screenshots).
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
       activity.setRecentsScreenshotEnabled(!enabled)
-    } else {
-      val window = activity.window ?: return
-      if (enabled) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-      else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
     }
   }
 }

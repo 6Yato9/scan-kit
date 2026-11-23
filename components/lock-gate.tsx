@@ -62,8 +62,9 @@
 // and openWebLink); a hand-off longer than a couple of minutes locks on
 // return. The rules are lib/android-leave.ts. Nothing is presented while
 // away, so a picker's promise settles normally. The Recents card is kept
-// blank while App Lock is on (setRecentsPrivacy; FLAG_SECURE before Android
-// 13) in place of iOS's privacy cover. Builds without the native events keep
+// blank while App Lock is on (setRecentsPrivacy, Android 13+; screenshots are
+// never blocked, so older versions show the card) in place of iOS's privacy
+// cover. Builds without the native events keep
 // the 'background' rule.
 //
 // Behaviour:

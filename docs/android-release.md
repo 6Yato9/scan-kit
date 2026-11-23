@@ -85,8 +85,9 @@ is an app-private signature permission AndroidX adds; it grants nothing.
   users to export their documents (Settings → Export all documents) before
   changing phones.
 * **App Lock:** the Recents card is blank while App Lock is on (Android 13+:
-  `setRecentsScreenshotEnabled(false)`; Android 8–12: `FLAG_SECURE`, which
-  also blocks screenshots of the app while App Lock is on). Picking a photo or
+  `setRecentsScreenshotEnabled(false)`). Screenshots are never blocked (owner
+  decision 2026-11-23), so there is no `FLAG_SECURE`, and on Android 8–12 the
+  Recents card can show the last screen. Picking a photo or
   file, sharing, printing, opening a web link in the in-app browser and adding
   to Calendar / Contacts don't ask to unlock afterwards (they are another
   app's screen on Android); leaving the app does, and so does coming back
@@ -168,6 +169,6 @@ the camera, the image viewer and WebView filters, PDF viewing and
 session unlock, every PDF tool, Fill & sign, export and share, App Lock,
 shortcuts, text actions and read aloud. Real phones are still needed for:
 camera focus/auto-capture feel, OEM share targets and calendar/contacts apps,
-TTS voices, App Lock on Android 8–12 (FLAG_SECURE, screen-lock fallback as a
-separate screen), and performance on low-end devices (Play's pre-launch
+TTS voices, App Lock on Android 8–12 (screen-lock fallback as a separate
+screen), and performance on low-end devices (Play's pre-launch
 report on the internal track covers part of this).
