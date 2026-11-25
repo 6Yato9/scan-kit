@@ -1,6 +1,7 @@
 // __tests__/r8-ui.test.tsx
 // Pure helpers behind the round-8 UI: the export sheet's "Text" row detail,
 // and the heights the Filters panel animates between (so the page above never jumps).
+jest.mock('../lib/review-prompt', () => ({ recordWin: jest.fn(() => Promise.resolve()), maybeAskForReview: jest.fn(), noteAppOpened: jest.fn(() => Promise.resolve()), openStoreReviewPage: jest.fn() }));
 jest.mock('expo-file-system', () => ({ File: class {}, Directory: class {}, Paths: { document: 'file:///d' } }));
 jest.mock('expo-print', () => ({ printToFileAsync: jest.fn() }));
 jest.mock('jszip', () => jest.fn());

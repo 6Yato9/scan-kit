@@ -6,6 +6,7 @@ import { Stack } from 'expo-router';
 import { renderRouter, screen, testRouter } from 'expo-router/testing-library';
 
 // The real root layout pulls in the whole app; only its route settings matter here.
+jest.mock('../lib/review-prompt', () => ({ recordWin: jest.fn(() => Promise.resolve()), maybeAskForReview: jest.fn(), noteAppOpened: jest.fn(() => Promise.resolve()), openStoreReviewPage: jest.fn() }));
 jest.mock('@/contexts/scan-context', () => ({ ScanProvider: ({ children }: any) => children }));
 jest.mock('@/contexts/theme-context', () => ({ ThemeProvider: ({ children }: any) => children, useTheme: () => ({ colors: {}, isDark: false }) }));
 jest.mock('@/components/toast', () => ({ ToastProvider: ({ children }: any) => children }));

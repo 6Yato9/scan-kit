@@ -75,6 +75,7 @@ import { pageStats } from '@/lib/page-stats';
 import { formatBytes } from '@/components/tool-ui';
 import { zipFiles } from '@/lib/zip-stream';
 import { notifySuccess } from '@/lib/haptics';
+import { maybeAskForReview, recordWin } from '@/lib/review-prompt';
 import { canFlattenPdf, flattenPdfCopy, pdfShareInfo, shouldOfferFlatten } from '@/lib/pdf-fill';
 import { PdfEditError } from '@/lib/pdf-edit';
 import { PdfSessionError, readablePdfUri } from '@/lib/pdf-session';
@@ -403,6 +404,11 @@ export function ExportSheet({ visible, document, onClose }: Props) {
     return true;
   }
 
+  /** An export finished: a "win" for the rating prompt, which may follow once the sheet has gone (lib/review-prompt). */
+  function exportWon() {
+    recordWin().then(() => maybeAskForReview(1500)).catch(() => {});
+  }
+
   async function run(action: Action, password?: string) {
     if (busy || runningRef.current) return;
     runningRef.current = true;
@@ -451,6 +457,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
         if (outcome === 'printed' && sessionRef.current === session) {
           toast.show('Sent to printer');
           onClose();
+          exportWon();
         }
         return;
       }
@@ -461,6 +468,7 @@ export function ExportSheet({ visible, document, onClose }: Props) {
           notifySuccess();
           toast.show(pageCount === 1 ? 'Saved the page to Photos' : `Saved ${pageCount} pages to Photos`);
           onClose();
+          exportWon();
         }
         return;
       }
@@ -516,7 +524,10 @@ export function ExportSheet({ visible, document, onClose }: Props) {
       // was closed meanwhile (closing aborts `signal`).
       // Close once the share sheet is done, unless the user has moved on.
       const onFinish = () => {
-        if (sessionRef.current === session) onClose();
+        if (sessionRef.current === session) {
+          onClose();
+          exportWon();
+        }
       };
       if ('uris' in file) {
         await shareFiles(file.uris, { dialogTitle: outName, signal, onFinish });

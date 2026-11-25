@@ -1,11 +1,18 @@
 // app/settings/about.tsx
-import { StyleSheet, Text, View } from 'react-native';
+import { Alert, StyleSheet, Text, View } from 'react-native';
 import Constants from 'expo-constants';
 import { useTheme } from '@/contexts/theme-context';
 import { ToolScreen } from '@/components/tool-ui';
 import { BrandMark } from '@/components/brand-mark';
 import { SettingsGroup, SettingsRow } from '@/components/settings-list';
 import { Spacing, Type } from '@/lib/theme';
+import { openStoreReviewPage } from '@/lib/review-prompt';
+
+async function rate() {
+  if (!(await openStoreReviewPage())) {
+    Alert.alert('Couldn’t open the store', 'You can rate Scan Kit from its page in the App Store or Google Play.');
+  }
+}
 
 export default function AboutScreen() {
   const { colors } = useTheme();
@@ -25,6 +32,18 @@ export default function AboutScreen() {
       <SettingsGroup title="Your data">
         <SettingsRow icon="phone-portrait-outline" hue="green" label="Stored on this device" description={'Scans never leave your phone unless you share\u00A0them.'} />
         <SettingsRow icon="cloud-offline-outline" hue="blue" label="Works offline" description={'Scanning, text recognition and export need no\u00A0connection.'} last />
+      </SettingsGroup>
+
+      <SettingsGroup title="Support Scan Kit">
+        <SettingsRow
+          icon="star-outline"
+          hue="amber"
+          label="Rate Scan Kit"
+          description={'A rating helps other people find the\u00A0app.'}
+          accessory={{ type: 'chevron' }}
+          onPress={rate}
+          last
+        />
       </SettingsGroup>
     </ToolScreen>
   );

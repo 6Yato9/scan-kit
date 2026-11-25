@@ -11,7 +11,7 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSCameraUsageDescription": "Scan Kit needs camera access to scan documents.",
+        "NSCameraUsageDescription": "Scan Kit uses the camera to scan documents, cards and QR codes. Photos stay on this device.",
         "NSMicrophoneUsageDescription": "Scan Kit doesn’t use the microphone or record audio.",
         "NSCalendarsUsageDescription": "Scan Kit adds the dates you pick in a scanned page to your calendar.",
         "NSContactsUsageDescription": "Scan Kit saves the business cards you scan as new contacts.",
@@ -172,7 +172,7 @@
       [
         "expo-local-authentication",
         {
-          "faceIDPermission": "Unlock Scan Kit with Face ID."
+          "faceIDPermission": "Scan Kit uses Face ID to unlock the app when App Lock is on."
         }
       ],
       "expo-font",
@@ -181,8 +181,8 @@
       [
         "expo-media-library",
         {
-          "photosPermission": "Scan Kit uses your photo library to import photos of documents.",
-          "savePhotosPermission": "Scan Kit saves exported pages to your photo library.",
+          "photosPermission": "Scan Kit opens the photos you choose so you can turn them into documents.",
+          "savePhotosPermission": "Scan Kit adds the pages you export to your photo library.",
           "isAccessMediaLocationEnabled": false
         }
       ],

@@ -25,6 +25,7 @@ import { recoverInterruptedStamps } from '@/lib/page-stamp';
 import { recoverInterruptedPdfEdits } from '@/lib/pdf-edit';
 import { installPdfSessionWatch } from '@/lib/pdf-session';
 import { navigateWhenUnlocked } from '@/lib/nav-guard';
+import { noteAppOpened } from '@/lib/review-prompt';
 import {
   documentFileRefsForCleanup,
   documentIdsForCleanup,
@@ -80,6 +81,8 @@ function OnboardingGate() {
   useEffect(() => {
     let cancelled = false;
     getOnboarded().then(v => { if (!cancelled) setOnboardedState(v); });
+    // When the app was first opened, for the rating prompt's "not in the first days" rule.
+    noteAppOpened().catch(() => {});
     return () => { cancelled = true; };
   }, []);
 

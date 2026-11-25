@@ -74,6 +74,7 @@ import { indexPdfText, needsPdfText, pdfFileGeneration } from '@/lib/pdf-text';
 import { canUnlockForSession, PdfSessionError, readablePdfUri, unlockForSession, useReadablePdfUri } from '@/lib/pdf-session';
 import { subscribeViewerNotices, takeViewerNotice } from '@/lib/viewer-notice';
 import { AUTO_TITLE_WAIT_MS, awaitingAutoTitle, takeNewDocumentNote, uncroppedMessage } from '@/lib/new-doc-note';
+import { maybeAskForReview, recordWin } from '@/lib/review-prompt';
 import { alertScanError, deleteTempFiles, pickPhotos, scanPagesWithCamera, ToolScanError } from '@/lib/tool-scan';
 import { withSystemUI } from '@/lib/system-ui';
 import { insertAt, restoreStashedPage, stashPage } from '@/lib/page-undo';
@@ -255,6 +256,12 @@ function ViewerContent({
   // Another screen on top (a tool, Mark up, the camera) may change pages this
   // Undo would silently put back: the menu stops offering it.
   useFocusEffect(useCallback(() => () => lastUndo.drop(), [lastUndo]));
+  // Whether the viewer is the screen on show (for the rating prompt's "still here" check).
+  const focusedRef = useRef(false);
+  useFocusEffect(useCallback(() => {
+    focusedRef.current = true;
+    return () => { focusedRef.current = false; };
+  }, []));
   // The page counter row (image pages or PDF), directly above the toolbar:
   // ViewerScreen rests toasts on its bottom padding, so a toast covers the
   // counter (and at most the foot of the page) while the toolbar under it
@@ -360,6 +367,13 @@ function ViewerContent({
     const note = takeNewDocumentNote(id);
     if (!note) return;
     const count = doc.pages.length;
+    // A new document saved is a "win" (lib/review-prompt). The rating prompt
+    // may follow once the confirmation has been read, unless a page needs
+    // cropping or the user has moved on.
+    const clean = !(note.uncropped.length && count);
+    recordWin().then(() => {
+      if (clean) maybeAskForReview(6000, () => focusedRef.current);
+    }).catch(() => {});
     if (note.uncropped.length && count) {
       const target = Math.min(note.uncropped[0], count - 1);
       toast.show(uncroppedMessage(note.uncropped, count), {
